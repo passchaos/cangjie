@@ -6,6 +6,7 @@ const ot_layout = @import("opentype/layout.zig");
 const class_context = @import("opentype/class_context.zig");
 const metric_variation = @import("opentype/metric_variation.zig");
 const ligature_provenance = @import("ligature_provenance.zig");
+const run_metadata = @import("shaping/run_metadata.zig");
 const unicode = @import("unicode.zig");
 const shape_profile_mod = @import("shape_profile.zig");
 
@@ -111,31 +112,20 @@ pub const LookupOptions = struct {
     /// proves that LookupFlag=0 matching can advance to the adjacent glyph
     /// without consulting source metadata or Unicode properties.
     run_has_default_ignorables: ?bool = null,
-    /// Optional source-order index per shaped glyph. MarkLigPos uses this with
-    /// `ligature_components` to attach marks to the logical component whose
-    /// source position most closely precedes the mark. Without this metadata,
-    /// the parser falls back to a conservative positional heuristic.
-    glyph_source_indices: ?[]const usize = null,
-    /// Original Unicode scalars indexed by `glyph_source_indices`. GPOS mark
-    /// attachment searches use this to keep hidden default-ignorables
-    /// transparent after they have been mapped to visible fallback glyph ids.
-    source_codepoints: ?[]const u21 = null,
+    /// Correlated post-GSUB source and provenance sidecars. Keeping them behind
+    /// one borrowed object avoids copying several slices through every GPOS
+    /// helper while preserving detached callers that need no source metadata.
+    run_metadata: *const run_metadata.Positioning = &.{},
     /// HarfBuzz-compatible parity switch: an unsupported variation selector
     /// mapped to a synthetic not-found glyph remains visible to positioning
     /// lookups instead of being skipped as a hidden default-ignorable.
     visible_variation_selectors: bool = false,
-    /// GSUB substitution state parallel to the post-GSUB glyph stream. GPOS
-    /// treats untouched default-ignorables as transparent, but substituted
-    /// glyphs must remain visible to matching just like HarfBuzz.
-    glyph_substituted: ?[]const bool = null,
-    /// Optional compact ligature provenance. Its `infos` array is parallel to
-    /// the post-GSUB glyph stream; component source slices live in the store's
-    /// append-only pool.
-    ligature_components: ?*const ligature_provenance.Store = null,
     /// Preselected lookup indices for the active script/language/features.
     /// This is a shaping fast path; callers that supply it must keep it in
     /// sync with the other selection options.
     selected_lookups: ?[]const u16 = null,
+    /// Run-local inline output flags kept hot for PairPos.
+    unsafe_glyphs: ?*run_metadata.UnsafeGlyphs = null,
     /// Optional per-lookup prefilters built once for the validated GPOS table.
     /// The slice is indexed by LookupList index and may be shared across runs.
     lookup_accelerators: ?[]const LookupAccelerator = null,
@@ -1947,6 +1937,11 @@ fn collectPairAdjustmentLookupAcceleratedImpl(
     options: LookupOptions,
 ) (GposError || std.mem.Allocator.Error)!void {
     if (glyphs.len < 2) return;
+    // Native pair accelerators visit first glyphs in strictly increasing
+    // order. When no earlier GPOS lookup has emitted an adjustment, every
+    // xAdvance-only record is therefore a new, ordered index and can bypass
+    // appendAdjustmentEx's reverse merge search.
+    const append_pairs_directly = adjustments.items.len == 0;
     var first_index: usize = 0;
     while (first_index + 1 < glyphs.len) {
         if (!adjacent_pairs and lookupIgnoresGlyph(lookup_flag, options, glyphs[first_index])) {
@@ -1985,10 +1980,21 @@ fn collectPairAdjustmentLookupAcceleratedImpl(
                         glyphs[first_index],
                         glyphs[second_index],
                     )) |record| {
-                        try appendAdjustment(adjustments, allocator, first_index, .{
-                            .index = first_index,
-                            .x_advance = record.x_advance,
-                        }, true);
+                        if (!options.vertical and record.x_advance != 0) {
+                            try markUnsafePositioningPair(
+                                allocator,
+                                &options,
+                                first_index,
+                                second_index,
+                            );
+                        }
+                        try appendAcceleratedPairXAdvance(
+                            adjustments,
+                            allocator,
+                            first_index,
+                            record.x_advance,
+                            append_pairs_directly,
+                        );
                         break;
                     }
                     continue;
@@ -2000,10 +2006,21 @@ fn collectPairAdjustmentLookupAcceleratedImpl(
                         glyphs[first_index],
                         glyphs[second_index],
                     ) orelse continue;
-                    try appendAdjustment(adjustments, allocator, first_index, .{
-                        .index = first_index,
-                        .x_advance = x_advance,
-                    }, true);
+                    if (!options.vertical and x_advance != 0) {
+                        try markUnsafePositioningPair(
+                            allocator,
+                            &options,
+                            first_index,
+                            second_index,
+                        );
+                    }
+                    try appendAcceleratedPairXAdvance(
+                        adjustments,
+                        allocator,
+                        first_index,
+                        x_advance,
+                        append_pairs_directly,
+                    );
                     break;
                 },
                 .format_2_dense_x_advance => {
@@ -2013,10 +2030,21 @@ fn collectPairAdjustmentLookupAcceleratedImpl(
                         glyphs[first_index],
                         glyphs[second_index],
                     ) orelse continue;
-                    try appendAdjustment(adjustments, allocator, first_index, .{
-                        .index = first_index,
-                        .x_advance = x_advance,
-                    }, true);
+                    if (!options.vertical and x_advance != 0) {
+                        try markUnsafePositioningPair(
+                            allocator,
+                            &options,
+                            first_index,
+                            second_index,
+                        );
+                    }
+                    try appendAcceleratedPairXAdvance(
+                        adjustments,
+                        allocator,
+                        first_index,
+                        x_advance,
+                        append_pairs_directly,
+                    );
                     break;
                 },
                 .generic => {},
@@ -2134,6 +2162,30 @@ fn pairClassForGlyph(entries: []const PairClassEntry, glyph: GlyphId) u16 {
         }
     }
     return 0;
+}
+
+fn appendAcceleratedPairXAdvance(
+    adjustments: *std.ArrayList(Adjustment),
+    allocator: std.mem.Allocator,
+    first_index: usize,
+    x_advance: i16,
+    append_directly: bool,
+) std.mem.Allocator.Error!void {
+    if (append_directly) {
+        try adjustments.append(allocator, .{
+            .index = first_index,
+            .x_advance = x_advance,
+            .pair_positioned = true,
+        });
+        return;
+    }
+    try appendAdjustment(
+        adjustments,
+        allocator,
+        first_index,
+        .{ .index = first_index, .x_advance = x_advance },
+        true,
+    );
 }
 
 fn collectSingleAdjustmentLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -2331,37 +2383,45 @@ fn shapeProfileElapsed(start: i128, io: ?std.Io) i128 {
     return std.Io.Clock.now(.awake, io.?).nanoseconds - start;
 }
 
+inline fn positioningMetadata(
+    options: LookupOptions,
+) *const run_metadata.Positioning {
+    return options.run_metadata;
+}
+
 fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GposError!void {
+    const metadata = positioningMetadata(options);
     for (options.normalized_variation_coords) |coord| {
         if (!std.math.isFinite(coord) or coord < -1 or coord > 1) return error.InvalidShapingInput;
     }
-    if (options.glyph_source_indices) |sources| {
+    if (metadata.glyph_source_indices) |sources| {
         if (sources.len != glyph_count) return error.InvalidShapingInput;
     }
-    if (options.glyph_substituted) |substituted| {
+    if (metadata.glyph_substituted) |substituted| {
         if (substituted.len != glyph_count) return error.InvalidShapingInput;
     }
-    if (options.source_codepoints != null and options.glyph_source_indices == null) return error.InvalidShapingInput;
-    if (options.ligature_components) |store| {
+    if (metadata.source_codepoints != null and metadata.glyph_source_indices == null) return error.InvalidShapingInput;
+    if (metadata.source_boundaries != null and metadata.glyph_source_indices == null) return error.InvalidShapingInput;
+    if (metadata.ligature_components) |store| {
         if (store.infos.items.len != glyph_count or !store.isValid()) return error.InvalidShapingInput;
     }
 }
 
 fn sourceForGlyph(options: LookupOptions, glyph_index: usize) usize {
-    const sources = options.glyph_source_indices orelse return glyph_index;
+    const sources = positioningMetadata(options).glyph_source_indices orelse return glyph_index;
     if (glyph_index >= sources.len) return glyph_index;
     return sources[glyph_index];
 }
 
 fn sourceCodepointForGlyph(options: LookupOptions, glyph_index: usize) ?u21 {
-    const codepoints = options.source_codepoints orelse return null;
+    const codepoints = positioningMetadata(options).source_codepoints orelse return null;
     const source = sourceForGlyph(options, glyph_index);
     if (source >= codepoints.len) return null;
     return codepoints[source];
 }
 
 fn glyphWasSubstituted(options: LookupOptions, glyph_index: usize) bool {
-    const substituted = options.glyph_substituted orelse return false;
+    const substituted = positioningMetadata(options).glyph_substituted orelse return false;
     return glyph_index < substituted.len and substituted[glyph_index];
 }
 
@@ -2482,6 +2542,16 @@ fn collectPairAdjustmentAtParsed(table: Table, parsed: PairPositionSubtable, gly
                 ) orelse return false;
             const value_1 = try readValueRecord(table, pair_record + 2, parsed.value_format_1, pair_set_offset);
             const value_2 = try readValueRecord(table, pair_record + 2 + parsed.value_size_1, parsed.value_format_2, pair_set_offset);
+            try markUnsafePairApplication(
+                allocator,
+                &options,
+                glyphs.len,
+                first_index,
+                second_index,
+                value_1,
+                value_2,
+                parsed.value_format_2 != 0,
+            );
             try appendAdjustment(adjustments, allocator, first_index, value_1, true);
             try appendAdjustment(adjustments, allocator, second_index, value_2, false);
             return true;
@@ -2497,6 +2567,16 @@ fn collectPairAdjustmentAtParsed(table: Table, parsed: PairPositionSubtable, gly
             const record_offset = parsed.matrix_offset + (@as(usize, class_1) * parsed.class_2_count + class_2) * record_size;
             const value_1 = try readValueRecord(table, record_offset, parsed.value_format_1, parsed.subtable_offset);
             const value_2 = try readValueRecord(table, record_offset + parsed.value_size_1, parsed.value_format_2, parsed.subtable_offset);
+            try markUnsafePairApplication(
+                allocator,
+                &options,
+                glyphs.len,
+                first_index,
+                second_index,
+                value_1,
+                value_2,
+                parsed.value_format_2 != 0,
+            );
             try appendAdjustment(adjustments, allocator, first_index, value_1, true);
             try appendAdjustment(adjustments, allocator, second_index, value_2, false);
             return true;
@@ -2534,6 +2614,123 @@ fn collectBacktrackUnignoredGlyphs(glyphs: []const GlyphId, pos: usize, lookup_f
         out_i += 1;
     }
     return out_i == out.len;
+}
+
+inline fn markUnsafePositioningPair(
+    allocator: std.mem.Allocator,
+    options: *const LookupOptions,
+    first_glyph: usize,
+    second_glyph: usize,
+) std.mem.Allocator.Error!void {
+    if (options.unsafe_glyphs) |unsafe_glyphs| {
+        if (unsafe_glyphs.markRange(
+            @min(first_glyph, second_glyph),
+            @max(first_glyph, second_glyph) +| 1,
+        )) return;
+    }
+    const metadata = positioningMetadata(options.*);
+    const safety = metadata.source_boundaries orelse return;
+    const sources = metadata.glyph_source_indices orelse return;
+    try safety.markGlyphPair(
+        allocator,
+        sources,
+        first_glyph,
+        second_glyph,
+    );
+}
+
+fn markUnsafePairApplication(
+    allocator: std.mem.Allocator,
+    options: *const LookupOptions,
+    glyph_count: usize,
+    first_glyph: usize,
+    second_glyph: usize,
+    first_value: Adjustment,
+    second_value: Adjustment,
+    has_second_value_record: bool,
+) std.mem.Allocator.Error!void {
+    const applied = adjustmentHasEffectiveNumericDelta(
+        first_value,
+        options.vertical,
+    ) or adjustmentHasEffectiveNumericDelta(
+        second_value,
+        options.vertical,
+    );
+    if (!applied and !has_second_value_record) return;
+    const unsafe_end = if (has_second_value_record and second_glyph + 1 < glyph_count)
+        second_glyph + 1
+    else
+        second_glyph;
+    try markUnsafePositioningPair(
+        allocator,
+        options,
+        first_glyph,
+        unsafe_end,
+    );
+}
+
+fn adjustmentHasEffectiveNumericDelta(
+    value: Adjustment,
+    vertical: bool,
+) bool {
+    return (!vertical and value.x_advance != 0) or
+        value.x_placement != 0 or
+        value.y_placement != 0 or
+        (vertical and value.y_advance != 0);
+}
+
+fn markUnsafePositioningContext(
+    allocator: std.mem.Allocator,
+    options: *const LookupOptions,
+    glyph_indices: []const usize,
+) std.mem.Allocator.Error!void {
+    const metadata = positioningMetadata(options.*);
+    if (glyph_indices.len >= 2) {
+        if (options.unsafe_glyphs) |unsafe_glyphs| {
+            var first = glyph_indices[0];
+            var last = first;
+            for (glyph_indices[1..]) |index| {
+                first = @min(first, index);
+                last = @max(last, index);
+            }
+            if (unsafe_glyphs.markRange(first, last +| 1)) return;
+        }
+    }
+    const safety = metadata.source_boundaries orelse return;
+    const sources = metadata.glyph_source_indices orelse return;
+    try safety.markMatchedGlyphs(allocator, sources, glyph_indices);
+}
+
+fn markUnsafePositioningChainingContext(
+    allocator: std.mem.Allocator,
+    options: *const LookupOptions,
+    backtrack: []const usize,
+    input: []const usize,
+    lookahead: []const usize,
+) std.mem.Allocator.Error!void {
+    const metadata = positioningMetadata(options.*);
+    if (options.unsafe_glyphs) |unsafe_glyphs| {
+        var first: ?usize = null;
+        var last: usize = 0;
+        for ([_][]const usize{ backtrack, input, lookahead }) |region| {
+            for (region) |index| {
+                first = if (first) |value| @min(value, index) else index;
+                last = @max(last, index);
+            }
+        }
+        if (first) |start| {
+            if (unsafe_glyphs.markRange(start, last +| 1)) return;
+        }
+    }
+    const safety = metadata.source_boundaries orelse return;
+    const sources = metadata.glyph_source_indices orelse return;
+    try safety.markMatchedRegions(
+        allocator,
+        sources,
+        backtrack,
+        input,
+        lookahead,
+    );
 }
 
 fn appendAdjustment(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, index: usize, value: Adjustment, pair_positioned: bool) std.mem.Allocator.Error!void {
@@ -2769,6 +2966,12 @@ fn collectCursiveAdjustmentParsed(table: Table, parsed: CursivePositionSubtable,
             if (entry_relative != 0 and exit_relative != 0) {
                 const entry = try readAnchor(table, parsed.subtable_offset + entry_relative, options);
                 const exit = try readAnchor(table, parsed.subtable_offset + exit_relative, options);
+                try markUnsafePositioningPair(
+                    allocator,
+                    &options,
+                    previous_position,
+                    i,
+                );
                 try appendCursiveAdjustments(adjustments, allocator, previous_position, i, exit, entry, lookup_flag, options.direction);
             }
         }
@@ -2803,6 +3006,12 @@ fn collectCursiveAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []co
 
     const entry = try readAnchor(table, subtable_offset + entry_relative, options);
     const exit = try readAnchor(table, subtable_offset + exit_relative, options);
+    try markUnsafePositioningPair(
+        allocator,
+        &options,
+        previous_position,
+        target_index,
+    );
     try appendCursiveAdjustments(adjustments, allocator, previous_position, target_index, exit, entry, lookup_flag, options.direction);
     return true;
 }
@@ -3203,6 +3412,12 @@ fn collectMarkToBaseAdjustmentAtParsed(table: Table, subtable: MarkToBaseSubtabl
     const base_anchor_offset = subtable.base_array_offset + base_anchor_relative;
     const mark_anchor = try readAnchor(table, mark_anchor_offset, options);
     const base_anchor = try readAnchor(table, base_anchor_offset, options);
+    try markUnsafePositioningPair(
+        allocator,
+        &options,
+        base_position,
+        mark_position,
+    );
     try appendMarkAttachmentAdjustment(
         adjustments,
         allocator,
@@ -3377,6 +3592,11 @@ fn collectCoveragePositioningAt(table: Table, subtable_offset: usize, glyphs: []
     }
     const pos_count = try readU16(table, subtable_offset + 4);
     const records_pos = coverage_offsets_pos + @as(usize, glyph_count) * 2;
+    try markUnsafePositioningContext(
+        allocator,
+        &options,
+        input_indices_buf[0..glyph_count],
+    );
     try collectPositionRecordsMapped(table, records_pos, pos_count, input_indices_buf[0..glyph_count], glyphs, adjustments, allocator, options);
     return .{ .matched = true, .next_pos = input_indices_buf[glyph_count - 1] + 1 };
 }
@@ -3523,6 +3743,13 @@ fn collectChainingGlyphRuleSet(table: Table, set_offset: usize, glyphs: []const 
 
         const pos_count = try readU16(table, cursor);
         cursor += 2;
+        try markUnsafePositioningChainingContext(
+            allocator,
+            &options,
+            backtrack_indices_buf[0..backtrack_count],
+            input_indices_buf[0..input_count],
+            lookahead_indices_buf[0..lookahead_count],
+        );
         try collectPositionRecordsMapped(table, cursor, pos_count, input_indices_buf[0..input_count], glyphs, adjustments, allocator, options);
         return .{ .matched = true, .next_pos = input_indices_buf[input_count - 1] + 1 };
     }
@@ -3678,6 +3905,13 @@ fn collectChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_
 
         const pos_count = try readU16(table, cursor);
         cursor += 2;
+        try markUnsafePositioningChainingContext(
+            allocator,
+            &options,
+            window.backtrack_indices[0..backtrack_count],
+            input_indices,
+            window.forward_indices[lookahead_forward_start .. lookahead_forward_start + lookahead_count],
+        );
         try collectPositionRecordsMapped(table, cursor, pos_count, input_indices, glyphs, adjustments, allocator, options);
         return .{ .matched = true, .next_pos = input_indices[input_count - 1] + 1 };
     }
@@ -3797,11 +4031,13 @@ fn collectAcceleratedChainingClassPositioningAt(table: Table, subtable: Chaining
         input_classes[input_i - 1] = try classValue(table, subtable.input_class_def, glyphs[input_indices[input_i]]);
     }
 
+    var lookahead_indices: [max_chaining_class_region_glyphs]usize = undefined;
     var lookahead_classes: [max_chaining_class_region_glyphs]u16 = undefined;
     var lookahead_count: usize = 0;
     var glyph_i = input_indices[group.max_input_count - 1] + 1;
     while (glyph_i < glyphs.len and lookahead_count < group.max_lookahead_count) : (glyph_i += 1) {
         if (matchSkipsGlyph(lookup_flag, options, glyphs, glyph_i)) continue;
+        lookahead_indices[lookahead_count] = glyph_i;
         lookahead_classes[lookahead_count] = try classValue(table, subtable.lookahead_class_def, glyphs[glyph_i]);
         lookahead_count += 1;
     }
@@ -3822,6 +4058,13 @@ fn collectAcceleratedChainingClassPositioningAt(table: Table, subtable: Chaining
         if (!std.mem.eql(u16, expected_lookahead, lookahead_classes[0..rule.lookahead_count])) continue;
 
         const matched_inputs = input_indices[0..rule.input_count];
+        try markUnsafePositioningChainingContext(
+            allocator,
+            &options,
+            &.{},
+            matched_inputs,
+            lookahead_indices[0..rule.lookahead_count],
+        );
         try collectNestedAdjustment(table, glyphs, matched_inputs[0], rule.lookup_index, adjustments, allocator, options);
         return .{ .matched = true, .next_pos = matched_inputs[matched_inputs.len - 1] + 1 };
     }
@@ -3865,6 +4108,13 @@ fn collectChainingCoveragePositioningAt(table: Table, subtable: ChainingCoverage
     if (!collectForwardUnignoredGlyphs(glyphs, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..subtable.lookahead_count])) return .{};
     if (!try gposCoverageIndicesMatchCached(table, subtable.subtable_offset, glyphs, backtrack_indices_buf[0..subtable.backtrack_count], subtable.backtrack_offsets_pos, subtable.backtrack_coverages, 0)) return .{};
     if (!try gposCoverageIndicesMatchCached(table, subtable.subtable_offset, glyphs, lookahead_indices_buf[0..subtable.lookahead_count], subtable.lookahead_offsets_pos, subtable.lookahead_coverages, 0)) return .{};
+    try markUnsafePositioningChainingContext(
+        allocator,
+        &options,
+        backtrack_indices_buf[0..subtable.backtrack_count],
+        input_indices_buf[0..subtable.input_count],
+        lookahead_indices_buf[0..subtable.lookahead_count],
+    );
     if (try collectFastChainingSinglePosRecords(table, subtable, glyphs, input_indices_buf[0..subtable.input_count], adjustments, allocator, options)) {
         return .{ .matched = true, .next_pos = input_indices_buf[subtable.input_count - 1] + 1 };
     }
@@ -3894,6 +4144,13 @@ fn collectAcceleratedChainingCoveragePositioningAt(table: Table, subtable: Chain
     if (!collectForwardUnignoredGlyphs(glyphs, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..subtable.lookahead_count])) return .{};
     if (!try gposCoverageIndicesMatchCached(table, subtable.subtable_offset, glyphs, backtrack_indices_buf[0..subtable.backtrack_count], subtable.backtrack_offsets_pos, subtable.backtrack_coverages, 0)) return .{};
     if (!try gposCoverageIndicesMatchCached(table, subtable.subtable_offset, glyphs, lookahead_indices_buf[0..subtable.lookahead_count], subtable.lookahead_offsets_pos, subtable.lookahead_coverages, 0)) return .{};
+    try markUnsafePositioningChainingContext(
+        allocator,
+        &options,
+        backtrack_indices_buf[0..subtable.backtrack_count],
+        input_indices_buf[0..subtable.input_count],
+        lookahead_indices_buf[0..subtable.lookahead_count],
+    );
     if (try collectFastChainingSinglePosRecords(table, subtable, glyphs, input_indices_buf[0..subtable.input_count], adjustments, allocator, options)) {
         return .{ .matched = true, .next_pos = input_indices_buf[subtable.input_count - 1] + 1 };
     }
@@ -3997,6 +4254,11 @@ fn collectPositionRuleSet(table: Table, rule_set_offset: usize, glyphs: []const 
         }
         if (!matched) continue;
         const records_pos = rule_offset + 4 + (@as(usize, glyph_count) - 1) * 2;
+        try markUnsafePositioningContext(
+            allocator,
+            &options,
+            input_indices_buf[0..glyph_count],
+        );
         try collectPositionRecordsMapped(table, records_pos, pos_count, input_indices_buf[0..glyph_count], glyphs, adjustments, allocator, options);
         return .{ .matched = true, .next_pos = input_indices_buf[glyph_count - 1] + 1 };
     }
@@ -4024,6 +4286,11 @@ fn collectClassPositionRuleSet(table: Table, set_offset: usize, class_def_offset
         }
         if (!matched) continue;
         const records_pos = rule_offset + 4 + (@as(usize, glyph_count) - 1) * 2;
+        try markUnsafePositioningContext(
+            allocator,
+            &options,
+            input_indices_buf[0..glyph_count],
+        );
         try collectPositionRecordsMapped(table, records_pos, pos_count, input_indices_buf[0..glyph_count], glyphs, adjustments, allocator, options);
         return .{ .matched = true, .next_pos = input_indices_buf[glyph_count - 1] + 1 };
     }
@@ -5257,6 +5524,12 @@ fn collectMarkToLigatureAdjustmentAt(table: Table, subtable_offset: usize, glyph
     const ligature_anchor_offset = ligature_attach_offset + ligature_anchor_relative;
     const mark_anchor = try readAnchor(table, mark_anchor_offset, options);
     const ligature_anchor = try readAnchor(table, ligature_anchor_offset, options);
+    try markUnsafePositioningPair(
+        allocator,
+        &options,
+        ligature_position,
+        mark_position,
+    );
     try appendMarkAttachmentAdjustment(
         adjustments,
         allocator,
@@ -5291,9 +5564,9 @@ fn previousCoveredLigatureGlyph(table: Table, mark_coverage_offset: usize, glyph
 fn ligatureComponentIndexForMark(table: Table, mark_coverage_offset: usize, glyphs: []const GlyphId, ligature_position: usize, mark_position: usize, component_count: usize, lookup_flag: u16, options: LookupOptions) GposError!usize {
     if (component_count <= 1) return 0;
 
-    if (options.glyph_source_indices) |sources| {
+    if (positioningMetadata(options).glyph_source_indices) |sources| {
         if (mark_position < sources.len) {
-            if (options.ligature_components) |store| {
+            if (positioningMetadata(options).ligature_components) |store| {
                 if (ligature_position < store.infos.items.len) {
                     const info = store.infos.items[ligature_position];
                     if (baseMarkLigatureActsAsSingleBase(options.script_tag, info)) return 0;
@@ -5350,7 +5623,7 @@ fn markGlyphForAttachmentSearchParsed(table: Table, subtable: MarkToBaseSubtable
 fn markAttachmentSearchSkipsNonCoveredGlyphParsed(table: Table, subtable: MarkToBaseSubtable, glyphs: []const GlyphId, index: usize, options: LookupOptions) GposError!bool {
     if (try markGlyphForAttachmentSearchParsed(table, subtable, glyphs[index], options)) return true;
     if (index == 0) return false;
-    const sources = options.glyph_source_indices orelse return false;
+    const sources = positioningMetadata(options).glyph_source_indices orelse return false;
     if (index >= sources.len) return false;
     if (sources[index] != sources[index - 1]) return false;
     if (try markGlyphForAttachmentSearchParsed(table, subtable, glyphs[index - 1], options)) return false;
@@ -5364,7 +5637,7 @@ fn markAttachmentSearchSkipsNonCoveredGlyph(table: Table, mark_coverage_offset: 
 
 fn isMultipleSubstContinuationForMarkSearch(table: Table, mark_coverage_offset: usize, glyphs: []const GlyphId, index: usize, options: LookupOptions) GposError!bool {
     if (index == 0) return false;
-    if (options.ligature_components) |store| {
+    if (positioningMetadata(options).ligature_components) |store| {
         if (index < store.infos.items.len) {
             const info = store.infos.items[index];
             if (info.flags.multiplied) {
@@ -5379,7 +5652,7 @@ fn isMultipleSubstContinuationForMarkSearch(table: Table, mark_coverage_offset: 
 
     // Detached GPOS callers may not retain GSUB provenance. Preserve the
     // conservative source-adjacency fallback for those callers.
-    const sources = options.glyph_source_indices orelse return false;
+    const sources = positioningMetadata(options).glyph_source_indices orelse return false;
     if (index >= sources.len) return false;
     if (sources[index] != sources[index - 1]) return false;
     if (try markGlyphForAttachmentSearch(table, mark_coverage_offset, glyphs[index - 1], options)) return false;
@@ -5407,8 +5680,10 @@ test "GPOS MarkLig search skips non-first MultipleSubst components across marks"
         &glyphs,
         3,
         .{
-            .glyph_source_indices = &sources,
-            .ligature_components = &components,
+            .run_metadata = &.{
+                .glyph_source_indices = &sources,
+                .ligature_components = &components,
+            },
         },
     ));
 }
@@ -5456,6 +5731,12 @@ fn collectMarkToMarkAdjustmentAt(table: Table, subtable_offset: usize, glyphs: [
     const mark_2_anchor_offset = mark_2_array_offset + mark_2_anchor_relative;
     const mark_1_anchor = try readAnchor(table, mark_1_anchor_offset, options);
     const mark_2_anchor = try readAnchor(table, mark_2_anchor_offset, options);
+    try markUnsafePositioningPair(
+        allocator,
+        &options,
+        mark_2_position,
+        mark_1_position,
+    );
     try appendMarkAttachmentAdjustment(
         adjustments,
         allocator,
@@ -5603,13 +5884,13 @@ const MarkLigatureComponentHint = struct {
 
 fn markLigatureComponentHint(table: Table, mark_coverage_offset: usize, glyphs: []const GlyphId, mark_position: usize, lookup_flag: u16, options: LookupOptions) GposError!?MarkLigatureComponentHint {
     const ligature_position = try previousCoveredLigatureGlyph(table, mark_coverage_offset, glyphs, mark_position, lookup_flag, options) orelse return null;
-    const store = options.ligature_components orelse return null;
+    const store = positioningMetadata(options).ligature_components orelse return null;
     if (ligature_position >= store.infos.items.len) return null;
     const info = store.infos.items[ligature_position];
     if (baseMarkLigatureActsAsSingleBase(options.script_tag, info)) return null;
     if (info.component_count <= 1) return null;
     const component_sources = store.componentSources(info) orelse return error.InvalidShapingInput;
-    const sources = options.glyph_source_indices orelse return null;
+    const sources = positioningMetadata(options).glyph_source_indices orelse return null;
     if (mark_position >= sources.len) return null;
 
     const mark_source = sources[mark_position];
@@ -7250,9 +7531,11 @@ test "GPOS adjacent PairPos fast path respects the run default-ignorable proof" 
         .{
             .lookup_accelerators = &accelerators,
             .run_has_default_ignorables = true,
-            .glyph_source_indices = &sources,
-            .source_codepoints = &codepoints,
-            .glyph_substituted = &substituted,
+            .run_metadata = &.{
+                .glyph_source_indices = &sources,
+                .source_codepoints = &codepoints,
+                .glyph_substituted = &substituted,
+            },
         },
         null,
     );
@@ -8120,17 +8403,21 @@ test "GPOS cursive attachment skips only unsubstituted default ignorables" {
     defer adjustments.deinit(allocator);
 
     try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{
-        .glyph_source_indices = &sources,
-        .source_codepoints = &codepoints,
-        .glyph_substituted = &.{ false, false, false },
+        .run_metadata = &.{
+            .glyph_source_indices = &sources,
+            .source_codepoints = &codepoints,
+            .glyph_substituted = &.{ false, false, false },
+        },
     });
     try std.testing.expectEqual(@as(usize, 2), adjustments.items.len);
 
     adjustments.clearRetainingCapacity();
     try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{
-        .glyph_source_indices = &sources,
-        .source_codepoints = &codepoints,
-        .glyph_substituted = &.{ false, true, false },
+        .run_metadata = &.{
+            .glyph_source_indices = &sources,
+            .source_codepoints = &codepoints,
+            .glyph_substituted = &.{ false, true, false },
+        },
     });
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
@@ -10127,8 +10414,10 @@ test "GPOS mark-to-ligature uses source metadata for component choice" {
     defer adjustments.deinit(allocator);
 
     try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{
-        .glyph_source_indices = &sources,
-        .ligature_components = &ligature_components,
+        .run_metadata = &.{
+            .glyph_source_indices = &sources,
+            .ligature_components = &ligature_components,
+        },
     });
 
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
@@ -10537,7 +10826,7 @@ test "GPOS public adjustment collection validates source metadata cardinality" {
     defer adjustments.deinit(allocator);
 
     try std.testing.expectError(error.InvalidShapingInput, collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &glyphs, &adjustments, allocator, .{
-        .glyph_source_indices = &sources,
+        .run_metadata = &.{ .glyph_source_indices = &sources },
     }));
 }
 
@@ -10570,7 +10859,7 @@ test "GPOS public adjustment collection validates ligature component source orde
     defer adjustments.deinit(allocator);
 
     try std.testing.expectError(error.InvalidShapingInput, collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &glyphs, &adjustments, allocator, .{
-        .ligature_components = &ligature_components,
+        .run_metadata = &.{ .ligature_components = &ligature_components },
     }));
 }
 

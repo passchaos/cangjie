@@ -17,6 +17,7 @@ const layout_scratch = @import("layout_scratch.zig");
 const myanmar = @import("myanmar.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
 const shaping_sections = @import("shaping_sections.zig");
+const run_metadata = @import("shaping/run_metadata.zig");
 const discretionary_hyphen = @import("layout/discretionary_hyphen.zig");
 const glyph_position = @import("layout/glyph_position.zig");
 const styled_bidi = @import("layout/styled_bidi.zig");
@@ -5109,6 +5110,14 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
 
     const gpos_adjustments = &scratch.gpos_adjustments;
     const gpos_start = shapeProfileNow(shape_profile, profile_io);
+    var gpos_unsafe_glyphs = run_metadata.UnsafeGlyphs{};
+    const gpos_run_metadata = run_metadata.Positioning{
+        .glyph_source_indices = glyph_source_indices.items,
+        .source_codepoints = codepoints.items,
+        .glyph_substituted = glyph_substituted.items,
+        .ligature_components = ligature_components,
+        .source_boundaries = source_boundaries,
+    };
     var gpos_options = gpos.LookupOptions{
         .script_tag = gpos_script_tag,
         .language_tag = lookup_options.language_tag,
@@ -5119,10 +5128,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .apply_all_if_unselected = false,
         .run_may_have_mark_attachments = runMayHaveMarkAttachments(glyph_ids.items, codepoints.items, glyph_source_indices.items, gdef_metadata.*),
         .run_has_default_ignorables = has_default_ignorable,
-        .glyph_source_indices = glyph_source_indices.items,
-        .source_codepoints = codepoints.items,
-        .glyph_substituted = glyph_substituted.items,
-        .ligature_components = ligature_components,
+        .run_metadata = &gpos_run_metadata,
+        .unsafe_glyphs = &gpos_unsafe_glyphs,
         .shape_profile = shape_profile,
         .profile_io = profile_io,
         .visible_variation_selectors = lookup_options.not_found_variation_selector_glyph != null,
@@ -5517,9 +5524,8 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             .cluster = source_span.start,
             .source_byte_len = source_span.end - source_span.start,
             .flags = .{
-                .unsafe_to_break_before = source_boundaries.isUnsafeBeforeByte(
-                    source_span.start,
-                ),
+                .unsafe_to_break_before = gpos_unsafe_glyphs.isUnsafeBefore(index) or
+                    source_boundaries.isUnsafeBeforeByte(source_span.start),
             },
             .x_advance = if (visible_not_found_variation_selector) 0 else if (lookup_options.writing_mode.isVertical()) 0.0 else horizontal_advance,
             .y_advance = if (hide_default_ignorable or visible_not_found_variation_selector) 0 else if (lookup_options.writing_mode.isVertical()) vertical_advance else @as(f32, @floatFromInt(adjustment.y_advance)) * scale,

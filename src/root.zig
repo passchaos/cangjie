@@ -9776,6 +9776,8 @@ test "applies GPOS pair positioning during shaping" {
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
     try std.testing.expectApproxEqAbs(@as(f32, 30.0), run.width(), 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, -1.0), run.glyphs[1].y_offset, 0.001);
+    try std.testing.expect(!run.glyphs[0].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[1].isUnsafeToBreakBefore());
 }
 
 test "empty GSUB topology does not suppress independent GPOS shaping" {
@@ -10165,6 +10167,8 @@ test "applies GPOS mark-to-base positioning during shaping" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), run.glyphs[1].x_advance, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), run.glyphs[0].x_advance + run.glyphs[1].x_offset, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 2.0), run.glyphs[1].y_offset, 0.001);
+    try std.testing.expect(!run.glyphs[0].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[1].isUnsafeToBreakBefore());
 }
 
 test "applies GPOS mark anchors with contour and device formats" {
@@ -10228,6 +10232,8 @@ test "applies GPOS mark-to-mark positioning during shaping" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), run.glyphs[1].x_advance, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 1.5), run.glyphs[0].x_advance + run.glyphs[1].x_offset, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 2.5), run.glyphs[1].y_offset, 0.001);
+    try std.testing.expect(!run.glyphs[0].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[1].isUnsafeToBreakBefore());
 }
 
 test "applies GPOS cursive positioning during shaping" {
@@ -10249,6 +10255,8 @@ test "applies GPOS cursive positioning during shaping" {
     try std.testing.expectApproxEqAbs(@as(f32, 16.0), run.glyphs[1].x_advance, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), run.glyphs[1].x_offset, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0.8), run.glyphs[1].y_offset, 0.001);
+    try std.testing.expect(!run.glyphs[0].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[1].isUnsafeToBreakBefore());
 }
 
 test "applies GPOS mark-to-ligature positioning during shaping" {
@@ -10271,6 +10279,8 @@ test "applies GPOS mark-to-ligature positioning during shaping" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), run.glyphs[1].x_advance, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 1.2), run.glyphs[0].x_advance + run.glyphs[1].x_offset, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 2.4), run.glyphs[1].y_offset, 0.001);
+    try std.testing.expect(!run.glyphs[0].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[1].isUnsafeToBreakBefore());
 }
 
 test "passes GSUB ligature component sources into GPOS mark-to-ligature shaping" {
@@ -10311,6 +10321,8 @@ test "applies GPOS coverage-based contextual positioning" {
 
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), run.glyphs[1].x_offset, 0.001);
+    try std.testing.expect(!run.glyphs[0].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[1].isUnsafeToBreakBefore());
 }
 
 test "applies GPOS chaining contextual positioning" {
@@ -10329,6 +10341,9 @@ test "applies GPOS chaining contextual positioning" {
 
     try std.testing.expectEqual(@as(usize, 3), run.glyphs.len);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), run.glyphs[1].x_offset, 0.001);
+    try std.testing.expect(!run.glyphs[0].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[1].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[2].isUnsafeToBreakBefore());
 }
 
 test "applies GPOS glyph-based chaining contextual positioning" {
@@ -10347,6 +10362,9 @@ test "applies GPOS glyph-based chaining contextual positioning" {
 
     try std.testing.expectEqual(@as(usize, 3), run.glyphs.len);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), run.glyphs[1].x_offset, 0.001);
+    try std.testing.expect(!run.glyphs[0].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[1].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[2].isUnsafeToBreakBefore());
 }
 
 test "applies GPOS class-based chaining contextual positioning" {
@@ -10365,6 +10383,9 @@ test "applies GPOS class-based chaining contextual positioning" {
 
     try std.testing.expectEqual(@as(usize, 3), run.glyphs.len);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), run.glyphs[1].x_offset, 0.001);
+    try std.testing.expect(!run.glyphs[0].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[1].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[2].isUnsafeToBreakBefore());
 }
 
 test "applies GPOS glyph-based contextual positioning" {
@@ -10383,6 +10404,8 @@ test "applies GPOS glyph-based contextual positioning" {
 
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), run.glyphs[1].x_offset, 0.001);
+    try std.testing.expect(!run.glyphs[0].isUnsafeToBreakBefore());
+    try std.testing.expect(run.glyphs[1].isUnsafeToBreakBefore());
 }
 
 fn writeKernFormat0SubtableTest(bytes: []u8, offset: usize, coverage: u16, left: GlyphId, right: GlyphId, value: i16) void {

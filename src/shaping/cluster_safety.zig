@@ -11,13 +11,12 @@ const std = @import("std");
 
 pub const SourceBoundaries = struct {
     /// Bits are local to `[byte_base, byte_base + byte_len]`. Storage is
-    /// allocated only after the first successful contextual match: the common
-    /// shaping path incurs no sidecar allocation, while retained shape scratch
-    /// can reuse the high-water allocation on later runs.
+    /// activated only when a boundary exceeds the inline 64-byte mask.
     unsafe_before_byte: std.DynamicBitSetUnmanaged = .{},
+    inline_boundaries: u64 = 0,
     byte_base: usize = 0,
     byte_len: usize = 0,
-    initialized_for_run: bool = false,
+    dense_active: bool = false,
     source_byte_starts: []const usize = &.{},
 
     pub fn deinit(self: *SourceBoundaries, allocator: std.mem.Allocator) void {
@@ -33,7 +32,8 @@ pub const SourceBoundaries = struct {
     ) void {
         self.byte_base = byte_base;
         self.byte_len = byte_len;
-        self.initialized_for_run = false;
+        self.inline_boundaries = 0;
+        self.dense_active = false;
         self.source_byte_starts = source_byte_starts;
     }
 
@@ -72,6 +72,53 @@ pub const SourceBoundaries = struct {
         }
     }
 
+    /// Protect every source boundary crossed by a positioning relationship.
+    /// Pair, cursive, and mark attachment lookups may skip transparent glyphs
+    /// between their endpoints, so endpoint indexes—not physical adjacency—
+    /// define the complete unsafe span.
+    pub fn markGlyphPair(
+        self: *SourceBoundaries,
+        allocator: std.mem.Allocator,
+        glyph_source_indices: []const usize,
+        first_glyph: usize,
+        second_glyph: usize,
+    ) std.mem.Allocator.Error!void {
+        if (first_glyph >= glyph_source_indices.len or
+            second_glyph >= glyph_source_indices.len)
+        {
+            return;
+        }
+        const first_source = glyph_source_indices[first_glyph];
+        const second_source = glyph_source_indices[second_glyph];
+        if (first_source >= self.source_byte_starts.len or
+            second_source >= self.source_byte_starts.len)
+        {
+            return;
+        }
+        const first_byte = self.source_byte_starts[first_source];
+        const second_byte = self.source_byte_starts[second_source];
+        if (first_byte == second_byte) return;
+
+        // The overwhelming PairPos/cursive case is two adjacent shaping
+        // sources. There is exactly one source boundary to protect, so avoid
+        // the general range-fill machinery and set that bit directly. Source
+        // gaps still use the dense span below to cover ignored glyphs.
+        if (first_source +| 1 == second_source or
+            second_source +| 1 == first_source)
+        {
+            try self.markByteBoundary(
+                allocator,
+                @max(first_byte, second_byte),
+            );
+            return;
+        }
+        try self.markByteSpan(
+            allocator,
+            @min(first_byte, second_byte),
+            @max(first_byte, second_byte),
+        );
+    }
+
     pub fn markMatchedRegions(
         self: *SourceBoundaries,
         allocator: std.mem.Allocator,
@@ -104,15 +151,17 @@ pub const SourceBoundaries = struct {
         self: *const SourceBoundaries,
         byte_offset: usize,
     ) bool {
-        if (!self.initialized_for_run or byte_offset < self.byte_base) {
+        if (byte_offset < self.byte_base) {
             return false;
         }
         const local = byte_offset - self.byte_base;
-        if (local > self.byte_len or
-            local >= self.unsafe_before_byte.capacity())
-        {
-            return false;
+        if (local > self.byte_len) return false;
+        if (!self.dense_active) {
+            if (local >= @bitSizeOf(u64)) return false;
+            const shift: u6 = @intCast(local);
+            return (self.inline_boundaries & (@as(u64, 1) << shift)) != 0;
         }
+        if (local >= self.unsafe_before_byte.capacity()) return false;
         return self.unsafe_before_byte.isSet(local);
     }
 
@@ -139,6 +188,42 @@ pub const SourceBoundaries = struct {
             self.byte_len +| 1,
         );
         if (first_local >= end_local) return;
+        if (!self.dense_active and end_local <= @bitSizeOf(u64)) {
+            self.inline_boundaries |= inlineRangeMask(
+                first_local,
+                end_local,
+            );
+            return;
+        }
+        try self.ensureDense(allocator);
+        self.unsafe_before_byte.setRangeValue(
+            .{ .start = first_local, .end = end_local },
+            true,
+        );
+    }
+
+    fn markByteBoundary(
+        self: *SourceBoundaries,
+        allocator: std.mem.Allocator,
+        byte_offset: usize,
+    ) std.mem.Allocator.Error!void {
+        if (byte_offset <= self.byte_base) return;
+        const local = byte_offset - self.byte_base;
+        if (local > self.byte_len) return;
+        if (!self.dense_active and local < @bitSizeOf(u64)) {
+            const shift: u6 = @intCast(local);
+            self.inline_boundaries |= @as(u64, 1) << shift;
+            return;
+        }
+        try self.ensureDense(allocator);
+        self.unsafe_before_byte.set(local);
+    }
+
+    fn ensureDense(
+        self: *SourceBoundaries,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!void {
+        if (self.dense_active) return;
         const required_capacity = self.byte_len +| 1;
         if (self.unsafe_before_byte.capacity() < required_capacity) {
             try self.unsafe_before_byte.resize(
@@ -147,14 +232,28 @@ pub const SourceBoundaries = struct {
                 false,
             );
         }
-        if (!self.initialized_for_run) {
-            self.unsafe_before_byte.unsetAll();
-            self.initialized_for_run = true;
+        self.unsafe_before_byte.unsetAll();
+        var pending = self.inline_boundaries;
+        while (pending != 0) {
+            const boundary: usize = @ctz(pending);
+            self.unsafe_before_byte.set(boundary);
+            pending &= pending - 1;
         }
-        self.unsafe_before_byte.setRangeValue(
-            .{ .start = first_local, .end = end_local },
-            true,
-        );
+        self.dense_active = true;
+    }
+
+    fn inlineRangeMask(start: usize, end: usize) u64 {
+        std.debug.assert(start < end);
+        std.debug.assert(end <= @bitSizeOf(u64));
+        const below_end = if (end == @bitSizeOf(u64))
+            std.math.maxInt(u64)
+        else
+            (@as(u64, 1) << @as(u6, @intCast(end))) - 1;
+        const below_start = if (start == 0)
+            0
+        else
+            (@as(u64, 1) << @as(u6, @intCast(start))) - 1;
+        return below_end & ~below_start;
     }
 };
 
@@ -194,6 +293,24 @@ test "chaining regions survive synthetic and decomposed source indexes" {
     try std.testing.expect(safety.isUnsafeBeforeByte(5));
     try std.testing.expect(safety.isUnsafeBeforeByte(8));
     try std.testing.expect(!safety.isUnsafeBeforeByte(9));
+}
+
+test "positioning relationships protect skipped source boundaries" {
+    var safety = SourceBoundaries{};
+    defer safety.deinit(std.testing.allocator);
+    safety.reset(0, 8, &.{ 0, 2, 5, 7 });
+
+    try safety.markGlyphPair(
+        std.testing.allocator,
+        &.{ 0, 1, 2, 3 },
+        0,
+        3,
+    );
+    try std.testing.expect(!safety.isUnsafeBeforeByte(0));
+    try std.testing.expect(safety.isUnsafeBeforeByte(2));
+    try std.testing.expect(safety.isUnsafeBeforeByte(5));
+    try std.testing.expect(safety.isUnsafeBeforeByte(7));
+    try std.testing.expect(!safety.isUnsafeBeforeByte(8));
 }
 
 test "reset reuses storage without leaking flags into a shorter run" {

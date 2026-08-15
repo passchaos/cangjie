@@ -27,6 +27,87 @@ test "CPAL palette lookup revalidates borrowed table bytes" {
     );
 }
 
+test "color APIs reject glyph IDs outside maxp with and without COLR" {
+    const allocator = std.testing.allocator;
+
+    {
+        const bytes = try test_font.buildColorTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        try std.testing.expectError(
+            error.InvalidGlyph,
+            font.colorLayers(allocator, font.glyph_count),
+        );
+    }
+
+    {
+        const bytes = try test_font.buildColorV1Ttf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        try std.testing.expectError(
+            error.InvalidGlyph,
+            font.colorPaint(font.glyph_count),
+        );
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        try std.testing.expectError(
+            error.InvalidGlyph,
+            font.colorLayers(allocator, font.glyph_count),
+        );
+        try std.testing.expectError(
+            error.InvalidGlyph,
+            font.colorPaint(font.glyph_count),
+        );
+    }
+}
+
+test "COLR APIs revalidate borrowed table bytes" {
+    const allocator = std.testing.allocator;
+
+    {
+        const bytes = try test_font.buildColorTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        const layers = try font.colorLayers(allocator, 1);
+        defer allocator.free(layers);
+        try std.testing.expectEqual(@as(usize, 2), layers.len);
+
+        const colr = try tableOffset(bytes, "COLR");
+        // Keep the layer graph semantically valid by selecting the other
+        // declared CPAL entry; only the borrowed COLR checksum should fail.
+        bytes[colr + 22] +%= 1;
+        try std.testing.expectError(
+            error.BadSfnt,
+            font.colorLayers(allocator, 1),
+        );
+    }
+
+    {
+        const bytes = try test_font.buildColorV1Ttf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        try std.testing.expect((try font.colorPaint(1)) != null);
+
+        const colr = try tableOffset(bytes, "COLR");
+        // 0x2000 -> 0x2100 remains a legal alpha, isolating checksum
+        // revalidation from PaintSolid semantic validation.
+        bytes[colr + 47] +%= 1;
+        try std.testing.expectError(
+            error.BadSfnt,
+            font.colorPaint(1),
+        );
+    }
+}
+
 test "COLR palette indices are validated at parse time" {
     const allocator = std.testing.allocator;
 

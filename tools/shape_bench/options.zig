@@ -143,14 +143,14 @@ pub const Direction = enum {
     ttb,
     btt,
 
-    pub fn textDirection(self: Direction) cangjie.TextDirection {
+    pub fn textDirection(self: Direction) cangjie.shaping.Direction {
         return switch (self) {
             .ltr, .ttb => .ltr,
             .rtl, .btt => .rtl,
         };
     }
 
-    pub fn writingMode(self: Direction) cangjie.WritingMode {
+    pub fn writingMode(self: Direction) cangjie.shaping.WritingMode {
         return switch (self) {
             .ltr, .rtl => .horizontal_tb,
             .ttb => .vertical_rl,
@@ -158,7 +158,7 @@ pub const Direction = enum {
         };
     }
 
-    pub fn textOrientation(self: Direction) cangjie.TextOrientation {
+    pub fn textOrientation(self: Direction) cangjie.shaping.Orientation {
         return switch (self) {
             .ltr, .rtl => .mixed,
             .ttb, .btt => .upright,
@@ -203,11 +203,11 @@ pub const Options = struct {
     native_direction_shaping: bool = false,
     beginning_of_text: bool = false,
     end_of_text: bool = false,
-    cluster_level: ?cangjie.ClusterLevel = null,
+    cluster_level: ?cangjie.shaping.ClusterLevel = null,
     normalize_clusters_to_graphemes: bool = false,
-    script_tag: ?cangjie.OpenTypeScriptTag = null,
-    language_tag: ?cangjie.OpenTypeLanguageTag = null,
-    script_position: cangjie.ScriptPosition = .normal,
+    script_tag: ?cangjie.text.OpenTypeScript = null,
+    language_tag: ?cangjie.text.OpenTypeLanguage = null,
+    script_position: cangjie.shaping.ScriptPosition = .normal,
     use_caches: bool = true,
     use_shaped_cache: bool = false,
     profile: bool = false,
@@ -227,13 +227,13 @@ pub const Options = struct {
     unsafe_to_concat: bool = false,
     not_found_variation_selector_glyph: ?u32 = null,
     remove_default_ignorables: bool = false,
-    feature_override_buf: [max_feature_overrides]cangjie.FeatureOverride = undefined,
+    feature_override_buf: [max_feature_overrides]cangjie.shaping.Feature = undefined,
     feature_override_count: usize = 0,
-    feature_range_buf: [max_feature_ranges]cangjie.GsubFeatureRange = undefined,
+    feature_range_buf: [max_feature_ranges]cangjie.shaping.FeatureRange = undefined,
     feature_range_count: usize = 0,
     variation_coord_buf: [max_variation_coords]f32 = undefined,
     variation_coord_count: usize = 0,
-    variation_design_coord_buf: [max_variation_coords]cangjie.VariationCoordinate = undefined,
+    variation_design_coord_buf: [max_variation_coords]cangjie.font.metadata.VariationCoordinate = undefined,
     variation_design_coord_count: usize = 0,
 
     pub fn fontLabel(self: Options) []const u8 {
@@ -246,11 +246,11 @@ pub const Options = struct {
         return "inline";
     }
 
-    pub fn featureOverrides(self: *const Options) []const cangjie.FeatureOverride {
+    pub fn featureOverrides(self: *const Options) []const cangjie.shaping.Feature {
         return self.feature_override_buf[0..self.feature_override_count];
     }
 
-    pub fn featureRanges(self: *const Options) []const cangjie.GsubFeatureRange {
+    pub fn featureRanges(self: *const Options) []const cangjie.shaping.FeatureRange {
         return self.feature_range_buf[0..self.feature_range_count];
     }
 
@@ -266,7 +266,7 @@ pub const Options = struct {
         return self.variation_coord_buf[0..self.variation_coord_count];
     }
 
-    pub fn designVariationCoords(self: *const Options) []const cangjie.VariationCoordinate {
+    pub fn designVariationCoords(self: *const Options) []const cangjie.font.metadata.VariationCoordinate {
         return self.variation_design_coord_buf[0..self.variation_design_coord_count];
     }
 };
@@ -625,7 +625,7 @@ fn parseDirection(text: []const u8) ?Direction {
     return null;
 }
 
-fn parseClusterLevel(text: []const u8) ?cangjie.ClusterLevel {
+fn parseClusterLevel(text: []const u8) ?cangjie.shaping.ClusterLevel {
     if (std.mem.eql(u8, text, "0") or std.mem.eql(u8, text, "monotone-graphemes")) return .monotone_graphemes;
     if (std.mem.eql(u8, text, "1") or std.mem.eql(u8, text, "monotone-characters")) return .monotone_characters;
     if (std.mem.eql(u8, text, "2") or std.mem.eql(u8, text, "characters")) return .characters;
@@ -633,7 +633,7 @@ fn parseClusterLevel(text: []const u8) ?cangjie.ClusterLevel {
     return null;
 }
 
-pub fn clusterLevelArgument(level: cangjie.ClusterLevel) []const u8 {
+pub fn clusterLevelArgument(level: cangjie.shaping.ClusterLevel) []const u8 {
     return switch (level) {
         .monotone_graphemes => "0",
         .monotone_characters => "1",
@@ -642,7 +642,7 @@ pub fn clusterLevelArgument(level: cangjie.ClusterLevel) []const u8 {
     };
 }
 
-fn parseLanguageTag(text: []const u8) ?cangjie.OpenTypeLanguageTag {
+fn parseLanguageTag(text: []const u8) ?cangjie.text.OpenTypeLanguage {
     if (std.ascii.eqlIgnoreCase(text, "dflt")) return .dflt;
     if (std.ascii.eqlIgnoreCase(text, "ara")) return .ara;
     if (std.ascii.eqlIgnoreCase(text, "far") or std.ascii.eqlIgnoreCase(text, "fa")) return .far;
@@ -653,10 +653,10 @@ fn parseLanguageTag(text: []const u8) ?cangjie.OpenTypeLanguageTag {
     if (std.ascii.eqlIgnoreCase(text, "zht")) return .zht;
     if (std.ascii.eqlIgnoreCase(text, "hin")) return .hin;
     if (std.ascii.eqlIgnoreCase(text, "dhv") or std.ascii.eqlIgnoreCase(text, "dv")) return .dhv;
-    return cangjie.openTypeLanguageTagForLocale(text);
+    return cangjie.text.openTypeLanguageForLocale(text);
 }
 
-pub fn harfrustLanguageArgument(tag_value: cangjie.OpenTypeLanguageTag) ?[]const u8 {
+pub fn harfrustLanguageArgument(tag_value: cangjie.text.OpenTypeLanguage) ?[]const u8 {
     return switch (tag_value) {
         .dflt => null,
         .ara => "ar",
@@ -671,17 +671,17 @@ pub fn harfrustLanguageArgument(tag_value: cangjie.OpenTypeLanguageTag) ?[]const
     };
 }
 
-fn parseScriptPosition(text: []const u8) ?cangjie.ScriptPosition {
+fn parseScriptPosition(text: []const u8) ?cangjie.shaping.ScriptPosition {
     if (std.mem.eql(u8, text, "normal")) return .normal;
     if (std.mem.eql(u8, text, "superscript")) return .superscript;
     if (std.mem.eql(u8, text, "subscript")) return .subscript;
     return null;
 }
 
-fn parseScriptTag(text: []const u8) ?cangjie.OpenTypeScriptTag {
+fn parseScriptTag(text: []const u8) ?cangjie.text.OpenTypeScript {
     if (text.len != 4) return null;
     const tag_value = runtimeOpenTypeTag(text[0..4]);
-    return std.enums.fromInt(cangjie.OpenTypeScriptTag, tag_value);
+    return std.enums.fromInt(cangjie.text.OpenTypeScript, tag_value);
 }
 
 pub fn printUsage(args: []const []const u8) void {

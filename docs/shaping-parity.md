@@ -1600,11 +1600,12 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   intermediate lookup states before a later lookup maps them back. The final
   post-GSUB run is still checked against `maxp` before GPOS and metrics. The
   three AlternateSubst rows now use
-  `TextContext.shapeWithFeatureRanges` and public UTF-8 byte-scoped
-  `GsubFeatureRange` values, including disabled spans, one-based alternate
-  values, lookup-flag skipping, and overlapping declarations where the later
-  value wins. The dedicated API keeps rare range data out of `ShapeOptions`
-  and its ordinary cache identity. Ranges gate only lookup candidates;
+  `cangjie.shaping.Context.shape` requests with public UTF-8 byte-scoped
+  `FeatureRange` values, including disabled spans, one-based alternate values,
+  lookup-flag skipping, and overlapping declarations where the later value
+  wins. The request keeps rare range data out of run-wide `Options` while
+  avoiding a duplicate shaping method; ranges still participate in the
+  appropriate cache identity. Ranges gate only lookup candidates;
   contextual lookups still see the complete surrounding glyph stream,
   matching HarfBuzz feature masks.
 - All twelve Unicode text-rendering `HVAR-{1,2}.tests` rows pass both

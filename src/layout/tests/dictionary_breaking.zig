@@ -41,30 +41,36 @@ test "dictionary opportunities reach one-shot retained and styled paragraphs" {
     // one-glyph word the preferred opportunity before overflow.
     const default_layout = try context.layoutParagraph(
         cascade,
-        thai_text,
-        20,
-        .{ .max_width = 35 },
+        .{
+            .text = thai_text,
+            .font_size = 20,
+            .options = .{ .max_width = 35 },
+        },
     );
     try std.testing.expectEqual(@as(usize, 2), default_layout.lines[0].glyph_len);
 
     const one_shot = try context.layoutParagraph(
         cascade,
-        thai_text,
-        20,
         .{
-            .max_width = 35,
-            .word_break_dictionary = dictionary,
+            .text = thai_text,
+            .font_size = 20,
+            .options = .{
+                .max_width = 35,
+                .word_break_dictionary = dictionary,
+            },
         },
     );
     try expectDictionaryFirstLine(one_shot);
 
     var shaped = try context.shapeParagraph(
         cascade,
-        thai_text,
-        20,
         .{
-            .max_width = 100,
-            .word_break_dictionary = dictionary,
+            .text = thai_text,
+            .font_size = 20,
+            .options = .{
+                .max_width = 100,
+                .word_break_dictionary = dictionary,
+            },
         },
     );
     defer shaped.deinit();
@@ -88,12 +94,14 @@ test "dictionary opportunities reach one-shot retained and styled paragraphs" {
     }};
     const styled = try context.layoutStyledParagraph(
         cascade,
-        thai_text,
-        20,
-        &spans,
         .{
-            .max_width = 35,
-            .word_break_dictionary = dictionary,
+            .text = thai_text,
+            .default_font_size = 20,
+            .spans = &spans,
+            .options = .{
+                .max_width = 35,
+                .word_break_dictionary = dictionary,
+            },
         },
     );
     try expectDictionaryFirstLine(styled.layout);
@@ -128,11 +136,13 @@ test "dictionary opportunities cannot bypass shaped boundary safety" {
 
     const paragraph = try context.layoutParagraph(
         cascade,
-        thai_text,
-        20,
         .{
-            .max_width = 20,
-            .word_break_dictionary = dictionary,
+            .text = thai_text,
+            .font_size = 20,
+            .options = .{
+                .max_width = 20,
+                .word_break_dictionary = dictionary,
+            },
         },
     );
     try std.testing.expectEqual(@as(usize, 1), paragraph.lines.len);

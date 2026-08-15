@@ -143,7 +143,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
         .elapsed_ns = elapsed,
         .glyph_count = glyph_count,
         .checksum = checksum,
-        .profile = cangjie.ShapeStageProfile{},
+        .profile = cangjie.shaping.StageProfile{},
         .line_summaries = try line_summaries.toOwnedSlice(allocator),
         .samples = try samples.toOwnedSlice(allocator),
     };
@@ -348,7 +348,7 @@ fn harfBuzzNormalizedCoords(allocator: std.mem.Allocator, coords: []const f32) !
     return out;
 }
 
-fn harfBuzzDesignVariations(allocator: std.mem.Allocator, coords: []const cangjie.VariationCoordinate) ![]hb.hb_variation_t {
+fn harfBuzzDesignVariations(allocator: std.mem.Allocator, coords: []const cangjie.font.metadata.VariationCoordinate) ![]hb.hb_variation_t {
     const out = try allocator.alloc(hb.hb_variation_t, coords.len);
     for (coords, out) |coord, *variation| {
         variation.* = .{
@@ -362,9 +362,9 @@ fn harfBuzzDesignVariations(allocator: std.mem.Allocator, coords: []const cangji
 fn scriptTagForText(text: []const u8) ?c_uint {
     var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
     while (it.nextCodepoint()) |codepoint| {
-        const script = cangjie.scriptForCodepoint(codepoint);
+        const script = cangjie.text.script(codepoint);
         if (script == .common or script == .inherited or script == .unknown) continue;
-        return @intFromEnum(cangjie.openTypeScriptTag(script));
+        return @intFromEnum(cangjie.text.openTypeScript(script));
     }
     return null;
 }

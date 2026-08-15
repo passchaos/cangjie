@@ -304,16 +304,16 @@ const CompareOrder = enum {
 fn compareOrder(text: []const u8, direction: options_mod.Direction) CompareOrder {
     if (direction == .ltr or direction == .ttb) return .source;
     if (direction == .btt) return .reverse_source;
-    const native_direction = cangjie.openTypeScriptHorizontalDirection(scriptTagForText(text)) orelse .rtl;
+    const native_direction = cangjie.text.openTypeScriptHorizontalDirection(scriptTagForText(text)) orelse .rtl;
     return if (native_direction == .ltr) .source else .reverse_source;
 }
 
-fn scriptTagForText(text: []const u8) cangjie.OpenTypeScriptTag {
+fn scriptTagForText(text: []const u8) cangjie.text.OpenTypeScript {
     var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
     while (it.nextCodepoint()) |codepoint| {
-        const script = cangjie.scriptForCodepoint(codepoint);
+        const script = cangjie.text.script(codepoint);
         if (script != .common and script != .inherited and script != .unknown) {
-            return cangjie.openTypeScriptTag(script);
+            return cangjie.text.openTypeScript(script);
         }
     }
     return .dflt;
@@ -519,13 +519,13 @@ fn firstDifferentGlyphIndex(lhs: []const u32, rhs: []const u32) usize {
     return shared_len;
 }
 
-fn printGlyphWindow(font: *const cangjie.Font, glyph_ids: []const u32, clusters: []const u32, center: usize) !void {
+fn printGlyphWindow(font: *const cangjie.font.Font, glyph_ids: []const u32, clusters: []const u32, center: usize) !void {
     const start = center -| 8;
     const end = @min(glyph_ids.len, center + 9);
     for (glyph_ids[start..end], start..) |glyph_id, index| {
         if (index != start) std.debug.print(",", .{});
         const cluster = if (index < clusters.len) clusters[index] else 0;
-        const name = if (glyph_id <= std.math.maxInt(cangjie.GlyphId))
+        const name = if (glyph_id <= std.math.maxInt(cangjie.font.GlyphId))
             try font.glyphName(@intCast(glyph_id))
         else
             null;

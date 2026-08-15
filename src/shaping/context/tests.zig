@@ -14,7 +14,7 @@ test "text context owns reusable caches and resets them together" {
     const context = try context_mod.TextContext.init(std.testing.allocator, .{});
     defer context.deinit();
 
-    const first = try context.shape(&font, "AAA", 20, .{});
+    const first = try context.shape(&font, .{ .text = "AAA", .font_size = 20 });
     try std.testing.expectEqual(@as(usize, 3), first.glyphs.len);
     const first_stats = context.stats();
     try std.testing.expect(first_stats.glyph_indices.misses > 0);
@@ -22,7 +22,7 @@ test "text context owns reusable caches and resets them together" {
     // lookup without retaining an owned metadata record.
     try std.testing.expect(first_stats.lookup_selection.misses > 0);
 
-    _ = try context.shape(&font, "AAA", 20, .{});
+    _ = try context.shape(&font, .{ .text = "AAA", .font_size = 20 });
     const reused = context.stats();
     try std.testing.expect(
         reused.glyph_indices.hits > first_stats.glyph_indices.hits,
@@ -50,8 +50,8 @@ test "text context optionally retains complete cascade runs" {
     );
     defer context.deinit();
 
-    _ = try context.shapeCascade(cascade, "AAA", 20, .{});
-    _ = try context.shapeCascade(cascade, "AAA", 20, .{});
+    _ = try context.shapeCascade(cascade, .{ .text = "AAA", .font_size = 20 });
+    _ = try context.shapeCascade(cascade, .{ .text = "AAA", .font_size = 20 });
     const cache_stats = context.stats().shaped_runs;
     try std.testing.expectEqual(@as(usize, 1), cache_stats.hits);
     try std.testing.expectEqual(@as(usize, 1), cache_stats.misses);
@@ -70,7 +70,7 @@ test "text context can bypass all font-derived caches" {
     );
     defer context.deinit();
 
-    const run = try context.shape(&font, "AA", 20, .{});
+    const run = try context.shape(&font, .{ .text = "AA", .font_size = 20 });
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
     try std.testing.expectEqual(context_mod.TextContext.Stats{}, context.stats());
 }
@@ -94,10 +94,12 @@ test "text context owns styled metadata and paragraph measurement" {
     }};
     const styled = try context.layoutStyledParagraph(
         cascade,
-        "AA",
-        20,
-        &spans,
-        .{ .max_width = 100 },
+        .{
+            .text = "AA",
+            .default_font_size = 20,
+            .spans = &spans,
+            .options = .{ .max_width = 100 },
+        },
     );
     try std.testing.expectEqual(styled.layout.glyphs.len, styled.glyph_metadata.len);
     for (styled.glyph_metadata) |metadata| {
@@ -106,9 +108,11 @@ test "text context owns styled metadata and paragraph measurement" {
 
     const metrics = try context.measureParagraph(
         cascade,
-        "AA",
-        20,
-        .{ .max_width = 100 },
+        .{
+            .text = "AA",
+            .font_size = 20,
+            .options = .{ .max_width = 100 },
+        },
     );
     try std.testing.expect(metrics.width > 0);
     try std.testing.expect(metrics.height > 0);

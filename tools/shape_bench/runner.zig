@@ -29,7 +29,7 @@ pub const BenchResult = struct {
     elapsed_ns: i128,
     glyph_count: usize,
     checksum: u64,
-    profile: cangjie.ShapeStageProfile,
+    profile: cangjie.shaping.StageProfile,
     line_summaries: []LineSummary = &.{},
     samples: []Sample = &.{},
     glyph_index_cache_hits: usize = 0,
@@ -57,7 +57,7 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
             .limited(256 * 1024 * 1024),
         );
         errdefer allocator.free(container);
-        const format = cangjie.detectFontContainerFormat(container) catch {
+        const format = cangjie.font.container.detectFormat(container) catch {
             if (options.hide_gsub_table) try hideSfntTable(container, "GSUB");
             return container;
         };
@@ -66,7 +66,7 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
             return container;
         }
 
-        const decoded = try cangjie.decodeFontContainerAlloc(
+        const decoded = try cangjie.font.container.decodeAlloc(
             allocator,
             container,
             256 * 1024 * 1024,
@@ -144,30 +144,30 @@ fn writeSfntSearchParameters(data: []u8, table_count: u16) void {
     std.mem.writeInt(u16, data[10..12], table_count * 16 - search_range, .big);
 }
 
-pub fn parseFont(allocator: std.mem.Allocator, font_bytes: []const u8, options: options_mod.Options) !cangjie.Font {
-    return try cangjie.Font.parseFace(allocator, font_bytes, options.face_index);
+pub fn parseFont(allocator: std.mem.Allocator, font_bytes: []const u8, options: options_mod.Options) !cangjie.font.Font {
+    return try cangjie.font.Font.parseFace(allocator, font_bytes, options.face_index);
 }
 
-pub fn resolvedVariationCoords(allocator: std.mem.Allocator, font: *const cangjie.Font, options: *const options_mod.Options) ![]f32 {
+pub fn resolvedVariationCoords(allocator: std.mem.Allocator, font: *const cangjie.font.Font, options: *const options_mod.Options) ![]f32 {
     if (options.designVariationCoords().len == 0) {
         return try allocator.dupe(f32, options.normalizedVariationCoords());
     }
     return try font.normalizedVariationCoordinates(allocator, options.designVariationCoords());
 }
 
-pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.Font, options: options_mod.Options) !BenchResult {
-    const text_context = try cangjie.TextContext.init(allocator, .{
+pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.Font, options: options_mod.Options) !BenchResult {
+    const text_context = try cangjie.shaping.Context.init(allocator, .{
         .cache_font_data = options.use_caches,
         .cache_shaped_runs = options.use_shaped_cache,
     });
     defer text_context.deinit();
 
-    const cascade_fonts = [_]*const cangjie.Font{font};
-    const cascade = cangjie.FontCascade.init(&cascade_fonts);
+    const cascade_fonts = [_]*const cangjie.font.Font{font};
+    const cascade = cangjie.shaping.FontCascade.init(&cascade_fonts);
     const normalized_variation_coords = try resolvedVariationCoords(allocator, font, &options);
     defer allocator.free(normalized_variation_coords);
 
-    const shape_options = cangjie.ShapeOptions{
+    const shape_options = cangjie.shaping.Options{
         .direction = options.direction.textDirection(),
         .reorder_bidi = options.reorder_bidi,
         .native_direction_shaping = options.native_direction_shaping,
@@ -205,7 +205,7 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
         }
     }
 
-    var profile = cangjie.ShapeStageProfile{};
+    var profile = cangjie.shaping.StageProfile{};
     if (options.profile) {
         text_context.enableProfiling(
             &profile,
@@ -294,20 +294,20 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
     };
 }
 
-fn glyphIds(allocator: std.mem.Allocator, glyphs: []const cangjie.GlyphPosition) ![]const u32 {
+fn glyphIds(allocator: std.mem.Allocator, glyphs: []const cangjie.shaping.GlyphPosition) ![]const u32 {
     const ids = try allocator.alloc(u32, glyphs.len);
     for (glyphs, ids) |glyph, *id| id.* = glyph.outputGlyphId();
     return ids;
 }
 
-fn glyphXAdvances(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, options: options_mod.Options, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
+fn glyphXAdvances(allocator: std.mem.Allocator, font: *const cangjie.font.Font, font_size: f32, options: options_mod.Options, glyphs: []const cangjie.shaping.GlyphPosition) ![]const i32 {
     _ = options;
     const values = try allocator.alloc(i32, glyphs.len);
     for (glyphs, values) |glyph, *value| value.* = fontUnitPosition(font, font_size, glyph.x_advance);
     return values;
 }
 
-fn glyphYAdvances(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, options: options_mod.Options, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
+fn glyphYAdvances(allocator: std.mem.Allocator, font: *const cangjie.font.Font, font_size: f32, options: options_mod.Options, glyphs: []const cangjie.shaping.GlyphPosition) ![]const i32 {
     const values = try allocator.alloc(i32, glyphs.len);
     for (glyphs, values) |glyph, *value| {
         const runtime_value = fontUnitPosition(font, font_size, glyph.y_advance);
@@ -321,11 +321,11 @@ fn glyphYAdvances(allocator: std.mem.Allocator, font: *const cangjie.Font, font_
 
 fn glyphXOffsets(
     allocator: std.mem.Allocator,
-    font: *const cangjie.Font,
+    font: *const cangjie.font.Font,
     font_size: f32,
     options: options_mod.Options,
     normalized_variation_coords: []const f32,
-    glyphs: []const cangjie.GlyphPosition,
+    glyphs: []const cangjie.shaping.GlyphPosition,
 ) ![]const i32 {
     const values = try allocator.alloc(i32, glyphs.len);
     const preserve_vertical_position_delta = verticalKerningFeatureRequested(options);
@@ -369,7 +369,7 @@ fn verticalKerningFeatureRequested(options: options_mod.Options) bool {
     return false;
 }
 
-fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, options: options_mod.Options, normalized_variation_coords: []const f32, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
+fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.font.Font, font_size: f32, options: options_mod.Options, normalized_variation_coords: []const f32, glyphs: []const cangjie.shaping.GlyphPosition) ![]const i32 {
     const values = try allocator.alloc(i32, glyphs.len);
     for (glyphs, values) |glyph, *value| {
         value.* = if (usesHarfBuzzVerticalSummary(options.direction) and glyph.vertical) vertical: {
@@ -386,7 +386,7 @@ fn usesHarfBuzzVerticalSummary(direction: options_mod.Direction) bool {
     return direction == .ttb or direction == .btt;
 }
 
-fn glyphFlags(allocator: std.mem.Allocator, text: []const u8, options: options_mod.Options, glyphs: []const cangjie.GlyphPosition) ![]const u32 {
+fn glyphFlags(allocator: std.mem.Allocator, text: []const u8, options: options_mod.Options, glyphs: []const cangjie.shaping.GlyphPosition) ![]const u32 {
     const values = try allocator.alloc(u32, glyphs.len);
     for (glyphs, values) |glyph, *value| {
         value.* = @intFromBool(glyph.isUnsafeToBreakBefore());
@@ -397,7 +397,7 @@ fn glyphFlags(allocator: std.mem.Allocator, text: []const u8, options: options_m
     return values;
 }
 
-fn glyphExtents(allocator: std.mem.Allocator, font: *const cangjie.Font, font_size: f32, normalized_variation_coords: []const f32, glyphs: []const cangjie.GlyphPosition) ![]const i32 {
+fn glyphExtents(allocator: std.mem.Allocator, font: *const cangjie.font.Font, font_size: f32, normalized_variation_coords: []const f32, glyphs: []const cangjie.shaping.GlyphPosition) ![]const i32 {
     const values = try allocator.alloc(i32, glyphs.len * 4);
     for (glyphs, 0..) |glyph, index| {
         const base = index * 4;
@@ -420,7 +420,7 @@ fn glyphExtents(allocator: std.mem.Allocator, font: *const cangjie.Font, font_si
     return values;
 }
 
-fn bitmapGlyphExtents(font: *const cangjie.Font, glyph_id: u32, font_size: f32, out: []i32) !bool {
+fn bitmapGlyphExtents(font: *const cangjie.font.Font, glyph_id: u32, font_size: f32, out: []i32) !bool {
     if (out.len < 4) return false;
     const bitmap_info = (try font.bitmapGlyphInfo(@intCast(glyph_id), font_size)) orelse return false;
     const ppem = @max(bitmap_info.ppem, 1);
@@ -447,13 +447,13 @@ fn textContainsCodepoint(text: []const u8, target: u21) bool {
     return false;
 }
 
-fn syntheticVerticalOriginX(font: *const cangjie.Font, glyph_id: cangjie.GlyphId, options: options_mod.Options, normalized_variation_coords: []const f32) !i32 {
+fn syntheticVerticalOriginX(font: *const cangjie.font.Font, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, normalized_variation_coords: []const f32) !i32 {
     var advance = @as(i32, (try font.horizontalMetricsAtCoords(glyph_id, normalized_variation_coords)).advance_width);
     if (options.font_bold_x != 0 and advance != 0) advance += syntheticStrength(font, options.font_bold_x);
     return @divTrunc(advance, 2) + syntheticStrength(font, options.font_bold_x);
 }
 
-fn syntheticVerticalOriginY(font: *const cangjie.Font, glyph_id: cangjie.GlyphId, options: options_mod.Options, normalized_coords: []const f32) !i32 {
+fn syntheticVerticalOriginY(font: *const cangjie.font.Font, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, normalized_coords: []const f32) !i32 {
     var bounds = try font.glyphBoundsAtCoords(glyph_id, normalized_coords);
     if (options.font_slant != 0) {
         const x1 = @as(f32, @floatFromInt(bounds.x_min));
@@ -474,32 +474,32 @@ fn syntheticVerticalOriginY(font: *const cangjie.Font, glyph_id: cangjie.GlyphId
     return @as(i32, bounds.y_max) + @divTrunc(font_advance - glyph_height, 2) + y_strength;
 }
 
-fn syntheticStrength(font: *const cangjie.Font, value: f32) i32 {
+fn syntheticStrength(font: *const cangjie.font.Font, value: f32) i32 {
     return @intFromFloat(@round(@as(f32, @floatFromInt(font.units_per_em)) * value));
 }
 
-fn harfBuzzVerticalAdvance(font: *const cangjie.Font, glyph: cangjie.GlyphPosition) !i32 {
+fn harfBuzzVerticalAdvance(font: *const cangjie.font.Font, glyph: cangjie.shaping.GlyphPosition) !i32 {
     if (try font.verticalMetrics(glyph.glyph_id)) |metrics| return -@as(i32, @intCast(metrics.advance_height));
     return -defaultVerticalAdvance(font);
 }
 
-fn defaultVerticalAdvance(font: *const cangjie.Font) i32 {
+fn defaultVerticalAdvance(font: *const cangjie.font.Font) i32 {
     return @as(i32, font.ascender) - @as(i32, font.descender);
 }
 
-fn fontUnitPosition(font: *const cangjie.Font, font_size: f32, value: f32) i32 {
+fn fontUnitPosition(font: *const cangjie.font.Font, font_size: f32, value: f32) i32 {
     const font_units = value * @as(f32, @floatFromInt(font.units_per_em)) / font_size;
     return @intFromFloat(@round(font_units));
 }
 
 fn shapeOnce(
-    text_context: *cangjie.TextContext,
-    font: *const cangjie.Font,
-    cascade: cangjie.FontCascade,
+    text_context: *cangjie.shaping.Context,
+    font: *const cangjie.font.Font,
+    cascade: cangjie.shaping.FontCascade,
     text: []const u8,
     options: options_mod.Options,
-    shape_options: cangjie.ShapeOptions,
-) ![]const cangjie.GlyphPosition {
+    shape_options: cangjie.shaping.Options,
+) ![]const cangjie.shaping.GlyphPosition {
     if (options.feature_range_count != 0) return shapeOnceWithGsubFeatureRanges(
         text_context,
         font,
@@ -511,25 +511,31 @@ fn shapeOnce(
         if (options.use_shaped_cache) {
             const shaped = try text_context.shapeCascade(
                 cascade,
-                text,
-                options.size,
-                shape_options,
+                .{
+                    .text = text,
+                    .font_size = options.size,
+                    .options = shape_options,
+                },
             );
             return shaped.glyphs;
         }
         const run = try text_context.shape(
             font,
-            text,
-            options.size,
-            shape_options,
+            .{
+                .text = text,
+                .font_size = options.size,
+                .options = shape_options,
+            },
         );
         return run.glyphs;
     }
     const run = try text_context.shape(
         font,
-        text,
-        options.size,
-        shape_options,
+        .{
+            .text = text,
+            .font_size = options.size,
+            .options = shape_options,
+        },
     );
     return run.glyphs;
 }
@@ -538,24 +544,26 @@ fn shapeOnce(
 // otherwise its code-size change would contaminate the zero-range A/B intended
 // to measure the shaping library rather than this dispatch wrapper.
 noinline fn shapeOnceWithGsubFeatureRanges(
-    text_context: *cangjie.TextContext,
-    font: *const cangjie.Font,
+    text_context: *cangjie.shaping.Context,
+    font: *const cangjie.font.Font,
     text: []const u8,
     options: options_mod.Options,
-    shape_options: cangjie.ShapeOptions,
-) ![]const cangjie.GlyphPosition {
+    shape_options: cangjie.shaping.Options,
+) ![]const cangjie.shaping.GlyphPosition {
     const ranges = options.featureRanges();
-    const run = try text_context.shapeWithFeatureRanges(
+    const run = try text_context.shape(
         font,
-        text,
-        options.size,
-        ranges,
-        shape_options,
+        .{
+            .text = text,
+            .font_size = options.size,
+            .options = shape_options,
+            .feature_ranges = ranges,
+        },
     );
     return run.glyphs;
 }
 
-fn glyphsChecksum(glyphs: []const cangjie.GlyphPosition) u64 {
+fn glyphsChecksum(glyphs: []const cangjie.shaping.GlyphPosition) u64 {
     var hasher = std.hash.Wyhash.init(0);
     for (glyphs) |glyph| {
         const glyph_id = glyph.outputGlyphId();

@@ -129,7 +129,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
         .elapsed_ns = elapsed,
         .glyph_count = glyph_count,
         .checksum = checksum,
-        .profile = cangjie.ShapeStageProfile{},
+        .profile = cangjie.shaping.StageProfile{},
         .line_summaries = try line_summaries.toOwnedSlice(allocator),
         .samples = try samples.toOwnedSlice(allocator),
     };

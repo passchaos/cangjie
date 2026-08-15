@@ -22,19 +22,20 @@ TTC/OTC, web fonts, or current color-font formats.
 
 ## Ownership And Limits
 
-`Font.parse` and `Font.parseFace` remain zero-copy APIs: a `Font` borrows the
-caller's SFNT bytes. Compressed containers and DFONT resources require newly
-reconstructed bytes, so `LoadedFont` owns both the decoded allocation and the
-`Font` borrowing it. Destroying `LoadedFont` deinitializes the parser before
-releasing those bytes.
+`cangjie.font.Font.parse` and `parseFace` are zero-copy APIs: a `Font` borrows
+the caller's SFNT bytes. Compressed containers and DFONT resources require
+newly reconstructed bytes, so `cangjie.font.container.LoadedFont` owns both the
+decoded allocation and the `Font` borrowing it. Destroying `LoadedFont`
+deinitializes the parser before releasing those bytes.
 
-`decodeFontContainerAlloc` always returns owned bytes, including a copy for
-plain SFNT/TTC input. Its size limit applies to the decoded output and therefore
-bounds WOFF expansion and DFONT-to-SFNT/TTC reconstruction. Convenience
-database loaders use a conservative 64 MiB default; callers loading a trusted
-larger collection can use the explicit `*WithLimit` APIs.
+`cangjie.font.container.decodeAlloc` always returns owned bytes, including a
+copy for plain SFNT/TTC input. Its size limit applies to the decoded output and
+therefore bounds WOFF expansion and DFONT-to-SFNT/TTC reconstruction.
+Convenience database loaders use a conservative 64 MiB default; callers
+loading a trusted larger collection can use the explicit `*WithLimit` APIs.
 
-`FontDatabase` decodes containers before parsing and fallback discovery. It:
+`cangjie.font.database.Database` decodes containers before parsing and fallback
+discovery. It:
 
 - scans `.woff`, `.woff2`, and `.dfont` beside `.ttf`, `.otf`, `.ttc`, and
   `.otc`;

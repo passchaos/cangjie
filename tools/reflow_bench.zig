@@ -21,13 +21,13 @@ pub fn main(init: std.process.Init) !void {
 
     const font_bytes = try cangjie.testing.test_font.buildMinimalTtf(allocator);
     defer allocator.free(font_bytes);
-    var font = try cangjie.Font.parse(allocator, font_bytes);
+    var font = try cangjie.font.Font.parse(allocator, font_bytes);
     defer font.deinit();
-    const fonts = [_]*const cangjie.Font{&font};
-    const cascade = cangjie.FontCascade.init(&fonts);
-    const uncached_context = try cangjie.TextContext.init(allocator, .{});
+    const fonts = [_]*const cangjie.font.Font{&font};
+    const cascade = cangjie.shaping.FontCascade.init(&fonts);
+    const uncached_context = try cangjie.shaping.Context.init(allocator, .{});
     defer uncached_context.deinit();
-    const cached_context = try cangjie.TextContext.init(
+    const cached_context = try cangjie.shaping.Context.init(
         allocator,
         .{ .cache_shaped_runs = true },
     );
@@ -38,9 +38,11 @@ pub fn main(init: std.process.Init) !void {
     // comparison.
     _ = try uncached_context.layoutParagraph(
         cascade,
-        default_text,
-        20,
-        .{ .max_width = widths[0] },
+        .{
+            .text = default_text,
+            .font_size = 20,
+            .options = .{ .max_width = widths[0] },
+        },
     );
 
     var shape_each_checksum: usize = 0;
@@ -48,9 +50,11 @@ pub fn main(init: std.process.Init) !void {
     for (0..iterations) |iteration| {
         const layout = try uncached_context.layoutParagraph(
             cascade,
-            default_text,
-            20,
-            .{ .max_width = widths[iteration % widths.len] },
+            .{
+                .text = default_text,
+                .font_size = 20,
+                .options = .{ .max_width = widths[iteration % widths.len] },
+            },
         );
         shape_each_checksum +%= layout.glyphs.len + layout.lines.len;
     }
@@ -58,18 +62,22 @@ pub fn main(init: std.process.Init) !void {
 
     _ = try cached_context.layoutParagraph(
         cascade,
-        default_text,
-        20,
-        .{ .max_width = widths[0] },
+        .{
+            .text = default_text,
+            .font_size = 20,
+            .options = .{ .max_width = widths[0] },
+        },
     );
     var cached_layout_checksum: usize = 0;
     const cached_layout_start = std.Io.Clock.now(.awake, init.io).nanoseconds;
     for (0..iterations) |iteration| {
         const layout = try cached_context.layoutParagraph(
             cascade,
-            default_text,
-            20,
-            .{ .max_width = widths[iteration % widths.len] },
+            .{
+                .text = default_text,
+                .font_size = 20,
+                .options = .{ .max_width = widths[iteration % widths.len] },
+            },
         );
         cached_layout_checksum +%= layout.glyphs.len + layout.lines.len;
     }
@@ -77,12 +85,14 @@ pub fn main(init: std.process.Init) !void {
 
     var paragraph = try uncached_context.shapeParagraph(
         cascade,
-        default_text,
-        20,
-        .{ .max_width = widths[0] },
+        .{
+            .text = default_text,
+            .font_size = 20,
+            .options = .{ .max_width = widths[0] },
+        },
     );
     defer paragraph.deinit();
-    var reflow = cangjie.ReflowBuffer.init(allocator);
+    var reflow = cangjie.paragraph.ReflowBuffer.init(allocator);
     defer reflow.deinit();
     _ = try paragraph.layout(&reflow, .{ .max_width = widths[0] });
 

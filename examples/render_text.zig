@@ -40,22 +40,20 @@ pub fn main(init: std.process.Init) !void {
     const font_bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, options.font_path, allocator, .limited(64 * 1024 * 1024));
     defer allocator.free(font_bytes);
 
-    var font = try cangjie.Font.parse(allocator, font_bytes);
+    var font = try cangjie.font.Font.parse(allocator, font_bytes);
     defer font.deinit();
 
-    const text_context = try cangjie.TextContext.init(allocator, .{});
+    const text_context = try cangjie.shaping.Context.init(allocator, .{});
     defer text_context.deinit();
     const run = try text_context.shape(
         &font,
-        options.text,
-        options.size,
-        .{},
+        .{ .text = options.text, .font_size = options.size },
     );
 
-    var target = try cangjie.RenderTarget.init(allocator, options.width, options.height);
+    var target = try cangjie.render.GrayTarget.init(allocator, options.width, options.height);
     defer target.deinit();
 
-    var rasterizer = cangjie.Rasterizer.init(allocator);
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
     try rasterizer.renderRun(&target, run, options.x, options.baseline);
 
     try writePgm(init.io, options.output_path, &target);
@@ -113,7 +111,7 @@ fn parseF32(text: []const u8) !f32 {
     return std.fmt.parseFloat(f32, text);
 }
 
-fn writePgm(io: std.Io, path: []const u8, target: *const cangjie.RenderTarget) !void {
+fn writePgm(io: std.Io, path: []const u8, target: *const cangjie.render.GrayTarget) !void {
     if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| {
         if (slash > 0) {
             try std.Io.Dir.cwd().createDirPath(io, path[0..slash]);

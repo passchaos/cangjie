@@ -15,7 +15,7 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
     };
 }
 
-pub fn run(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.Font, options: options_mod.Options) !report.Result {
+pub fn run(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.Font, options: options_mod.Options) !report.Result {
     const glyph_id = try resolveGlyphId(font, options);
     if (options.warmup != 0) {
         var warmup_checksum: u64 = 0;
@@ -48,13 +48,13 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.Font, 
     };
 }
 
-fn resolveGlyphId(font: *const cangjie.Font, options: options_mod.Options) !cangjie.GlyphId {
+fn resolveGlyphId(font: *const cangjie.font.Font, options: options_mod.Options) !cangjie.font.GlyphId {
     if (options.glyph_id) |glyph_id| return glyph_id;
     if (options.font_path == null and options.builtin_font == .gvar_compound) return 2;
     return try font.glyphIndex(options.codepoint);
 }
 
-fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.Font, glyph_id: cangjie.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
+fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Font, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
     switch (options.mode) {
         .outline => try runOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster => try runRasterIterations(allocator, font, glyph_id, options, iterations, checksum),
@@ -63,7 +63,7 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.Font, glyph_
     }
 }
 
-fn runOutlineIterations(allocator: std.mem.Allocator, font: *const cangjie.Font, glyph_id: cangjie.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
+fn runOutlineIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Font, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
     const coords = options.normalizedVariationCoords();
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
@@ -76,10 +76,10 @@ fn runOutlineIterations(allocator: std.mem.Allocator, font: *const cangjie.Font,
     }
 }
 
-fn runRasterIterations(allocator: std.mem.Allocator, font: *const cangjie.Font, glyph_id: cangjie.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
-    var target = try cangjie.RenderTarget.init(allocator, options.target_size, options.target_size);
+fn runRasterIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Font, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
+    var target = try cangjie.render.GrayTarget.init(allocator, options.target_size, options.target_size);
     defer target.deinit();
-    var rasterizer = cangjie.Rasterizer.init(allocator);
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
     rasterizer.hint_size_px = options.font_size;
     rasterizer.samples_per_axis = options.samples_per_axis;
     const coords = options.normalizedVariationCoords();
@@ -98,7 +98,7 @@ fn runRasterIterations(allocator: std.mem.Allocator, font: *const cangjie.Font, 
     }
 }
 
-fn runRasterReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.Font, glyph_id: cangjie.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
+fn runRasterReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Font, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
     const coords = options.normalizedVariationCoords();
     var outline = if (coords.len == 0)
         try font.glyphOutlineForRaster(allocator, glyph_id)
@@ -106,9 +106,9 @@ fn runRasterReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.F
         try font.glyphOutlineAtCoords(allocator, glyph_id, coords);
     defer outline.deinit();
 
-    var target = try cangjie.RenderTarget.init(allocator, options.target_size, options.target_size);
+    var target = try cangjie.render.GrayTarget.init(allocator, options.target_size, options.target_size);
     defer target.deinit();
-    var rasterizer = cangjie.Rasterizer.init(allocator);
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
     rasterizer.hint_size_px = options.font_size;
     rasterizer.samples_per_axis = options.samples_per_axis;
     var i: usize = 0;
@@ -119,7 +119,7 @@ fn runRasterReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.F
     }
 }
 
-fn runRasterPreparedIterations(allocator: std.mem.Allocator, font: *const cangjie.Font, glyph_id: cangjie.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
+fn runRasterPreparedIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Font, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
     const coords = options.normalizedVariationCoords();
     var outline = if (coords.len == 0)
         try font.glyphOutlineForRaster(allocator, glyph_id)
@@ -127,9 +127,9 @@ fn runRasterPreparedIterations(allocator: std.mem.Allocator, font: *const cangji
         try font.glyphOutlineAtCoords(allocator, glyph_id, coords);
     defer outline.deinit();
 
-    var target = try cangjie.RenderTarget.init(allocator, options.target_size, options.target_size);
+    var target = try cangjie.render.GrayTarget.init(allocator, options.target_size, options.target_size);
     defer target.deinit();
-    var rasterizer = cangjie.Rasterizer.init(allocator);
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
     rasterizer.hint_size_px = options.font_size;
     rasterizer.samples_per_axis = options.samples_per_axis;
     var prepared = try rasterizer.prepareGlyph(&outline, 0, options.font_size, options.font_size, font.units_per_em);
@@ -143,7 +143,7 @@ fn runRasterPreparedIterations(allocator: std.mem.Allocator, font: *const cangji
     }
 }
 
-fn outlineChecksum(outline: cangjie.GlyphOutline) u64 {
+fn outlineChecksum(outline: cangjie.font.Outline) u64 {
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(std.mem.asBytes(&outline.glyph_id));
     hasher.update(std.mem.asBytes(&outline.bounds));

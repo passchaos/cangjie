@@ -22,7 +22,7 @@ test "macOS SFNSMono parses shapes and rasterizes stable grayscale glyphs" {
     std.crypto.hash.sha2.Sha256.hash(font_bytes, &font_digest, .{});
     const known_font = std.mem.eql(u8, &font_digest, &known_sfns_mono_sha256);
 
-    var font = cangjie.Font.parse(allocator, font_bytes) catch |err| switch (err) {
+    var font = cangjie.font.Font.parse(allocator, font_bytes) catch |err| switch (err) {
         error.BadSfnt,
         error.InvalidGlyph,
         error.MissingTable,
@@ -34,21 +34,21 @@ test "macOS SFNSMono parses shapes and rasterizes stable grayscale glyphs" {
     };
     defer font.deinit();
 
-    try std.testing.expectEqual(cangjie.FontFormat.truetype, font.format);
+    try std.testing.expectEqual(cangjie.font.Format.truetype, font.format);
     try std.testing.expect(font.units_per_em >= 16);
     try std.testing.expect((try font.glyphIndex('C')) > 0);
     try std.testing.expect((try font.glyphIndex('j')) > 0);
 
-    const text_context = try cangjie.TextContext.init(allocator, .{});
+    const text_context = try cangjie.shaping.Context.init(allocator, .{});
     defer text_context.deinit();
-    const run = try text_context.shape(&font, "Cangjie", 36, .{});
+    const run = try text_context.shape(&font, .{ .text = "Cangjie", .font_size = 36 });
     try std.testing.expectEqual(@as(usize, 7), run.glyphs.len);
     try std.testing.expectApproxEqAbs(@as(f32, 155.77734), run.width(), 0.001);
 
-    var target = try cangjie.RenderTarget.init(allocator, 240, 96);
+    var target = try cangjie.render.GrayTarget.init(allocator, 240, 96);
     defer target.deinit();
 
-    var rasterizer = cangjie.Rasterizer.init(allocator);
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
     try rasterizer.renderRun(&target, run, 12, 60);
 
     const stats = rasterStats(&target);
@@ -74,34 +74,36 @@ test "Linux Noto Sans Arabic parses duplicate contextual GPOS coverage" {
     };
     defer allocator.free(font_bytes);
 
-    var font = try cangjie.Font.parse(allocator, font_bytes);
+    var font = try cangjie.font.Font.parse(allocator, font_bytes);
     defer font.deinit();
     try std.testing.expect((try font.glyphIndex(0x0645)) > 0); // Arabic meem.
 
-    const text_context = try cangjie.TextContext.init(allocator, .{});
+    const text_context = try cangjie.shaping.Context.init(allocator, .{});
     defer text_context.deinit();
     const run = try text_context.shape(
         &font,
-        "مرحبا بالعالم 123",
-        32,
-        .{ .direction = .rtl },
+        .{
+            .text = "مرحبا بالعالم 123",
+            .font_size = 32,
+            .options = .{ .direction = .rtl },
+        },
     );
     try std.testing.expectEqual(@as(usize, 17), run.glyphs.len);
     // These are the positional-form glyphs and advances selected by the same
     // Noto Sans Arabic file through Pango/HarfBuzz. Keep a small tolerance for
     // float scaling, but require joining to reduce the unshaped 281.824px run.
     try std.testing.expectApproxEqAbs(@as(f32, 217.408), run.width(), 0.01);
-    var actual_glyph_ids: [17]cangjie.GlyphId = undefined;
+    var actual_glyph_ids: [17]cangjie.font.GlyphId = undefined;
     for (run.glyphs, &actual_glyph_ids) |glyph, *actual| actual.* = glyph.glyph_id;
     try std.testing.expectEqualSlices(
-        cangjie.GlyphId,
+        cangjie.font.GlyphId,
         &.{ 907, 1380, 1354, 3, 770, 667, 47, 12, 667, 47, 102, 3, 47, 104, 417, 979, 771 },
         &actual_glyph_ids,
     );
 
-    var target = try cangjie.RenderTarget.init(allocator, 320, 96);
+    var target = try cangjie.render.GrayTarget.init(allocator, 320, 96);
     defer target.deinit();
-    var rasterizer = cangjie.Rasterizer.init(allocator);
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
     try rasterizer.renderRun(&target, run, 12, 64);
     const stats = rasterStats(&target);
     try std.testing.expect(stats.covered > 100);
@@ -119,21 +121,23 @@ test "Linux Noto Sans CJK vertical shaping uses real vert substitutions and vmtx
     };
     defer allocator.free(font_bytes);
 
-    var font = try cangjie.Font.parseFace(allocator, font_bytes, 2); // Noto Sans CJK SC.
+    var font = try cangjie.font.Font.parseFace(allocator, font_bytes, 2); // Noto Sans CJK SC.
     defer font.deinit();
     try std.testing.expect(font.hasVerticalMetrics());
 
-    const text_context = try cangjie.TextContext.init(allocator, .{});
+    const text_context = try cangjie.shaping.Context.init(allocator, .{});
     defer text_context.deinit();
-    const horizontal = try text_context.shape(&font, "中、（", 32, .{});
-    var horizontal_ids: [3]cangjie.GlyphId = undefined;
+    const horizontal = try text_context.shape(&font, .{ .text = "中、（", .font_size = 32 });
+    var horizontal_ids: [3]cangjie.font.GlyphId = undefined;
     for (horizontal.glyphs, &horizontal_ids) |glyph, *id| id.* = glyph.glyph_id;
 
     const vertical = try text_context.shape(
         &font,
-        "中、（",
-        32,
-        .{ .writing_mode = .vertical_rl },
+        .{
+            .text = "中、（",
+            .font_size = 32,
+            .options = .{ .writing_mode = .vertical_rl },
+        },
     );
     try std.testing.expectEqual(@as(usize, 3), vertical.glyphs.len);
     try std.testing.expectApproxEqAbs(@as(f32, 0), vertical.width(), 0.001);
@@ -164,7 +168,7 @@ const RasterStats = struct {
     bounds: ?RasterBounds,
 };
 
-fn rasterStats(target: *const cangjie.RenderTarget) RasterStats {
+fn rasterStats(target: *const cangjie.render.GrayTarget) RasterStats {
     var stats = RasterStats{
         .covered = 0,
         .coverage_sum = 0,

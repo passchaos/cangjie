@@ -1,6 +1,6 @@
 //! Public reusable ownership boundary for shaping and paragraph layout.
 //!
-//! `TextContext` is a small heap-backed handle. Internal scratch arrays and
+//! The context is a small heap-backed handle. Internal scratch arrays and
 //! caches cannot be accidentally copied or rewired by callers.
 
 const std = @import("std");
@@ -11,6 +11,42 @@ const state_mod = @import("state.zig");
 const stats_mod = @import("stats.zig");
 const text_shaper = @import("../text_shaper.zig");
 const unicode = @import("../../unicode.zig");
+
+/// One-font shaping input. Feature ranges use UTF-8 byte offsets and remain
+/// separate from `ShapeOptions` because they are uncommon and change GSUB
+/// lookup eligibility rather than the run-wide segment properties.
+pub const ShapeRequest = struct {
+    /// Valid UTF-8 to shape. The bytes are borrowed only for this call.
+    text: []const u8,
+    /// Positive, finite font size in output units.
+    font_size: f32,
+    options: layout.ShapeOptions = .{},
+    feature_ranges: []const unicode.GsubFeatureRange = &.{},
+};
+
+/// Fallback shaping input for an already selected cascade.
+pub const CascadeRequest = struct {
+    text: []const u8,
+    font_size: f32,
+    options: layout.ShapeOptions = .{},
+};
+
+/// Paragraph shaping and layout input. Keeping text, size, and options in one
+/// record makes call sites resilient as the paragraph contract grows.
+pub const ParagraphRequest = struct {
+    text: []const u8,
+    font_size: f32,
+    options: layout.ParagraphOptions,
+};
+
+/// Styled paragraph input. Spans and their backing style data are borrowed for
+/// the duration of the call; returned slices still follow the context lifetime.
+pub const StyledParagraphRequest = struct {
+    text: []const u8,
+    default_font_size: f32,
+    spans: []const layout.StyledParagraphSpan,
+    options: layout.ParagraphOptions,
+};
 
 /// Owns reusable shaping output, transient arrays, and font-derived caches.
 ///
@@ -25,6 +61,10 @@ pub const TextContext = opaque {
     };
     pub const Stats = stats_mod.Stats;
     pub const Counter = stats_mod.Counter;
+    pub const ShapeInput = ShapeRequest;
+    pub const CascadeInput = CascadeRequest;
+    pub const ParagraphInput = ParagraphRequest;
+    pub const StyledParagraphInput = StyledParagraphRequest;
     pub const StyledParagraph = struct {
         layout: layout.ParagraphLayout,
         glyph_metadata: []const layout.StyledGlyphMetadata,
@@ -92,49 +132,37 @@ pub const TextContext = opaque {
     pub fn shape(
         self: *TextContext,
         font: *const Font,
-        text: []const u8,
-        font_size: f32,
-        options: layout.ShapeOptions,
+        request: ShapeRequest,
     ) !layout.GlyphRun {
         const state = self.getState();
+        if (request.feature_ranges.len != 0) {
+            return text_shaper.TextShaper
+                .shapeUtf8WithCachesAndGsubFeatureRanges(
+                font,
+                if (state.cache_font_data) &state.glyph_metrics else null,
+                if (state.cache_font_data) &state.glyph_indices else null,
+                &state.output,
+                request.text,
+                request.font_size,
+                request.feature_ranges,
+                request.options,
+            );
+        }
         return text_shaper.TextShaper.shapeUtf8WithCaches(
             font,
             if (state.cache_font_data) &state.glyph_metrics else null,
             if (state.cache_font_data) &state.glyph_indices else null,
             &state.output,
-            text,
-            font_size,
-            options,
-        );
-    }
-
-    pub fn shapeWithFeatureRanges(
-        self: *TextContext,
-        font: *const Font,
-        text: []const u8,
-        font_size: f32,
-        ranges: []const unicode.GsubFeatureRange,
-        options: layout.ShapeOptions,
-    ) !layout.GlyphRun {
-        const state = self.getState();
-        return text_shaper.TextShaper.shapeUtf8WithCachesAndGsubFeatureRanges(
-            font,
-            if (state.cache_font_data) &state.glyph_metrics else null,
-            if (state.cache_font_data) &state.glyph_indices else null,
-            &state.output,
-            text,
-            font_size,
-            ranges,
-            options,
+            request.text,
+            request.font_size,
+            request.options,
         );
     }
 
     pub fn shapeCascade(
         self: *TextContext,
         cascade: layout.FontCascade,
-        text: []const u8,
-        font_size: f32,
-        options: layout.ShapeOptions,
+        request: CascadeRequest,
     ) !layout.ShapedText {
         const state = self.getState();
         return layout.TextShaper.shapeUtf8CascadeWithCaches(
@@ -144,35 +172,31 @@ pub const TextContext = opaque {
             if (state.cache_font_data) &state.glyph_indices else null,
             state.shapedRunCache(),
             &state.output,
-            text,
-            font_size,
-            options,
+            request.text,
+            request.font_size,
+            request.options,
         );
     }
 
     pub fn shapeScriptRuns(
         self: *TextContext,
         cascade: layout.FontCascade,
-        text: []const u8,
-        font_size: f32,
-        options: layout.ShapeOptions,
+        request: CascadeRequest,
     ) !layout.ScriptedText {
         const state = self.getState();
         return layout.TextShaper.shapeUtf8ScriptRuns(
             cascade,
             &state.output,
-            text,
-            font_size,
-            options,
+            request.text,
+            request.font_size,
+            request.options,
         );
     }
 
     pub fn shapeParagraph(
         self: *TextContext,
         cascade: layout.FontCascade,
-        text: []const u8,
-        font_size: f32,
-        options: layout.ParagraphOptions,
+        request: ParagraphRequest,
     ) !layout.ShapedParagraph {
         const state = self.getState();
         return layout.TextShaper.shapeParagraphUtf8WithCaches(
@@ -183,18 +207,16 @@ pub const TextContext = opaque {
             if (state.cache_font_data) &state.glyph_indices else null,
             state.shapedRunCache(),
             &state.output,
-            text,
-            font_size,
-            options,
+            request.text,
+            request.font_size,
+            request.options,
         );
     }
 
     pub fn layoutParagraph(
         self: *TextContext,
         cascade: layout.FontCascade,
-        text: []const u8,
-        font_size: f32,
-        options: layout.ParagraphOptions,
+        request: ParagraphRequest,
     ) !layout.ParagraphLayout {
         const state = self.getState();
         return layout.TextShaper.layoutParagraphUtf8WithCaches(
@@ -204,29 +226,26 @@ pub const TextContext = opaque {
             if (state.cache_font_data) &state.glyph_indices else null,
             state.shapedRunCache(),
             &state.output,
-            text,
-            font_size,
-            options,
+            request.text,
+            request.font_size,
+            request.options,
         );
     }
 
     pub fn layoutStyledParagraph(
         self: *TextContext,
         cascade: layout.FontCascade,
-        text: []const u8,
-        default_font_size: f32,
-        spans: []const layout.StyledParagraphSpan,
-        options: layout.ParagraphOptions,
+        request: StyledParagraphRequest,
     ) !StyledParagraph {
         const state = self.getState();
         const paragraph = try layout.TextShaper.layoutStyledParagraphUtf8(
             cascade,
             &state.output,
             &state.styled_output,
-            text,
-            default_font_size,
-            spans,
-            options,
+            request.text,
+            request.default_font_size,
+            request.spans,
+            request.options,
         );
         return .{
             .layout = paragraph,
@@ -237,16 +256,9 @@ pub const TextContext = opaque {
     pub fn measureParagraph(
         self: *TextContext,
         cascade: layout.FontCascade,
-        text: []const u8,
-        font_size: f32,
-        options: layout.ParagraphOptions,
+        request: ParagraphRequest,
     ) !layout.TextMetrics {
-        const paragraph = try self.layoutParagraph(
-            cascade,
-            text,
-            font_size,
-            options,
-        );
+        const paragraph = try self.layoutParagraph(cascade, request);
         if (paragraph.lines.len == 0) {
             return .{
                 .width = 0,

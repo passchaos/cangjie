@@ -111,9 +111,10 @@ than embedded in the shaping implementation:
   run ranges.
 - `truncation.zig` owns line limits and plain-text ellipsis materialization.
 
-`src/layout.zig` retains the public paragraph types and orchestration entry
-points only. This keeps shaping, boundary selection, geometry, and truncation
-independently testable without changing the `TextContext` surface.
+`src/layout.zig` retains paragraph orchestration and the internal records
+re-exported by `cangjie.paragraph` and `cangjie.shaping`. This keeps shaping,
+boundary selection, geometry, and truncation independently testable without
+changing the context ownership model.
 
 Post-shaping bidi output reconstruction is similarly isolated under
 `src/layout/bidi/reorder/`:
@@ -134,9 +135,10 @@ Public result records are separated from shaping algorithms under
 - `paragraph.zig` owns paragraph lines, metrics, hit testing, caret movement,
   and selection geometry.
 
-`src/layout.zig` re-exports these records under their existing names, so
-`TextContext` callers keep one intentional public surface while implementation
-files no longer mix data-model methods with OpenType shaping stages.
+`src/layout.zig` re-exports these records for internal consumers, while the
+public façade groups them under `cangjie.paragraph` and `cangjie.shaping`.
+Implementation files therefore no longer mix data-model methods with OpenType
+shaping stages.
 
 Arabic/Syriac stretch post-processing lives under
 `src/shaping/features/stch/`:
@@ -330,19 +332,20 @@ justification, hit testing, and selection geometry. Font size, language/script
 tags, OpenType features, normalized variation coordinates, letter/word
 spacing, and minimum line height are applied per span; visual style fragments
 retain color, background, and decoration metadata for renderers. Font-family
-name resolution remains a separate `FontDatabase` responsibility: the unified
-entry consumes an already selected `FontCascade` and does not guess how a
-family name maps to loaded font bytes.
+name resolution remains a separate `cangjie.font.database.Database`
+responsibility: the unified entry consumes an already selected `FontCascade`
+and does not guess how a family name maps to loaded font bytes.
 
-`FontDatabase.layoutAttributedParagraphUtf8` is the integrated entry point for
-callers that do want that resolution. It maps each normalized style run's
-family, weight, stretch, and normal/italic/oblique request to a database face,
-builds a coverage-aware fallback cascade for that run, and passes those
-borrowed fonts into the same unified paragraph. Runs without an explicit
-family inherit the caller's default query family. An explicit unknown family
-is reported as `FontFamilyNotFound` rather than silently rendering through an
-unrelated fallback family. The database and all fonts must outlive the returned
-layout because font runs retain borrowed face pointers.
+`cangjie.font.database.Database.layoutAttributedParagraphUtf8` is the
+integrated entry point for callers that do want that resolution. It maps each
+normalized style run's family, weight, stretch, and normal/italic/oblique
+request to a database face, builds a coverage-aware fallback cascade for that
+run, and passes those borrowed fonts into the same unified paragraph. Runs
+without an explicit family inherit the caller's default query family. An
+explicit unknown family is reported as `FontFamilyNotFound` rather than
+silently rendering through an unrelated fallback family. The database and all
+fonts must outlive the returned layout because font runs retain borrowed face
+pointers.
 
 `ShapedParagraph` now implements the first width-independent paragraph
 boundary. It owns source text plus pristine shaped glyph/run snapshots.
@@ -352,18 +355,31 @@ without another GSUB/GPOS pass and without accumulating mutations. Reflow
 rejects direction, script, language, feature, or variation changes because
 those options require reshaping.
 
-`TextContext` is the public ownership boundary for this pipeline. It is an
-opaque, heap-backed handle that owns reusable output/scratch arrays plus cmap,
-metric, fallback, GDEF, GSUB/GPOS proof/plan, and optional whole-run caches.
-`TextContext.Options` independently controls font-derived and whole-run
-caching. Its concise
-`shape`, `shapeWithFeatureRanges`, `shapeCascade`, `shapeScriptRuns`,
-`shapeParagraph`, `layoutParagraph`, `layoutStyledParagraph`, and
-`measureParagraph` methods replace public APIs that required callers to
-construct several independent caches and write internal buffer pointers.
+`cangjie.shaping.Context` is the public ownership boundary for this pipeline.
+It is an opaque, heap-backed handle that owns reusable output/scratch arrays
+plus cmap, metric, fallback, GDEF, GSUB/GPOS proof/plan, and optional whole-run
+caches. `Context.Options` independently controls font-derived and whole-run
+caching. Its methods accept named `cangjie.shaping.ShapeRequest`,
+`cangjie.shaping.CascadeRequest`, `cangjie.paragraph.Request`, or
+`cangjie.paragraph.StyledRequest` records rather than long positional argument
+lists. `shape` handles both ordinary runs and uncommon UTF-8 byte-scoped
+feature ranges, avoiding a second nearly identical shaping entry point.
+Cascade, script-run, retained-paragraph, one-shot layout, styled layout, and
+measurement operations share the same context and request model.
 Returned run and layout slices borrow the context and remain valid until its
 next shaping/layout call. Fonts must outlive the context, or the caller must
 invoke `clearCaches` before destroying them.
+
+The package root is intentionally small and grouped by responsibility:
+`cangjie.font`, `cangjie.text`, `cangjie.shaping`, `cangjie.paragraph`,
+`cangjie.render`, `cangjie.editor`, and `cangjie.debug`. Specialized font-table
+records live under `font.metadata`; container and database APIs live under
+`font.container` and `font.database`. This prevents unrelated low-level table
+types, editor helpers, and renderer commands from competing in one flat
+namespace. The root integration suite is likewise split under
+`src/tests/root/` by font, Unicode, shaping, rendering, database, bidi, and
+paragraph responsibility instead of making the public root a 10,000-line test
+container.
 
 Paragraph shaping now retains glyph atoms in logical source order and applies
 bidi visual ordering only after line ranges are known. Each line builds its own
@@ -585,8 +601,8 @@ Future changes must preserve these rules:
 1. Extend the existing HarfBuzz-compatible shaping-boundary flags only when a
    new portable shaping relationship can change retained-run reuse semantics.
 2. Continue moving internal cache and scratch implementations under the
-   `shaping/context` module boundary now that `TextContext` owns their public
-   lifetime.
+   `shaping/context` module boundary now that `cangjie.shaping.Context` owns
+   their public lifetime.
 3. Add language-aware hyphenation as the next optional tailoring layer; keep
    dictionary segmentation and hyphenation outside the default UAX #14 state
    machine.

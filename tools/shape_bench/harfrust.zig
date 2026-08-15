@@ -88,7 +88,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Option
         .elapsed_ns = elapsed,
         .glyph_count = glyph_count,
         .checksum = checksum,
-        .profile = cangjie.ShapeStageProfile{},
+        .profile = cangjie.shaping.StageProfile{},
         .line_summaries = try line_summaries.toOwnedSlice(allocator),
         .samples = try samples.toOwnedSlice(allocator),
     };
@@ -224,7 +224,7 @@ fn shapeBatch(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Opt
     return result.stdout;
 }
 
-fn harfrustVariationText(allocator: std.mem.Allocator, coords: []const cangjie.VariationCoordinate) ![]const u8 {
+fn harfrustVariationText(allocator: std.mem.Allocator, coords: []const cangjie.font.metadata.VariationCoordinate) ![]const u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
     for (coords, 0..) |coord, index| {

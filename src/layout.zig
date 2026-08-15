@@ -11,6 +11,9 @@ const layout_scratch = @import("shaping/context/scratch.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const pipeline_types = @import("shaping/pipeline/types.zig");
+const normalization = @import("shaping/pipeline/normalization/root.zig");
+const normalize_marks = normalization.marks;
+const normalize_native = normalization.native;
 const source_pipeline = @import("shaping/pipeline/source/root.zig");
 const gsub_pipeline = @import("shaping/pipeline/gsub/root.zig");
 const gsub_executor = gsub_pipeline.executor;
@@ -1947,7 +1950,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
 
     const shape_in_native_direction = lookup_options.shouldShapeInNativeDirection();
     if (shape_in_native_direction) {
-        reverseScratchGlyphOrderForNativeDirection(scratch);
+        normalize_native.reverse(scratch);
     }
 
     const gdef_start = shapeProfileNow(shape_profile, profile_io);
@@ -2094,25 +2097,21 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     // Keep immutable source codepoints in logical order, but reorder the glyph
     // stream and its parallel metadata by modified combining class. USE then
     // runs its syllable machine over this canonicalized source permutation.
-    reorderMarksForShaping(
-        glyph_ids,
-        glyph_source_indices,
-        glyph_cluster_indices,
-        glyph_substituted,
-        ligature_components,
-        codepoints.items,
+    const mark_normalization_input = normalize_marks.Input{
+        .glyph_ids = glyph_ids,
+        .glyph_source_indices = glyph_source_indices,
+        .glyph_cluster_indices = glyph_cluster_indices,
+        .glyph_substituted = glyph_substituted,
+        .ligature_components = ligature_components,
+        .codepoints = codepoints.items,
+    };
+    normalize_marks.reorder(
+        mark_normalization_input,
         lookup_options.cluster_level,
     );
     var arabic_joining_features: ?[]const u32 = null;
     if (lookup_options.script_tag == .arab) {
-        reorderArabicModifierMarksForShaping(
-            glyph_ids,
-            glyph_source_indices,
-            glyph_cluster_indices,
-            glyph_substituted,
-            ligature_components,
-            codepoints.items,
-        );
+        normalize_marks.reorderArabicModifiers(mark_normalization_input);
     }
     if (gsub_arabic.supports(lookup_options.script_tag) and
         codepoints.items.len != 0)
@@ -2501,81 +2500,6 @@ test "beginning item dotted circle creates a synthetic base source" {
     try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, cluster_owners.items);
 }
 
-const isShapeNativeDirectionDecimalNumber = source_pipeline.isDecimalNumber;
-
-fn isShapeNativeDirectionLetter(codepoint: u21) bool {
-    if (isShapeNativeDirectionDecimalNumber(codepoint) or
-        unicode.isUnicodeMarkCodepoint(codepoint) or
-        unicode.isDefaultIgnorableForShaping(codepoint) or
-        isShapeNativeDirectionFormatControl(codepoint))
-    {
-        return false;
-    }
-    return switch (unicode.bidiClassForCodepoint(codepoint)) {
-        .ltr, .rtl => true,
-        else => false,
-    };
-}
-
-fn isShapeNativeDirectionFormatControl(codepoint: u21) bool {
-    return (codepoint >= 0x0600 and codepoint <= 0x0605) or
-        codepoint == 0x06dd or
-        codepoint == 0x070f or
-        (codepoint >= 0x0890 and codepoint <= 0x0891) or
-        codepoint == 0x08e2 or
-        codepoint == 0x0d4e or
-        codepoint == 0x110bd or
-        codepoint == 0x110cd;
-}
-
-fn reverseScratchGlyphOrderForNativeDirection(scratch: *layout_scratch.ShapeScratch) void {
-    const len = scratch.glyph_ids.items.len;
-    if (len < 2) return;
-
-    var group_start: usize = 0;
-    var index: usize = 1;
-    while (index <= len) : (index += 1) {
-        if (index < len and scratchGlyphContinuesNativeGrapheme(scratch, index)) continue;
-        reverseScratchGlyphRange(scratch, group_start, index);
-        group_start = index;
-    }
-    reverseScratchGlyphRange(scratch, 0, len);
-}
-
-fn scratchGlyphContinuesNativeGrapheme(scratch: *const layout_scratch.ShapeScratch, glyph_index: usize) bool {
-    const source_index = if (glyph_index < scratch.glyph_source_indices.items.len)
-        scratch.glyph_source_indices.items[glyph_index]
-    else
-        glyph_index;
-    if (source_index < scratch.codepoints.items.len and unicode.isUnicodeMarkCodepoint(scratch.codepoints.items[source_index])) return true;
-    return scratchGlyphCluster(scratch, glyph_index) == scratchGlyphCluster(scratch, glyph_index - 1);
-}
-
-fn scratchGlyphCluster(scratch: *const layout_scratch.ShapeScratch, glyph_index: usize) usize {
-    if (glyph_index >= scratch.glyph_cluster_indices.items.len) return glyph_index;
-    const source_index = scratch.glyph_cluster_indices.items[glyph_index];
-    if (source_index >= scratch.clusters.items.len) return source_index;
-    return scratch.clusters.items[source_index];
-}
-
-fn reverseScratchGlyphRange(scratch: *layout_scratch.ShapeScratch, start: usize, end: usize) void {
-    var left = start;
-    var right = end;
-    while (left + 1 < right) {
-        right -= 1;
-        swapScratchGlyphs(scratch, left, right);
-        left += 1;
-    }
-}
-
-fn swapScratchGlyphs(scratch: *layout_scratch.ShapeScratch, a: usize, b: usize) void {
-    std.mem.swap(GlyphId, &scratch.glyph_ids.items[a], &scratch.glyph_ids.items[b]);
-    std.mem.swap(usize, &scratch.glyph_source_indices.items[a], &scratch.glyph_source_indices.items[b]);
-    std.mem.swap(usize, &scratch.glyph_cluster_indices.items[a], &scratch.glyph_cluster_indices.items[b]);
-    std.mem.swap(bool, &scratch.glyph_substituted.items[a], &scratch.glyph_substituted.items[b]);
-    std.mem.swap(ligature_provenance.Info, &scratch.ligature_components.infos.items[a], &scratch.ligature_components.infos.items[b]);
-}
-
 test "attachment scratch is needed only for emitted attachment adjustments" {
     try std.testing.expect(!position_attachments.hasGpos(&.{
         .{ .index = 0, .x_advance = -20, .pair_positioned = true },
@@ -2662,124 +2586,6 @@ test "USE shaping zeroes synthesized nonspacing marks without a GDEF table" {
     try std.testing.expectApproxEqAbs(@as(f32, 800), run.glyphs[0].x_advance, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0), run.glyphs[1].x_advance, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, -800), run.glyphs[1].x_offset, 0.001);
-}
-
-fn reorderMarksForShaping(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *ligature_provenance.Store, codepoints: []const u21, cluster_level: ?ClusterLevel) void {
-    var run_start: ?usize = null;
-    for (glyph_source_indices.items, 0..) |source_index, glyph_index| {
-        const modified_class = markSortClass(source_index, codepoints);
-        if (modified_class == 0) {
-            if (run_start) |start| reorderMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints, start, glyph_index, cluster_level);
-            run_start = null;
-            continue;
-        }
-        if (run_start == null) run_start = glyph_index;
-    }
-    if (run_start) |start| reorderMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints, start, glyph_source_indices.items.len, cluster_level);
-}
-
-fn reorderMarkRun(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *ligature_provenance.Store, codepoints: []const u21, start: usize, end: usize, cluster_level: ?ClusterLevel) void {
-    var i = start + 1;
-    while (i < end) : (i += 1) {
-        var j = i;
-        const current_class = markSortClass(glyph_source_indices.items[i], codepoints);
-        while (j > start and markSortClass(glyph_source_indices.items[j - 1], codepoints) > current_class) : (j -= 1) {}
-        if (j == i) continue;
-        if (cluster_level) |level| {
-            if (level.isMonotone()) shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, j, i + 1);
-        }
-        var move_index = i;
-        while (move_index > j) {
-            std.mem.swap(GlyphId, &glyph_ids.items[move_index - 1], &glyph_ids.items[move_index]);
-            std.mem.swap(usize, &glyph_source_indices.items[move_index - 1], &glyph_source_indices.items[move_index]);
-            std.mem.swap(usize, &glyph_cluster_indices.items[move_index - 1], &glyph_cluster_indices.items[move_index]);
-            std.mem.swap(bool, &glyph_substituted.items[move_index - 1], &glyph_substituted.items[move_index]);
-            std.mem.swap(ligature_provenance.Info, &ligature_components.infos.items[move_index - 1], &ligature_components.infos.items[move_index]);
-            move_index -= 1;
-        }
-    }
-}
-
-test "mark reorder merges clusters for explicit monotone cluster levels" {
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(std.testing.allocator);
-    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 2 });
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(std.testing.allocator);
-    try sources.appendSlice(std.testing.allocator, &.{ 0, 1 });
-    var clusters = std.ArrayList(usize).empty;
-    defer clusters.deinit(std.testing.allocator);
-    try clusters.appendSlice(std.testing.allocator, &.{ 0, 2 });
-    var substituted = std.ArrayList(bool).empty;
-    defer substituted.deinit(std.testing.allocator);
-    try substituted.appendSlice(std.testing.allocator, &.{ false, false });
-    var ligatures = ligature_provenance.Store{};
-    defer ligatures.deinit(std.testing.allocator);
-    try ligatures.infos.appendSlice(std.testing.allocator, &.{ .{}, .{} });
-    const codepoints = [_]u21{ 0x05bc, 0x05c1 };
-
-    reorderMarkRun(&glyphs, &sources, &clusters, &substituted, &ligatures, &codepoints, 0, 2, .monotone_characters);
-
-    try std.testing.expectEqualSlices(usize, &.{ 1, 0 }, sources.items);
-    try std.testing.expectEqualSlices(usize, &.{ 0, 0 }, clusters.items);
-}
-
-fn reorderArabicModifierMarksForShaping(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *ligature_provenance.Store, codepoints: []const u21) void {
-    var run_start: ?usize = null;
-    for (glyph_source_indices.items, 0..) |source_index, glyph_index| {
-        const modified_class = markSortClass(source_index, codepoints);
-        if (modified_class == 0) {
-            if (run_start) |start| reorderArabicModifierMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints, start, glyph_index);
-            run_start = null;
-            continue;
-        }
-        if (run_start == null) run_start = glyph_index;
-    }
-    if (run_start) |start| reorderArabicModifierMarkRun(glyph_ids, glyph_source_indices, glyph_cluster_indices, glyph_substituted, ligature_components, codepoints, start, glyph_source_indices.items.len);
-}
-
-fn reorderArabicModifierMarkRun(glyph_ids: *std.ArrayList(GlyphId), glyph_source_indices: *std.ArrayList(usize), glyph_cluster_indices: *std.ArrayList(usize), glyph_substituted: *std.ArrayList(bool), ligature_components: *ligature_provenance.Store, codepoints: []const u21, start: usize, end: usize) void {
-    var group_start = start;
-    for ([_]u8{ 220, 230 }) |target_class| {
-        var index = group_start;
-        while (index < end and markSortClass(glyph_source_indices.items[index], codepoints) < target_class) : (index += 1) {}
-        if (index == end) break;
-        if (markSortClass(glyph_source_indices.items[index], codepoints) > target_class) continue;
-
-        var group_end = index;
-        while (group_end < end and
-            markSortClass(glyph_source_indices.items[group_end], codepoints) == target_class and
-            glyph_source_indices.items[group_end] < codepoints.len and
-            isArabicModifierCombiningMark(codepoints[glyph_source_indices.items[group_end]])) : (group_end += 1)
-        {}
-
-        if (group_end == index) continue;
-        var move_index = index;
-        while (move_index < group_end) : (move_index += 1) {
-            shaping_metadata.move(
-                glyph_ids,
-                glyph_source_indices,
-                glyph_cluster_indices,
-                glyph_substituted,
-                ligature_components,
-                move_index,
-                group_start,
-            );
-            group_start += 1;
-        }
-    }
-}
-
-fn isArabicModifierCombiningMark(codepoint: u21) bool {
-    return switch (codepoint) {
-        0x0654, 0x0655, 0x0658, 0x06dc, 0x06e3, 0x06e7, 0x06e8, 0x08ca, 0x08cb, 0x08cd, 0x08ce, 0x08cf, 0x08d3, 0x08f3 => true,
-        else => false,
-    };
-}
-
-fn markSortClass(source_index: usize, codepoints: []const u21) u8 {
-    if (source_index >= codepoints.len) return 0;
-    return unicode.modifiedCombiningClassForShaping(codepoints[source_index]);
 }
 
 fn isDefaultIgnorableForShaping(codepoint: u21) bool {

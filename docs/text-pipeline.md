@@ -451,8 +451,12 @@ Future changes must preserve these rules:
   boundary; empty text has no opportunities, matching unicode-linebreak.
 - CRLF is one mandatory break opportunity after LF, never a break between CR
   and LF.
-- A soft line must not divide a shaped cluster marked unsafe to break.
-- Emergency wrapping may split only at a grapheme/shaping-cluster boundary.
+- Neither a UAX #14 opportunity nor an emergency wrap may divide a shaped
+  boundary marked unsafe to break. The flag covers contextual substitutions
+  and positioning relationships, including GPOS, legacy `kern`, and geometric
+  fallback mark attachment.
+- Emergency wrapping may split only at a grapheme/shaping-cluster boundary
+  that is also safe for reuse of the retained shaped run.
 - Reflow must be repeatable without re-running GSUB/GPOS once the
   width-independent paragraph representation exists.
 - Bidi visual order is a line property. Logical source order and mappings must
@@ -462,8 +466,8 @@ Future changes must preserve these rules:
 
 ## Next Structural Steps
 
-1. Add explicit shaping-cluster safety flags modeled after HarfBuzz and merge
-   them with UAX #14 opportunities.
+1. Extend the existing HarfBuzz-compatible shaping-boundary flags only when a
+   new portable shaping relationship can change retained-run reuse semantics.
 2. Consolidate plan caches and transient arrays into reusable shaping/layout
    contexts, following HarfBuzz and Swash lifetime boundaries.
 3. Add optional dictionary segmentation and hyphenation as tailoring layers;

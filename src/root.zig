@@ -7319,7 +7319,14 @@ test "maps logical carets onto visually reordered bidi glyphs" {
 test "mixed bidi paragraphs wrap and reorder each visual line independently" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
-    const bytes = try test_font.buildLastResortCmapTtf(allocator);
+    // This test isolates per-line bidi ordering. The normal last-resort
+    // fixture also carries a legacy kern pair for glyph 1; since every scalar
+    // maps to that glyph, the pair intentionally makes every adjacent source
+    // boundary unsafe and would turn this into a kern break-safety test.
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
     defer allocator.free(bytes);
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
@@ -7464,7 +7471,7 @@ test "wraps CJK text at character boundaries without spaces" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
 
-    const bytes = try test_font.buildNamedCjkTtf(allocator);
+    const bytes = try test_font.buildNamedCjkTtfWithKern(allocator, false);
     defer allocator.free(bytes);
 
     var font = try Font.parse(allocator, bytes);
@@ -7483,8 +7490,8 @@ test "wraps CJK text at character boundaries without spaces" {
     try std.testing.expectEqual(@as(usize, 2), paragraph.lines.len);
     try std.testing.expectEqual(@as(usize, 2), paragraph.lines[0].glyph_len);
     try std.testing.expectEqual(@as(usize, 1), paragraph.lines[1].glyph_len);
-    try std.testing.expectApproxEqAbs(@as(f32, 29.0), paragraph.lines[0].width, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 15.0), paragraph.lines[1].width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 32.0), paragraph.lines[0].width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 16.0), paragraph.lines[1].width, 0.001);
     try std.testing.expectEqual(@as(u21, 0x4e00), paragraph.glyphs[0].codepoint);
     try std.testing.expectEqual(@as(u21, 0x4e01), paragraph.glyphs[1].codepoint);
     try std.testing.expectEqual(@as(u21, 0x4e02), paragraph.glyphs[2].codepoint);
@@ -7576,7 +7583,10 @@ test "paragraph wrapping consumes Unicode line break data" {
     try std.testing.expectEqual(@as(u21, 'A'), crlf.glyphs[0].codepoint);
     try std.testing.expectEqual(@as(u21, 'A'), crlf.glyphs[3].codepoint);
 
-    const cjk_bytes = try test_font.buildNamedCjkTtf(allocator);
+    const cjk_bytes = try test_font.buildNamedCjkTtfWithKern(
+        allocator,
+        false,
+    );
     defer allocator.free(cjk_bytes);
     var cjk_font = try Font.parse(allocator, cjk_bytes);
     defer cjk_font.deinit();
@@ -7830,7 +7840,10 @@ test "paragraph wrapping honors UAX 14 punctuation and no-break glue" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
 
-    const cjk_bytes = try test_font.buildNamedCjkTtf(allocator);
+    const cjk_bytes = try test_font.buildNamedCjkTtfWithKern(
+        allocator,
+        false,
+    );
     defer allocator.free(cjk_bytes);
     var cjk_font = try Font.parse(allocator, cjk_bytes);
     defer cjk_font.deinit();
@@ -7971,7 +7984,10 @@ test "paragraph justification skips hard breaks tabs and lines without spaces" {
     try std.testing.expectApproxEqAbs(natural_tab_line_width, tabs.lines[0].width, 0.001);
     try std.testing.expectApproxEqAbs(natural_tab_advance, tabs.glyphs[1].x_advance, 0.001);
 
-    const cjk_bytes = try test_font.buildNamedCjkTtf(allocator);
+    const cjk_bytes = try test_font.buildNamedCjkTtfWithKern(
+        allocator,
+        false,
+    );
     defer allocator.free(cjk_bytes);
     var cjk_font = try Font.parse(allocator, cjk_bytes);
     defer cjk_font.deinit();
@@ -7988,14 +8004,17 @@ test "paragraph justification skips hard breaks tabs and lines without spaces" {
         },
     );
     try std.testing.expectEqual(@as(usize, 2), cjk.lines.len);
-    try std.testing.expectApproxEqAbs(@as(f32, 29), cjk.lines[0].width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 32), cjk.lines[0].width, 0.001);
 }
 
 test "right-to-left justification keeps line origin and survives bidi reorder" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
 
-    const bytes = try test_font.buildLastResortCmapTtf(allocator);
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
     defer allocator.free(bytes);
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
@@ -10438,6 +10457,7 @@ fn writeI32Test(bytes: []u8, offset: usize, value: i32) void {
 }
 
 test {
+    _ = @import("layout/tests/positioning_break_safety.zig");
     _ = @import("text/attributed/tests.zig");
     std.testing.refAllDecls(@This());
 }

@@ -181,6 +181,11 @@ pub fn buildCodepointSetTtf(allocator: std.mem.Allocator, codepoints: []const u3
     return buildSfnt(allocator, 0x00010000, try codepointSetTtfTables(allocator, codepoints));
 }
 
+/// Minimal outline-backed base/mark fixture without OpenType positioning.
+pub fn buildFallbackMarkTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try fallbackMarkTtfTables(allocator));
+}
+
 pub fn buildNamedTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildNamedTtfWithNames(allocator, "Cangjie Sans", "Regular", "Cangjie Sans Regular");
 }
@@ -479,11 +484,38 @@ pub fn buildNamedBidiMirrorTtfWithNames(allocator: std.mem.Allocator, family: []
 }
 
 pub fn buildNamedCjkTtf(allocator: std.mem.Allocator) ![]u8 {
-    return buildSfnt(allocator, 0x00010000, try namedCjkTtfTables(allocator));
+    return buildNamedCjkTtfWithKern(allocator, true);
+}
+
+pub fn buildNamedCjkTtfWithKern(
+    allocator: std.mem.Allocator,
+    include_kern: bool,
+) ![]u8 {
+    return buildSfnt(
+        allocator,
+        0x00010000,
+        try namedCjkTtfTables(allocator, include_kern),
+    );
 }
 
 pub fn buildLastResortCmapTtf(allocator: std.mem.Allocator) ![]u8 {
-    return buildSfnt(allocator, 0x00010000, try lastResortCmapTtfTables(allocator));
+    return buildLastResortCmapTtfWithKern(allocator, true);
+}
+
+/// Build the broad format-13 fixture with positioning chosen explicitly.
+///
+/// Most parser/shaper tests retain the historical legacy-kern table. Paragraph
+/// tests that only need universal cmap coverage can request a neutral font so
+/// unrelated pair positioning does not become an accidental test condition.
+pub fn buildLastResortCmapTtfWithKern(
+    allocator: std.mem.Allocator,
+    include_kern: bool,
+) ![]u8 {
+    return buildSfnt(
+        allocator,
+        0x00010000,
+        try lastResortCmapTtfTables(allocator, include_kern),
+    );
 }
 
 pub fn buildTrimmedCmapTtf(allocator: std.mem.Allocator) ![]u8 {
@@ -1477,6 +1509,31 @@ fn codepointSetTtfTables(allocator: std.mem.Allocator, codepoints: []const u32) 
     return tables;
 }
 
+fn fallbackMarkTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 7);
+    errdefer allocator.free(tables);
+    // Glyph 1 has the synthetic triangle outline, while glyphs 2 and 3 are
+    // valid empty outlines. Fallback positioning therefore exercises both a
+    // real base extent and a zero-size mark extent without a GPOS table.
+    tables[0] = .{
+        .tag = "cmap",
+        .data = try cmapFormat12SequentialTable(
+            allocator,
+            // Segmented cmap groups must be ordered by scalar value. The resulting
+            // glyph IDs are X=1, x=2, acute=3; every ID is valid in the outline
+            // and metric tables below.
+            &.{ 'X', 'x', 0x0301 },
+        ),
+    };
+    tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 4) };
+    tables[4] = .{ .tag = "hmtx", .data = try hmtxTableWithGlyphCount(allocator, 4) };
+    tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 4) };
+    return tables;
+}
+
 fn namedTtfTables(allocator: std.mem.Allocator, family: []const u8, subfamily: []const u8, full_name: []const u8) ![]Table {
     const tables = try allocator.alloc(Table, 9);
     errdefer allocator.free(tables);
@@ -2373,8 +2430,11 @@ fn namedBidiMirrorTtfTables(allocator: std.mem.Allocator, family: []const u8, su
     return tables;
 }
 
-fn namedCjkTtfTables(allocator: std.mem.Allocator) ![]Table {
-    const tables = try allocator.alloc(Table, 9);
+fn namedCjkTtfTables(
+    allocator: std.mem.Allocator,
+    include_kern: bool,
+) ![]Table {
+    const tables = try allocator.alloc(Table, if (include_kern) 9 else 8);
     errdefer allocator.free(tables);
     tables[0] = .{ .tag = "cmap", .data = try cmapFormat12GlyphArrayTable(allocator, &.{ 0x4e00, 0x4e01, 0x4e02 }, 1) };
     tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
@@ -2384,12 +2444,17 @@ fn namedCjkTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[7] = .{ .tag = "name", .data = try nameTable(allocator, "Cangjie CJK", "Regular", "Cangjie CJK Regular") };
-    tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    if (include_kern) {
+        tables[8] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    }
     return tables;
 }
 
-fn lastResortCmapTtfTables(allocator: std.mem.Allocator) ![]Table {
-    const tables = try allocator.alloc(Table, 8);
+fn lastResortCmapTtfTables(
+    allocator: std.mem.Allocator,
+    include_kern: bool,
+) ![]Table {
+    const tables = try allocator.alloc(Table, if (include_kern) 8 else 7);
     errdefer allocator.free(tables);
     // Format 13 covers large fallback spans, but the ranges are still Unicode
     // scalar ranges. Split around the UTF-16 surrogate block so the fixture
@@ -2404,7 +2469,9 @@ fn lastResortCmapTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[4] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
     tables[5] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
-    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    if (include_kern) {
+        tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    }
     return tables;
 }
 

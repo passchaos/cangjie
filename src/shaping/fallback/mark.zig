@@ -1,7 +1,15 @@
+//! Geometric fallback positioning for combining marks.
+//!
+//! Fonts without usable GPOS attachment data still need a deterministic
+//! base/mark relationship. Besides the visual offset, that relationship is
+//! shaping metadata: a retained glyph run cannot be split between its source
+//! endpoints without recomputing the fallback position.
+
 const std = @import("std");
-const Font = @import("font.zig").Font;
-const GlyphId = @import("glyph.zig").GlyphId;
-const unicode = @import("unicode.zig");
+const cluster_safety = @import("../cluster_safety.zig");
+const Font = @import("../../font.zig").Font;
+const GlyphId = @import("../../glyph.zig").GlyphId;
+const unicode = @import("../../unicode.zig");
 
 const Extents = struct {
     x_bearing: i32,
@@ -11,15 +19,36 @@ const Extents = struct {
 };
 
 pub const Base = struct {
-    cluster: usize,
+    source_end: usize,
     extents: Extents,
     x_offset: i32,
     y_offset: i32,
 };
 
+const SourceAttachment = struct {
+    base_last_byte: usize,
+    mark_start: usize,
+};
+
 pub const Offset = struct {
     x: f32 = 0,
     y: f32 = 0,
+    /// Present whenever fallback positioning accepted the mark class and
+    /// extents, even when the resulting geometric delta is zero.
+    attachment: ?SourceAttachment = null,
+
+    pub fn recordBreakSafety(
+        self: Offset,
+        boundaries: *cluster_safety.SourceBoundaries,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!void {
+        const attachment = self.attachment orelse return;
+        try boundaries.markByteRelationship(
+            allocator,
+            attachment.base_last_byte,
+            attachment.mark_start,
+        );
+    }
 };
 
 const MarkClass = enum(u8) {
@@ -57,12 +86,12 @@ test "fallback mark positioning follows Thai and Lao shaper policy" {
     try std.testing.expect(enabled(.hebr, false, false, false, false, false));
 }
 
-pub fn baseForGlyph(font: *const Font, glyph_id: GlyphId, cluster: usize, y_offset: f32, advance: f32, scale: f32, forward: bool) !?Base {
+pub fn baseForGlyph(font: *const Font, glyph_id: GlyphId, source_end: usize, y_offset: f32, advance: f32, scale: f32, forward: bool) !?Base {
     const bounds = font.glyphBounds(glyph_id) catch return null;
     const y_offset_units: i32 = @intFromFloat(@round(y_offset / scale));
     const advance_units: i32 = @intFromFloat(@round(advance / scale));
     return .{
-        .cluster = cluster,
+        .source_end = source_end,
         .extents = .{
             .x_bearing = 0,
             .y_bearing = @as(i32, bounds.y_max) + y_offset_units,
@@ -77,7 +106,7 @@ pub fn baseForGlyph(font: *const Font, glyph_id: GlyphId, cluster: usize, y_offs
     };
 }
 
-pub fn offset(font: *const Font, glyph_id: GlyphId, codepoint: u21, base: *Base, scale: f32) !Offset {
+pub fn offset(font: *const Font, glyph_id: GlyphId, codepoint: u21, mark_source_start: usize, base: *Base, scale: f32) !Offset {
     const class = recategorizedMarkClass(codepoint);
     if (class == .other or class == .left or class == .right) return .{};
     const mark_extents = try glyphExtents(font, glyph_id);
@@ -132,6 +161,14 @@ pub fn offset(font: *const Font, glyph_id: GlyphId, codepoint: u21, base: *Base,
     return .{
         .x = @as(f32, @floatFromInt(x_offset + base.x_offset)) * scale,
         .y = @as(f32, @floatFromInt(y_offset + base.y_offset)) * scale,
+        // Use a byte inside the base's terminal scalar as the first endpoint.
+        // SourceBoundaries marks every queried UTF-8 boundary after that point
+        // through the mark start, without incorrectly protecting the boundary
+        // before a multi-byte base.
+        .attachment = .{
+            .base_last_byte = base.source_end -| 1,
+            .mark_start = mark_source_start,
+        },
     };
 }
 

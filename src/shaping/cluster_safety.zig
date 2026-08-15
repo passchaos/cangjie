@@ -119,6 +119,20 @@ pub const SourceBoundaries = struct {
         );
     }
 
+    pub fn markByteRelationship(
+        self: *SourceBoundaries,
+        allocator: std.mem.Allocator,
+        first_byte: usize,
+        second_byte: usize,
+    ) std.mem.Allocator.Error!void {
+        if (first_byte == second_byte) return;
+        try self.markByteSpan(
+            allocator,
+            @min(first_byte, second_byte),
+            @max(first_byte, second_byte),
+        );
+    }
+
     pub fn markMatchedRegions(
         self: *SourceBoundaries,
         allocator: std.mem.Allocator,

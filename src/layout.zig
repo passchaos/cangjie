@@ -3,7 +3,7 @@ const aat_kerx = @import("aat_kerx.zig");
 const arabic_normalization = @import("arabic_normalization.zig");
 const attachment = @import("attachment.zig");
 const Font = @import("font.zig").Font;
-const fallback_mark = @import("fallback_mark.zig");
+const fallback_mark = @import("shaping/fallback/mark.zig");
 const GdefLookupMetadata = @import("font.zig").GdefLookupMetadata;
 const GlyphClass = @import("font.zig").GlyphClass;
 const GlyphId = @import("glyph.zig").GlyphId;
@@ -20,6 +20,7 @@ const shaping_sections = @import("shaping_sections.zig");
 const run_metadata = @import("shaping/run_metadata.zig");
 const discretionary_hyphen = @import("layout/discretionary_hyphen.zig");
 const glyph_position = @import("layout/glyph_position.zig");
+const shaped_boundary = @import("layout/line_break/shaped_boundary.zig");
 const styled_bidi = @import("layout/styled_bidi.zig");
 const styled_buffer = @import("layout/styled_buffer.zig");
 const styled_paragraph = @import("layout/styled_paragraph.zig");
@@ -3131,7 +3132,7 @@ fn buildParagraphLines(
                 line_start,
                 fitting_last_break,
             );
-            if (overflow_break.defer_until_cluster_end) continue;
+            if (overflow_break.defer_break) continue;
             const break_end = overflow_break.index;
             var break_width = if (overflow_break.uses_current_discardable)
                 line_width - glyph.x_advance
@@ -3230,17 +3231,7 @@ fn buildParagraphLines(
     try truncateParagraphLines(buffer, max_lines, options.ellipsis, max_width, alignment, false);
 }
 
-const OverflowBreak = struct {
-    index: usize,
-    uses_current_discardable: bool = false,
-    defer_until_cluster_end: bool = false,
-};
-
-fn chooseOverflowBreak(glyphs: []const GlyphPosition, grapheme_clusters: []const unicode.GraphemeCluster, index: usize, line_start: usize, last_break: ?usize) OverflowBreak {
-    if (isDiscardableBreak(glyphs[index].codepoint)) return .{ .index = index, .uses_current_discardable = true };
-    if (last_break != null and last_break.? > line_start) return .{ .index = last_break.?, .uses_current_discardable = false };
-    return graphemeOverflowBreak(glyphs, grapheme_clusters, index, line_start);
-}
+const chooseOverflowBreak = shaped_boundary.chooseOverflowBreak;
 
 fn recordSoftLineBreak(
     glyphs: []const GlyphPosition,
@@ -3255,7 +3246,11 @@ fn recordSoftLineBreak(
     normalized_variation_coords: []const f32,
 ) !void {
     if (glyphs.len == 0) return;
-    if (breakBoundaryIsUnsafe(glyphs, byte_offset, index)) return;
+    if (shaped_boundary.sourceBoundaryIsUnsafe(
+        glyphs,
+        byte_offset,
+        index,
+    )) return;
     const current = glyphs[index];
     if (isDiscardableBreak(current.codepoint) and glyphSourceEnd(current) == byte_offset) {
         if (index > line_start) {
@@ -3299,38 +3294,17 @@ fn recordSoftLineBreak(
         }
         return;
     }
-    const break_index = glyphIndexForSourceBoundary(glyphs, byte_offset, line_start, index + 1) orelse @min(index + 1, glyphs.len);
+    const break_index = shaped_boundary.glyphIndexForSourceBoundary(
+        glyphs,
+        byte_offset,
+        line_start,
+        index + 1,
+    ) orelse @min(index + 1, glyphs.len);
     if (break_index > line_start) {
         last_break.* = break_index;
         width_at_break.* = lineWidth(glyphs[line_start..break_index]);
         last_break_hyphen.* = null;
     }
-}
-
-fn breakBoundaryIsUnsafe(
-    glyphs: []const GlyphPosition,
-    byte_offset: usize,
-    current_index: usize,
-) bool {
-    if (glyphs.len == 0) return false;
-    const current = @min(current_index, glyphs.len - 1);
-
-    // Line-break opportunities are consumed as soon as the current shaped
-    // atom ends, so an unsafe boundary can only be carried by that glyph or
-    // the immediately following atom. Every output sharing a cluster queries
-    // the same source-byte sidecar bit during construction, making one glyph
-    // per atom sufficient. This keeps ordinary UAX #14 reflow strictly O(1)
-    // per opportunity instead of rescanning the paragraph or cluster.
-    const current_glyph = glyphs[current];
-    if (current_glyph.cluster == byte_offset and
-        current_glyph.isUnsafeToBreakBefore())
-    {
-        return true;
-    }
-    if (current + 1 >= glyphs.len) return false;
-    const next_glyph = glyphs[current + 1];
-    return next_glyph.cluster == byte_offset and
-        next_glyph.isUnsafeToBreakBefore();
 }
 
 test "soft line break mapping never splits a shaped source atom" {
@@ -3467,66 +3441,9 @@ fn isMandatoryLineBreak(codepoint: u21) bool {
     };
 }
 
-fn graphemeOverflowBreak(glyphs: []const GlyphPosition, grapheme_clusters: []const unicode.GraphemeCluster, index: usize, line_start: usize) OverflowBreak {
-    const cluster_start = glyphClusterStart(glyphs[index]);
-    const line_cluster_start = glyphClusterStart(glyphs[line_start]);
-    const current_cluster = graphemeClusterContaining(grapheme_clusters, cluster_start) orelse return .{ .index = index + 1 };
-    const current_cluster_start = current_cluster.byte_start;
-    const current_cluster_end = current_cluster.byte_start + current_cluster.byte_len;
-
-    if (current_cluster_start > line_cluster_start) {
-        return .{ .index = glyphIndexForSourceBoundary(glyphs, current_cluster_start, line_start, index) orelse index };
-    }
-    // MultipleSubst and other one-to-many transformations can emit adjacent
-    // glyphs with the same source cluster. Source extent alone cannot tell
-    // whether the current output glyph is the last member of that atom, so do
-    // not commit an emergency line until the following glyph starts another
-    // source cluster. This matches Parley's rule that a shaped atom (including
-    // all glyphs of a ligature/multi-output cluster) is consumed as a whole.
-    const cluster_continues = index + 1 < glyphs.len and
-        glyphClusterStart(glyphs[index + 1]) == current_cluster_start;
-    if (!cluster_continues and glyphSourceEnd(glyphs[index]) >= current_cluster_end) {
-        return .{ .index = index + 1 };
-    }
-    return .{ .index = index, .defer_until_cluster_end = true };
-}
-
-fn glyphClusterStart(glyph: GlyphPosition) usize {
-    return glyph.cluster;
-}
-
-fn glyphSourceEnd(glyph: GlyphPosition) usize {
-    return glyph.cluster + @max(glyph.source_byte_len, 1);
-}
-
-fn byteEndForGlyphPrefix(glyphs: []const GlyphPosition, glyph_end: usize, fallback: usize) usize {
-    var byte_end = fallback;
-    // Logical line byte boundaries are independent of visual glyph order. A
-    // prefix scan is therefore intentionally source-oriented: it finds the
-    // largest source end represented before the visual split even when bidi
-    // clusters inside that prefix are not monotonic.
-    for (glyphs[0..@min(glyph_end, glyphs.len)]) |glyph| {
-        byte_end = @max(byte_end, glyphSourceEnd(glyph));
-    }
-    return byte_end;
-}
-
-fn graphemeClusterContaining(clusters: []const unicode.GraphemeCluster, byte_offset: usize) ?unicode.GraphemeCluster {
-    for (clusters) |cluster| {
-        const end = cluster.byte_start + cluster.byte_len;
-        if (byte_offset >= cluster.byte_start and byte_offset < end) return cluster;
-    }
-    return null;
-}
-
-fn glyphIndexForSourceBoundary(glyphs: []const GlyphPosition, boundary: usize, line_start: usize, fallback: usize) ?usize {
-    var index = line_start + 1;
-    while (index < glyphs.len and index <= fallback) : (index += 1) {
-        if (glyphClusterStart(glyphs[index]) >= boundary) return index;
-    }
-    if (glyphs.len != 0 and fallback >= glyphs.len and boundary >= glyphSourceEnd(glyphs[glyphs.len - 1])) return glyphs.len;
-    return null;
-}
+const glyphClusterStart = shaped_boundary.glyphClusterStart;
+const glyphSourceEnd = shaped_boundary.glyphSourceEnd;
+const byteEndForGlyphPrefix = shaped_boundary.byteEndForGlyphPrefix;
 
 fn resolvedAlignment(options: ParagraphOptions) TextAlign {
     return switch (options.alignment) {
@@ -5321,6 +5238,18 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                 const previous_adjustment = findAdjustmentSorted(gpos_adjustments.items, index - 1, &adjustment_cursor);
                 if (kerx_lookup != null or !previous_adjustment.pair_positioned) {
                     if (active_kern != 0) if (previous_kern_output_index) |previous_output_index| {
+                        // Legacy `kern` relates the previous participating
+                        // source to the current one. HarfBuzz marks that span
+                        // unsafe because reshaping either side independently
+                        // would lose the pair adjustment.
+                        if (kern_lookup != null and index != 0) {
+                            try source_boundaries.markGlyphPair(
+                                buffer.allocator,
+                                glyph_source_indices.items,
+                                index - 1,
+                                index,
+                            );
+                        }
                         // Format 6 can carry 32-bit values. Split in that
                         // wider domain before scaling so large but valid AAT
                         // adjustments are not truncated to legacy i16 range.
@@ -5478,9 +5407,18 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
                     font,
                     glyph_id,
                     source_codepoint,
+                    source_span.start,
                     base,
                     scale,
                 ) catch .{};
+                // Safety metadata is best-effort under allocation failure,
+                // matching GPOS's existing source-boundary fallback: shaping
+                // geometry itself remains available if a long-run dynamic
+                // bitset cannot grow.
+                fallback_mark_offset.recordBreakSafety(
+                    source_boundaries,
+                    buffer.allocator,
+                ) catch {};
             }
         }
         if (needs_attachment_remapping) {
@@ -5553,7 +5491,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
             );
         }
         if (fallback_mark_enabled and !hide_default_ignorable and !visible_not_found_variation_selector and !unicode.isNonspacingMarkCodepoint(source_codepoint)) {
-            fallback_mark_base = fallback_mark.baseForGlyph(font, glyph_id, source_span.start, output_y_offset, horizontal_advance, scale, shapingDirectionForGpos(lookup_options) == .ltr) catch null;
+            fallback_mark_base = fallback_mark.baseForGlyph(font, glyph_id, source_span.end, output_y_offset, horizontal_advance, scale, shapingDirectionForGpos(lookup_options) == .ltr) catch null;
         }
         if (!kerx_skips_glyph) {
             previous_kern_glyph = glyph_id;

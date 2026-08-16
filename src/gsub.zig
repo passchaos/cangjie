@@ -66,10 +66,7 @@ pub const GsubError = error{
 
 const Table = table_core.View;
 
-const FeatureSelection = struct {
-    index: u16,
-    required: bool = false,
-};
+const FeatureSelection = feature_domain.selection.Item;
 
 pub const LookupOptions = struct {
     script_tag: unicode.OpenTypeScriptTag = .dflt,
@@ -469,20 +466,13 @@ fn selectedFeatureLookupIndicesForOptions(
     var feature_indices = std.ArrayList(FeatureSelection).empty;
     defer feature_indices.deinit(allocator);
     const script_list_offset = try checkedRequiredScriptListOffset(table);
-    const script_count = try readU16(table, script_list_offset);
-    const script_offset = try findScriptOffset(
+    const script_offset = (try feature_domain.selection.script(
         table,
         script_list_offset,
-        script_count,
-        @intFromEnum(options.script_tag),
-    ) orelse try findScriptOffset(
-        table,
-        script_list_offset,
-        script_count,
-        @intFromEnum(unicode.OpenTypeScriptTag.dflt),
-    ) orelse 0;
+        options.script_tag,
+    )) orelse 0;
     if (script_offset != 0) {
-        try collectScriptFeatures(
+        try feature_domain.selection.collect(
             table,
             script_offset,
             options.language_tag,
@@ -742,13 +732,14 @@ fn applyFeatureSequenceWithOptions(
     var owned_feature_indices = std.ArrayList(FeatureSelection).empty;
     defer owned_feature_indices.deinit(allocator);
     const script_list_offset = try checkedRequiredScriptListOffset(table);
-    const script_count = try readU16(table, script_list_offset);
-    const script_offset = try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(shaping_options.script_tag)) orelse
-        try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(unicode.OpenTypeScriptTag.dflt)) orelse
-        0;
+    const script_offset = (try feature_domain.selection.script(
+        table,
+        script_list_offset,
+        shaping_options.script_tag,
+    )) orelse 0;
     if (script_offset != 0) {
-        if (try selectedLangSysOffset(table, script_offset, shaping_options.language_tag)) |lang_sys_offset| {
-            try collectLangSysFeaturesStackFirst(
+        if (try feature_domain.selection.languageSystem(table, script_offset, shaping_options.language_tag)) |lang_sys_offset| {
+            try feature_domain.selection.collectLanguageStackFirst(
                 table,
                 lang_sys_offset,
                 &feature_indices_stack,
@@ -807,11 +798,12 @@ fn buildFeatureLookupPlan(
     var feature_indices = std.ArrayList(FeatureSelection).empty;
     defer feature_indices.deinit(allocator);
     const script_list_offset = try checkedRequiredScriptListOffset(table);
-    const script_count = try readU16(table, script_list_offset);
-    const script_offset = try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(options.script_tag)) orelse
-        try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(unicode.OpenTypeScriptTag.dflt)) orelse
-        0;
-    if (script_offset != 0) try collectScriptFeatures(table, script_offset, options.language_tag, &feature_indices, allocator);
+    const script_offset = (try feature_domain.selection.script(
+        table,
+        script_list_offset,
+        options.script_tag,
+    )) orelse 0;
+    if (script_offset != 0) try feature_domain.selection.collect(table, script_offset, options.language_tag, &feature_indices, allocator);
     const feature_list_offset = try checkedRequiredFeatureListOffset(table);
     const feature_count = try readU16(table, feature_list_offset);
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
@@ -873,11 +865,12 @@ fn buildMergedFeatureLookupPlan(
     var feature_indices = std.ArrayList(FeatureSelection).empty;
     defer feature_indices.deinit(allocator);
     const script_list_offset = try checkedRequiredScriptListOffset(table);
-    const script_count = try readU16(table, script_list_offset);
-    const script_offset = try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(options.script_tag)) orelse
-        try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(unicode.OpenTypeScriptTag.dflt)) orelse
-        0;
-    if (script_offset != 0) try collectScriptFeatures(table, script_offset, options.language_tag, &feature_indices, allocator);
+    const script_offset = (try feature_domain.selection.script(
+        table,
+        script_list_offset,
+        options.script_tag,
+    )) orelse 0;
+    if (script_offset != 0) try feature_domain.selection.collect(table, script_offset, options.language_tag, &feature_indices, allocator);
     const feature_list_offset = try checkedRequiredFeatureListOffset(table);
     const feature_count = try readU16(table, feature_list_offset);
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
@@ -1078,11 +1071,12 @@ fn applySelectedFeature(
     var feature_indices = std.ArrayList(FeatureSelection).empty;
     defer feature_indices.deinit(allocator);
     const script_list_offset = try checkedRequiredScriptListOffset(table);
-    const script_count = try readU16(table, script_list_offset);
-    const script_offset = try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(options.script_tag)) orelse
-        try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(unicode.OpenTypeScriptTag.dflt)) orelse
-        return;
-    try collectScriptFeatures(table, script_offset, options.language_tag, &feature_indices, allocator);
+    const script_offset = (try feature_domain.selection.script(
+        table,
+        script_list_offset,
+        options.script_tag,
+    )) orelse return;
+    try feature_domain.selection.collect(table, script_offset, options.language_tag, &feature_indices, allocator);
 
     const feature_list_offset = try checkedRequiredFeatureListOffset(table);
     const feature_count = try readU16(table, feature_list_offset);
@@ -2741,19 +2735,25 @@ fn selectedLookupRecords(table: Table, allocator: std.mem.Allocator, options: Lo
     const script_list_offset = try checkedRequiredScriptListOffset(table);
     const feature_list_offset = try checkedRequiredFeatureListOffset(table);
 
-    const script_count = try readU16(table, script_list_offset);
-    if (!table.assume_validated) try validateScriptRecordOrder(table, script_list_offset, script_count);
     // Prefer the requested script, then fall back to DFLT. Language selection
     // mirrors OpenType: a matching LangSys overrides the default LangSys.
-    const script_offset = try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(options.script_tag)) orelse
-        try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(unicode.OpenTypeScriptTag.dflt)) orelse
-        0;
+    const script_offset = (try feature_domain.selection.script(
+        table,
+        script_list_offset,
+        options.script_tag,
+    )) orelse 0;
     if (script_offset != 0) {
-        try collectScriptFeatures(table, script_offset, options.language_tag, &feature_indices, allocator);
+        try feature_domain.selection.collect(table, script_offset, options.language_tag, &feature_indices, allocator);
     }
 
     const feature_count = try readU16(table, feature_list_offset);
-    if (!table.assume_validated) try validateFeatureRecordOrder(table, feature_list_offset, feature_count);
+    if (!table.assume_validated) {
+        try feature_domain.selection.validateFeatureRecords(
+            table,
+            feature_list_offset,
+            feature_count,
+        );
+    }
     const feature_variation_index = try feature_domain.variations.matchingRecord(
         table,
         options.normalized_variation_coords,
@@ -2881,104 +2881,6 @@ fn defaultFeatureEnabled(feature_tag: u32) bool {
         feature_tag == unicode.tag("clig") or
         feature_tag == unicode.tag("calt") or
         feature_tag == unicode.tag("rclt");
-}
-
-fn findScriptOffset(table: Table, script_list_offset: usize, script_count: u16, script_tag: u32) GsubError!?usize {
-    for (0..script_count) |script_i| {
-        const script_record = script_list_offset + 2 + script_i * 6;
-        if (try readU32(table, script_record) != script_tag) continue;
-        return script_list_offset + try readU16(table, script_record + 4);
-    }
-    return null;
-}
-
-fn collectScriptFeatures(table: Table, script_offset: usize, language_tag: unicode.OpenTypeLanguageTag, feature_indices: *std.ArrayList(FeatureSelection), allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!void {
-    const lang_sys_offset = (try selectedLangSysOffset(table, script_offset, language_tag)) orelse return;
-    try collectLangSysFeatures(table, lang_sys_offset, feature_indices, allocator);
-}
-
-fn selectedLangSysOffset(table: Table, script_offset: usize, language_tag: unicode.OpenTypeLanguageTag) GsubError!?usize {
-    const default_lang_sys_offset = try readU16(table, script_offset);
-    const lang_sys_count = try readU16(table, script_offset + 2);
-    try validateLangSysRecordOrder(table, script_offset, lang_sys_count);
-    if (language_tag != .dflt) {
-        if (try findLangSysOffset(table, script_offset, lang_sys_count, @intFromEnum(language_tag))) |lang_sys_offset| {
-            return lang_sys_offset;
-        }
-    }
-    if (default_lang_sys_offset != 0) {
-        return script_offset + default_lang_sys_offset;
-    }
-    return null;
-}
-
-fn findLangSysOffset(table: Table, script_offset: usize, lang_sys_count: u16, language_tag: u32) GsubError!?usize {
-    for (0..lang_sys_count) |lang_i| {
-        const lang_record = script_offset + 4 + lang_i * 6;
-        if (try readU32(table, lang_record) != language_tag) continue;
-        return script_offset + try readU16(table, lang_record + 4);
-    }
-    return null;
-}
-
-fn collectLangSysFeatures(table: Table, lang_sys_offset: usize, feature_indices: *std.ArrayList(FeatureSelection), allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!void {
-    const required_feature_index = try readU16(table, lang_sys_offset + 2);
-    if (required_feature_index != 0xffff) {
-        try appendFeatureSelection(feature_indices, allocator, required_feature_index, true);
-    }
-    const feature_count = try readU16(table, lang_sys_offset + 4);
-    for (0..feature_count) |i| {
-        const feature_index = try readU16(table, lang_sys_offset + 6 + i * 2);
-        try appendFeatureSelection(feature_indices, allocator, feature_index, false);
-    }
-}
-
-fn collectLangSysFeaturesStackFirst(
-    table: Table,
-    lang_sys_offset: usize,
-    stack: []FeatureSelection,
-    stack_len: *usize,
-    owned: *std.ArrayList(FeatureSelection),
-    allocator: std.mem.Allocator,
-) (GsubError || std.mem.Allocator.Error)!void {
-    const required_feature_index = try readU16(table, lang_sys_offset + 2);
-    const feature_count = try readU16(table, lang_sys_offset + 4);
-    const max_selection_count = @as(usize, feature_count) + @intFromBool(required_feature_index != 0xffff);
-    if (max_selection_count > stack.len) {
-        try collectLangSysFeatures(table, lang_sys_offset, owned, allocator);
-        return;
-    }
-    if (required_feature_index != 0xffff) {
-        appendFeatureSelectionToBuffer(stack, stack_len, required_feature_index, true);
-    }
-    for (0..feature_count) |feature_i| {
-        appendFeatureSelectionToBuffer(
-            stack,
-            stack_len,
-            try readU16(table, lang_sys_offset + 6 + feature_i * 2),
-            false,
-        );
-    }
-}
-
-fn appendFeatureSelection(feature_indices: *std.ArrayList(FeatureSelection), allocator: std.mem.Allocator, index: u16, required: bool) std.mem.Allocator.Error!void {
-    for (feature_indices.items) |*selection| {
-        if (selection.index != index) continue;
-        selection.required = selection.required or required;
-        return;
-    }
-    try feature_indices.append(allocator, .{ .index = index, .required = required });
-}
-
-fn appendFeatureSelectionToBuffer(feature_indices: []FeatureSelection, len: *usize, index: u16, required: bool) void {
-    for (feature_indices[0..len.*]) |*selection| {
-        if (selection.index != index) continue;
-        selection.required = selection.required or required;
-        return;
-    }
-    std.debug.assert(len.* < feature_indices.len);
-    feature_indices[len.*] = .{ .index = index, .required = required };
-    len.* += 1;
 }
 
 fn lookupIndexLessThan(_: void, lhs: u16, rhs: u16) bool {
@@ -7538,7 +7440,7 @@ fn ensureScriptFeatureReferencesWithin(table: Table, feature_count: u16) GsubErr
     const script_list_offset = try checkedRequiredScriptListOffset(table);
     const script_count = try readU16BadGsub(table, script_list_offset);
     try ensureBytesWithin(table, script_list_offset + 2, @as(usize, script_count) * 6);
-    try validateScriptRecordOrder(table, script_list_offset, script_count);
+    try feature_domain.selection.validateScriptRecords(table, script_list_offset, script_count);
 
     for (0..script_count) |script_i| {
         const script_record = script_list_offset + 2 + script_i * 6;
@@ -7546,7 +7448,7 @@ fn ensureScriptFeatureReferencesWithin(table: Table, feature_count: u16) GsubErr
         const default_lang_sys_relative = try readU16BadGsub(table, script_offset);
         const lang_sys_count = try readU16BadGsub(table, script_offset + 2);
         try ensureBytesWithin(table, script_offset + 4, @as(usize, lang_sys_count) * 6);
-        try validateLangSysRecordOrder(table, script_offset, lang_sys_count);
+        try feature_domain.selection.validateLanguageRecords(table, script_offset, lang_sys_count);
 
         if (default_lang_sys_relative != 0) {
             try ensureLangSysFeatureReferencesWithin(table, try checkedSubtableOffset(table, script_offset, default_lang_sys_relative), feature_count);
@@ -7573,37 +7475,6 @@ fn ensureLangSysFeatureReferencesWithin(table: Table, lang_sys_offset: usize, fe
     for (0..lang_feature_count) |feature_i| {
         const feature_index = try readU16BadGsub(table, lang_sys_offset + 6 + feature_i * 2);
         if (feature_index >= feature_count) return error.BadGsub;
-    }
-}
-
-fn validateScriptRecordOrder(table: Table, script_list_offset: usize, script_count: u16) GsubError!void {
-    // Match GPOS and HarfBuzz's deterministic first-record behavior for
-    // adjacent duplicate Script tags, while still validating every child graph
-    // and rejecting a genuinely decreasing ScriptList.
-    return validateTagRecordOrder(table, script_list_offset + 2, script_count, 6, true);
-}
-
-fn validateFeatureRecordOrder(table: Table, feature_list_offset: usize, feature_count: u16) GsubError!void {
-    return validateTagRecordOrder(table, feature_list_offset + 2, feature_count, 6, true);
-}
-
-fn validateLangSysRecordOrder(table: Table, script_offset: usize, lang_sys_count: u16) GsubError!void {
-    return validateTagRecordOrder(table, script_offset + 4, lang_sys_count, 6, false);
-}
-
-fn validateTagRecordOrder(table: Table, records_offset: usize, record_count: u16, record_stride: usize, allow_equal_tags: bool) GsubError!void {
-    // OpenType Layout tag records are sorted by tag. FeatureList records in
-    // widely deployed fonts may repeat a feature or Script tag with different
-    // payloads, so those lists are nondecreasing with stable first-match
-    // selection. LangSys records stay strict because a duplicate language
-    // branch under one selected Script would otherwise be unreachable.
-    var previous_tag: ?u32 = null;
-    for (0..record_count) |record_i| {
-        const tag_value = try readU32BadGsub(table, records_offset + record_i * record_stride);
-        if (previous_tag) |previous| {
-            if (if (allow_equal_tags) tag_value < previous else tag_value <= previous) return error.BadGsub;
-        }
-        previous_tag = tag_value;
     }
 }
 
@@ -11010,42 +10881,6 @@ test "GSUB LangSys required feature bypasses optional feature filtering" {
     defer lookups.deinit(allocator);
 
     try std.testing.expectEqualSlices(u16, &.{0}, lookups.items);
-}
-
-test "GSUB LangSys feature collection uses stack and preserves required duplicates" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 144;
-
-    // Required feature 7 is repeated in the optional array; collection must
-    // retain one entry with the required bit set.
-    writeU16Test(&bytes, 0, 0);
-    writeU16Test(&bytes, 2, 7);
-    writeU16Test(&bytes, 4, 3);
-    writeU16Test(&bytes, 6, 7);
-    writeU16Test(&bytes, 8, 9);
-    writeU16Test(&bytes, 10, 9);
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    var stack: [64]FeatureSelection = undefined;
-    var stack_len: usize = 0;
-    var owned = std.ArrayList(FeatureSelection).empty;
-    defer owned.deinit(allocator);
-    try collectLangSysFeaturesStackFirst(table, 0, &stack, &stack_len, &owned, allocator);
-    try std.testing.expectEqual(@as(usize, 0), owned.items.len);
-    try std.testing.expectEqualSlices(FeatureSelection, &.{
-        .{ .index = 7, .required = true },
-        .{ .index = 9, .required = false },
-    }, stack[0..stack_len]);
-
-    // 65 optional entries cannot fit the fixed stack and must retain the
-    // allocator-backed parser path without truncation.
-    writeU16Test(&bytes, 2, 0xffff);
-    writeU16Test(&bytes, 4, 65);
-    for (0..65) |i| writeU16Test(&bytes, 6 + i * 2, @intCast(i));
-    stack_len = 0;
-    try collectLangSysFeaturesStackFirst(table, 0, &stack, &stack_len, &owned, allocator);
-    try std.testing.expectEqual(@as(usize, 0), stack_len);
-    try std.testing.expectEqual(@as(usize, 65), owned.items.len);
-    try std.testing.expectEqual(@as(u16, 64), owned.items[64].index);
 }
 
 test "GSUB lookup selection sorts and deduplicates repeated feature lookups" {

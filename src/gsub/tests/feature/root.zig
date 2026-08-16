@@ -2,5 +2,6 @@
 
 test {
     _ = @import("model.zig");
+    _ = @import("selection.zig");
     _ = @import("variations.zig");
 }

@@ -5,6 +5,7 @@ const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
 const positioning = @import("gpos/positioning/root.zig");
 pub const runtime = @import("gpos/runtime/root.zig");
+const runtime_output = @import("gpos/runtime/output/root.zig");
 const table_core = @import("gpos/table/root.zig");
 const class_context = @import("opentype/class_context.zig");
 const ligature_provenance = @import("ligature_provenance.zig");
@@ -41,6 +42,16 @@ const PairPosRecord = accelerator_core.model.PairPositionRecord;
 const PairClassEntry = accelerator_core.model.PairClassEntry;
 const NativeCoverage = accelerator_core.coverage.Owned;
 const SinglePosSubtable = accelerator_core.model.SinglePositionSubtable;
+const appendAdjustment = runtime_output.adjustments.append;
+const appendAdjustmentEx = runtime_output.adjustments.appendWithFlags;
+const currentAdjustmentPlacement = runtime_output.adjustments.currentPlacement;
+const findAdjustment = runtime_output.adjustments.find;
+const findAdjustmentMutable = runtime_output.adjustments.findMutable;
+const markUnsafePositioningPair = runtime_output.safety.markPair;
+const markUnsafePairApplication = runtime_output.safety.markPairApplication;
+const markUnsafePositioningContext = runtime_output.safety.markContext;
+const markUnsafePositioningChainingContext =
+    runtime_output.safety.markChainingContext;
 
 const max_run_digest_cache_entries = 16;
 
@@ -1153,7 +1164,7 @@ fn collectPairAdjustmentLookupAcceleratedImpl(
     // Native pair accelerators visit first glyphs in strictly increasing
     // order. When no earlier GPOS lookup has emitted an adjustment, every
     // xAdvance-only record is therefore a new, ordered index and can bypass
-    // appendAdjustmentEx's reverse merge search.
+    // the output accumulator's reverse merge search.
     const append_pairs_directly = adjustments.items.len == 0;
     var first_index: usize = 0;
     while (first_index + 1 < glyphs.len) {
@@ -1643,226 +1654,6 @@ fn collectBacktrackUnignoredGlyphs(glyphs: []const GlyphId, pos: usize, lookup_f
     return out_i == out.len;
 }
 
-inline fn markUnsafePositioningPair(
-    allocator: std.mem.Allocator,
-    options: *const LookupOptions,
-    first_glyph: usize,
-    second_glyph: usize,
-) std.mem.Allocator.Error!void {
-    if (options.unsafe_glyphs) |unsafe_glyphs| {
-        if (unsafe_glyphs.markRange(
-            @min(first_glyph, second_glyph),
-            @max(first_glyph, second_glyph) +| 1,
-        )) return;
-    }
-    const metadata = positioningMetadata(options.*);
-    const safety = metadata.source_boundaries orelse return;
-    const sources = metadata.glyph_source_indices orelse return;
-    try safety.markGlyphPair(
-        allocator,
-        sources,
-        first_glyph,
-        second_glyph,
-    );
-}
-
-fn markUnsafePairApplication(
-    allocator: std.mem.Allocator,
-    options: *const LookupOptions,
-    glyph_count: usize,
-    first_glyph: usize,
-    second_glyph: usize,
-    first_value: Adjustment,
-    second_value: Adjustment,
-    has_second_value_record: bool,
-) std.mem.Allocator.Error!void {
-    const applied = adjustmentHasEffectiveNumericDelta(
-        first_value,
-        options.vertical,
-    ) or adjustmentHasEffectiveNumericDelta(
-        second_value,
-        options.vertical,
-    );
-    if (!applied and !has_second_value_record) return;
-    const unsafe_end = if (has_second_value_record and second_glyph + 1 < glyph_count)
-        second_glyph + 1
-    else
-        second_glyph;
-    try markUnsafePositioningPair(
-        allocator,
-        options,
-        first_glyph,
-        unsafe_end,
-    );
-}
-
-fn adjustmentHasEffectiveNumericDelta(
-    value: Adjustment,
-    vertical: bool,
-) bool {
-    return (!vertical and value.x_advance != 0) or
-        value.x_placement != 0 or
-        value.y_placement != 0 or
-        (vertical and value.y_advance != 0);
-}
-
-fn markUnsafePositioningContext(
-    allocator: std.mem.Allocator,
-    options: *const LookupOptions,
-    glyph_indices: []const usize,
-) std.mem.Allocator.Error!void {
-    const metadata = positioningMetadata(options.*);
-    if (glyph_indices.len >= 2) {
-        if (options.unsafe_glyphs) |unsafe_glyphs| {
-            var first = glyph_indices[0];
-            var last = first;
-            for (glyph_indices[1..]) |index| {
-                first = @min(first, index);
-                last = @max(last, index);
-            }
-            if (unsafe_glyphs.markRange(first, last +| 1)) return;
-        }
-    }
-    const safety = metadata.source_boundaries orelse return;
-    const sources = metadata.glyph_source_indices orelse return;
-    try safety.markMatchedGlyphs(allocator, sources, glyph_indices);
-}
-
-fn markUnsafePositioningChainingContext(
-    allocator: std.mem.Allocator,
-    options: *const LookupOptions,
-    backtrack: []const usize,
-    input: []const usize,
-    lookahead: []const usize,
-) std.mem.Allocator.Error!void {
-    const metadata = positioningMetadata(options.*);
-    if (options.unsafe_glyphs) |unsafe_glyphs| {
-        var first: ?usize = null;
-        var last: usize = 0;
-        for ([_][]const usize{ backtrack, input, lookahead }) |region| {
-            for (region) |index| {
-                first = if (first) |value| @min(value, index) else index;
-                last = @max(last, index);
-            }
-        }
-        if (first) |start| {
-            if (unsafe_glyphs.markRange(start, last +| 1)) return;
-        }
-    }
-    const safety = metadata.source_boundaries orelse return;
-    const sources = metadata.glyph_source_indices orelse return;
-    try safety.markMatchedRegions(
-        allocator,
-        sources,
-        backtrack,
-        input,
-        lookahead,
-    );
-}
-
-fn appendAdjustment(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, index: usize, value: Adjustment, pair_positioned: bool) std.mem.Allocator.Error!void {
-    return try appendAdjustmentEx(adjustments, allocator, index, value, .{ .pair_positioned = pair_positioned });
-}
-
-const AdjustmentFlags = struct {
-    pair_positioned: bool = false,
-    attachment_type: AttachmentType = .none,
-    attachment_parent_index: ?usize = null,
-    x_placement_absolute: bool = false,
-    y_placement_absolute: bool = false,
-    x_advance_absolute: bool = false,
-    y_advance_absolute: bool = false,
-};
-
-fn appendAdjustmentEx(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, index: usize, value: Adjustment, flags: AdjustmentFlags) std.mem.Allocator.Error!void {
-    // Multiple positioning subtables can target the same glyph. Accumulate all
-    // deltas into one adjustment record per glyph index.
-    const has_delta = value.x_advance != 0 or value.x_placement != 0 or value.y_placement != 0 or value.y_advance != 0;
-    // PairPos is also a precedence signal for higher-level shaping: when a
-    // GPOS pair matches, legacy 'kern' must not be applied to that same pair
-    // even if the first ValueRecord is empty and all numeric deltas live on the
-    // second glyph. Keep a zero-valued record when metadata carries that fact.
-    if (!has_delta and
-        !flags.pair_positioned and
-        flags.attachment_type == .none and
-        !flags.x_advance_absolute and
-        !flags.y_advance_absolute) return;
-    var existing_i = adjustments.items.len;
-    while (existing_i > 0) {
-        existing_i -= 1;
-        if (adjustments.items[existing_i].index != index) continue;
-        const existing = &adjustments.items[existing_i];
-        if (flags.x_advance_absolute) {
-            existing.x_advance = value.x_advance;
-        } else {
-            existing.x_advance += value.x_advance;
-        }
-        if (flags.attachment_type == .mark or flags.x_placement_absolute) {
-            existing.x_placement = value.x_placement;
-        } else {
-            existing.x_placement += value.x_placement;
-        }
-        if (flags.attachment_type == .mark or flags.y_placement_absolute) {
-            existing.y_placement = value.y_placement;
-        } else {
-            existing.y_placement += value.y_placement;
-        }
-        if (flags.attachment_type == .mark) {
-            existing.attachment_cross_offset = value.attachment_cross_offset;
-        }
-        if (flags.y_advance_absolute) {
-            existing.y_advance = value.y_advance;
-        } else {
-            existing.y_advance += value.y_advance;
-        }
-        existing.pair_positioned = existing.pair_positioned or flags.pair_positioned;
-        existing.x_advance_absolute = existing.x_advance_absolute or flags.x_advance_absolute;
-        existing.y_advance_absolute = existing.y_advance_absolute or flags.y_advance_absolute;
-        if (flags.attachment_type != .none) existing.attachment_type = flags.attachment_type;
-        if (flags.attachment_parent_index) |parent_index| existing.attachment_parent_index = parent_index;
-        return;
-    }
-    try adjustments.append(allocator, .{
-        .index = index,
-        .x_advance = value.x_advance,
-        .x_placement = value.x_placement,
-        .y_placement = value.y_placement,
-        .y_advance = value.y_advance,
-        .attachment_cross_offset = value.attachment_cross_offset,
-        .pair_positioned = flags.pair_positioned,
-        .attachment_type = flags.attachment_type,
-        .attachment_parent_index = flags.attachment_parent_index,
-        .x_advance_absolute = flags.x_advance_absolute,
-        .y_advance_absolute = flags.y_advance_absolute,
-    });
-}
-
-test "GPOS keeps zero-valued absolute advance adjustments" {
-    const allocator = std.testing.allocator;
-    var adjustments = std.ArrayList(Adjustment).empty;
-    defer adjustments.deinit(allocator);
-
-    try appendAdjustmentEx(&adjustments, allocator, 2, .{ .index = 2, .x_advance = 0 }, .{ .x_advance_absolute = true });
-
-    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
-    try std.testing.expectEqual(@as(usize, 2), adjustments.items[0].index);
-    try std.testing.expectEqual(@as(i16, 0), adjustments.items[0].x_advance);
-    try std.testing.expect(adjustments.items[0].x_advance_absolute);
-}
-
-test "GPOS absolute advance adjustments replace previous advance" {
-    const allocator = std.testing.allocator;
-    var adjustments = std.ArrayList(Adjustment).empty;
-    defer adjustments.deinit(allocator);
-
-    try appendAdjustmentEx(&adjustments, allocator, 2, .{ .index = 2, .x_advance = 120 }, .{ .x_advance_absolute = true });
-    try appendAdjustmentEx(&adjustments, allocator, 2, .{ .index = 2, .x_advance = 240 }, .{ .x_advance_absolute = true });
-
-    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
-    try std.testing.expectEqual(@as(i16, 240), adjustments.items[0].x_advance);
-    try std.testing.expect(adjustments.items[0].x_advance_absolute);
-}
-
 test "GPOS cursive positioning uses previous placement for overlapping joins" {
     const allocator = std.testing.allocator;
     var adjustments = std.ArrayList(Adjustment).empty;
@@ -2102,41 +1893,6 @@ fn reverseCursiveAttachmentChain(adjustments: *std.ArrayList(Adjustment), alloca
         .index = old_parent_index,
         .y_placement = -child_placement.y,
     }, .{ .attachment_type = .cursive, .attachment_parent_index = child_index, .y_placement_absolute = true });
-}
-
-const AdjustmentPlacement = struct {
-    x: i16 = 0,
-    y: i16 = 0,
-};
-
-fn currentAdjustmentPlacement(adjustments: []const Adjustment, index: usize) AdjustmentPlacement {
-    var i = adjustments.len;
-    while (i > 0) {
-        i -= 1;
-        if (adjustments[i].index == index) return .{
-            .x = adjustments[i].x_placement,
-            .y = adjustments[i].y_placement,
-        };
-    }
-    return .{};
-}
-
-fn findAdjustmentMutable(adjustments: []Adjustment, index: usize) ?*Adjustment {
-    var i = adjustments.len;
-    while (i > 0) {
-        i -= 1;
-        if (adjustments[i].index == index) return &adjustments[i];
-    }
-    return null;
-}
-
-fn findAdjustment(adjustments: []const Adjustment, index: usize) ?Adjustment {
-    var i = adjustments.len;
-    while (i > 0) {
-        i -= 1;
-        if (adjustments[i].index == index) return adjustments[i];
-    }
-    return null;
 }
 
 fn previousCoveredCursiveGlyph(table: Table, coverage_offset: usize, glyphs: []const GlyphId, target_index: usize, entry_exit_count: usize, lookup_flag: u16, options: LookupOptions) GposError!?usize {

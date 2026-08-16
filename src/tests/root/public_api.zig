@@ -202,6 +202,39 @@ test "metric inspection exposes table and presentation metrics" {
     try std.testing.expect((try inspection.verticalOrigins(allocator)) == null);
 }
 
+test "variation inspection exposes table-level variable font data" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildMetricVariationTtf(allocator);
+    defer allocator.free(bytes);
+
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    const inspection = cangjie.font.metadata.variations.inspect(&face);
+
+    const hvar = (try inspection.horizontalMetrics(allocator)).?;
+    defer inspection.freeHorizontalMetrics(allocator, hvar);
+    try std.testing.expectEqual(@as(u32, 0x00010000), hvar.version);
+    try std.testing.expectEqual(
+        @as(?i32, 4),
+        try inspection.horizontalAdvanceDelta(1, &.{0.5}),
+    );
+
+    const vvar = (try inspection.verticalMetrics(allocator)).?;
+    defer inspection.freeVerticalMetrics(allocator, vvar);
+    try std.testing.expectEqual(
+        @as(?i32, 4),
+        try inspection.verticalAdvanceDelta(1, &.{0.5}),
+    );
+    try std.testing.expect((try inspection.metricVariations(allocator)) == null);
+    const stat_axes = try inspection.statAxes(allocator);
+    defer allocator.free(stat_axes);
+    const stat_values = try inspection.statValues(allocator);
+    defer inspection.freeStatValues(allocator, stat_values);
+    try std.testing.expect(
+        (try inspection.compositeVariations(allocator)) == null,
+    );
+}
+
 test "concrete engine remains valid after a value move" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalTtf(allocator);

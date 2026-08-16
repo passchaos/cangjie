@@ -3454,196 +3454,6 @@ test "GSUB source syllable matching can target selected lookup indexes" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
 }
 
-test "GSUB MarkAttachmentType uses MarkAttachClassDef without glyph classes" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 24;
-
-    writeU16Test(&bytes, 0, 1);
-    writeU16Test(&bytes, 2, 0x0100); // MarkAttachmentType 1.
-    writeU16Test(&bytes, 4, 1);
-    writeU16Test(&bytes, 6, 8);
-
-    const single = 8;
-    writeU16Test(&bytes, single + 0, 1);
-    writeU16Test(&bytes, single + 2, 6);
-    writeI16Test(&bytes, single + 4, 10);
-    writeU16Test(&bytes, single + 6, 1);
-    writeU16Test(&bytes, single + 8, 3);
-    writeU16Test(&bytes, single + 10, 5);
-    writeU16Test(&bytes, single + 12, 7);
-    writeU16Test(&bytes, single + 14, 8);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 5, 7, 8 });
-
-    var mark_attach_classes = [_]u16{0} ** 9;
-    mark_attach_classes[5] = 2;
-    mark_attach_classes[7] = 1;
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
-        .mark_attach_classes = &mark_attach_classes,
-    });
-
-    // Fonts may omit useful GlyphClassDef data while still classifying marks in
-    // MarkAttachClassDef. Non-zero attachment classes must therefore activate
-    // MarkAttachmentType filtering; ordinary glyphs (class zero and attachment
-    // class zero) still participate.
-    try std.testing.expectEqualSlices(GlyphId, &.{ 5, 17, 18 }, glyphs.items);
-}
-
-test "GSUB lookup flags honor GDEF mark filtering sets" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 22;
-
-    writeU16Test(&bytes, 0, 1);
-    writeU16Test(&bytes, 2, 0x0010); // UseMarkFilteringSet.
-    writeU16Test(&bytes, 4, 1);
-    writeU16Test(&bytes, 6, 10);
-    writeU16Test(&bytes, 8, 1); // MarkFilteringSet index.
-
-    const single = 10;
-    writeU16Test(&bytes, single + 0, 1);
-    writeU16Test(&bytes, single + 2, 6);
-    writeI16Test(&bytes, single + 4, 10);
-    writeCoverage1(&bytes, single + 6, 5);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 5, 7 });
-
-    const mark_sets = [_][]const GlyphId{ &.{7}, &.{5} };
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
-        .mark_filtering_sets = &mark_sets,
-    });
-
-    try std.testing.expectEqualSlices(GlyphId, &.{ 15, 7 }, glyphs.items);
-
-    // The validated Font path serves LookupFlag metadata from the accelerator
-    // rather than rereading the variable-length header on every run.
-    glyphs.items[0] = 5;
-    const accelerator = try accelerator_root.build.lookup.one(.{
-        .data = &bytes,
-        .offset = 0,
-        .length = bytes.len,
-        .assume_validated = true,
-    }, 0, allocator);
-    defer deinitLookupAcceleratorContents(allocator, @constCast(&[_]LookupAccelerator{accelerator}));
-    const accelerators = [_]LookupAccelerator{accelerator};
-    try applyLookupWithIndex(
-        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
-        0,
-        0,
-        &glyphs,
-        allocator,
-        .{
-            .mark_filtering_sets = &mark_sets,
-            .lookup_accelerators = &accelerators,
-            .assume_validated = true,
-        },
-        null,
-    );
-    try std.testing.expectEqualSlices(GlyphId, &.{ 15, 7 }, glyphs.items);
-}
-
-test "GSUB rejects missing GDEF mark filtering set indexes during shaping" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 22;
-
-    writeU16Test(&bytes, 0, 1);
-    writeU16Test(&bytes, 2, 0x0010); // UseMarkFilteringSet.
-    writeU16Test(&bytes, 4, 1);
-    writeU16Test(&bytes, 6, 10);
-    writeU16Test(&bytes, 8, 1); // Invalid: only set 0 is supplied below.
-
-    const single = 10;
-    writeU16Test(&bytes, single + 0, 1);
-    writeU16Test(&bytes, single + 2, 6);
-    writeI16Test(&bytes, single + 4, 10);
-    writeCoverage1(&bytes, single + 6, 5);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.append(allocator, 5);
-
-    const mark_sets = [_][]const GlyphId{&.{5}};
-    // The MarkFilteringSet field is a direct index into GDEF MarkGlyphSetsDef.
-    // Once those sets are available, treating an out-of-range index as "ignore
-    // all marks" would hide malformed layout data and make lookup behavior
-    // depend on fallback glyph-class metadata.
-    try std.testing.expectError(error.BadGsub, applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
-        .mark_filtering_sets = &mark_sets,
-    }));
-    try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
-}
-
-test "GSUB lookup flags combine mark filtering set and attachment type" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 26;
-
-    writeU16Test(&bytes, 0, 1);
-    writeU16Test(&bytes, 2, 0x0210); // MarkAttachmentType 2 + UseMarkFilteringSet.
-    writeU16Test(&bytes, 4, 1);
-    writeU16Test(&bytes, 6, 10);
-    writeU16Test(&bytes, 8, 0); // MarkFilteringSet index.
-
-    const single = 10;
-    writeU16Test(&bytes, single + 0, 1);
-    writeU16Test(&bytes, single + 2, 8);
-    writeI16Test(&bytes, single + 4, 10);
-    writeCoverage1List(&bytes, single + 8, &.{ 5, 7 });
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 5, 7 });
-
-    var glyph_classes = [_]u16{0} ** 8;
-    glyph_classes[5] = 3;
-    glyph_classes[7] = 3;
-    var mark_attach_classes = [_]u16{0} ** 8;
-    mark_attach_classes[5] = 1;
-    mark_attach_classes[7] = 2;
-    const mark_sets = [_][]const GlyphId{&.{ 5, 7 }};
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
-        .glyph_classes = &glyph_classes,
-        .mark_attach_classes = &mark_attach_classes,
-        .mark_filtering_sets = &mark_sets,
-    });
-
-    try std.testing.expectEqualSlices(GlyphId, &.{ 5, 17 }, glyphs.items);
-}
-
-test "GSUB extension substitution preserves wrapper lookup flags" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 28;
-
-    writeU16Test(&bytes, 0, 7);
-    writeU16Test(&bytes, 2, 0x0008);
-    writeU16Test(&bytes, 4, 1);
-    writeU16Test(&bytes, 6, 8);
-
-    const extension = 8;
-    writeU16Test(&bytes, extension + 0, 1);
-    writeU16Test(&bytes, extension + 2, 1);
-    writeU32Test(&bytes, extension + 4, 8);
-
-    const single = extension + 8;
-    writeU16Test(&bytes, single + 0, 1);
-    writeU16Test(&bytes, single + 2, 6);
-    writeI16Test(&bytes, single + 4, 1);
-    writeCoverage1(&bytes, single + 6, 3);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.append(allocator, 3);
-
-    const glyph_classes = [_]u16{ 0, 1, 2, 3 };
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
-        .glyph_classes = &glyph_classes,
-    });
-
-    try std.testing.expectEqualSlices(GlyphId, &.{3}, glyphs.items);
-}
-
 fn writeSingleDeltaLookup(bytes: []u8, lookup_offset: usize, glyph: GlyphId, delta: i16) void {
     writeU16Test(bytes, lookup_offset + 0, 1);
     writeU16Test(bytes, lookup_offset + 4, 1);
@@ -3756,6 +3566,14 @@ const CacheIntegrationTestBindings = struct {
         applyCachedLookupSelectionWithOptionsAfterMetadataProof;
 };
 
+const filteringTestApplyLookup = applyLookup;
+const filteringTestApplyLookupWithIndex = applyLookupWithIndex;
+
+const FilteringIntegrationTestBindings = struct {
+    pub const applyLookup = filteringTestApplyLookup;
+    pub const applyLookupWithIndex = filteringTestApplyLookupWithIndex;
+};
+
 const TopologyTestBindings = struct {
     pub const apply = applyWithOptions;
     pub const validate = validateGlyphBounds;
@@ -3778,6 +3596,8 @@ test {
         .selectionSuite(FeatureIntegrationTestBindings);
     _ = @import("gsub/tests/runtime/cache_integration.zig")
         .suite(CacheIntegrationTestBindings);
+    _ = @import("gsub/tests/runtime/filtering/integration.zig")
+        .suite(FilteringIntegrationTestBindings);
     _ = @import("gsub/tests/runtime/root.zig");
     _ = @import("gsub/tests/table/root.zig");
     _ = @import("gsub/tests/validation/table/topology.zig")

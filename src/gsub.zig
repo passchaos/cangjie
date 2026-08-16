@@ -3502,43 +3502,6 @@ fn writeClassDef1(bytes: []u8, offset: usize, start: GlyphId, class: u16) void {
     writeU16Test(bytes, offset + 6, class);
 }
 
-test "GSUB public apply validates source metadata cardinality" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 10;
-    writeU16Test(&bytes, 0, 1);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 2 });
-
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(allocator);
-    try sources.append(allocator, 0);
-
-    try std.testing.expectError(error.InvalidShapingInput, applyWithOptions(&bytes, 0, bytes.len, &glyphs, allocator, .{
-        .glyph_source_indices = &sources,
-    }));
-}
-
-test "GSUB public apply validates ligature component source order" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 10;
-    writeU16Test(&bytes, 0, 1);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.append(allocator, 10);
-
-    var ligature_components = ligature_provenance.Store{};
-    defer ligature_components.deinit(allocator);
-    try ligature_components.sources.appendSlice(allocator, &.{ 3, 2 });
-    try ligature_components.infos.append(allocator, .{ .component_count = 2 });
-
-    try std.testing.expectError(error.InvalidShapingInput, applyWithOptions(&bytes, 0, bytes.len, &glyphs, allocator, .{
-        .ligature_components = &ligature_components,
-    }));
-}
-
 /// Static test bindings let integration suites exercise root orchestration
 /// without widening the production API or paying for runtime callbacks.
 const topologyTestHasFeature = hasFeature;
@@ -3574,6 +3537,10 @@ const FilteringIntegrationTestBindings = struct {
     pub const applyLookupWithIndex = filteringTestApplyLookupWithIndex;
 };
 
+const MetadataIntegrationTestBindings = struct {
+    pub const apply = applyWithOptions;
+};
+
 const TopologyTestBindings = struct {
     pub const apply = applyWithOptions;
     pub const validate = validateGlyphBounds;
@@ -3598,6 +3565,8 @@ test {
         .suite(CacheIntegrationTestBindings);
     _ = @import("gsub/tests/runtime/filtering/integration.zig")
         .suite(FilteringIntegrationTestBindings);
+    _ = @import("gsub/tests/runtime/metadata_integration.zig")
+        .suite(MetadataIntegrationTestBindings);
     _ = @import("gsub/tests/runtime/root.zig");
     _ = @import("gsub/tests/table/root.zig");
     _ = @import("gsub/tests/validation/table/topology.zig")

@@ -16,7 +16,7 @@ pub fn apply(
     ranges: []const ranges_mod.Range,
     global_overrides: []const unicode.FeatureOverride,
     sources: *source_buffer.Buffer,
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
     gdef_metadata: GdefLookupMetadata,
 ) !void {
     try sources.source_features.resize(

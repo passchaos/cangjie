@@ -118,7 +118,7 @@ pub const LookupSelectionCache = struct {
         self.misses = 0;
     }
 
-    pub fn gsubLookups(self: *LookupSelectionCache, font: *const Font, options: gsub.LookupOptions, gdef_metadata: GdefLookupMetadata) ![]const u16 {
+    pub fn gsubLookups(self: *LookupSelectionCache, font: *const Font, options: gsub.runtime.Options, gdef_metadata: GdefLookupMetadata) ![]const u16 {
         const key = lookupSelectionKey(font, .gsub, options.script_tag, options.language_tag, options.features, options.vertical, null);
         if (self.lookup(key, options.features)) |lookups| return lookups;
 
@@ -149,7 +149,7 @@ pub const LookupSelectionCache = struct {
         return self.gsub_accelerator_entries.items[self.gsub_accelerator_entries.items.len - 1].accelerators;
     }
 
-    pub fn gsubFeatureLookupPlan(self: *LookupSelectionCache, font: *const Font, applications: []const gsub.feature.Application, options: gsub.LookupOptions, gdef_metadata: GdefLookupMetadata) !gsub.feature.LookupPlan {
+    pub fn gsubFeatureLookupPlan(self: *LookupSelectionCache, font: *const Font, applications: []const gsub.feature.Application, options: gsub.runtime.Options, gdef_metadata: GdefLookupMetadata) !gsub.feature.LookupPlan {
         const key = lookupSelectionKey(font, .gsub, options.script_tag, options.language_tag, options.features, options.vertical, null);
         for (self.gsub_feature_plan_entries.items) |entry| {
             if (!lookupSelectionKeysEqual(entry.key, key)) continue;
@@ -178,7 +178,7 @@ pub const LookupSelectionCache = struct {
         return self.gsub_feature_plan_entries.items[self.gsub_feature_plan_entries.items.len - 1].plan;
     }
 
-    pub fn gsubMergedFeatureLookupPlan(self: *LookupSelectionCache, font: *const Font, applications: []const gsub.feature.Application, options: gsub.LookupOptions, gdef_metadata: GdefLookupMetadata) !gsub.feature.MergedLookupPlan {
+    pub fn gsubMergedFeatureLookupPlan(self: *LookupSelectionCache, font: *const Font, applications: []const gsub.feature.Application, options: gsub.runtime.Options, gdef_metadata: GdefLookupMetadata) !gsub.feature.MergedLookupPlan {
         const key = lookupSelectionKey(font, .gsub, options.script_tag, options.language_tag, options.features, options.vertical, null);
         for (self.gsub_merged_feature_plan_entries.items) |entry| {
             if (!lookupSelectionKeysEqual(entry.key, key)) continue;

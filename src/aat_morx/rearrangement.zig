@@ -18,7 +18,7 @@ pub fn apply(
     offset: usize,
     length: usize,
     glyphs: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
     operations_left: *usize,
 ) Error!void {
     if (length < 16) return error.BadSfnt;
@@ -76,7 +76,7 @@ pub fn apply(
 
 pub fn applyVerb(
     glyphs: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
     start: usize,
     end: usize,
     current_end: usize,

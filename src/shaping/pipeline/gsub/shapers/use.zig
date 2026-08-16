@@ -40,7 +40,7 @@ pub const Input = struct {
     source_syllables: *std.ArrayList(u8),
     source_rphf_substituted: *std.ArrayList(bool),
     source_pref_substituted: *std.ArrayList(bool),
-    base_gsub_options: gsub.LookupOptions,
+    base_gsub_options: gsub.runtime.Options,
     lookup_options: pipeline_types.LookupOptions,
     gdef_metadata: GdefLookupMetadata,
 };
@@ -175,7 +175,7 @@ fn resizeSourceSidecars(input: Input) !void {
 
 fn applyObservedStage(
     input: Input,
-    use_options: gsub.LookupOptions,
+    use_options: gsub.runtime.Options,
     applications: []const gsub.feature.Application,
     stage: ObservedStage,
 ) !void {
@@ -215,7 +215,7 @@ fn applyObservedStage(
 
 fn applyDirectionFeatures(
     input: Input,
-    use_options: gsub.LookupOptions,
+    use_options: gsub.runtime.Options,
 ) !void {
     if (!usesDirectionFeatures(input.lookup_options.script_tag)) return;
     var applications: [2]gsub.feature.Application = undefined;

@@ -18,7 +18,7 @@ pub fn apply(
     table_length: usize,
     glyph_count: usize,
     glyphs: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
 ) Error!void {
     try validateParallelMetadata(glyphs.items.len, options);
     if (table_offset > data.len or table_length > data.len - table_offset or table_length < 8) return error.BadSfnt;
@@ -123,7 +123,7 @@ pub fn apply(
     if (chain_offset > table_length) return error.BadSfnt;
 }
 
-fn validateParallelMetadata(glyph_count: usize, options: gsub.LookupOptions) Error!void {
+fn validateParallelMetadata(glyph_count: usize, options: gsub.runtime.Options) Error!void {
     if (options.glyph_source_indices) |values| {
         if (values.items.len != glyph_count) return error.InvalidShapingInput;
     }
@@ -146,7 +146,7 @@ fn applyNoncontextualSubtable(
     offset: usize,
     length: usize,
     glyphs: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
 ) Error!void {
     if (length < 2) return error.BadSfnt;
     for (glyphs.items, 0..) |*glyph, index| {

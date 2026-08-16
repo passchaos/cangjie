@@ -9,7 +9,7 @@ const ligature_provenance = @import("../ligature_provenance.zig");
 /// AAT coverage flags choose between logical and layout order independently
 /// for each subtable. Keeping this operation centralized prevents a temporary
 /// direction change from desynchronizing later `morx`, GPOS, or output stages.
-pub fn reverse(glyphs: *std.ArrayList(GlyphId), options: gsub.LookupOptions) void {
+pub fn reverse(glyphs: *std.ArrayList(GlyphId), options: gsub.runtime.Options) void {
     reverseSlice(GlyphId, glyphs.items);
     if (options.glyph_source_indices) |values| reverseSlice(usize, values.items);
     if (options.glyph_cluster_indices) |values| reverseSlice(usize, values.items);

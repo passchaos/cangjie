@@ -30,7 +30,7 @@ pub const Input = struct {
     ligature_components: *ligature_provenance.Store,
     source_features: *std.ArrayList(u32),
     joining_forms: *std.ArrayList(unicode.JoiningForm),
-    base_gsub_options: gsub.LookupOptions,
+    base_gsub_options: gsub.runtime.Options,
     lookup_options: pipeline_types.LookupOptions,
     gdef_metadata: GdefLookupMetadata,
     shape_in_native_direction: bool,
@@ -198,7 +198,7 @@ pub fn run(input: Input) !Result {
 fn applyJoiningStages(
     input: Input,
     applications: []const gsub.feature.Application,
-    joining_options: gsub.LookupOptions,
+    joining_options: gsub.runtime.Options,
 ) !void {
     if (input.profile) |profile| {
         for (applications, 0..) |application, stage_index| {
@@ -247,7 +247,7 @@ fn applyJoiningStages(
 
 fn applyMongolianFeatures(
     input: Input,
-    joining_options: gsub.LookupOptions,
+    joining_options: gsub.runtime.Options,
 ) !void {
     if (input.lookup_options.script_tag != .mong) return;
     var applications: [2]gsub.feature.Application = undefined;
@@ -277,7 +277,7 @@ fn applyMongolianFeatures(
 
 fn applyArabicRequiredFeatures(
     input: Input,
-    joining_options: gsub.LookupOptions,
+    joining_options: gsub.runtime.Options,
 ) !void {
     if (input.lookup_options.script_tag != .arab) return;
     if (features.enabled(

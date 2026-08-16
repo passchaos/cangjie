@@ -110,7 +110,7 @@ fn shapeValidated(
 
     var run_limits = try gsub.runtime.Limits.init(sources.glyph_ids.items.len);
     var random_state: u32 = 1;
-    var gsub_options = gsub.LookupOptions{
+    var gsub_options = gsub.runtime.Options{
         .script_tag = script,
         .language_tag = options.language_tag orelse
             unicode.inferOpenTypeLanguageTag(text),

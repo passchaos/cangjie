@@ -27,7 +27,7 @@ pub const Input = struct {
     glyph_cluster_indices: *std.ArrayList(usize),
     source_features: *std.ArrayList(u32),
     ligature_components: *ligature_provenance.Store,
-    options: *gsub.LookupOptions,
+    options: *gsub.runtime.Options,
     lookup_options: pipeline_types.LookupOptions,
     gdef_metadata: GdefLookupMetadata,
 };

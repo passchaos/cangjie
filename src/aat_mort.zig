@@ -244,7 +244,7 @@ pub fn apply(
     table_length: usize,
     glyph_count: usize,
     glyphs: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
 ) Error!void {
     try validateParallelMetadata(glyphs.items.len, options);
     try validate(data, table_offset, table_length, glyph_count);
@@ -343,7 +343,7 @@ fn applyInsertion(
     length: usize,
     glyph_count: usize,
     glyphs: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
 ) Error!void {
     const class_count: usize = try readU16(data, offset);
     const class_table_offset: usize = try readU16(data, offset + 2);
@@ -445,7 +445,7 @@ fn applyContextual(
     length: usize,
     glyph_count: usize,
     glyphs: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
 ) Error!void {
     const class_count: usize = try readU16(data, offset);
     const class_table_offset: usize = try readU16(data, offset + 2);
@@ -527,7 +527,7 @@ fn replaceContextualGlyph(
     action_offset: i16,
     glyph_count: usize,
     glyphs: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
     glyph_index: usize,
 ) Error!void {
     if (action_offset == 0 or glyph_index >= glyphs.items.len) return;
@@ -551,7 +551,7 @@ fn applyRearrangement(
     offset: usize,
     length: usize,
     glyphs: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
 ) Error!void {
     if (length < 8) return error.BadSfnt;
     const class_count: usize = try readU16(data, offset);
@@ -629,7 +629,7 @@ fn applyNoncontextual(
     length: usize,
     glyph_count: usize,
     glyphs: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
 ) Error!void {
     if (length < 2) return error.BadSfnt;
     try state_table.validateLookupU16(data, offset, length, glyph_count);
@@ -648,7 +648,7 @@ fn applyNoncontextual(
     }
 }
 
-fn validateParallelMetadata(glyph_count: usize, options: gsub.LookupOptions) Error!void {
+fn validateParallelMetadata(glyph_count: usize, options: gsub.runtime.Options) Error!void {
     if (options.glyph_source_indices) |values| if (values.items.len != glyph_count) return error.InvalidShapingInput;
     if (options.glyph_cluster_indices) |values| if (values.items.len != glyph_count) return error.InvalidShapingInput;
     if (options.glyph_substituted) |values| if (values.items.len != glyph_count) return error.InvalidShapingInput;

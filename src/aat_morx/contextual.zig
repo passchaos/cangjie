@@ -15,7 +15,7 @@ pub fn apply(
     length: usize,
     glyph_count: usize,
     glyphs: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
     operations_left: *usize,
 ) Error!void {
     if (length < 20) return error.BadSfnt;
@@ -113,7 +113,7 @@ fn replaceFromLookup(
     lookup_index: u16,
     glyph_count: usize,
     glyphs: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
     glyph_index: usize,
 ) Error!void {
     if (glyph_index >= glyphs.items.len) return;

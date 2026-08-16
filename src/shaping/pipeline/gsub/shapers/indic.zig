@@ -38,7 +38,7 @@ pub const Input = struct {
     source_syllables: *std.ArrayList(u8),
     source_pref_substituted: *std.ArrayList(bool),
     source_boundaries: *cluster_safety.SourceBoundaries,
-    options: *gsub.LookupOptions,
+    options: *gsub.runtime.Options,
     lookup_options: pipeline_types.LookupOptions,
     gdef_metadata: GdefLookupMetadata,
 };

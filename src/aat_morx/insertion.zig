@@ -21,7 +21,7 @@ pub fn apply(
     length: usize,
     glyph_count: usize,
     glyphs: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
     operations_left: *usize,
 ) Error!void {
     if (length < 20) return error.BadSfnt;
@@ -190,7 +190,7 @@ pub const WorkingRun = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         glyphs: *const std.ArrayList(GlyphId),
-        options: gsub.LookupOptions,
+        options: gsub.runtime.Options,
     ) Error!WorkingRun {
         var run = WorkingRun{};
         errdefer run.deinit(allocator);
@@ -291,7 +291,7 @@ pub const WorkingRun = struct {
         run: *WorkingRun,
         allocator: std.mem.Allocator,
         glyphs: *std.ArrayList(GlyphId),
-        options: gsub.LookupOptions,
+        options: gsub.runtime.Options,
     ) Error!void {
         const len = run.glyphs.items.len;
         try glyphs.ensureTotalCapacity(allocator, len);
@@ -349,7 +349,7 @@ test "inserted glyphs clone every parallel metadata sidecar" {
     @memset(ligatures.infos.items, .{});
     ligatures.infos.items[0].flags.synthetic_base = true;
 
-    const options = gsub.LookupOptions{
+    const options = gsub.runtime.Options{
         .glyph_source_indices = &sources,
         .glyph_cluster_indices = &clusters,
         .glyph_substituted = &substituted,

@@ -29,7 +29,7 @@ pub const Input = struct {
     source_features: *std.ArrayList(u32),
     source_syllables: *std.ArrayList(u8),
     source_boundaries: *cluster_safety.SourceBoundaries,
-    base_gsub_options: gsub.LookupOptions,
+    base_gsub_options: gsub.runtime.Options,
     gdef_metadata: GdefLookupMetadata,
     dotted_circle_glyph: GlyphId,
 };

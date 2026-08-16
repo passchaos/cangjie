@@ -28,7 +28,7 @@ pub const Input = struct {
     glyph_script_positions: *std.ArrayList(u8),
     source_syllables: *std.ArrayList(u8),
     codepoints: []const u21,
-    base_gsub_options: gsub.LookupOptions,
+    base_gsub_options: gsub.runtime.Options,
     lookup_options: pipeline_types.LookupOptions,
     gdef_metadata: GdefLookupMetadata,
     dotted_circle_glyph: GlyphId,

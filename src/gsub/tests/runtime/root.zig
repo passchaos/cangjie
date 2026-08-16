@@ -2,4 +2,5 @@
 
 test {
     _ = @import("limits.zig");
+    _ = @import("options.zig");
 }

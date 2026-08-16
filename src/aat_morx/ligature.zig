@@ -34,7 +34,7 @@ pub fn applyExtended(
     length: usize,
     glyph_count: usize,
     glyphs: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
     operations_left: *usize,
 ) Error!void {
     if (length < 28) return error.BadSfnt;
@@ -160,7 +160,7 @@ pub fn applyObsolete(
     length: usize,
     glyph_count: usize,
     glyphs: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
 ) Error!void {
     const header = try readObsoleteHeader(data, offset, length);
     const class_first: usize = try state_table.readU16(data, offset + header.class_table_offset);
@@ -452,7 +452,7 @@ const OutputRun = struct {
     has_stage_substituted: bool = false,
     has_ligatures: bool = false,
 
-    fn init(allocator: std.mem.Allocator, options: gsub.LookupOptions) Error!OutputRun {
+    fn init(allocator: std.mem.Allocator, options: gsub.runtime.Options) Error!OutputRun {
         var output = OutputRun{};
         errdefer output.deinit(allocator);
         output.has_sources = options.glyph_source_indices != null;
@@ -482,7 +482,7 @@ const OutputRun = struct {
         output: *OutputRun,
         allocator: std.mem.Allocator,
         glyphs: *const std.ArrayList(GlyphId),
-        options: gsub.LookupOptions,
+        options: gsub.runtime.Options,
         index: usize,
     ) Error!void {
         try output.glyphs.append(allocator, glyphs.items[index]);
@@ -506,7 +506,7 @@ const OutputRun = struct {
         output: *OutputRun,
         allocator: std.mem.Allocator,
         glyphs: *std.ArrayList(GlyphId),
-        options: gsub.LookupOptions,
+        options: gsub.runtime.Options,
     ) Error!void {
         const len = output.glyphs.items.len;
         try glyphs.ensureTotalCapacity(allocator, len);

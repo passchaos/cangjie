@@ -26,7 +26,7 @@ pub fn apply(
     table_proved: bool,
     applications: []const gsub.feature.Application,
     glyph_ids: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
     gdef_metadata: GdefLookupMetadata,
 ) !void {
     if (applications.len == 0) return;
@@ -73,7 +73,7 @@ pub fn applyAfterRunProof(
     table_proved: bool,
     applications: []const gsub.feature.Application,
     glyph_ids: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
     gdef_metadata: GdefLookupMetadata,
 ) !void {
     if (!table_proved or context.lookup_selection_cache == null) {
@@ -110,7 +110,7 @@ pub fn applyMerged(
     table_proved: bool,
     applications: []const gsub.feature.Application,
     glyph_ids: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
     gdef_metadata: GdefLookupMetadata,
 ) !void {
     if (applications.len == 0) return;
@@ -149,7 +149,7 @@ pub fn applyMergedAfterRunProof(
     table_proved: bool,
     applications: []const gsub.feature.Application,
     glyph_ids: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
     gdef_metadata: GdefLookupMetadata,
 ) !void {
     if (!table_proved) {
@@ -198,7 +198,7 @@ pub noinline fn applyGenericAfterTableProof(
     font: *const Font,
     context: Context,
     glyph_ids: *std.ArrayList(GlyphId),
-    options: gsub.LookupOptions,
+    options: gsub.runtime.Options,
     gdef_metadata: GdefLookupMetadata,
 ) linksection(shaping_sections.isolated_hotpaths) !void {
     if (try font_shaping.applyGsubCachedLookupSelectionUsingGdefAfterRunProof(

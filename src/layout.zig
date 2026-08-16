@@ -1978,7 +1978,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     // needs the original component sources for a ligature glyph; otherwise a
     // mark after a ligature can only guess a component from post-substitution
     // mark order.
-    var gsub_options = gsub.LookupOptions{
+    var gsub_options = gsub.runtime.Options{
         .script_tag = lookup_options.script_tag,
         .language_tag = lookup_options.language_tag,
         .text_direction = if (lookup_options.direction == .rtl) .rtl else .ltr,

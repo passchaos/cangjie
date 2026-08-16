@@ -1,7 +1,7 @@
 const std = @import("std");
-const bin = @import("binary.zig");
 const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
+const table_core = @import("gpos/table/root.zig");
 const ot_layout = @import("opentype/layout.zig");
 const class_context = @import("opentype/class_context.zig");
 const metric_variation = @import("opentype/metric_variation.zig");
@@ -58,22 +58,7 @@ const PositionContextResult = struct {
     next_pos: usize = 0,
 };
 
-const Table = struct {
-    data: []const u8,
-    offset: usize,
-    length: usize,
-    assume_validated: bool = false,
-    /// True only during Font.parse's exhaustive LookupList validation. In that
-    /// mode every lookup's payload is visited by the outer pass, so contextual
-    /// PosLookupRecords only need to prove that their indexes are in range.
-    /// Runtime shaping leaves this false because a matched context must
-    /// preflight nested lookups before appending any partial adjustments.
-    validating_full_lookup_list: bool = false,
-    /// Optional maxp.numGlyphs bound supplied by Font.parse. Runtime shaping
-    /// callers do not know the SFNT maxp table, so their Table values leave
-    /// this null and keep the historical structural-only validation.
-    glyph_count: ?u16 = null,
-};
+const Table = table_core.View;
 
 const FeatureSelection = struct {
     index: u16,
@@ -5254,24 +5239,15 @@ fn ensureClassValueWithinLimit(class_value: u16, class_count: u16) GposError!voi
 }
 
 fn checkedPositionOffset(table: Table, base_offset: usize, relative_offset: u32) GposError!usize {
-    if (relative_offset > std.math.maxInt(usize) - base_offset) return error.BadGpos;
-    const absolute = base_offset + @as(usize, @intCast(relative_offset));
-    if (absolute > table.length) return error.BadGpos;
-    return absolute;
+    return (try table_core.offset.optional32(table, base_offset, relative_offset)) orelse base_offset;
 }
 
 fn checkedRequiredPositionOffset(table: Table, base_offset: usize, relative_offset: u16) GposError!usize {
-    if (relative_offset == 0) return error.BadGpos;
-    return checkedPositionOffset(table, base_offset, @as(u32, relative_offset));
+    return table_core.offset.required16(table, base_offset, relative_offset);
 }
 
 fn checkedExtensionPositionPayloadOffset(table: Table, extension_offset: usize, relative_offset: u32) GposError!usize {
-    // ExtensionPos.ExtensionOffset is a required Offset32 to a wrapped
-    // positioning subtable. It must not point back into the fixed 8-byte
-    // wrapper header, where format/type/offset words can masquerade as a
-    // plausible SinglePos/PairPos header and make shaping depend on aliases.
-    if (relative_offset < 8) return error.BadGpos;
-    return checkedPositionOffset(table, extension_offset, relative_offset);
+    return table_core.offset.extensionPayload(table, extension_offset, relative_offset);
 }
 
 fn checkedRequiredScriptListOffset(table: Table) GposError!usize {
@@ -5320,7 +5296,7 @@ fn checkedRequiredClassDefOffset(table: Table, base_offset: usize, relative_offs
 }
 
 fn ensureBytesWithin(table: Table, offset: usize, len: usize) GposError!void {
-    if (offset > table.length or len > table.length - offset) return error.BadGpos;
+    return table.ensure(offset, len);
 }
 
 fn readU16BadGpos(table: Table, relative: usize) GposError!u16 {
@@ -10863,6 +10839,10 @@ test "GPOS public adjustment collection validates ligature component source orde
     }));
 }
 
+test {
+    _ = @import("gpos/tests/table/root.zig");
+}
+
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {
     std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
 }
@@ -10876,25 +10856,13 @@ fn writeU32Test(bytes: []u8, offset: usize, value: u32) void {
 }
 
 fn readU16(table: Table, relative: usize) GposError!u16 {
-    // `relative` is ultimately derived from font-supplied offsets. Keep the
-    // bounds check in subtraction form so hostile values near usize.max report
-    // a parser error instead of overflowing before the table slice is read.
-    if (relative > table.length or table.length - relative < 2) return error.EndOfStream;
-    return bin.readU16At(table.data, table.offset + relative) catch |err| switch (err) {
-        error.EndOfStream => error.EndOfStream,
-    };
+    return table.readU16(relative);
 }
 
 fn readI16(table: Table, relative: usize) GposError!i16 {
-    if (relative > table.length or table.length - relative < 2) return error.EndOfStream;
-    return bin.readI16At(table.data, table.offset + relative) catch |err| switch (err) {
-        error.EndOfStream => error.EndOfStream,
-    };
+    return table.readI16(relative);
 }
 
 fn readU32(table: Table, relative: usize) GposError!u32 {
-    if (relative > table.length or table.length - relative < 4) return error.EndOfStream;
-    return bin.readU32At(table.data, table.offset + relative) catch |err| switch (err) {
-        error.EndOfStream => error.EndOfStream,
-    };
+    return table.readU32(relative);
 }

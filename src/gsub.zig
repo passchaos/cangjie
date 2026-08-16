@@ -1054,10 +1054,20 @@ pub fn validateGlyphBounds(data: []const u8, offset: usize, length: usize, glyph
     try feature_domain.validation.scriptReferences(table, feature_count);
     for (0..lookup_count) |lookup_i| {
         const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGsub(table, lookup_list_offset + 2 + lookup_i * 2));
-        try ensureLookupHeaderWithin(table, lookup_offset);
-        const lookup_type = try readU16BadGsub(table, lookup_offset);
+        const lookup_type = try validation.lookup.validateHeader(
+            ContextualRecordExecutor,
+            table,
+            lookup_offset,
+        );
         const subtable_count = try readU16BadGsub(table, lookup_offset + 4);
-        try ensureSubstitutionLookupSubtablesWithin(table, lookup_offset, lookup_type, subtable_count);
+        try validation.lookup.validateSubtables(
+            ContextualRecordExecutor,
+            table,
+            lookup_offset,
+            lookup_type,
+            subtable_count,
+            .strict,
+        );
     }
 }
 
@@ -1081,14 +1091,20 @@ pub fn validateGlyphBoundsForShaping(data: []const u8, offset: usize, length: us
     feature_domain.validation.scriptReferences(table, feature_count) catch {};
     for (0..lookup_count) |lookup_i| {
         const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGsub(table, lookup_list_offset + 2 + lookup_i * 2));
-        try ensureLookupHeaderWithin(table, lookup_offset);
-        const lookup_type = try readU16BadGsub(table, lookup_offset);
+        const lookup_type = try validation.lookup.validateHeader(
+            ContextualRecordExecutor,
+            table,
+            lookup_offset,
+        );
         const subtable_count = try readU16BadGsub(table, lookup_offset + 4);
-        if (lookup_type == 4) {
-            try ensureLigatureLookupSubtablesWithinForShaping(table, lookup_offset, subtable_count);
-        } else {
-            try ensureSubstitutionLookupSubtablesWithinForShaping(table, lookup_offset, lookup_type, subtable_count);
-        }
+        try validation.lookup.validateSubtables(
+            ContextualRecordExecutor,
+            table,
+            lookup_offset,
+            lookup_type,
+            subtable_count,
+            .shaping,
+        );
     }
 }
 
@@ -1404,7 +1420,11 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
     }
     // Header validation remains coupled to ExtensionSubst payload preflight;
     // dispatch itself only parses fixed fields or trusts an exact sidecar.
-    try ensureLookupHeaderWithin(table, lookup_offset);
+    _ = try validation.lookup.validateHeader(
+        ContextualRecordExecutor,
+        table,
+        lookup_offset,
+    );
     const dispatch = try runtime.dispatch.header(
         table,
         lookup_offset,
@@ -1419,7 +1439,16 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
     // as one unit. Validate every supported direct subtable before touching the
     // glyph run; otherwise a malformed later subtable can leak substitutions
     // already made by an earlier subtable in the same lookup.
-    if (!table.assume_validated) try ensureSubstitutionLookupSubtablesWithin(table, lookup_offset, lookup_type, subtable_count);
+    if (!table.assume_validated) {
+        try validation.lookup.validateSubtables(
+            ContextualRecordExecutor,
+            table,
+            lookup_offset,
+            lookup_type,
+            subtable_count,
+            .strict,
+        );
+    }
     var lookup_options = options;
     if ((lookup_flag & 0x0010) != 0) {
         // UseMarkFilteringSet stores its set index after the variable-length
@@ -1458,11 +1487,8 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
     }
     if (lookup_type == 7) {
         // ExtensionSubst is only an addressing wrapper, but malformed wrapped
-        // payloads can otherwise be discovered after an earlier wrapper in the
-        // same lookup has already substituted glyphs. Preflight every wrapper
-        // before choosing the optimized homogeneous path below so the lookup
-        // remains all-or-nothing for truncated variable arrays.
-        if (!table.assume_validated) try ensureExtensionSubstitutionLookupPayloadsWithin(table, lookup_offset, subtable_count);
+        // payloads must be proved before dispatch. `validateHeader` above owns
+        // that lookup-level atomic preflight; do not repeat it on this branch.
         const wrapped_type = if (runtime.dispatch.extensionType(
             lookup_index,
             lookup_options,
@@ -2316,9 +2342,13 @@ const ContextualRecordExecutor = struct {
         lookup_offset: usize,
     ) GsubError!void {
         if (table.glyph_count != null) {
-            _ = try ensureLookupFixedHeaderWithin(table, lookup_offset);
+            _ = try validation.lookup.header.validate(table, lookup_offset);
         } else {
-            try ensureLookupHeaderWithin(table, lookup_offset);
+            _ = try validation.lookup.validateHeader(
+                ContextualRecordExecutor,
+                table,
+                lookup_offset,
+            );
         }
     }
 };
@@ -2342,152 +2372,6 @@ fn applySubstitutionRecordsMapped(
         allocator,
         options,
     );
-}
-
-fn ensureExtensionSubstitutionLookupPayloadsWithin(table: Table, lookup_offset: usize, subtable_count: u16) GsubError!void {
-    for (0..subtable_count) |subtable_i| {
-        const subtable_offset = try checkedRequiredSubtableOffset(table, lookup_offset, try readU16BadGsub(table, lookup_offset + 6 + subtable_i * 2));
-        try ensureExtensionSubstitutionPayloadWithin(table, subtable_offset);
-    }
-}
-
-fn ensureLookupHeaderWithin(table: Table, lookup_offset: usize) GsubError!void {
-    const lookup_type = try ensureLookupFixedHeaderWithin(table, lookup_offset);
-    if (lookup_type == 7 and !table.assume_validated) {
-        const subtable_count = try readU16BadGsub(table, lookup_offset + 4);
-        try ensureExtensionSubstitutionLookupPayloadsWithin(table, lookup_offset, subtable_count);
-    }
-}
-
-fn ensureLookupFixedHeaderWithin(table: Table, lookup_offset: usize) GsubError!u16 {
-    try accelerator_root.build.lookup.header.validate(table, lookup_offset);
-    const lookup_type = try readU16BadGsub(table, lookup_offset);
-    return lookup_type;
-}
-
-fn ensureSubstitutionLookupSubtablesWithin(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16) GsubError!void {
-    switch (lookup_type) {
-        1, 2, 3, 4, 5, 6, 8 => {},
-        else => return,
-    }
-    for (0..subtable_count) |subtable_i| {
-        // Lookup.SubTable offsets are mandatory child pointers for supported
-        // lookups. Offset zero would alias the Lookup header as a subtable and
-        // let lookup type/flag/count bytes masquerade as substitution payload.
-        const subtable_offset = try checkedRequiredSubtableOffset(table, lookup_offset, try readU16BadGsub(table, lookup_offset + 6 + subtable_i * 2));
-        try ensureSubstitutionSubtableFixedHeaderWithin(table, subtable_offset, lookup_type);
-        try ensureSubstitutionSubtableVariableDataWithin(table, subtable_offset, lookup_type);
-    }
-}
-
-fn ensureSubstitutionLookupSubtablesWithinForShaping(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16) GsubError!void {
-    switch (lookup_type) {
-        1, 2, 3, 4, 5, 6, 8 => {},
-        else => return,
-    }
-    for (0..subtable_count) |subtable_i| {
-        const subtable_offset = try checkedRequiredSubtableOffset(table, lookup_offset, try readU16BadGsub(table, lookup_offset + 6 + subtable_i * 2));
-        try ensureSubstitutionSubtableFixedHeaderWithin(table, subtable_offset, lookup_type);
-        try ensureSubstitutionSubtableVariableDataWithinForShaping(table, subtable_offset, lookup_type);
-    }
-}
-
-fn ensureLigatureLookupSubtablesWithinForShaping(table: Table, lookup_offset: usize, subtable_count: u16) GsubError!void {
-    for (0..subtable_count) |subtable_i| {
-        const subtable_offset = try checkedRequiredSubtableOffset(table, lookup_offset, try readU16BadGsub(table, lookup_offset + 6 + subtable_i * 2));
-        try ensureSubstitutionSubtableFixedHeaderWithin(table, subtable_offset, 4);
-        try validation.direct.ligature.validate(
-            table,
-            subtable_offset,
-            .shaping,
-        );
-    }
-}
-
-fn ensureExtensionSubstitutionPayloadWithin(table: Table, subtable_offset: usize) GsubError!void {
-    // A contextual record may reference ExtensionSubst after earlier records
-    // have already mutated the glyph stream. Preflight both the wrapper and the
-    // wrapped subtable's fixed header so a malformed extension payload fails
-    // before any record in the contextual match is applied.
-    if (subtable_offset > table.length or table.length - subtable_offset < 8) return error.BadGsub;
-    const subst_format = try readU16BadGsub(table, subtable_offset);
-    if (subst_format != 1) return error.UnsupportedGsub;
-    const extension_lookup_type = try readU16BadGsub(table, subtable_offset + 2);
-    if (extension_lookup_type == 7) return error.UnsupportedGsub;
-    const extension_subtable = try checkedExtensionSubtablePayloadOffset(table, subtable_offset, try readU32BadGsub(table, subtable_offset + 4));
-    try ensureSubstitutionSubtableFixedHeaderWithin(table, extension_subtable, extension_lookup_type);
-    try ensureSubstitutionSubtableVariableDataWithin(table, extension_subtable, extension_lookup_type);
-}
-
-fn ensureSubstitutionSubtableFixedHeaderWithin(table: Table, subtable_offset: usize, lookup_type: u16) GsubError!void {
-    if (subtable_offset > table.length or table.length - subtable_offset < 2) return error.BadGsub;
-    const subst_format = try readU16BadGsub(table, subtable_offset);
-    const min_len: usize = switch (lookup_type) {
-        1, 2, 3, 4 => 6,
-        5 => switch (subst_format) {
-            1, 3 => 6,
-            2 => 8,
-            else => return error.UnsupportedGsub,
-        },
-        6 => switch (subst_format) {
-            1 => 6,
-            2 => 12,
-            3 => 4,
-            else => return error.UnsupportedGsub,
-        },
-        8 => 6,
-        else => return,
-    };
-    if (table.length - subtable_offset < min_len) return error.BadGsub;
-}
-
-fn ensureSubstitutionSubtableVariableDataWithin(table: Table, subtable_offset: usize, lookup_type: u16) GsubError!void {
-    switch (lookup_type) {
-        1 => try validation.direct.single.validate(table, subtable_offset),
-        2 => try validation.direct.set_sequence.multiple(
-            table,
-            subtable_offset,
-        ),
-        3 => try validation.direct.set_sequence.alternate(
-            table,
-            subtable_offset,
-        ),
-        4 => try validation.direct.ligature.validate(
-            table,
-            subtable_offset,
-            .strict,
-        ),
-        5 => try validation.contextual.context.validate(
-            ContextualRecordExecutor,
-            table,
-            subtable_offset,
-        ),
-        6 => try validation.contextual.chaining.validate(
-            ContextualRecordExecutor,
-            table,
-            subtable_offset,
-            .strict,
-        ),
-        8 => try validation.reverse.validate(table, subtable_offset),
-        else => {},
-    }
-}
-
-fn ensureSubstitutionSubtableVariableDataWithinForShaping(table: Table, subtable_offset: usize, lookup_type: u16) GsubError!void {
-    switch (lookup_type) {
-        // Chaining input/backtrack/lookahead Coverage tables are boolean
-        // membership sets; unlike a top-level coverage, their numeric index is
-        // never used to address a parallel array. HarfBuzz accepts duplicate
-        // format-1 glyph IDs in these sets (TestGPOSOne.ttf contains one), so
-        // validate bounds and glyph IDs without imposing strict order.
-        6 => try validation.contextual.chaining.validate(
-            ContextualRecordExecutor,
-            table,
-            subtable_offset,
-            .shaping,
-        ),
-        else => try ensureSubstitutionSubtableVariableDataWithin(table, subtable_offset, lookup_type),
-    }
 }
 
 fn checkedRequiredSubtableOffset(table: Table, base_offset: usize, relative_offset: u16) GsubError!usize {
@@ -2725,7 +2609,14 @@ test "GSUB rejects ExtensionSubst payload offsets that alias the wrapper header"
     // but they do not name a child subtable. Reject them before wrapper fields
     // can be reinterpreted as a nested lookup payload.
     try std.testing.expectError(error.BadGsub, extensionSubtablePayload(table, 0, 1));
-    try std.testing.expectError(error.BadGsub, ensureExtensionSubstitutionPayloadWithin(table, 0));
+    try std.testing.expectError(
+        error.BadGsub,
+        validation.lookup.extension.validate(
+            ContextualRecordExecutor,
+            table,
+            0,
+        ),
+    );
     try std.testing.expectError(error.BadGsub, applyExtensionSubstitution(table, 0, &glyphs, std.testing.allocator, 0, .{}));
     try std.testing.expectError(error.BadGsub, applyNestedExtensionSubstitutionAt(table, 0, &glyphs, 0, std.testing.allocator, 0, .{}));
     try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
@@ -2891,12 +2782,23 @@ test "GSUB rejects reserved LookupFlag bits" {
     writeCoverage1(&bytes, subtable + 6, 1);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGsub, ensureLookupHeaderWithin(table, 18));
+    try std.testing.expectError(
+        error.BadGsub,
+        validation.lookup.validateHeader(
+            ContextualRecordExecutor,
+            table,
+            18,
+        ),
+    );
     try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
 
     writeU16Test(&bytes, 20, 0xff10); // MarkAttachmentType plus UseMarkFilteringSet are valid.
     writeU16Test(&bytes, 26, 0); // MarkFilteringSet index follows the subtable-offset array.
-    try ensureLookupHeaderWithin(table, 18);
+    _ = try validation.lookup.validateHeader(
+        ContextualRecordExecutor,
+        table,
+        18,
+    );
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
 }
 
@@ -3076,7 +2978,17 @@ test "GSUB rejects null Lookup SubTable offsets" {
     writeU16Test(&bytes, 24, 0); // Invalid: Lookup.SubTable offsets are required.
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGsub, ensureSubstitutionLookupSubtablesWithin(table, 18, 1, 1));
+    try std.testing.expectError(
+        error.BadGsub,
+        validation.lookup.validateSubtables(
+            ContextualRecordExecutor,
+            table,
+            18,
+            1,
+            1,
+            .strict,
+        ),
+    );
     try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
 
     var glyphs = std.ArrayList(GlyphId).empty;
@@ -3088,7 +3000,14 @@ test "GSUB rejects null Lookup SubTable offsets" {
     // Repairing only the child pointer should make the otherwise valid lookup
     // pass; the test guards against rejecting empty/no-op substitution data.
     writeU16Test(&bytes, 24, 8);
-    try ensureSubstitutionLookupSubtablesWithin(table, 18, 1, 1);
+    try validation.lookup.validateSubtables(
+        ContextualRecordExecutor,
+        table,
+        18,
+        1,
+        1,
+        .strict,
+    );
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
 }
 

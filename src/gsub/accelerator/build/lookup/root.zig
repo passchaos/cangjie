@@ -7,7 +7,7 @@ const context_coverage = @import("../context_coverage.zig");
 pub const extension = @import("extension.zig");
 const extension_reverse = @import("extension_reverse.zig");
 const feature_index = @import("../../feature_index.zig");
-pub const header = @import("header.zig");
+pub const header = @import("../../../validation/lookup/header.zig");
 const ligature = @import("../ligature/root.zig");
 const model = @import("../../model.zig");
 const multiple = @import("../multiple.zig");
@@ -62,7 +62,7 @@ pub fn build(
         // Runtime dispatch trusts these fixed fields when sidecar identity is
         // exact, so direct public accelerator construction proves the complete
         // lookup header even when the surrounding font was parsed elsewhere.
-        try header.validate(view, lookup_offset);
+        _ = try header.validate(view, lookup_offset);
         lookup.* = try one(view, lookup_offset, allocator);
         table_uses_run_digest_cache = table_uses_run_digest_cache or
             (lookup.chaining_coverage_only and

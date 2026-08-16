@@ -1,4 +1,6 @@
 const std = @import("std");
+const accelerator_root = @import("gsub/accelerator/root.zig");
+const accelerator_model = accelerator_root.model;
 const bin = @import("binary.zig");
 const cluster_safety = @import("shaping/cluster_safety.zig");
 const feature_model = @import("gsub/feature/root.zig");
@@ -41,6 +43,15 @@ pub const feature = struct {
     pub const applyMergedLookupPlan = applyMergedFeatureLookupPlanWithOptions;
     pub const applyMergedLookupPlanAfterMetadataProof =
         applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof;
+};
+
+/// Parsed lookup sidecars retained by shaping caches.
+pub const acceleration = struct {
+    pub const Lookup = accelerator_root.Lookup;
+
+    pub const build = buildLookupAccelerators;
+    pub const deinit = deinitLookupAccelerators;
+    pub const hasRandomFeature = hasRandomFeatureWithAccelerators;
 };
 
 /// GSUB parsing is table-driven and intentionally tolerant of unsupported
@@ -172,262 +183,42 @@ pub const LookupOptions = struct {
     profile_io: ?std.Io = null,
 };
 
-pub const LookupAccelerator = struct {
-    /// Dispatch fields decoded once from the validated Lookup table. The
-    /// shaping path checks `lookup_offset` before using them, so a stale or
-    /// foreign accelerator slice falls back to the defensive table parser.
-    lookup_offset: usize = 0,
-    lookup_type: u16 = 0,
-    lookup_flag: u16 = 0,
-    subtable_count: u16 = 0,
-    mark_filtering_set: ?u16 = null,
-    /// Stored on entry zero because feature selection is table-wide.
-    feature_index: ?*const FeatureLookupIndex = null,
-    /// Stored on entry zero for an O(1) table-level capability check. Shaping
-    /// runs use this to avoid mutation-epoch bookkeeping for fonts whose GSUB
-    /// has no lookup accelerator that consumes a shared run digest.
-    table_uses_run_digest_cache: bool = false,
-    extension_lookup_type: ?u16 = null,
-    single_subst: SingleSubstAccelerator = .{},
-    single_subst_entries: []const SingleSubstEntry = &.{},
-    multiple_subst: MultipleSubstAccelerator = .{},
-    ligature_subst: LigatureSubstAccelerator = .{},
-    context_class_subtables: []const ContextClassSubtableAccelerator = &.{},
-    context_coverage_subtables: []const ContextCoverageSubtable = &.{},
-    context_coverage_offsets: []const usize = &.{},
-    context_groups: []const ChainingSubtableGroup = &.{},
-    context_group_slots: []const u16 = &.{},
-    chaining_coverage_only: bool = false,
-    chaining_needs_second_input: bool = false,
-    chaining_needs_backtrack: bool = false,
-    chaining_needs_single_input_lookahead: bool = false,
-    chaining_input_digest: GlyphDigest = .{},
-    chaining_subtable_digests: []const GlyphDigest = &.{},
-    chaining_subtables: []const ChainingCoverageSubtable = &.{},
-    chaining_groups: []const ChainingSubtableGroup = &.{},
-    chaining_group_slots: []const u16 = &.{},
-    chaining_pair_groups: []const ChainingPairSubtableGroup = &.{},
-    chaining_pair_group_slots: []const u16 = &.{},
-    chaining_pair_index_complete: bool = false,
-    chaining_class_subtables: []const ChainingClassSubtableAccelerator = &.{},
-    reverse_chaining_subtables: []const ReverseChainingSingleSubtable = &.{},
-    reverse_chaining_groups: []const ChainingSubtableGroup = &.{},
-    reverse_chaining_exact_contexts: []const ReverseChainingContextEntry = &.{},
-};
-
-const FeatureLookupRecord = struct {
-    tag: u32,
-    lookup_start: usize,
-    lookup_len: usize,
-    borrowable: bool,
-};
-
-const FeatureLookupIndex = struct {
-    data_ptr: [*]const u8,
-    data_len: usize,
-    table_offset: usize,
-    table_length: usize,
-    // Table bytes alone do not prove the dispatch sidecar is the one that was
-    // built with this index: callers can copy LookupAccelerator values and
-    // mutate an offset/type while retaining the original feature_index pointer.
-    // Bind both artifacts so every trusted feature/capability query rejects
-    // such a foreign slice and returns to the defensive parser/executor.
-    accelerators_addr: usize,
-    accelerator_count: usize,
-    has_random_feature: bool,
-    records: []FeatureLookupRecord,
-    lookups: []u16,
-};
-
-const SingleSubstAccelerator = struct {
-    enabled: bool = false,
-    subst_format: u16 = 0,
-    coverage_offset: usize = 0,
-    delta: i16 = 0,
-    glyph_count: u16 = 0,
-    substitutes_pos: usize = 0,
-    single_mapping: bool = false,
-    single_from: GlyphId = 0,
-    single_to: GlyphId = 0,
-};
-
-const SingleSubstEntry = struct {
-    from: GlyphId,
-    to: GlyphId,
-};
-
-const MultipleSubstAccelerator = struct {
-    entries: []const MultipleSubstEntry = &.{},
-};
-
-const MultipleSubstEntry = struct {
-    glyph: GlyphId,
-    sequence_offset: usize,
-    glyph_count: u16,
-    single_to: GlyphId = 0,
-};
-
-const LigatureSubstAccelerator = struct {
-    sets: []const LigatureSetEntry = &.{},
-    set_slots: []const u16 = &.{},
-    definitions: []const LigatureDefinition = &.{},
-    components: []const GlyphId = &.{},
-    first_component_digest: GlyphDigest = .{},
-    /// Range in `components` containing a sorted exact set of legal second
-    /// components. Compact range metadata fits existing tail padding; a slice
-    /// here would widen every lookup accelerator, including unrelated scripts.
-    required_second_start: u32 = 0,
-    required_second_len: u16 = 0,
-    prefilter_second: bool = false,
-};
-
-comptime {
-    const LayoutWithoutRequiredSecondRange = struct {
-        sets: []const LigatureSetEntry = &.{},
-        set_slots: []const u16 = &.{},
-        definitions: []const LigatureDefinition = &.{},
-        components: []const GlyphId = &.{},
-        first_component_digest: GlyphDigest = .{},
-        prefilter_second: bool = false,
-    };
-    // The compact range must consume existing tail padding rather than make
-    // every GSUB LookupAccelerator larger on any supported pointer width.
-    std.debug.assert(@sizeOf(LigatureSubstAccelerator) ==
-        @sizeOf(LayoutWithoutRequiredSecondRange));
-}
-
-const LigatureSetEntry = struct {
-    glyph: GlyphId,
-    definition_start: usize,
-    definition_len: usize,
-};
-
-const LigatureDefinition = struct {
-    ligature: GlyphId,
-    component_start: usize,
-    component_count: u16,
-};
+const LookupAccelerator = acceleration.Lookup;
+const FeatureLookupRecord = accelerator_model.FeatureRecord;
+const FeatureLookupIndex = accelerator_model.FeatureIndex;
+const SingleSubstAccelerator = accelerator_model.SingleSubstitution;
+const SingleSubstEntry = accelerator_model.SingleEntry;
+const MultipleSubstAccelerator = accelerator_model.MultipleSubstitution;
+const MultipleSubstEntry = accelerator_model.MultipleEntry;
+const LigatureSubstAccelerator = accelerator_model.LigatureSubstitution;
+const LigatureSetEntry = accelerator_model.LigatureSet;
+const LigatureDefinition = accelerator_model.LigatureDefinition;
+const ContextClassSubtableAccelerator = accelerator_model.ContextClassSubtable;
+const ContextCoverageSubtable = accelerator_model.ContextCoverageSubtable;
+const ChainingCoverageSubtable = accelerator_model.ChainingCoverageSubtable;
+const FastSingleRecord = accelerator_model.FastSingleRecord;
+const ChainingClassSubtableAccelerator = accelerator_model.ChainingClassSubtable;
+const ReverseChainingSingleSubtable = accelerator_model.ReverseChainingSingleSubtable;
+const ReverseChainingContextKey = accelerator_model.ReverseChainingContextKey;
+const ReverseChainingContextEntry = accelerator_model.ReverseChainingContextEntry;
+const ChainingSubtableGroup = accelerator_model.ChainingGroup;
+const ChainingSubtablePair = accelerator_model.ChainingPair;
+const ChainingPairSubtableGroup = accelerator_model.ChainingPairGroup;
+const ChainingPairSubtablePair = accelerator_model.ChainingPairEntry;
 
 // HarfBuzz's fast LigatureSet path extracts the second component once before
-// trying definitions. The larger matcher only amortizes when a lookup has
-// enough alternatives beyond each set's first definition, so choose once per
-// lookup rather than adding a branch to every candidate glyph.
+// trying definitions. Select these thresholds once per lookup rather than
+// adding branches to every candidate glyph.
 const min_competing_ligature_definitions_for_second_prefilter = 32;
-// An exact whole-run scan has a higher fixed cost than extracting one second
-// glyph per candidate. Reserve it for authored sets large enough to amortize
-// that scan over many otherwise-competing definition probes.
 const min_competing_ligature_definitions_for_required_second = 128;
 
-const ContextClassSubtableAccelerator = struct {
-    subtable_offset: usize = 0,
-    first_index_start: usize = 0,
-    class_def: usize = 0,
-    rules: []const class_context.Rule = &.{},
-    classes: []const u16 = &.{},
-    groups: []const class_context.RuleGroup = &.{},
-};
-
-const ContextCoverageSubtable = struct {
-    glyph_count: u16 = 0,
-    coverage_start: usize = 0,
-    subst_count: u16 = 0,
-    records_pos: usize = 0,
-};
-
-const ChainingCoverageSubtable = struct {
-    const max_fast_records = 4;
-
-    subtable_offset: usize = 0,
-    backtrack_offsets_pos: usize = 0,
-    backtrack_count: u16 = 0,
-    input_offsets_pos: usize = 0,
-    input_count: u16 = 0,
-    second_input_digest: GlyphDigest = .{},
-    second_input_coverage_offset: usize = 0,
-    third_input_digest: GlyphDigest = .{},
-    third_input_coverage_offset: usize = 0,
-    first_backtrack_digest: GlyphDigest = .{},
-    lookahead_offsets_pos: usize = 0,
-    lookahead_count: u16 = 0,
-    first_lookahead_digest: GlyphDigest = .{},
-    records_pos: usize = 0,
-    subst_count: u16 = 0,
-    fast_record_count: u16 = 0,
-    fast_records: [max_fast_records]FastSingleRecord = [_]FastSingleRecord{.{}} ** max_fast_records,
-};
-
-const FastSingleRecord = struct {
-    sequence_index: u16 = 0,
-    accelerator: SingleSubstAccelerator = .{},
-};
-
-const ChainingClassSubtableAccelerator = struct {
-    first_index_start: usize = 0,
-    backtrack_class_def: usize = 0,
-    input_class_def: usize = 0,
-    lookahead_class_def: usize = 0,
-    rules: []const class_context.Rule = &.{},
-    classes: []const u16 = &.{},
-    groups: []const class_context.RuleGroup = &.{},
-};
-
 fn chainingClassRuleBacktrackCount(rule: class_context.Rule) u16 {
-    // ChainingClassSubtableAccelerator's conservative subset applies its sole
-    // nested lookup directly, so it has no substitution-record table offset.
-    // Reuse that otherwise idle sidecar field instead of widening the Rule
-    // shared by ContextSubst and GPOS or instantiating a second sorting path.
+    // The conservative accelerator subset has no substitution-record offset,
+    // so this shared Rule field carries its already-proven backtrack count.
     return @intCast(rule.records_offset);
 }
 
-const ReverseChainingSingleSubtable = struct {
-    subtable_offset: usize = 0,
-    coverage_offset: usize = 0,
-    backtrack_offsets_pos: usize = 0,
-    backtrack_count: u16 = 0,
-    lookahead_offsets_pos: usize = 0,
-    lookahead_count: u16 = 0,
-    glyph_count: u16 = 0,
-    substitutes_pos: usize = 0,
-};
-
-const ReverseChainingContextKey = struct {
-    target: GlyphId,
-    backtrack: GlyphId,
-    lookahead_0: GlyphId,
-    lookahead_1: GlyphId,
-};
-
-const ReverseChainingContextEntry = struct {
-    key: ReverseChainingContextKey,
-    subtable_index: u16,
-    substitute: GlyphId,
-};
-
 const empty_class_def_offset = std.math.maxInt(usize);
-
-const ChainingSubtableGroup = struct {
-    glyph: GlyphId,
-    subtable_indices: []const u16,
-    second_input_digest: GlyphDigest = .{},
-    has_no_second_input: bool = false,
-};
-
-const ChainingSubtablePair = struct {
-    glyph: GlyphId,
-    subtable_index: u16,
-};
-
-const ChainingPairSubtableGroup = struct {
-    first: GlyphId,
-    second: GlyphId,
-    subtable_indices: []const u16,
-};
-
-const ChainingPairSubtablePair = struct {
-    first: GlyphId,
-    second: GlyphId,
-    subtable_index: u16,
-};
 
 const max_run_digest_cache_entries = 16;
 
@@ -867,7 +658,7 @@ pub fn isEmptyTable(data: []const u8, offset: usize, length: usize) GsubError!bo
 /// refuses foreign table bytes and accelerators built for a different table
 /// range; the shaping hot path may trust the boolean only after separately
 /// proving the borrowed GSUB table for the current cache lifetime.
-pub fn hasRandomFeatureWithAccelerators(
+fn hasRandomFeatureWithAccelerators(
     data: []const u8,
     offset: usize,
     length: usize,
@@ -1526,7 +1317,7 @@ fn applyLookupPlanEntry(table: Table, lookup_count: u16, entry: FeatureLookupPla
     }
 }
 
-pub fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]LookupAccelerator {
+fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]LookupAccelerator {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = true };
     const major = try readU16(table, 0);
@@ -1593,7 +1384,7 @@ pub fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, a
     return accelerators;
 }
 
-pub fn deinitLookupAccelerators(allocator: std.mem.Allocator, accelerators: []LookupAccelerator) void {
+fn deinitLookupAccelerators(allocator: std.mem.Allocator, accelerators: []LookupAccelerator) void {
     deinitLookupAcceleratorContents(allocator, accelerators);
     allocator.free(accelerators);
 }
@@ -15461,6 +15252,7 @@ test "GSUB public apply validates ligature component source order" {
 }
 
 test {
+    _ = @import("gsub/tests/accelerator/root.zig");
     _ = @import("gsub/tests/feature/root.zig");
     _ = @import("gsub/tests/runtime/root.zig");
 }

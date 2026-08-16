@@ -36,7 +36,7 @@ pub const LookupSelectionCache = struct {
     };
     const GsubAcceleratorEntry = struct {
         font_addr: usize,
-        accelerators: []gsub.LookupAccelerator,
+        accelerators: []gsub.acceleration.Lookup,
     };
     const GposAcceleratorEntry = struct {
         font_addr: usize,
@@ -94,7 +94,7 @@ pub const LookupSelectionCache = struct {
         }
         self.entries.clearRetainingCapacity();
         for (self.gsub_accelerator_entries.items) |entry| {
-            gsub.deinitLookupAccelerators(self.allocator, entry.accelerators);
+            gsub.acceleration.deinit(self.allocator, entry.accelerators);
         }
         self.gsub_accelerator_entries.clearRetainingCapacity();
         for (self.gpos_accelerator_entries.items) |entry| {
@@ -131,7 +131,7 @@ pub const LookupSelectionCache = struct {
         return self.entries.items[self.entries.items.len - 1].lookups;
     }
 
-    pub fn gsubLookupAccelerators(self: *LookupSelectionCache, font: *const Font) ![]const gsub.LookupAccelerator {
+    pub fn gsubLookupAccelerators(self: *LookupSelectionCache, font: *const Font) ![]const gsub.acceleration.Lookup {
         const font_addr = @intFromPtr(font);
         for (self.gsub_accelerator_entries.items) |entry| {
             if (entry.font_addr != font_addr) continue;

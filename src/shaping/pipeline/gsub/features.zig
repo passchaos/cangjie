@@ -69,7 +69,7 @@ pub fn appendExplicitOptional(
 pub fn needsValueAwareSelection(
     font: *const Font,
     overrides: []const unicode.FeatureOverride,
-    lookup_accelerators: ?[]const gsub.LookupAccelerator,
+    lookup_accelerators: ?[]const gsub.acceleration.Lookup,
     table_proved: bool,
 ) bool {
     var rand_disabled = false;

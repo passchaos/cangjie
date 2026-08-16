@@ -2635,15 +2635,15 @@ pub const Font = struct {
         return try gsub_mod.hasFeature(self.data, gsub.offset, gsub.length, feature_tag);
     }
 
-    fn hasGsubRandomFeatureWithAcceleratorsForShaping(self: *const Font, accelerators: []const gsub_mod.LookupAccelerator) ?bool {
+    fn hasGsubRandomFeatureWithAcceleratorsForShaping(self: *const Font, accelerators: []const gsub_mod.acceleration.Lookup) ?bool {
         const gsub = self.gsub orelse return false;
-        return gsub_mod.hasRandomFeatureWithAccelerators(self.data, gsub.offset, gsub.length, accelerators);
+        return gsub_mod.acceleration.hasRandomFeature(self.data, gsub.offset, gsub.length, accelerators);
     }
 
-    fn gsubLookupAcceleratorsForShaping(self: *const Font, allocator: std.mem.Allocator) FontError![]gsub_mod.LookupAccelerator {
-        const gsub = self.gsub orelse return try allocator.alloc(gsub_mod.LookupAccelerator, 0);
+    fn gsubLookupAcceleratorsForShaping(self: *const Font, allocator: std.mem.Allocator) FontError![]gsub_mod.acceleration.Lookup {
+        const gsub = self.gsub orelse return try allocator.alloc(gsub_mod.acceleration.Lookup, 0);
         try sfnt.checksum.validate(self.data, gsub);
-        return try gsub_mod.buildLookupAccelerators(self.data, gsub.offset, gsub.length, allocator);
+        return try gsub_mod.acceleration.build(self.data, gsub.offset, gsub.length, allocator);
     }
 
     fn gsubFeatureLookupPlanForShaping(self: *const Font, allocator: std.mem.Allocator, applications: []const gsub_mod.feature.Application, options: gsub_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!gsub_mod.feature.LookupPlan {

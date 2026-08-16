@@ -32,6 +32,27 @@ pub fn tableOffset(
     return error.BadSfnt;
 }
 
+pub fn tableLength(
+    bytes: []const u8,
+    comptime tag: *const [4]u8,
+) error{BadSfnt}!usize {
+    if (bytes.len < 12) return error.BadSfnt;
+    const table_count = std.mem.readInt(u16, bytes[4..6], .big);
+    if (table_count > (bytes.len - 12) / 16) return error.BadSfnt;
+
+    for (0..table_count) |index| {
+        const record_offset = 12 + index * 16;
+        if (!std.mem.eql(u8, bytes[record_offset..][0..4], tag)) continue;
+        const length = std.mem.readInt(
+            u32,
+            bytes[record_offset + 12 ..][0..4],
+            .big,
+        );
+        return @intCast(length);
+    }
+    return error.BadSfnt;
+}
+
 /// Find a canonical name record by NameID and return its absolute SFNT offset.
 pub fn nameRecordOffset(
     bytes: []const u8,

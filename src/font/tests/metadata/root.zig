@@ -2,7 +2,7 @@
 
 test {
     _ = @import("metrics.zig");
-    _ = @import("names.zig");
+    _ = @import("name/root.zig");
     _ = @import("post/root.zig");
     _ = @import("style.zig");
 }

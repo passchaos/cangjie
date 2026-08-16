@@ -3,4 +3,5 @@
 test {
     _ = @import("contextual/root.zig");
     _ = @import("direct/root.zig");
+    _ = @import("lookup/root.zig");
 }

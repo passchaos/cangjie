@@ -23,6 +23,8 @@ const contextual_safety =
     @import("gsub/execution/contextual/safety.zig");
 const context_traversal =
     @import("gsub/execution/support/context_traversal.zig");
+const lookup_execution = @import("gsub/execution/lookup/root.zig");
+const lookup_profile = lookup_execution.profile;
 const GlyphId = @import("glyph.zig").GlyphId;
 const ligature_provenance = @import("ligature_provenance.zig");
 const class_context = @import("opentype/class_context.zig");
@@ -34,7 +36,6 @@ const table_core = @import("gsub/table/root.zig");
 const validation = @import("gsub/validation/root.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const unicode = @import("unicode.zig");
-const shape_profile_mod = @import("shape_profile.zig");
 
 /// Staged feature planning and application surface.
 ///
@@ -151,7 +152,10 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
     // Script/language/feature selection happens before the lookup list pass.
     // When no explicit features are supplied, selectedLookupIndices returns the
     // default-enabled lookups for the requested script/language.
-    const select_start = shapeProfileNow(shaping_options.shape_profile, shaping_options.profile_io);
+    const select_start = lookup_profile.now(
+        shaping_options.shape_profile,
+        shaping_options.profile_io,
+    );
     var selected_lookup_records_owned = if (shaping_options.selected_lookups == null) blk: {
         break :blk selectedLookupRecords(table, allocator, shaping_options) catch |err| {
             if (err == error.BadGsub and try canFallbackFromBadGsubSelection(table)) {
@@ -160,7 +164,12 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
             return err;
         };
     } else std.ArrayList(SelectedLookup).empty;
-    if (shaping_options.shape_profile) |profile| profile.gsub_select_ns += shapeProfileElapsed(select_start, shaping_options.profile_io);
+    if (shaping_options.shape_profile) |profile| {
+        profile.gsub_select_ns += lookup_profile.elapsed(
+            select_start,
+            shaping_options.profile_io,
+        );
+    }
     defer selected_lookup_records_owned.deinit(allocator);
     const selected_lookup_count = if (shaping_options.selected_lookups) |selected_lookups|
         selected_lookups.len
@@ -181,9 +190,17 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
     if (selected_lookup_count == 0 and
         (shaping_options.features.len != 0 or (!shaping_options.apply_all_if_unselected and has_feature_topology))) return;
 
-    const apply_start = shapeProfileNow(shaping_options.shape_profile, shaping_options.profile_io);
+    const apply_start = lookup_profile.now(
+        shaping_options.shape_profile,
+        shaping_options.profile_io,
+    );
     defer {
-        if (shaping_options.shape_profile) |profile| profile.gsub_apply_ns += shapeProfileElapsed(apply_start, shaping_options.profile_io);
+        if (shaping_options.shape_profile) |profile| {
+            profile.gsub_apply_ns += lookup_profile.elapsed(
+                apply_start,
+                shaping_options.profile_io,
+            );
+        }
     }
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
@@ -1128,20 +1145,6 @@ fn mergedFeatureLookupLessThan(_: void, lhs: MergedFeatureLookup, rhs: MergedFea
     return lhs.lookup < rhs.lookup;
 }
 
-fn recordGsubLookupProfile(profile: ?*shape_profile_mod.ShapeStageProfile, lookup_type: u16) void {
-    const p = profile orelse return;
-    p.gsub_lookup_count += 1;
-    switch (lookup_type) {
-        1 => p.gsub_single_lookup_count += 1,
-        2 => p.gsub_multiple_lookup_count += 1,
-        3 => p.gsub_alternate_lookup_count += 1,
-        4 => p.gsub_ligature_lookup_count += 1,
-        5, 6 => p.gsub_context_lookup_count += 1,
-        7 => p.gsub_extension_lookup_count += 1,
-        else => {},
-    }
-}
-
 fn sortUniqueLookupIndices(lookups: *std.ArrayList(u16)) void {
     feature_domain.run_selection.sortUniqueIndices(lookups);
 }
@@ -1203,7 +1206,8 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
     // profiling windows otherwise forces a roughly 10 KiB stack frame on each
     // tiny lookup invocation even when none of that state is used.
     if ((options.shape_profile == null or options.profile_fast_path) and table.assume_validated) {
-        if (try applyValidatedAcceleratedLookup(
+        if (try lookup_execution.accelerated.apply(
+            ContextualRecordExecutor,
             table,
             lookup_offset,
             lookup_index,
@@ -1224,198 +1228,27 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
     );
 }
 
-fn applyValidatedAcceleratedLookup(
-    table: Table,
-    lookup_offset: usize,
-    lookup_index: ?u16,
-    glyphs: *std.ArrayList(GlyphId),
-    allocator: std.mem.Allocator,
-    options: LookupOptions,
-    run_digest_cache: ?*runtime_prefilter.Cache,
-) (GsubError || std.mem.Allocator.Error)!bool {
-    const accelerator =
-        runtime.dispatch.any(lookup_index, options) orelse return false;
-    if (accelerator.lookup_offset != lookup_offset or accelerator.lookup_type == 0) return false;
-    const lookup_start = shapeProfileNow(options.shape_profile, options.profile_io);
-    const glyph_count_before = if (options.shape_profile != null) glyphs.items.len else 0;
-
-    const scoped_syllable =
-        runtime.dispatch.matchesSourceSyllable(lookup_index, options);
-    if (runtime.dispatch.needsCustomizedOptions(
-        accelerator.lookup_flag,
-        scoped_syllable,
-        options,
-    )) {
-        // LookupOptions carries all source-parallel shaping metadata and is
-        // intentionally large. Materialize a customized copy only for lookups
-        // that actually override mark-filtering or syllable scope; ordinary
-        // cached lookups can pass the caller's immutable value straight into
-        // the prepared dispatcher.
-        var customized_options = options;
-        if ((accelerator.lookup_flag & 0x0010) != 0) {
-            customized_options.active_mark_filtering_set = accelerator.mark_filtering_set;
-            try runtime_filtering.validateMarkFilteringSetIndex(customized_options);
-        }
-        customized_options.match_source_syllable = scoped_syllable;
-        return applyValidatedAcceleratedLookupPrepared(
-            table,
-            lookup_offset,
-            lookup_index,
-            glyphs,
-            allocator,
-            customized_options,
-            run_digest_cache,
-            accelerator,
-            lookup_start,
-            glyph_count_before,
-        );
-    }
-    return applyValidatedAcceleratedLookupPrepared(
-        table,
-        lookup_offset,
-        lookup_index,
-        glyphs,
-        allocator,
-        options,
-        run_digest_cache,
-        accelerator,
-        lookup_start,
-        glyph_count_before,
-    );
-}
-
-noinline fn applyValidatedAcceleratedLookupPrepared(
-    table: Table,
-    lookup_offset: usize,
-    lookup_index: ?u16,
-    glyphs: *std.ArrayList(GlyphId),
-    allocator: std.mem.Allocator,
-    lookup_options: LookupOptions,
-    run_digest_cache: ?*runtime_prefilter.Cache,
-    accelerator: *const LookupAccelerator,
-    lookup_start: i128,
-    glyph_count_before: usize,
-) (GsubError || std.mem.Allocator.Error)!bool {
-    switch (accelerator.lookup_type) {
-        4 => {
-            if (accelerator.subtable_count != 1 or accelerator.ligature_subst.sets.len == 0) return false;
-            if (run_digest_cache) |cache| {
-                const run_digest = cache.digestForRun(glyphs.items, accelerator.lookup_flag, lookup_options);
-                if (run_digest.isEmpty() or
-                    !accelerator.ligature_subst.first_component_digest.mayIntersect(run_digest))
-                {
-                    recordAcceleratedGsubLookupProfile(lookup_options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
-                    return true;
-                }
-            }
-            if (accelerator.ligature_subst.prefilter_second) {
-                try direct_ligature.acceleratedPrefiltered(
-                    accelerator.ligature_subst,
-                    glyphs,
-                    allocator,
-                    accelerator.lookup_flag,
-                    lookup_options,
-                );
-            } else if (accelerator.ligature_subst.required_second_len != 0) {
-                @branchHint(.unlikely);
-                try direct_ligature.acceleratedRequiredSecond(
-                    accelerator.ligature_subst,
-                    glyphs,
-                    allocator,
-                    accelerator.lookup_flag,
-                    lookup_options,
-                );
-            } else {
-                try direct_ligature.accelerated(
-                    accelerator.ligature_subst,
-                    glyphs,
-                    allocator,
-                    accelerator.lookup_flag,
-                    lookup_options,
-                );
-            }
-            recordAcceleratedGsubLookupProfile(lookup_options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
-            return true;
-        },
-        5 => {
-            if (accelerator.context_class_subtables.len != 0) {
-                try contextual_context.acceleratedClassLookup(
-                    ContextualRecordExecutor,
-                    table,
-                    accelerator.subtable_count,
-                    glyphs,
-                    allocator,
-                    accelerator.lookup_flag,
-                    lookup_options,
-                    accelerator,
-                );
-                recordAcceleratedGsubLookupProfile(lookup_options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
-                return true;
-            }
-            if (accelerator.context_coverage_subtables.len != 0) {
-                try contextual_context.acceleratedCoverageLookup(
-                    ContextualRecordExecutor,
-                    table,
-                    glyphs,
-                    allocator,
-                    accelerator.lookup_flag,
-                    lookup_options,
-                    accelerator,
-                );
-                recordAcceleratedGsubLookupProfile(lookup_options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
-                return true;
-            }
-            return false;
-        },
-        6 => {
-            if (!accelerator.chaining_coverage_only) return false;
-            const run_digest = if (run_digest_cache) |cache|
-                cache.digestForRun(glyphs.items, accelerator.lookup_flag, lookup_options)
-            else
-                runtime_prefilter.digest(glyphs.items, accelerator.lookup_flag, lookup_options);
-            if (run_digest.isEmpty() or !accelerator.chaining_input_digest.mayIntersect(run_digest)) {
-                recordAcceleratedGsubLookupProfile(lookup_options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
-                return true;
-            }
-            try applyChainingContextSubstitutionLookup(
-                table,
-                lookup_offset,
-                accelerator.subtable_count,
-                glyphs,
-                allocator,
-                accelerator.lookup_flag,
-                lookup_options,
-                accelerator,
-            );
-            recordAcceleratedGsubLookupProfile(lookup_options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
-            return true;
-        },
-        else => return false,
-    }
-}
-
-fn recordAcceleratedGsubLookupProfile(options: LookupOptions, lookup_index: ?u16, lookup_type: u16, lookup_start: i128, glyph_count_before: usize, glyph_count_after: usize) void {
-    const profile = options.shape_profile orelse return;
-    recordGsubLookupProfile(profile, lookup_type);
-    profile.recordGsubLookupTime(lookup_index, shapeProfileElapsed(lookup_start, options.profile_io));
-    profile.recordGsubLookupGlyphs(lookup_index, glyph_count_before, glyph_count_after, 0, 0, glyph_count_before, 0, &.{}, &.{});
-}
-
 noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*runtime_prefilter.Cache) (GsubError || std.mem.Allocator.Error)!void {
     const profiling = options.shape_profile != null;
-    const lookup_start = shapeProfileNow(options.shape_profile, options.profile_io);
+    const lookup_start = lookup_profile.now(
+        options.shape_profile,
+        options.profile_io,
+    );
     const glyph_count_before = if (profiling) glyphs.items.len else 0;
-    const glyph_hash_before = if (profiling) glyphRunHash(glyphs.items) else 0;
+    const glyph_hash_before = if (profiling) lookup_profile.glyphRunHash(glyphs.items) else 0;
     const glyphs_before = if (profiling) try allocator.dupe(GlyphId, glyphs.items) else &.{};
     defer if (profiling) allocator.free(glyphs_before);
     defer {
         if (options.shape_profile) |profile| {
-            const first_diff = firstDifferentGlyphIndex(glyphs_before, glyphs.items);
+            const first_diff = lookup_profile.firstDifferentGlyphIndex(glyphs_before, glyphs.items);
             const window_start = first_diff -| 2;
-            const before_window = glyphs_before[window_start..@min(glyphs_before.len, window_start + shape_profile_mod.ShapeStageProfile.lookup_window_capacity)];
-            const after_window = glyphs.items[window_start..@min(glyphs.items.len, window_start + shape_profile_mod.ShapeStageProfile.lookup_window_capacity)];
-            profile.recordGsubLookupTime(lookup_index, shapeProfileElapsed(lookup_start, options.profile_io));
-            profile.recordGsubLookupGlyphs(lookup_index, glyph_count_before, glyphs.items.len, glyph_hash_before, glyphRunHash(glyphs.items), first_diff, window_start, before_window, after_window);
+            const before_window = glyphs_before[window_start..@min(glyphs_before.len, window_start + lookup_profile.Profile.lookup_window_capacity)];
+            const after_window = glyphs.items[window_start..@min(glyphs.items.len, window_start + lookup_profile.Profile.lookup_window_capacity)];
+            profile.recordGsubLookupTime(
+                lookup_index,
+                lookup_profile.elapsed(lookup_start, options.profile_io),
+            );
+            profile.recordGsubLookupGlyphs(lookup_index, glyph_count_before, glyphs.items.len, glyph_hash_before, lookup_profile.glyphRunHash(glyphs.items), first_diff, window_start, before_window, after_window);
         }
     }
     // Header validation remains coupled to ExtensionSubst payload preflight;
@@ -1434,7 +1267,7 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
     const lookup_type = dispatch.lookup_type;
     const lookup_flag = dispatch.lookup_flag;
     const subtable_count = dispatch.subtable_count;
-    recordGsubLookupProfile(options.shape_profile, lookup_type);
+    lookup_profile.recordKind(options.shape_profile, lookup_type);
     // A GSUB lookup is an ordered list of alternative subtables and must apply
     // as one unit. Validate every supported direct subtable before touching the
     // glyph run; otherwise a malformed later subtable can leak substitutions
@@ -1721,23 +1554,6 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
     }
 }
 
-fn glyphRunHash(glyphs: []const GlyphId) u64 {
-    var hash: u64 = 0xcbf29ce484222325;
-    for (glyphs) |glyph| {
-        hash ^= glyph;
-        hash *%= 0x100000001b3;
-    }
-    return hash;
-}
-
-fn firstDifferentGlyphIndex(before: []const GlyphId, after: []const GlyphId) usize {
-    const len = @min(before.len, after.len);
-    for (0..len) |index| {
-        if (before[index] != after[index]) return index;
-    }
-    return len;
-}
-
 fn optionsWithRunDigestGeneration(options: LookupOptions, generation: *usize) LookupOptions {
     var result = options;
     if (runtime.dispatch.tableUsesRunDigestCache(
@@ -1772,20 +1588,6 @@ fn extensionSubtablePayload(table: Table, subtable_offset: usize, expected_looku
         subtable_offset,
         expected_lookup_type,
     );
-}
-
-fn shapeProfileNow(
-    profile: ?*shape_profile_mod.ShapeStageProfile,
-    io: ?std.Io,
-) i128 {
-    return if (profile != null)
-        std.Io.Clock.now(.awake, io.?).nanoseconds
-    else
-        0;
-}
-
-fn shapeProfileElapsed(start: i128, io: ?std.Io) i128 {
-    return std.Io.Clock.now(.awake, io.?).nanoseconds - start;
 }
 
 test "GSUB staged plans retain random AlternateSubst semantics" {
@@ -2319,6 +2121,28 @@ fn applyChainingContextSubstitutionAt(table: Table, subtable_offset: usize, pars
 }
 
 const ContextualRecordExecutor = struct {
+    pub fn applyChainingLookup(
+        table: Table,
+        lookup_offset: usize,
+        subtable_count: u16,
+        glyphs: *std.ArrayList(GlyphId),
+        allocator: std.mem.Allocator,
+        lookup_flag: u16,
+        options: LookupOptions,
+        accelerator: *const LookupAccelerator,
+    ) (GsubError || std.mem.Allocator.Error)!void {
+        return applyChainingContextSubstitutionLookup(
+            table,
+            lookup_offset,
+            subtable_count,
+            glyphs,
+            allocator,
+            lookup_flag,
+            options,
+            accelerator,
+        );
+    }
+
     pub fn applyNested(
         table: Table,
         glyphs: *std.ArrayList(GlyphId),

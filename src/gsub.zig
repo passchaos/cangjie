@@ -194,7 +194,7 @@ pub fn apply(data: []const u8, offset: usize, length: usize, glyphs: *std.ArrayL
 
 pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    try validateShapingMetadata(options, glyphs.items.len);
+    try runtime.metadata.validate(options, glyphs.items.len);
     var mutation_generation: usize = 0;
     var operations_left: usize = 0;
     const shaping_options = try optionsWithTopLevelState(
@@ -430,7 +430,7 @@ fn applySelectedSourceFeatureWithOptions(
     scoped_options.selected_lookups = selected_lookups;
     scoped_options.active_source_feature = source_feature;
     scoped_options.active_feature_value = feature_value;
-    try validateShapingMetadata(scoped_options, glyphs.items.len);
+    try runtime.metadata.validate(scoped_options, glyphs.items.len);
     var mutation_generation: usize = 0;
     const shaping_options = optionsWithRunDigestGeneration(
         scoped_options,
@@ -582,7 +582,7 @@ fn applyFeatureSequenceWithOptions(
     options: LookupOptions,
 ) (GsubError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    try validateShapingMetadataForApplications(options, glyphs.items.len, applications);
+    try runtime.metadata.validateApplications(options, glyphs.items.len, applications);
     var mutation_generation: usize = 0;
     var operations_left: usize = 0;
     const shaping_options = try optionsWithTopLevelState(
@@ -789,7 +789,7 @@ fn applyFeatureLookupPlanWithOptions(
     options: LookupOptions,
 ) (GsubError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    try validateShapingMetadataForFeaturePlan(options, glyphs.items.len, plan);
+    try runtime.metadata.validateLookupPlan(options, glyphs.items.len, plan);
     return try applyFeatureLookupPlanWithOptionsAfterMetadataProof(
         data,
         offset,
@@ -865,7 +865,7 @@ fn applyMergedFeatureLookupPlanWithOptions(
     options: LookupOptions,
 ) (GsubError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    try validateShapingMetadataForMergedPlan(options, glyphs.items.len, plan);
+    try runtime.metadata.validateMergedLookupPlan(options, glyphs.items.len, plan);
     return try applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof(
         data,
         offset,
@@ -3900,179 +3900,6 @@ fn shapeProfileNow(profile: ?*shape_profile_mod.ShapeStageProfile, io: ?std.Io) 
 
 fn shapeProfileElapsed(start: i128, io: ?std.Io) i128 {
     return std.Io.Clock.now(.awake, io.?).nanoseconds - start;
-}
-
-fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GsubError!void {
-    return validateShapingMetadataRequirements(
-        options,
-        glyph_count,
-        options.active_source_feature != null or options.active_source_feature_mask != 0,
-        options.match_source_syllable or options.match_source_syllable_lookups != null,
-    );
-}
-
-fn validateShapingMetadataForApplications(options: LookupOptions, glyph_count: usize, applications: []const FeatureApplication) GsubError!void {
-    var require_source_features = options.active_source_feature != null or options.active_source_feature_mask != 0;
-    var require_source_syllables = options.match_source_syllable or options.match_source_syllable_lookups != null;
-    for (applications) |application| {
-        require_source_features = require_source_features or application.source_scoped;
-        require_source_syllables = require_source_syllables or application.match_source_syllable;
-    }
-    return validateShapingMetadataRequirements(options, glyph_count, require_source_features, require_source_syllables);
-}
-
-fn validateShapingMetadataForFeaturePlan(options: LookupOptions, glyph_count: usize, plan: FeatureLookupPlan) GsubError!void {
-    var require_source_features = options.active_source_feature != null or options.active_source_feature_mask != 0;
-    var require_source_syllables = options.match_source_syllable or options.match_source_syllable_lookups != null;
-    for (plan.entries) |entry| {
-        require_source_features = require_source_features or entry.application.source_scoped;
-        require_source_syllables = require_source_syllables or entry.application.match_source_syllable;
-    }
-    return validateShapingMetadataRequirements(options, glyph_count, require_source_features, require_source_syllables);
-}
-
-fn validateShapingMetadataForMergedPlan(options: LookupOptions, glyph_count: usize, plan: MergedFeatureLookupPlan) GsubError!void {
-    var require_source_features = options.active_source_feature != null or options.active_source_feature_mask != 0;
-    var require_source_syllables = options.match_source_syllable or options.match_source_syllable_lookups != null;
-    for (plan.lookups) |lookup| {
-        require_source_features = require_source_features or lookup.source_mask != 0;
-        require_source_syllables = require_source_syllables or lookup.match_source_syllable;
-    }
-    return validateShapingMetadataRequirements(options, glyph_count, require_source_features, require_source_syllables);
-}
-
-/// Prove the maximal source metadata contract required by an explicit script
-/// shaper before it starts a multi-stage GSUB plan.
-///
-/// Later stages may require different subsets, but GSUB mutations preserve
-/// these bounds and parallel cardinalities. Validating the maximal contract
-/// once therefore lets trusted consecutive stages use the after-proof entry
-/// point without rescanning the whole glyph run for each feature group.
-pub fn validateScriptShaperRunMetadata(options: LookupOptions, glyph_count: usize) GsubError!void {
-    return validateShapingMetadataRequirements(
-        options,
-        glyph_count,
-        options.source_features != null,
-        options.source_syllables != null,
-    );
-}
-
-fn validateShapingMetadataRequirements(options: LookupOptions, glyph_count: usize, require_source_features: bool, require_source_syllables: bool) GsubError!void {
-    if (options.glyph_source_indices) |sources| {
-        if (sources.items.len != glyph_count) return error.InvalidShapingInput;
-    }
-    if (options.glyph_cluster_indices) |clusters| {
-        if (clusters.items.len != glyph_count) return error.InvalidShapingInput;
-    }
-    if (options.glyph_substituted) |substituted| {
-        if (substituted.items.len != glyph_count) return error.InvalidShapingInput;
-    }
-    if (options.glyph_stage_substituted) |substituted| {
-        if (substituted.items.len != glyph_count) return error.InvalidShapingInput;
-    }
-    if (options.ligature_components) |store| {
-        if (store.infos.items.len != glyph_count or !store.isValid()) return error.InvalidShapingInput;
-    }
-    if (!require_source_features and !require_source_syllables and options.source_codepoints == null) return;
-
-    const sources = options.glyph_source_indices orelse return error.InvalidShapingInput;
-    const features = if (require_source_features)
-        options.source_features orelse return error.InvalidShapingInput
-    else
-        &.{};
-    const syllables = if (require_source_syllables)
-        options.source_syllables orelse return error.InvalidShapingInput
-    else
-        &.{};
-    for (sources.items) |source| {
-        if (require_source_features and source >= features.len) return error.InvalidShapingInput;
-        if (require_source_syllables and source >= syllables.len) return error.InvalidShapingInput;
-        if (options.source_codepoints) |codepoints| {
-            if (source >= codepoints.len) return error.InvalidShapingInput;
-        }
-    }
-}
-
-test "GSUB feature plans validate derived source metadata requirements once" {
-    const allocator = std.testing.allocator;
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.append(allocator, 1);
-
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(allocator);
-    try sources.append(allocator, 0);
-
-    const source_scoped_plan = FeatureLookupPlan{
-        .entries = @constCast(&[_]FeatureLookupPlanEntry{.{
-            .application = .{ .tag = unicode.tag("init"), .source_scoped = true },
-            .lookups = &.{},
-            .lookup_offsets = &.{},
-        }}),
-    };
-    try std.testing.expectError(
-        error.InvalidShapingInput,
-        validateShapingMetadataForFeaturePlan(.{ .glyph_source_indices = &sources }, glyphs.items.len, source_scoped_plan),
-    );
-
-    const syllable_plan = FeatureLookupPlan{
-        .entries = @constCast(&[_]FeatureLookupPlanEntry{.{
-            .application = .{ .tag = unicode.tag("rphf"), .match_source_syllable = true },
-            .lookups = &.{},
-            .lookup_offsets = &.{},
-        }}),
-    };
-    try std.testing.expectError(
-        error.InvalidShapingInput,
-        validateShapingMetadataForFeaturePlan(.{ .glyph_source_indices = &sources }, glyphs.items.len, syllable_plan),
-    );
-
-    const source_scoped_application = [_]FeatureApplication{
-        .{ .tag = unicode.tag("init"), .source_scoped = true },
-    };
-    try std.testing.expectError(
-        error.InvalidShapingInput,
-        validateShapingMetadataForApplications(.{ .glyph_source_indices = &sources }, glyphs.items.len, &source_scoped_application),
-    );
-
-    const merged_plan = MergedFeatureLookupPlan{
-        .lookups = @constCast(&[_]MergedFeatureLookup{.{ .lookup = 0, .source_mask = 1 }}),
-        .lookup_offsets = @constCast(&[_]usize{0}),
-    };
-    try std.testing.expectError(
-        error.InvalidShapingInput,
-        validateShapingMetadataForMergedPlan(.{ .glyph_source_indices = &sources }, glyphs.items.len, merged_plan),
-    );
-}
-
-test "GSUB script shaper run proof validates maximal present metadata" {
-    const allocator = std.testing.allocator;
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(allocator);
-    try sources.append(allocator, 1);
-
-    try std.testing.expectError(
-        error.InvalidShapingInput,
-        validateScriptShaperRunMetadata(.{
-            .glyph_source_indices = &sources,
-            .source_features = &.{0},
-        }, 1),
-    );
-    try std.testing.expectError(
-        error.InvalidShapingInput,
-        validateScriptShaperRunMetadata(.{
-            .glyph_source_indices = &sources,
-            .source_syllables = &.{0},
-        }, 1),
-    );
-
-    sources.items[0] = 0;
-    try validateScriptShaperRunMetadata(.{
-        .glyph_source_indices = &sources,
-        .source_features = &.{0},
-        .source_syllables = &.{0},
-        .source_codepoints = &.{0x0915},
-    }, 1);
 }
 
 fn sourceForGlyph(options: LookupOptions, glyph_index: usize) usize {

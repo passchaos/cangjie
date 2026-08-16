@@ -83,7 +83,7 @@ pub fn run(input: Input) !void {
         input.source_syllables.items,
         input.codepoints,
     );
-    try gsub.validateScriptShaperRunMetadata(
+    try gsub.runtime.validateScriptShaperMetadata(
         myanmar_options,
         input.glyph_ids.items.len,
     );

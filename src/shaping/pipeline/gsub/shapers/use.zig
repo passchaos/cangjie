@@ -88,7 +88,7 @@ pub fn run(input: Input) !void {
         .pref,
     );
 
-    try gsub.validateScriptShaperRunMetadata(
+    try gsub.runtime.validateScriptShaperMetadata(
         use_options,
         input.glyph_ids.items.len,
     );

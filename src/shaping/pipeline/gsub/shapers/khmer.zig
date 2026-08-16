@@ -93,7 +93,7 @@ pub fn run(input: Input) !void {
         input.glyph_source_indices,
         input.codepoints.items,
     );
-    try gsub.validateScriptShaperRunMetadata(
+    try gsub.runtime.validateScriptShaperMetadata(
         options,
         input.glyph_ids.items.len,
     );

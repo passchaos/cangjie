@@ -127,7 +127,7 @@ pub fn finish(input: Input) !void {
     input.options.source_features = input.source_features.items;
     input.options.source_syllables = input.source_syllables.items;
 
-    try gsub.validateScriptShaperRunMetadata(
+    try gsub.runtime.validateScriptShaperMetadata(
         input.options.*,
         input.glyph_ids.items.len,
     );

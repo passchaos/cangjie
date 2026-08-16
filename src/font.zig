@@ -3565,7 +3565,18 @@ pub const Font = struct {
             else => return err,
         };
         if (self.format == .truetype) {
-            if (try self.verticalMetricsAtCoords(glyph_id, normalized_coords)) |metrics| {
+            const vertical_metrics = self.verticalMetricsAtCoords(
+                glyph_id,
+                normalized_coords,
+            ) catch |err| switch (err) {
+                // Keep vertical-origin fallback aligned with shaping's advance
+                // fallback. Some deployed CJK fonts advertise a vhea/vmtx pair
+                // whose line metrics are unusable; bounds plus font height are
+                // still sufficient to place a one-em vertical run.
+                error.InvalidMetrics => null,
+                else => return err,
+            };
+            if (vertical_metrics) |metrics| {
                 var origin = @as(i32, bounds.y_max) + @as(i32, metrics.top_side_bearing);
                 if (try self.metricVariationTableForRead(.vvar)) |vvar| {
                     if (try metric_variation_mod.vvarVerticalOriginDelta(

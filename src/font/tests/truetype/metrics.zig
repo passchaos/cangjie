@@ -165,6 +165,26 @@ test "vertical metrics API reports absence without requiring vertical tables" {
     );
 }
 
+test "shaping vertical origin falls back when deployed vertical metrics are unusable" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildVerticalMetricsTtf(allocator);
+    defer allocator.free(bytes);
+
+    const vhea_offset = try sfnt_fixture.tableOffset(bytes, "vhea");
+    writeInvalidLineAdvance(bytes, vhea_offset);
+    try sfnt_fixture.updateTableChecksum(bytes, "vhea");
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(1));
+    const origin = try font_mod.shaping.shapingVerticalOriginYForShaping(
+        &font,
+        1,
+        &.{},
+    );
+    try std.testing.expect(origin > font.descender);
+}
+
 test "metric table contracts reject malformed headers and payload lengths" {
     const allocator = std.testing.allocator;
 

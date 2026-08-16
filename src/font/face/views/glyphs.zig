@@ -31,7 +31,7 @@ pub const View = struct {
         self: View,
         codepoint: u21,
         selector: u21,
-    ) font_mod.FontError!font_mod.VariationSequenceKind {
+    ) font_mod.FontError!?font_mod.VariationSequenceKind {
         return self.implementation.variationSequenceKind(
             codepoint,
             selector,

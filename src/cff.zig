@@ -854,6 +854,11 @@ test "CFF Type2 charstrings require explicit endchar" {
 
     var interpreter = testInterpreter(&outline);
     try interpreter.run(&.{0x0e}); // A complete empty glyph is still valid.
+    interpreter = testInterpreter(&outline);
+    interpreter.nominal_width_x = 500;
+    try interpreter.run(&.{ 149, 14 }); // width=510 followed by endchar.
+    try std.testing.expectEqual(@as(f32, 510), interpreter.width);
+    try std.testing.expect(interpreter.width_seen);
     try std.testing.expectError(error.BadCff, interpreter.run(&.{}));
     try std.testing.expectError(error.BadCff, interpreter.run(&.{139})); // Operand stack without an endchar.
 }
@@ -1115,6 +1120,14 @@ const Type2Interpreter = struct {
 
     fn readEndcharSeac(self: *Type2Interpreter) CffError!void {
         if (self.stack_len == 0) return;
+        // A lone operand is the optional width of an ordinary endchar, not an
+        // incomplete seac. CFF math fonts use this compact form for otherwise
+        // empty or fully subroutine-drawn glyphs.
+        if (!self.width_seen and self.stack_len == 1) {
+            self.width = self.nominal_width_x + self.stack[0];
+            self.width_seen = true;
+            return;
+        }
         var start: usize = 0;
         // Type2 permits an optional width before the four seac operands.
         if (!self.width_seen and self.stack_len == 5) {

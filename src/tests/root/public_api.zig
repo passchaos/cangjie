@@ -121,6 +121,11 @@ test "concrete face views cover the normal application workflow" {
     try std.testing.expectEqual(cangjie.font.Format.truetype, properties.format);
     try std.testing.expectEqual(@as(u16, 1000), properties.units_per_em);
     try std.testing.expectEqual(@as(cangjie.font.GlyphId, 1), try face.glyphs().index('A'));
+    // Absence is distinct from a default UVS mapping. Consumers use this to
+    // decide whether fallback faces should be probed for the selector.
+    try std.testing.expect(
+        (try face.glyphs().variationKind('A', 0xFE0F)) == null,
+    );
     const metrics = try face.metrics().horizontal(1);
     try std.testing.expect(metrics.advance_width > 0);
 

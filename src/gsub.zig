@@ -840,55 +840,6 @@ fn readU32(table: Table, relative: usize) GsubError!u32 {
     return table.readU32(relative);
 }
 
-test "GSUB rejects ExtensionSubst payload offsets outside the table during shaping" {
-    var bytes = [_]u8{0} ** 8;
-    writeU16Test(&bytes, 0, 1); // ExtensionSubst format 1.
-    writeU16Test(&bytes, 2, 1); // Wrapped SingleSubst.
-    writeU32Test(&bytes, 4, 0xffff_fffe); // Far beyond this table.
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(std.testing.allocator);
-    try glyphs.append(std.testing.allocator, 5);
-
-    // These calls intentionally bypass Font.parse/lookup preflight. Extension
-    // wrappers are also followed by low-level shaping helpers, so every runtime
-    // path must convert a malicious Offset32 into BadGsub before reading the
-    // wrapped payload or mutating the glyph stream.
-    try std.testing.expectError(error.BadGsub, extensionSubtablePayload(table, 0, 1));
-    try std.testing.expectError(error.BadGsub, applyExtensionSubstitution(table, 0, &glyphs, std.testing.allocator, 0, .{}));
-    try std.testing.expectError(error.BadGsub, contextual_nested.extension.applyAt(ContextualRecordExecutor, table, 0, &glyphs, 0, std.testing.allocator, 0, .{}));
-    try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
-}
-
-test "GSUB rejects ExtensionSubst payload offsets that alias the wrapper header" {
-    var bytes = [_]u8{0} ** 8;
-    writeU16Test(&bytes, 0, 1); // ExtensionSubst format 1.
-    writeU16Test(&bytes, 2, 1); // Wrapped SingleSubst.
-    writeU32Test(&bytes, 4, 4); // Points into the ExtensionOffset field itself.
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(std.testing.allocator);
-    try glyphs.append(std.testing.allocator, 5);
-
-    // Offset32 values below the fixed wrapper size are in-range byte addresses,
-    // but they do not name a child subtable. Reject them before wrapper fields
-    // can be reinterpreted as a nested lookup payload.
-    try std.testing.expectError(error.BadGsub, extensionSubtablePayload(table, 0, 1));
-    try std.testing.expectError(
-        error.BadGsub,
-        validation.lookup.extension.validate(
-            ContextualRecordExecutor,
-            table,
-            0,
-        ),
-    );
-    try std.testing.expectError(error.BadGsub, applyExtensionSubstitution(table, 0, &glyphs, std.testing.allocator, 0, .{}));
-    try std.testing.expectError(error.BadGsub, contextual_nested.extension.applyAt(ContextualRecordExecutor, table, 0, &glyphs, 0, std.testing.allocator, 0, .{}));
-    try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
-}
-
 test "GSUB rejects malformed coverage ordering before substitution" {
     var bytes = [_]u8{0} ** 18;
     writeU16Test(&bytes, 0, 2); // SingleSubst format 2.
@@ -3352,6 +3303,38 @@ const MetadataIntegrationTestBindings = struct {
     pub const apply = applyWithOptions;
 };
 
+const ExtensionIntegrationTestBindings = struct {
+    pub const payload = extensionSubtablePayload;
+    pub fn validate(table: Table, subtable_offset: usize) GsubError!void {
+        return validation.lookup.extension.validate(
+            ContextualRecordExecutor,
+            table,
+            subtable_offset,
+        );
+    }
+    pub const apply = applyExtensionSubstitution;
+    pub fn applyNested(
+        table: Table,
+        subtable_offset: usize,
+        glyphs: *std.ArrayList(GlyphId),
+        glyph_index: usize,
+        allocator: std.mem.Allocator,
+        lookup_flag: u16,
+        options: LookupOptions,
+    ) (GsubError || std.mem.Allocator.Error)!?NestedGlyphChange {
+        return contextual_nested.extension.applyAt(
+            ContextualRecordExecutor,
+            table,
+            subtable_offset,
+            glyphs,
+            glyph_index,
+            allocator,
+            lookup_flag,
+            options,
+        );
+    }
+};
+
 const GlyphBoundsTestBindings = struct {
     pub const validate = validateGlyphBounds;
     pub const validateForShaping = validateGlyphBoundsForShaping;
@@ -3387,6 +3370,8 @@ test {
     _ = @import("gsub/tests/table/root.zig");
     _ = @import("gsub/tests/validation/table/glyph_bounds.zig")
         .suite(GlyphBoundsTestBindings);
+    _ = @import("gsub/tests/validation/lookup/extension_integration.zig")
+        .suite(ExtensionIntegrationTestBindings);
     _ = @import("gsub/tests/validation/table/topology.zig")
         .suite(TopologyTestBindings);
     _ = @import("gsub/tests/validation/root.zig");

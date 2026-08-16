@@ -6,7 +6,6 @@ const GlyphId = @import("glyph.zig").GlyphId;
 const positioning = @import("gpos/positioning/root.zig");
 const table_core = @import("gpos/table/root.zig");
 const class_context = @import("opentype/class_context.zig");
-const metric_variation = @import("opentype/metric_variation.zig");
 const ligature_provenance = @import("ligature_provenance.zig");
 const run_metadata = @import("shaping/run_metadata.zig");
 const unicode = @import("unicode.zig");
@@ -89,12 +88,7 @@ pub const LookupOptions = struct {
     context_depth: usize = 0,
 };
 
-pub const VariationStore = struct {
-    data: []const u8,
-    table_offset: usize,
-    table_length: usize,
-    store_offset: usize,
-};
+pub const VariationStore = positioning.VariationStore;
 
 pub const LookupAccelerator = accelerator_core.model.Lookup;
 const PairPosAcceleratorKind = accelerator_core.model.PairPositionKind;
@@ -470,7 +464,7 @@ fn appendSimplePairPosRecords(
     {
         return .{};
     }
-    const value_size_1 = try valueRecordSize(value_format_1);
+    const value_size_1 = try positioning.value_record.size(value_format_1);
     return switch (pos_format) {
         1 => try appendSimplePairPosFormat1Records(table, subtable_offset, value_size_1, records, allocator),
         2 => try appendSimplePairPosFormat2Records(
@@ -1858,7 +1852,7 @@ fn parseSinglePositionSubtable(table: Table, subtable_offset: usize) GposError!S
     const pos_format = try readU16(table, subtable_offset);
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const value_format = try readU16(table, subtable_offset + 4);
-    const value_size = try valueRecordSize(value_format);
+    const value_size = try positioning.value_record.size(value_format);
     return switch (pos_format) {
         1 => .{
             .subtable_offset = subtable_offset,
@@ -1867,7 +1861,7 @@ fn parseSinglePositionSubtable(table: Table, subtable_offset: usize) GposError!S
             .value_format = value_format,
             .value_size = value_size,
             .values_pos = subtable_offset + 6,
-            .value = try readValueRecord(table, subtable_offset + 6, value_format, subtable_offset),
+            .value = try positioning.value_record.read(table, subtable_offset + 6, value_format, subtable_offset),
         },
         2 => .{
             .subtable_offset = subtable_offset,
@@ -1888,7 +1882,7 @@ fn collectSingleAdjustmentSubtable(table: Table, subtable_offset: usize, glyphs:
     const value_format = try readU16(table, subtable_offset + 4);
     switch (pos_format) {
         1 => {
-            const value = try readValueRecord(table, subtable_offset + 6, value_format, subtable_offset);
+            const value = try positioning.value_record.read(table, subtable_offset + 6, value_format, subtable_offset);
             for (glyphs, 0..) |glyph, i| {
                 if (matched[i]) continue;
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
@@ -1900,13 +1894,13 @@ fn collectSingleAdjustmentSubtable(table: Table, subtable_offset: usize, glyphs:
         },
         2 => {
             const value_count = try readU16(table, subtable_offset + 6);
-            const value_size = try valueRecordSize(value_format);
+            const value_size = try positioning.value_record.size(value_format);
             for (glyphs, 0..) |glyph, i| {
                 if (matched[i]) continue;
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
                 if (try table_core.coverage.index(table, coverage_offset, glyph)) |coverage| {
                     if (coverage < value_count) {
-                        const value = try readValueRecord(table, subtable_offset + 8 + coverage * value_size, value_format, subtable_offset);
+                        const value = try positioning.value_record.read(table, subtable_offset + 8 + coverage * value_size, value_format, subtable_offset);
                         try appendAdjustment(adjustments, allocator, i, value, false);
                         matched[i] = true;
                     }
@@ -1923,7 +1917,7 @@ fn collectSingleAdjustment(table: Table, subtable_offset: usize, glyphs: []const
     const value_format = try readU16(table, subtable_offset + 4);
     switch (pos_format) {
         1 => {
-            const value = try readValueRecord(table, subtable_offset + 6, value_format, subtable_offset);
+            const value = try positioning.value_record.read(table, subtable_offset + 6, value_format, subtable_offset);
             for (glyphs, 0..) |glyph, i| {
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
                 if (try table_core.coverage.index(table, coverage_offset, glyph) != null) {
@@ -1933,12 +1927,12 @@ fn collectSingleAdjustment(table: Table, subtable_offset: usize, glyphs: []const
         },
         2 => {
             const value_count = try readU16(table, subtable_offset + 6);
-            const value_size = try valueRecordSize(value_format);
+            const value_size = try positioning.value_record.size(value_format);
             for (glyphs, 0..) |glyph, i| {
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
                 if (try table_core.coverage.index(table, coverage_offset, glyph)) |coverage| {
                     if (coverage < value_count) {
-                        const value = try readValueRecord(table, subtable_offset + 8 + coverage * value_size, value_format, subtable_offset);
+                        const value = try positioning.value_record.read(table, subtable_offset + 8 + coverage * value_size, value_format, subtable_offset);
                         try appendAdjustment(adjustments, allocator, i, value, false);
                     }
                 }
@@ -2140,8 +2134,8 @@ fn parsePairPositionSubtable(table: Table, subtable_offset: usize) GposError!Pai
         .coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2)),
         .value_format_1 = try readU16(table, subtable_offset + 4),
         .value_format_2 = try readU16(table, subtable_offset + 6),
-        .value_size_1 = try valueRecordSize(try readU16(table, subtable_offset + 4)),
-        .value_size_2 = try valueRecordSize(try readU16(table, subtable_offset + 6)),
+        .value_size_1 = try positioning.value_record.size(try readU16(table, subtable_offset + 4)),
+        .value_size_2 = try positioning.value_record.size(try readU16(table, subtable_offset + 6)),
     };
     if (pos_format == 2) {
         parsed.class_def_1 = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
@@ -2189,8 +2183,8 @@ fn collectPairAdjustmentAtParsed(table: Table, parsed: PairPositionSubtable, gly
                     parsed.value_size_2,
                     glyphs[second_index],
                 ) orelse return false;
-            const value_1 = try readValueRecord(table, pair_record + 2, parsed.value_format_1, pair_set_offset);
-            const value_2 = try readValueRecord(table, pair_record + 2 + parsed.value_size_1, parsed.value_format_2, pair_set_offset);
+            const value_1 = try positioning.value_record.read(table, pair_record + 2, parsed.value_format_1, pair_set_offset);
+            const value_2 = try positioning.value_record.read(table, pair_record + 2 + parsed.value_size_1, parsed.value_format_2, pair_set_offset);
             try markUnsafePairApplication(
                 allocator,
                 &options,
@@ -2214,8 +2208,8 @@ fn collectPairAdjustmentAtParsed(table: Table, parsed: PairPositionSubtable, gly
             const class_2 = try table_core.class_def.value(table, parsed.class_def_2, glyphs[second_index]);
             if (class_1 >= parsed.class_1_count or class_2 >= parsed.class_2_count) return false;
             const record_offset = parsed.matrix_offset + (@as(usize, class_1) * parsed.class_2_count + class_2) * record_size;
-            const value_1 = try readValueRecord(table, record_offset, parsed.value_format_1, parsed.subtable_offset);
-            const value_2 = try readValueRecord(table, record_offset + parsed.value_size_1, parsed.value_format_2, parsed.subtable_offset);
+            const value_1 = try positioning.value_record.read(table, record_offset, parsed.value_format_1, parsed.subtable_offset);
+            const value_2 = try positioning.value_record.read(table, record_offset + parsed.value_size_1, parsed.value_format_2, parsed.subtable_offset);
             try markUnsafePairApplication(
                 allocator,
                 &options,
@@ -4072,9 +4066,9 @@ fn ensureSinglePositionSubtableWithin(table: Table, subtable_offset: usize) Gpos
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
     try ensureCoverageTableWithin(table, coverage_offset);
     const value_format = try readU16BadGpos(table, subtable_offset + 4);
-    const value_size = try valueRecordSize(value_format);
+    const value_size = try positioning.value_record.size(value_format);
     switch (pos_format) {
-        1 => try ensureValueRecordWithin(table, subtable_offset + 6, value_format, subtable_offset),
+        1 => try positioning.value_record.validate(table, subtable_offset + 6, value_format, subtable_offset),
         2 => {
             const value_count = try readU16BadGpos(table, subtable_offset + 6);
             // Coverage indexes are direct indexes into the ValueRecord array.
@@ -4083,9 +4077,9 @@ fn ensureSinglePositionSubtableWithin(table: Table, subtable_offset: usize) Gpos
             // absent from a malformed SinglePos format 2 subtable.
             try ensureCoverageIndicesWithin(table, coverage_offset, value_count);
             try ensureBytesWithin(table, subtable_offset + 8, @as(usize, value_count) * value_size);
-            if (valueRecordHasDeviceOffsets(value_format)) {
+            if (positioning.value_record.hasDeviceOffsets(value_format)) {
                 for (0..value_count) |value_i| {
-                    try ensureValueRecordWithin(table, subtable_offset + 8 + value_i * value_size, value_format, subtable_offset);
+                    try positioning.value_record.validate(table, subtable_offset + 8 + value_i * value_size, value_format, subtable_offset);
                 }
             }
         },
@@ -4099,8 +4093,8 @@ fn ensurePairPositionSubtableWithin(table: Table, subtable_offset: usize) GposEr
     try ensureCoverageTableWithin(table, coverage_offset);
     const value_format_1 = try readU16BadGpos(table, subtable_offset + 4);
     const value_format_2 = try readU16BadGpos(table, subtable_offset + 6);
-    const value_size_1 = try valueRecordSize(value_format_1);
-    const value_size_2 = try valueRecordSize(value_format_2);
+    const value_size_1 = try positioning.value_record.size(value_format_1);
+    const value_size_2 = try positioning.value_record.size(value_format_2);
 
     switch (pos_format) {
         1 => {
@@ -4133,15 +4127,15 @@ fn ensurePairPositionSubtableWithin(table: Table, subtable_offset: usize) GposEr
             try ensureClassDefTableWithinLimit(table, class_def_2, class_2_count);
             const record_size = value_size_1 + value_size_2;
             try ensureBytesWithin(table, subtable_offset + 16, try checkedMul(try checkedMul(@as(usize, class_1_count), class_2_count), record_size));
-            if (valueRecordHasDeviceOffsets(value_format_1) or valueRecordHasDeviceOffsets(value_format_2)) {
+            if (positioning.value_record.hasDeviceOffsets(value_format_1) or positioning.value_record.hasDeviceOffsets(value_format_2)) {
                 const record_count = try checkedMul(@as(usize, class_1_count), class_2_count);
                 for (0..record_count) |record_i| {
                     const record_offset = subtable_offset + 16 + record_i * record_size;
-                    if (valueRecordHasDeviceOffsets(value_format_1)) {
-                        try ensureValueRecordWithin(table, record_offset, value_format_1, subtable_offset);
+                    if (positioning.value_record.hasDeviceOffsets(value_format_1)) {
+                        try positioning.value_record.validate(table, record_offset, value_format_1, subtable_offset);
                     }
-                    if (valueRecordHasDeviceOffsets(value_format_2)) {
-                        try ensureValueRecordWithin(table, record_offset + value_size_1, value_format_2, subtable_offset);
+                    if (positioning.value_record.hasDeviceOffsets(value_format_2)) {
+                        try positioning.value_record.validate(table, record_offset + value_size_1, value_format_2, subtable_offset);
                     }
                 }
             }
@@ -4168,11 +4162,11 @@ fn ensurePairValueRecordsWithin(table: Table, pair_set_offset: usize, pair_value
         previous_second = second_glyph;
 
         try ensureGlyphIdWithinMaxp(table, second_glyph);
-        if (valueRecordHasDeviceOffsets(value_format_1)) {
-            try ensureValueRecordWithin(table, pair_record_offset + 2, value_format_1, pair_set_offset);
+        if (positioning.value_record.hasDeviceOffsets(value_format_1)) {
+            try positioning.value_record.validate(table, pair_record_offset + 2, value_format_1, pair_set_offset);
         }
-        if (valueRecordHasDeviceOffsets(value_format_2)) {
-            try ensureValueRecordWithin(table, pair_record_offset + 2 + value_size_1, value_format_2, pair_set_offset);
+        if (positioning.value_record.hasDeviceOffsets(value_format_2)) {
+            try positioning.value_record.validate(table, pair_record_offset + 2 + value_size_1, value_format_2, pair_set_offset);
         }
         if (target_second_glyph) |target| {
             if (second_glyph == target) matched_record = pair_record_offset;
@@ -4212,8 +4206,8 @@ fn ensureCursivePositionSubtableWithin(table: Table, subtable_offset: usize) Gpo
         const record = subtable_offset + 6 + entry_i * 4;
         const entry_anchor = try readU16BadGpos(table, record);
         const exit_anchor = try readU16BadGpos(table, record + 2);
-        if (entry_anchor != 0) try ensureAnchorTableWithin(table, try checkedPositionOffset(table, subtable_offset, entry_anchor));
-        if (exit_anchor != 0) try ensureAnchorTableWithin(table, try checkedPositionOffset(table, subtable_offset, exit_anchor));
+        if (entry_anchor != 0) try positioning.anchor.validate(table, try checkedPositionOffset(table, subtable_offset, entry_anchor));
+        if (exit_anchor != 0) try positioning.anchor.validate(table, try checkedPositionOffset(table, subtable_offset, exit_anchor));
     }
 }
 
@@ -4467,7 +4461,7 @@ fn ensureMarkArrayWithin(table: Table, mark_array_offset: usize, class_count: u1
         // MarkArray header would reinterpret markCount/markClass metadata as a
         // Paint-style child table and make malformed mark positioning stateful.
         if (anchor_offset == 0) return error.BadGpos;
-        try ensureAnchorTableWithin(table, try checkedPositionOffset(table, mark_array_offset, anchor_offset));
+        try positioning.anchor.validate(table, try checkedPositionOffset(table, mark_array_offset, anchor_offset));
     }
     return mark_count;
 }
@@ -4478,7 +4472,7 @@ fn ensureBaseArrayWithin(table: Table, base_array_offset: usize, class_count: u1
     try ensureBytesWithin(table, base_array_offset + 2, anchor_count * 2);
     for (0..anchor_count) |anchor_i| {
         const anchor_offset = try readU16BadGpos(table, base_array_offset + 2 + anchor_i * 2);
-        if (anchor_offset != 0) try ensureAnchorTableWithin(table, try checkedPositionOffset(table, base_array_offset, anchor_offset));
+        if (anchor_offset != 0) try positioning.anchor.validate(table, try checkedPositionOffset(table, base_array_offset, anchor_offset));
     }
     return base_count;
 }
@@ -4499,7 +4493,7 @@ fn ensureLigatureArrayWithin(table: Table, ligature_array_offset: usize, class_c
         try ensureBytesWithin(table, attach_offset + 2, anchor_count * 2);
         for (0..anchor_count) |anchor_i| {
             const anchor_offset = try readU16BadGpos(table, attach_offset + 2 + anchor_i * 2);
-            if (anchor_offset != 0) try ensureAnchorTableWithin(table, try checkedPositionOffset(table, attach_offset, anchor_offset));
+            if (anchor_offset != 0) try positioning.anchor.validate(table, try checkedPositionOffset(table, attach_offset, anchor_offset));
         }
     }
     return ligature_count;
@@ -4511,53 +4505,9 @@ fn ensureMark2ArrayWithin(table: Table, mark_2_array_offset: usize, class_count:
     try ensureBytesWithin(table, mark_2_array_offset + 2, anchor_count * 2);
     for (0..anchor_count) |anchor_i| {
         const anchor_offset = try readU16BadGpos(table, mark_2_array_offset + 2 + anchor_i * 2);
-        if (anchor_offset != 0) try ensureAnchorTableWithin(table, try checkedPositionOffset(table, mark_2_array_offset, anchor_offset));
+        if (anchor_offset != 0) try positioning.anchor.validate(table, try checkedPositionOffset(table, mark_2_array_offset, anchor_offset));
     }
     return mark_2_count;
-}
-
-fn ensureAnchorTableWithin(table: Table, anchor_offset: usize) GposError!void {
-    const format = try readU16BadGpos(table, anchor_offset);
-    switch (format) {
-        1 => try ensureBytesWithin(table, anchor_offset, 6),
-        2 => try ensureBytesWithin(table, anchor_offset, 8),
-        3 => {
-            try ensureBytesWithin(table, anchor_offset, 10);
-            const x_device_offset = try readU16BadGpos(table, anchor_offset + 6);
-            const y_device_offset = try readU16BadGpos(table, anchor_offset + 8);
-            // AnchorFormat3 uses nullable offsets for Device/VariationIndex
-            // tables. Non-zero offsets are real child tables relative to the
-            // anchor, so validate them during lookup preflight instead of
-            // allowing a dangling offset to survive until future variation
-            // support tries to follow it.
-            if (x_device_offset != 0) try ensureDeviceOrVariationIndexTableWithin(table, try checkedPositionOffset(table, anchor_offset, x_device_offset));
-            if (y_device_offset != 0) try ensureDeviceOrVariationIndexTableWithin(table, try checkedPositionOffset(table, anchor_offset, y_device_offset));
-        },
-        else => return error.UnsupportedGpos,
-    }
-}
-
-fn ensureDeviceOrVariationIndexTableWithin(table: Table, device_offset: usize) GposError!void {
-    try ensureBytesWithin(table, device_offset, 6);
-    const start_size = try readU16BadGpos(table, device_offset);
-    const end_size = try readU16BadGpos(table, device_offset + 2);
-    const delta_format = try readU16BadGpos(table, device_offset + 4);
-
-    // OpenType 1.8 reuses AnchorFormat3's Device-table offsets for variation
-    // indexes by storing DeltaFormat 0x8000. The table remains exactly three
-    // uint16 fields; StartSize and EndSize carry outer/inner variation indexes.
-    if (delta_format == 0x8000) return;
-    if (end_size < start_size) return error.BadGpos;
-
-    const bits_per_delta: usize = switch (delta_format) {
-        1 => 2,
-        2 => 4,
-        3 => 8,
-        else => return error.UnsupportedGpos,
-    };
-    const delta_count = @as(usize, end_size) - @as(usize, start_size) + 1;
-    const words = (delta_count * bits_per_delta + 15) / 16;
-    try ensureBytesWithin(table, device_offset + 6, words * 2);
 }
 
 fn ensureGlyphIdWithinMaxp(table: Table, glyph_id: usize) GposError!void {
@@ -4581,37 +4531,6 @@ fn ensureContextCoverageOffsetArrayWithin(table: Table, base_offset: usize, offs
 fn checkedMul(a: usize, b: usize) GposError!usize {
     if (a != 0 and b > std.math.maxInt(usize) / a) return error.BadGpos;
     return a * b;
-}
-
-fn ensureValueRecordWithin(table: Table, offset: usize, format: u16, value_base_offset: usize) GposError!void {
-    try ensureBytesWithin(table, offset, try valueRecordSize(format));
-    try ensureValueRecordDeviceOffsetsWithin(table, offset, format, value_base_offset);
-}
-
-fn ensureValueRecordDeviceOffsetsWithin(table: Table, offset: usize, format: u16, value_base_offset: usize) GposError!void {
-    if (!valueRecordHasDeviceOffsets(format)) return;
-    // Device/VariationIndex offsets in ValueRecords are nullable child pointers
-    // relative to the immediate ValueRecord parent, not to the record itself.
-    // Validate non-null children while preflighting so malformed variation data
-    // cannot lurk behind otherwise usable placement/advance fields.
-    var cursor = offset;
-    if ((format & 0x0001) != 0) cursor += 2;
-    if ((format & 0x0002) != 0) cursor += 2;
-    if ((format & 0x0004) != 0) cursor += 2;
-    if ((format & 0x0008) != 0) cursor += 2;
-    inline for (.{ 0x0010, 0x0020, 0x0040, 0x0080 }) |bit| {
-        if ((format & bit) != 0) {
-            const device_offset = try readU16BadGpos(table, cursor);
-            if (device_offset != 0) {
-                try ensureDeviceOrVariationIndexTableWithin(table, try checkedPositionOffset(table, value_base_offset, device_offset));
-            }
-            cursor += 2;
-        }
-    }
-}
-
-fn valueRecordHasDeviceOffsets(format: u16) bool {
-    return (format & 0x00f0) != 0;
 }
 
 fn ensureCoverageTableWithin(table: Table, coverage_offset: usize) GposError!void {
@@ -4809,7 +4728,7 @@ fn collectSingleAdjustmentAt(table: Table, subtable_offset: usize, glyph: GlyphI
     switch (pos_format) {
         1 => {
             if (try table_core.coverage.index(table, coverage_offset, glyph) != null) {
-                const value = try readValueRecord(table, subtable_offset + 6, value_format, subtable_offset);
+                const value = try positioning.value_record.read(table, subtable_offset + 6, value_format, subtable_offset);
                 try appendAdjustment(adjustments, allocator, target_index, value, false);
                 return true;
             }
@@ -4819,8 +4738,8 @@ fn collectSingleAdjustmentAt(table: Table, subtable_offset: usize, glyph: GlyphI
             const coverage = try table_core.coverage.index(table, coverage_offset, glyph) orelse return false;
             const value_count = try readU16(table, subtable_offset + 6);
             if (coverage >= value_count) return false;
-            const value_size = try valueRecordSize(value_format);
-            const value = try readValueRecord(table, subtable_offset + 8 + coverage * value_size, value_format, subtable_offset);
+            const value_size = try positioning.value_record.size(value_format);
+            const value = try positioning.value_record.read(table, subtable_offset + 8 + coverage * value_size, value_format, subtable_offset);
             try appendAdjustment(adjustments, allocator, target_index, value, false);
             return true;
         },
@@ -4840,7 +4759,7 @@ fn collectSingleAdjustmentAtAccelerated(table: Table, subtables: []const SingleP
             2 => {
                 const coverage = try table_core.coverage.index(table, subtable.coverage_offset, glyph) orelse continue;
                 if (coverage >= subtable.value_count) continue;
-                const value = try readValueRecord(table, subtable.values_pos + coverage * subtable.value_size, subtable.value_format, subtable.subtable_offset);
+                const value = try positioning.value_record.read(table, subtable.values_pos + coverage * subtable.value_size, subtable.value_format, subtable.subtable_offset);
                 try appendAdjustment(adjustments, allocator, target_index, value, false);
                 return true;
             },
@@ -5278,115 +5197,13 @@ fn baseMarkLigatureActsAsSingleBase(script_tag: unicode.OpenTypeScriptTag, info:
     return info.flags.base_mark_ligature and script_tag == .hebr;
 }
 
-const Anchor = struct {
-    x: i16,
-    y: i16,
-};
+const Anchor = positioning.anchor.Value;
 
 fn readAnchor(table: Table, anchor_offset: usize, options: LookupOptions) GposError!Anchor {
-    const format = try readU16(table, anchor_offset);
-    return switch (format) {
-        1 => blk: {
-            if (anchor_offset + 6 > table.length) return error.EndOfStream;
-            break :blk .{
-                .x = try readI16(table, anchor_offset + 2),
-                .y = try readI16(table, anchor_offset + 4),
-            };
-        },
-        2 => blk: {
-            if (anchor_offset + 8 > table.length) return error.EndOfStream;
-            break :blk .{
-                .x = try readI16(table, anchor_offset + 2),
-                .y = try readI16(table, anchor_offset + 4),
-            };
-        },
-        3 => blk: {
-            if (anchor_offset + 10 > table.length) return error.EndOfStream;
-            var x: i32 = try readI16(table, anchor_offset + 2);
-            var y: i32 = try readI16(table, anchor_offset + 4);
-            x += try anchorVariationDelta(table, anchor_offset, try readU16(table, anchor_offset + 6), options);
-            y += try anchorVariationDelta(table, anchor_offset, try readU16(table, anchor_offset + 8), options);
-            break :blk .{
-                .x = std.math.cast(i16, x) orelse return error.BadGpos,
-                .y = std.math.cast(i16, y) orelse return error.BadGpos,
-            };
-        },
-        else => error.UnsupportedGpos,
-    };
-}
-
-fn anchorVariationDelta(table: Table, anchor_offset: usize, relative_offset: u16, options: LookupOptions) GposError!i32 {
-    if (relative_offset == 0 or options.normalized_variation_coords.len == 0) return 0;
-    const device_offset = try checkedPositionOffset(table, anchor_offset, relative_offset);
-    const delta_format = try readU16(table, device_offset + 4);
-    // Device tables are PPEM-dependent and remain outside this font-unit
-    // shaping API. DeltaFormat 0x8000 is the variation-common VariationIndex
-    // encoding: StartSize/EndSize are its outer/inner ItemVariationStore keys.
-    if (delta_format != 0x8000) return 0;
-    const store = options.gdef_variation_store orelse return 0;
-    return metric_variation.itemVariationDelta(
-        store.data,
-        store.table_offset,
-        store.table_length,
-        store.store_offset,
-        .{
-            .outer = try readU16(table, device_offset),
-            .inner = try readU16(table, device_offset + 2),
-        },
-        options.normalized_variation_coords,
-    ) catch |err| switch (err) {
-        error.BadSfnt, error.EndOfStream => error.BadGpos,
-        error.OutOfMemory => unreachable,
-    };
-}
-
-fn valueRecordSize(format: u16) GposError!usize {
-    // OpenType ValueFormat is a 16-bit bitset, but only the low byte is
-    // assigned for pair/single positioning value records. Accepting unknown
-    // high bits would make the parser compute too-small record strides and
-    // reinterpret trailing payload bytes as subsequent PairValue/Class records.
-    if ((format & 0xff00) != 0) return error.BadGpos;
-    var size: usize = 0;
-    if ((format & 0x0001) != 0) size += 2;
-    if ((format & 0x0002) != 0) size += 2;
-    if ((format & 0x0004) != 0) size += 2;
-    if ((format & 0x0008) != 0) size += 2;
-    if ((format & 0x0010) != 0) size += 2;
-    if ((format & 0x0020) != 0) size += 2;
-    if ((format & 0x0040) != 0) size += 2;
-    if ((format & 0x0080) != 0) size += 2;
-    return size;
-}
-
-fn readValueRecord(table: Table, offset: usize, format: u16, value_base_offset: usize) GposError!Adjustment {
-    // ValueFormat bits decide which signed fields are present and in what order.
-    // Device/variation-index offset fields are parsed and skipped for now: the
-    // base placement/advance remains valid, while size-specific deltas can be
-    // layered in later without rejecting common production fonts outright.
-    try ensureValueRecordWithin(table, offset, format, value_base_offset);
-    var value = Adjustment{ .index = 0 };
-    var cursor = offset;
-    if ((format & 0x0001) != 0) {
-        value.x_placement = try readI16(table, cursor);
-        cursor += 2;
-    }
-    if ((format & 0x0002) != 0) {
-        value.y_placement = try readI16(table, cursor);
-        cursor += 2;
-    }
-    if ((format & 0x0004) != 0) {
-        value.x_advance = try readI16(table, cursor);
-        cursor += 2;
-    }
-    if ((format & 0x0008) != 0) {
-        value.y_advance = try readI16(table, cursor);
-        cursor += 2;
-    }
-    if ((format & 0x0010) != 0) cursor += 2;
-    if ((format & 0x0020) != 0) cursor += 2;
-    if ((format & 0x0040) != 0) cursor += 2;
-    if ((format & 0x0080) != 0) cursor += 2;
-    return value;
+    return positioning.anchor.read(table, anchor_offset, .{
+        .normalized_coords = options.normalized_variation_coords,
+        .variation_store = options.gdef_variation_store,
+    });
 }
 
 const min_run_glyphs_for_chaining_digest = 16;
@@ -5499,21 +5316,21 @@ test "GPOS validates AnchorFormat3 device offsets" {
     writeU16Test(&bytes, 16, 0);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try ensureAnchorTableWithin(table, 0);
+    try positioning.anchor.validate(table, 0);
 
     writeU16Test(&bytes, 6, 14); // Points inside an incomplete child DeviceTable.
-    try std.testing.expectError(error.BadGpos, ensureAnchorTableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.anchor.validate(table, 0));
 
     writeU16Test(&bytes, 6, 10);
     writeU16Test(&bytes, 12, 11); // endSize must not precede startSize.
-    try std.testing.expectError(error.BadGpos, ensureAnchorTableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.anchor.validate(table, 0));
 
     writeU16Test(&bytes, 12, 14);
     writeU16Test(&bytes, 14, 4); // Unknown delta formats cannot be sized safely.
-    try std.testing.expectError(error.UnsupportedGpos, ensureAnchorTableWithin(table, 0));
+    try std.testing.expectError(error.UnsupportedGpos, positioning.anchor.validate(table, 0));
 
     writeU16Test(&bytes, 14, 0x8000); // VariationIndex table: three uint16 fields only.
-    try ensureAnchorTableWithin(table, 0);
+    try positioning.anchor.validate(table, 0);
 }
 
 test "GPOS AnchorFormat3 resolves GDEF VariationIndex deltas" {
@@ -6182,7 +5999,7 @@ test "GPOS value records tolerate device and variation offset fields" {
     writeU16Test(&bytes, 24, 3);
     writeU16Test(&bytes, 26, 0x8000);
 
-    const value = try readValueRecord(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, 0x00ff, 0);
+    const value = try positioning.value_record.read(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, 0x00ff, 0);
     try std.testing.expectEqual(@as(i16, 50), value.x_placement);
     try std.testing.expectEqual(@as(i16, -25), value.y_placement);
     try std.testing.expectEqual(@as(i16, 30), value.x_advance);
@@ -6196,8 +6013,8 @@ test "GPOS value records reject overflowing offset plus size" {
     // corrupted absolute table-relative offset. Validate the offset/size pair
     // before reading any field so malformed subtables fail cleanly instead of
     // wrapping `offset + size` in safety builds.
-    try std.testing.expectError(error.BadGpos, ensureValueRecordWithin(table, std.math.maxInt(usize) - 1, 0x0004, 0));
-    try std.testing.expectError(error.BadGpos, readValueRecord(table, std.math.maxInt(usize) - 1, 0x0004, 0));
+    try std.testing.expectError(error.BadGpos, positioning.value_record.validate(table, std.math.maxInt(usize) - 1, 0x0004, 0));
+    try std.testing.expectError(error.BadGpos, positioning.value_record.read(table, std.math.maxInt(usize) - 1, 0x0004, 0));
 }
 
 test "GPOS value records validate device offsets against parent base" {

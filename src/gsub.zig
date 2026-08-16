@@ -4,6 +4,7 @@ const accelerator_model = accelerator_root.model;
 const cluster_safety = @import("shaping/cluster_safety.zig");
 const feature_domain = @import("gsub/feature/root.zig");
 const direct_alternate = @import("gsub/execution/direct/alternate/root.zig");
+const direct_ligature = @import("gsub/execution/direct/ligature/root.zig");
 const direct_multiple = @import("gsub/execution/direct/multiple/root.zig");
 const direct_single = @import("gsub/execution/direct/single/root.zig");
 const GlyphId = @import("glyph.zig").GlyphId;
@@ -15,7 +16,6 @@ const runtime_mutation = @import("gsub/runtime/mutation.zig");
 const runtime_prefilter = @import("gsub/runtime/prefilter/root.zig");
 const table_core = @import("gsub/table/root.zig");
 const validation = @import("gsub/validation/root.zig");
-const shaping_metadata = @import("shaping_metadata.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const unicode = @import("unicode.zig");
 const shape_profile_mod = @import("shape_profile.zig");
@@ -78,9 +78,6 @@ const LookupOptions = runtime.Options;
 
 const LookupAccelerator = acceleration.Lookup;
 const SingleSubstAccelerator = accelerator_model.SingleSubstitution;
-const LigatureSubstAccelerator = accelerator_model.LigatureSubstitution;
-const LigatureSetEntry = accelerator_model.LigatureSet;
-const LigatureDefinition = accelerator_model.LigatureDefinition;
 const ContextClassSubtableAccelerator = accelerator_model.ContextClassSubtable;
 const ContextCoverageSubtable = accelerator_model.ContextCoverageSubtable;
 const ChainingCoverageSubtable = accelerator_model.ChainingCoverageSubtable;
@@ -1040,9 +1037,6 @@ fn chainingClassGroupForGlyph(subtable: ChainingClassSubtableAccelerator, glyph:
     return classGroupForGlyph(subtable.classes, subtable.first_index_start, subtable.groups, glyph);
 }
 
-const buildLigatureSubstAccelerator =
-    accelerator_root.build.ligature.build;
-
 /// Validate GSUB glyph references that are meaningful at font-load time.
 ///
 /// Runtime shaping only reaches records whose lookup and coverage match the
@@ -1305,8 +1299,7 @@ noinline fn applyValidatedAcceleratedLookupPrepared(
                 }
             }
             if (accelerator.ligature_subst.prefilter_second) {
-                try applyLigatureSubstitutionPrefiltered(
-                    table,
+                try direct_ligature.acceleratedPrefiltered(
                     accelerator.ligature_subst,
                     glyphs,
                     allocator,
@@ -1315,8 +1308,7 @@ noinline fn applyValidatedAcceleratedLookupPrepared(
                 );
             } else if (accelerator.ligature_subst.required_second_len != 0) {
                 @branchHint(.unlikely);
-                try applyLigatureSubstitutionRequiredSecondPrefiltered(
-                    table,
+                try direct_ligature.acceleratedRequiredSecond(
                     accelerator.ligature_subst,
                     glyphs,
                     allocator,
@@ -1324,8 +1316,7 @@ noinline fn applyValidatedAcceleratedLookupPrepared(
                     lookup_options,
                 );
             } else {
-                try applyLigatureSubstitutionAccelerated(
-                    table,
+                try direct_ligature.accelerated(
                     accelerator.ligature_subst,
                     glyphs,
                     allocator,
@@ -1633,12 +1624,12 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
                 }
             }
             if (accelerator.prefilter_second) {
-                try applyLigatureSubstitutionPrefiltered(table, accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
+                try direct_ligature.acceleratedPrefiltered(accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
             } else if (accelerator.required_second_len != 0) {
                 @branchHint(.unlikely);
-                try applyLigatureSubstitutionRequiredSecondPrefiltered(table, accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
+                try direct_ligature.acceleratedRequiredSecond(accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
             } else {
-                try applyLigatureSubstitutionAccelerated(table, accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
+                try direct_ligature.accelerated(accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
             }
             return;
         }
@@ -1650,7 +1641,7 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
             1 => {}, // SingleSubst needs whole-lookup ordering; handled below.
             2 => {}, // MultipleSubst needs per-position subtable ordering; handled above.
             3 => {}, // AlternateSubst needs whole-lookup ordering; handled above.
-            4 => try applyLigatureSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, lookup_options),
+            4 => try direct_ligature.subtable(table, subtable_offset, glyphs, allocator, lookup_flag, lookup_options),
             5 => unreachable, // ContextSubst needs position-major subtable ordering.
             6 => unreachable, // ChainingContextSubst is handled position-major above.
             7 => try applyExtensionSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, lookup_options),
@@ -1728,292 +1719,6 @@ fn shapeProfileNow(
 
 fn shapeProfileElapsed(start: i128, io: ?std.Io) i128 {
     return std.Io.Clock.now(.awake, io.?).nanoseconds - start;
-}
-
-fn mergeLigatureClusterMetadata(options: LookupOptions, glyph_index: usize, match: LigatureMatch) void {
-    const clusters = options.glyph_cluster_indices orelse return;
-    if (glyph_index >= clusters.items.len) return;
-    switch (options.cluster_level) {
-        .monotone_graphemes, .monotone_characters => shaping_metadata.mergeMonotoneClusters(clusters.items, glyph_index, glyph_index + match.match_end),
-        .characters, .graphemes => {},
-    }
-    mergeFollowingMarksForLigatureCluster(options, glyph_index, match);
-}
-
-fn mergeFollowingMarksForLigatureCluster(options: LookupOptions, glyph_index: usize, match: LigatureMatch) void {
-    const clusters = options.glyph_cluster_indices orelse return;
-    const sources = options.glyph_source_indices orelse return;
-    if (glyph_index >= clusters.items.len or glyph_index >= sources.items.len) return;
-    if (match.component_count <= 1) return;
-
-    const last_component = glyph_index + match.component_offsets[match.component_count - 1];
-    if (last_component >= clusters.items.len or last_component >= sources.items.len) return;
-    const last_source = sources.items[last_component];
-    const merged_cluster = clusters.items[glyph_index];
-
-    var index = glyph_index + match.match_end;
-    while (index < clusters.items.len and index < sources.items.len) : (index += 1) {
-        if (sources.items[index] != last_source) break;
-        if (clusters.items[index] != last_source) break;
-        clusters.items[index] = merged_cluster;
-    }
-}
-
-fn ligatureComponentInfoForMatch(
-    allocator: std.mem.Allocator,
-    options: LookupOptions,
-    glyph_index: usize,
-    match: LigatureMatch,
-) std.mem.Allocator.Error!ligature_provenance.Info {
-    const store = options.ligature_components orelse return .{};
-    const matched_component_count = @min(match.component_count, ligature_provenance.max_components);
-    if (matched_component_count <= 1) return .{};
-    var all_sources: [ligature_provenance.max_components]usize = undefined;
-    var all_source_count: usize = 0;
-    var logical_sources: [ligature_provenance.max_components]usize = undefined;
-    var logical_component_count: usize = 0;
-    appendLigatureSourcesForMatch(
-        all_sources[0..],
-        &all_source_count,
-        logical_sources[0..],
-        &logical_component_count,
-        options,
-        glyph_index,
-    );
-    var synthetic_base = false;
-    if (glyph_index < store.infos.items.len) {
-        synthetic_base = store.infos.items[glyph_index].flags.synthetic_base;
-    }
-    for (1..matched_component_count) |component_index| {
-        const matched_index = glyph_index + match.component_offsets[component_index];
-        appendLigatureSourcesForMatch(
-            all_sources[0..],
-            &all_source_count,
-            logical_sources[0..],
-            &logical_component_count,
-            options,
-            matched_index,
-        );
-        if (matched_index < store.infos.items.len) {
-            synthetic_base = synthetic_base or store.infos.items[matched_index].flags.synthetic_base;
-        }
-    }
-    std.debug.assert(logical_component_count != 0);
-    const base_mark_ligature = ligatureIsBaseWithMarks(
-        options,
-        glyph_index,
-        match,
-        matched_component_count,
-    );
-    var info = if (all_source_count > 1)
-        try store.addLigatureWithSources(
-            allocator,
-            all_sources[0..all_source_count],
-            logical_sources[0..logical_component_count],
-        )
-    else
-        ligature_provenance.Info{
-            .component_count = @intCast(logical_component_count),
-            .flags = .{ .ligated = true },
-        };
-    info.flags.synthetic_base = synthetic_base;
-    info.flags.base_mark_ligature = base_mark_ligature;
-    return info;
-}
-
-fn appendLigatureSourcesForMatch(
-    sources: []usize,
-    source_count: *usize,
-    logical_sources: []usize,
-    logical_component_count: *usize,
-    options: LookupOptions,
-    glyph_index: usize,
-) void {
-    if (source_count.* >= sources.len) return;
-    var contributes_component = true;
-    if (options.ligature_components) |store| {
-        if (glyph_index < store.infos.items.len) {
-            const info = store.infos.items[glyph_index];
-            // HarfBuzz's `_hb_glyph_info_get_lig_num_comps_in_ligation`
-            // assigns every non-first MultipleSubst output zero component
-            // weight. All pieces therefore remain one logical component when
-            // a later LigatureSubst consumes them, and intervening marks keep
-            // the component identity of the first piece.
-            if (info.flags.multiplied and info.flags.multiple_component != 0) {
-                contributes_component = false;
-            }
-        }
-    }
-    insertLigatureComponentSource(
-        sources,
-        source_count.*,
-        runtime_filtering.sourceForGlyph(options, glyph_index),
-    );
-    source_count.* += 1;
-    if (contributes_component and logical_component_count.* < logical_sources.len) {
-        insertLigatureComponentSource(
-            logical_sources,
-            logical_component_count.*,
-            runtime_filtering.sourceForGlyph(options, glyph_index),
-        );
-        logical_component_count.* += 1;
-    }
-}
-
-test "GSUB ligation counts a MultipleSubst sequence as one component" {
-    var glyph_sources = std.ArrayList(usize).empty;
-    defer glyph_sources.deinit(std.testing.allocator);
-    try glyph_sources.appendSlice(std.testing.allocator, &.{ 0, 2, 2, 4 });
-
-    var components = ligature_provenance.Store{};
-    defer components.deinit(std.testing.allocator);
-    try components.infos.appendSlice(std.testing.allocator, &.{
-        .{},
-        .{ .flags = .{ .multiplied = true, .multiple_component = 0 } },
-        .{ .flags = .{ .multiplied = true, .multiple_component = 1 } },
-        .{},
-    });
-
-    var component_offsets = [_]usize{0} ** max_ligature_components;
-    component_offsets[1] = 1;
-    component_offsets[2] = 2;
-    component_offsets[3] = 3;
-    const info = try ligatureComponentInfoForMatch(
-        std.testing.allocator,
-        .{
-            .glyph_source_indices = &glyph_sources,
-            .ligature_components = &components,
-        },
-        0,
-        .{
-            .ligature = 50,
-            .component_count = 4,
-            .component_offsets = &component_offsets,
-            .match_end = 4,
-        },
-    );
-
-    try std.testing.expectEqual(@as(u8, 3), info.component_count);
-    try std.testing.expectEqual(@as(u8, 4), info.source_count);
-    try std.testing.expectEqualSlices(
-        usize,
-        &.{ 0, 2, 2, 4 },
-        components.componentSources(info).?,
-    );
-    try std.testing.expectEqualSlices(
-        usize,
-        &.{ 0, 2, 4 },
-        components.logicalComponentSources(info).?,
-    );
-
-    var single_component_offsets = [_]usize{0} ** max_ligature_components;
-    single_component_offsets[1] = 1;
-    const single_logical_component = try ligatureComponentInfoForMatch(
-        std.testing.allocator,
-        .{
-            .glyph_source_indices = &glyph_sources,
-            .ligature_components = &components,
-        },
-        1,
-        .{
-            .ligature = 51,
-            .component_count = 2,
-            .component_offsets = &single_component_offsets,
-            .match_end = 2,
-        },
-    );
-    try std.testing.expect(single_logical_component.isLigature());
-    try std.testing.expectEqual(@as(u8, 1), single_logical_component.component_count);
-    try std.testing.expectEqual(@as(u8, 2), single_logical_component.source_count);
-    try std.testing.expectEqualSlices(
-        usize,
-        &.{ 2, 2 },
-        components.componentSources(single_logical_component).?,
-    );
-    try std.testing.expectEqualSlices(
-        usize,
-        &.{2},
-        components.logicalComponentSources(single_logical_component).?,
-    );
-}
-
-fn insertLigatureComponentSource(sources: []usize, end: usize, source: usize) void {
-    var index = end;
-    while (index > 0 and source < sources[index - 1]) : (index -= 1) {
-        sources[index] = sources[index - 1];
-    }
-    sources[index] = source;
-}
-
-fn ligatureIsBaseWithMarks(options: LookupOptions, glyph_index: usize, match: LigatureMatch, component_count: usize) bool {
-    const codepoints = options.source_codepoints orelse return false;
-    const first_source = runtime_filtering.sourceForGlyph(options, glyph_index);
-    if (first_source >= codepoints.len or unicode.isUnicodeMarkCodepoint(codepoints[first_source])) return false;
-    for (1..component_count) |component_index| {
-        const matched_index = glyph_index + match.component_offsets[component_index];
-        const source = runtime_filtering.sourceForGlyph(options, matched_index);
-        if (source >= codepoints.len or !unicode.isUnicodeMarkCodepoint(codepoints[source])) return false;
-    }
-    return true;
-}
-
-test "GSUB base plus mark ligatures retain provenance with a GPOS hint" {
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(std.testing.allocator);
-    try sources.appendSlice(std.testing.allocator, &.{ 0, 1 });
-
-    var components = ligature_provenance.Store{};
-    defer components.deinit(std.testing.allocator);
-    try components.infos.resize(std.testing.allocator, 2);
-    @memset(components.infos.items, .{});
-    var component_offsets = [_]usize{0} ** max_ligature_components;
-    component_offsets[1] = 1;
-
-    const base_mark_codepoints = [_]u21{ 0x05e0, 0x05bc };
-    const base_mark = try ligatureComponentInfoForMatch(
-        std.testing.allocator,
-        .{
-            .glyph_source_indices = &sources,
-            .source_codepoints = &base_mark_codepoints,
-            .ligature_components = &components,
-        },
-        0,
-        .{
-            .ligature = 83,
-            .component_count = 2,
-            .component_offsets = &component_offsets,
-            .match_end = 2,
-        },
-    );
-    try std.testing.expectEqual(@as(u8, 2), base_mark.component_count);
-    try std.testing.expect(base_mark.flags.base_mark_ligature);
-    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, components.componentSources(base_mark).?);
-
-    const mark_mark_codepoints = [_]u21{ 0x05b8, 0x05bd };
-    const mark_mark = try ligatureComponentInfoForMatch(
-        std.testing.allocator,
-        .{
-            .glyph_source_indices = &sources,
-            .source_codepoints = &mark_mark_codepoints,
-            .ligature_components = &components,
-        },
-        0,
-        .{
-            .ligature = 97,
-            .component_count = 2,
-            .component_offsets = &component_offsets,
-            .match_end = 2,
-        },
-    );
-    try std.testing.expectEqual(@as(u8, 2), mark_mark.component_count);
-    try std.testing.expect(!mark_mark.flags.base_mark_ligature);
-    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, components.componentSources(mark_mark).?);
-}
-
-fn setLigatureMetadata(options: LookupOptions, glyph_index: usize, info: ligature_provenance.Info) void {
-    if (options.ligature_components) |store| {
-        if (glyph_index < store.infos.items.len) store.infos.items[glyph_index] = info;
-    }
 }
 
 test "GSUB staged plans retain random AlternateSubst semantics" {
@@ -2107,7 +1812,7 @@ fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std
         1 => try direct_single.subtable(table, extension_subtable, glyphs, lookup_flag, options),
         2 => try direct_multiple.subtable(table, extension_subtable, glyphs, allocator, lookup_flag, options),
         3 => try direct_alternate.subtable(table, extension_subtable, glyphs, lookup_flag, options),
-        4 => try applyLigatureSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options),
+        4 => try direct_ligature.subtable(table, extension_subtable, glyphs, allocator, lookup_flag, options),
         5 => try applyContextSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options),
         6 => try applyChainingContextSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options),
         8 => try applyReverseChainingSingleSubstitution(table, extension_subtable, glyphs, lookup_flag, options, null),
@@ -2115,238 +1820,18 @@ fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std
     }
 }
 
-fn applyLigatureSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
-    const subst_format = try readU16(table, subtable_offset);
-    if (subst_format != 1) return error.UnsupportedGsub;
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const lig_set_count = try readU16(table, subtable_offset + 4);
-
-    var component_offsets: [max_ligature_components]usize = undefined;
-    var i: usize = 0;
-    while (i < glyphs.items.len) : (i += 1) {
-        if (!runtime_filtering.sourceFeatureAllowsGlyph(options, i)) continue;
-        const first = glyphs.items[i];
-        if (runtime_filtering.lookupIgnoresGlyph(lookup_flag, options, first)) continue;
-        const covered = try table_core.coverage.index(table, coverage_offset, first) orelse continue;
-        if (covered >= lig_set_count) continue;
-        const set_offset = checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + covered * 2)) catch continue;
-        if (try ligatureAt(table, set_offset, glyphs.items[i..], i, lookup_flag, options, &component_offsets)) |match| {
-            const component_info = try ligatureComponentInfoForMatch(allocator, options, i, match);
-            mergeLigatureClusterMetadata(options, i, match);
-            glyphs.items[i] = match.ligature;
-            runtime_mutation.markSubstituted(options, i);
-            setLigatureMetadata(options, i, component_info);
-            if (match.component_count > 1) {
-                var component_index = match.component_count;
-                while (component_index > 1) {
-                    component_index -= 1;
-                    try glyphs.replaceRange(allocator, i + match.component_offsets[component_index], 1, &.{});
-                    runtime_mutation.removeMetadata(options, i + match.component_offsets[component_index], 1);
-                }
-            }
-        }
-    }
-}
-
-fn applyLigatureSubstitutionAccelerated(table: Table, accelerator: LigatureSubstAccelerator, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
-    return applyLigatureSubstitutionAcceleratedImpl(false, table, accelerator, glyphs, allocator, lookup_flag, options);
-}
-
-fn applyLigatureSubstitutionPrefiltered(table: Table, accelerator: LigatureSubstAccelerator, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
-    return applyLigatureSubstitutionAcceleratedImpl(true, table, accelerator, glyphs, allocator, lookup_flag, options);
-}
-
-noinline fn applyLigatureSubstitutionRequiredSecondPrefiltered(
-    table: Table,
-    accelerator: LigatureSubstAccelerator,
-    glyphs: *std.ArrayList(GlyphId),
-    allocator: std.mem.Allocator,
-    lookup_flag: u16,
-    options: LookupOptions,
-) (GsubError || std.mem.Allocator.Error)!void {
-    @branchHint(.cold);
-    const second_components = requiredLigatureSecondComponents(accelerator);
-    if (second_components.len == 0 or
-        !runtime_prefilter.hasAnyGlyph(glyphs.items, second_components))
-    {
-        return;
-    }
-    return applyLigatureSubstitutionPrefiltered(
-        table,
-        accelerator,
-        glyphs,
-        allocator,
-        lookup_flag,
-        options,
-    );
-}
-
-fn applyLigatureSubstitutionAcceleratedImpl(comptime prefilter_second: bool, table: Table, accelerator: LigatureSubstAccelerator, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
-    _ = table;
-    var component_offsets: [max_ligature_components]usize = undefined;
-    var i: usize = 0;
-    while (i < glyphs.items.len) : (i += 1) {
-        if (!runtime_filtering.sourceFeatureAllowsGlyph(options, i)) continue;
-        const first = glyphs.items[i];
-        if (runtime_filtering.lookupIgnoresGlyph(lookup_flag, options, first)) continue;
-        const set = ligatureSetForGlyph(accelerator.sets, accelerator.set_slots, first) orelse continue;
-        const match = if (prefilter_second)
-            ligatureAtAcceleratedPrefiltered(accelerator, set, glyphs.items[i..], i, lookup_flag, options, &component_offsets)
-        else
-            ligatureAtAccelerated(accelerator, set, glyphs.items[i..], i, lookup_flag, options, &component_offsets);
-        if (match) |matched| {
-            const component_info = try ligatureComponentInfoForMatch(allocator, options, i, matched);
-            mergeLigatureClusterMetadata(options, i, matched);
-            glyphs.items[i] = matched.ligature;
-            runtime_mutation.markSubstituted(options, i);
-            setLigatureMetadata(options, i, component_info);
-            if (matched.component_count > 1) {
-                var component_index = matched.component_count;
-                while (component_index > 1) {
-                    component_index -= 1;
-                    try glyphs.replaceRange(allocator, i + matched.component_offsets[component_index], 1, &.{});
-                    runtime_mutation.removeMetadata(options, i + matched.component_offsets[component_index], 1);
-                }
-            }
-        }
-    }
-}
-
-fn requiredLigatureSecondComponents(accelerator: LigatureSubstAccelerator) []const GlyphId {
-    return accelerator_root.build.ligature.requiredSecondComponents(
-        accelerator,
-    );
-}
-
-fn ligatureSetForGlyph(sets: []const LigatureSetEntry, slots: []const u16, glyph: GlyphId) ?LigatureSetEntry {
-    return accelerator_root.build.ligature.index.find(sets, slots, glyph);
-}
-
-fn ligatureAtAccelerated(accelerator: LigatureSubstAccelerator, set: LigatureSetEntry, glyphs: []const GlyphId, glyph_base: usize, lookup_flag: u16, options: LookupOptions, component_offsets: *[max_ligature_components]usize) ?LigatureMatch {
-    const definition_end = set.definition_start + set.definition_len;
-    const anchor_syllable = runtime_filtering.ligatureAnchorSyllable(options, glyph_base);
-    for (accelerator.definitions[set.definition_start..definition_end]) |definition| {
-        component_offsets[0] = 0;
-        var cursor: usize = 1;
-        var matched = true;
-        const component_count: usize = definition.component_count;
-        const expected_components = accelerator.components[definition.component_start .. definition.component_start + component_count - 1];
-        for (expected_components, 1..) |expected, component_index| {
-            while (cursor < glyphs.len and runtime_filtering.ligatureAllowsRelativeGlyph(options, anchor_syllable, glyph_base, cursor) and runtime_filtering.ligatureMaySkipGlyph(lookup_flag, options, glyphs, glyph_base, cursor)) : (cursor += 1) {}
-            if (cursor < glyphs.len and !runtime_filtering.ligatureAllowsRelativeGlyph(options, anchor_syllable, glyph_base, cursor)) {
-                matched = false;
-                break;
-            }
-            if (cursor >= glyphs.len or glyphs[cursor] != expected) {
-                matched = false;
-                break;
-            }
-            component_offsets[component_index] = cursor;
-            cursor += 1;
-        }
-        if (matched) {
-            // Definitions remain in font-authored preference order.
-            return .{
-                .ligature = definition.ligature,
-                .component_count = component_count,
-                .component_offsets = component_offsets,
-                .match_end = cursor,
-            };
-        }
-    }
-    return null;
-}
-
-fn ligatureAtAcceleratedPrefiltered(accelerator: LigatureSubstAccelerator, set: LigatureSetEntry, glyphs: []const GlyphId, glyph_base: usize, lookup_flag: u16, options: LookupOptions, component_offsets: *[max_ligature_components]usize) ?LigatureMatch {
-    const anchor_syllable = runtime_filtering.ligatureAnchorSyllable(options, glyph_base);
-    var second_offset: ?usize = null;
-    if (glyphs.len > 1) {
-        var cursor: usize = 1;
-        while (cursor < glyphs.len and runtime_filtering.ligatureAllowsRelativeGlyph(options, anchor_syllable, glyph_base, cursor) and runtime_filtering.ligatureMaySkipGlyph(lookup_flag, options, glyphs, glyph_base, cursor)) : (cursor += 1) {}
-        if (cursor < glyphs.len and runtime_filtering.ligatureAllowsRelativeGlyph(options, anchor_syllable, glyph_base, cursor)) second_offset = cursor;
-    }
-
-    component_offsets[0] = 0;
-    const definition_end = set.definition_start + set.definition_len;
-    for (accelerator.definitions[set.definition_start..definition_end]) |definition| {
-        const component_count: usize = definition.component_count;
-        const expected_components = accelerator.components[definition.component_start .. definition.component_start + component_count - 1];
-        if (component_count == 1) {
-            return .{
-                .ligature = definition.ligature,
-                .component_count = 1,
-                .component_offsets = component_offsets,
-                .match_end = 1,
-            };
-        }
-        const second = second_offset orelse continue;
-        if (expected_components[0] != glyphs[second]) continue;
-        component_offsets[1] = second;
-
-        var cursor = second + 1;
-        var matched = true;
-        for (expected_components[1..], 2..) |expected, component_index| {
-            while (cursor < glyphs.len and runtime_filtering.ligatureAllowsRelativeGlyph(options, anchor_syllable, glyph_base, cursor) and runtime_filtering.ligatureMaySkipGlyph(lookup_flag, options, glyphs, glyph_base, cursor)) : (cursor += 1) {}
-            if (cursor < glyphs.len and !runtime_filtering.ligatureAllowsRelativeGlyph(options, anchor_syllable, glyph_base, cursor)) {
-                matched = false;
-                break;
-            }
-            if (cursor >= glyphs.len or glyphs[cursor] != expected) {
-                matched = false;
-                break;
-            }
-            component_offsets[component_index] = cursor;
-            cursor += 1;
-        }
-        if (matched) {
-            // Definitions remain in font-authored preference order.
-            return .{
-                .ligature = definition.ligature,
-                .component_count = component_count,
-                .component_offsets = component_offsets,
-                .match_end = cursor,
-            };
-        }
-    }
-    return null;
-}
-
 fn applyDirectMultipleAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!?NestedGlyphChange {
     const change = try direct_multiple.at(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, options) orelse return null;
     return .{ .removed_len = change.removed_len, .inserted_len = change.inserted_len };
 }
 
-fn applyLigatureSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!?NestedGlyphChange {
-    const subst_format = try readU16(table, subtable_offset);
-    if (subst_format != 1) return error.UnsupportedGsub;
-    if (glyph_index >= glyphs.items.len) return null;
-    const first = glyphs.items[glyph_index];
-    if (runtime_filtering.lookupIgnoresGlyph(lookup_flag, options, first)) return null;
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const lig_set_count = try readU16(table, subtable_offset + 4);
-    const covered = try table_core.coverage.index(table, coverage_offset, first) orelse return null;
-    if (covered >= lig_set_count) return null;
-    const set_offset = checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + covered * 2)) catch return null;
-    var component_offsets: [max_ligature_components]usize = undefined;
-    const match = try ligatureAt(table, set_offset, glyphs.items[glyph_index..], glyph_index, lookup_flag, options, &component_offsets) orelse return null;
-    const component_info = try ligatureComponentInfoForMatch(allocator, options, glyph_index, match);
-    mergeLigatureClusterMetadata(options, glyph_index, match);
-    glyphs.items[glyph_index] = match.ligature;
-    runtime_mutation.markSubstituted(options, glyph_index);
-    setLigatureMetadata(options, glyph_index, component_info);
-    if (match.component_count > 1) {
-        var component_index = match.component_count;
-        while (component_index > 1) {
-            component_index -= 1;
-            try glyphs.replaceRange(allocator, glyph_index + match.component_offsets[component_index], 1, &.{});
-            runtime_mutation.removeMetadata(options, glyph_index + match.component_offsets[component_index], 1);
-        }
-    }
+fn applyDirectLigatureAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!?NestedGlyphChange {
+    const change = try direct_ligature.at(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, options) orelse return null;
     return .{
-        .removed_len = match.component_count,
-        .inserted_len = 1,
-        .component_offsets = component_offsets,
-        .component_count = match.component_count,
+        .removed_len = change.removed_len,
+        .inserted_len = change.inserted_len,
+        .component_offsets = change.component_offsets,
+        .component_count = change.component_count,
     };
 }
 
@@ -2783,24 +2268,6 @@ fn applyChainingContextSubstitution(table: Table, subtable_offset: usize, glyphs
         3 => try applyChainingCoverageSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, options),
         else => return error.UnsupportedGsub,
     }
-}
-
-test "GSUB required ligature components scan exact run glyphs" {
-    const candidates = [_]GlyphId{ 2, 7, 11 };
-    const accelerator = LigatureSubstAccelerator{
-        .components = &.{ 20, 21, 2, 7, 11 },
-        .required_second_start = 2,
-        .required_second_len = 3,
-    };
-    try std.testing.expectEqualSlices(
-        GlyphId,
-        &candidates,
-        requiredLigatureSecondComponents(accelerator),
-    );
-    var stale = accelerator;
-    stale.required_second_start = 4;
-    stale.required_second_len = 2;
-    try std.testing.expectEqual(@as(usize, 0), requiredLigatureSecondComponents(stale).len);
 }
 
 test "GSUB run digest cache reuses no-op runs and invalidates on substitution" {
@@ -3818,7 +3285,7 @@ const NestedGlyphChange = struct {
     /// ignored glyphs may remain physically between matched components.
     removed_len: usize = 1,
     inserted_len: usize = 1,
-    component_offsets: ?[max_ligature_components]usize = null,
+    component_offsets: ?[direct_ligature.max_components]usize = null,
     component_count: usize = 0,
 };
 
@@ -4657,7 +4124,7 @@ fn applyNestedGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), glyph_i
     if (lookup_type == 4) {
         for (0..subtable_count) |subtable_i| {
             const subtable_offset = nested_lookup_offset + try readU16(table, nested_lookup_offset + 6 + subtable_i * 2);
-            if (try applyLigatureSubstitutionAt(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, lookup_options)) |change| {
+            if (try applyDirectLigatureAt(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, lookup_options)) |change| {
                 return change;
             }
         }
@@ -4739,7 +4206,7 @@ fn applyNestedExtensionSubstitutionAt(table: Table, subtable_offset: usize, glyp
             return null;
         },
         2 => return try applyDirectMultipleAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options),
-        4 => return try applyLigatureSubstitutionAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options),
+        4 => return try applyDirectLigatureAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options),
         5 => return if ((try applyContextSubstitutionAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options)).matched) .{} else null,
         6 => return if ((try applyChainingContextSubstitutionAt(table, extension_subtable, null, glyphs, glyph_index, allocator, lookup_flag, options)).matched) .{} else null,
         else => return null,
@@ -4967,50 +4434,6 @@ fn reverseCoverageMatches(table: Table, subtable_offset: usize, glyphs: []const 
         collectForwardUnignoredGlyphs(glyphs, pos + 1, lookup_flag, options, indices, true, pos);
     if (!has_context) return false;
     return try coverageIndicesMatch(table, subtable_offset, glyphs, indices, offsets_pos);
-}
-
-const LigatureMatch = struct {
-    ligature: GlyphId,
-    component_count: usize,
-    component_offsets: *const [max_ligature_components]usize,
-    match_end: usize = 1,
-};
-
-const max_ligature_components = accelerator_model.max_ligature_components;
-
-fn ligatureAt(table: Table, set_offset: usize, glyphs: []const GlyphId, glyph_base: usize, lookup_flag: u16, options: LookupOptions, component_offsets: *[max_ligature_components]usize) GsubError!?LigatureMatch {
-    const ligature_count = try readU16(table, set_offset);
-    const anchor_syllable = runtime_filtering.ligatureAnchorSyllable(options, glyph_base);
-    for (0..ligature_count) |i| {
-        const lig_offset = checkedRequiredSubtableOffset(table, set_offset, try readU16(table, set_offset + 2 + i * 2)) catch continue;
-        const ligature = try readU16(table, lig_offset);
-        const component_count = try readU16(table, lig_offset + 2);
-        if (component_count == 0 or component_count > max_ligature_components) continue;
-        component_offsets[0] = 0;
-        var ok = true;
-        var cursor: usize = 1;
-        for (1..component_count) |component_index| {
-            const expected = try readU16(table, lig_offset + 4 + (component_index - 1) * 2);
-            while (cursor < glyphs.len and runtime_filtering.ligatureAllowsRelativeGlyph(options, anchor_syllable, glyph_base, cursor) and runtime_filtering.ligatureMaySkipGlyph(lookup_flag, options, glyphs, glyph_base, cursor)) : (cursor += 1) {}
-            if (cursor < glyphs.len and !runtime_filtering.ligatureAllowsRelativeGlyph(options, anchor_syllable, glyph_base, cursor)) {
-                ok = false;
-                break;
-            }
-            if (cursor >= glyphs.len or glyphs[cursor] != expected) {
-                ok = false;
-                break;
-            }
-            component_offsets[component_index] = cursor;
-            cursor += 1;
-        }
-        if (ok) {
-            // LigatureSet records are ordered by font-authored preference. Do
-            // not choose the longest matching sequence: a font may deliberately
-            // place a shorter ligature before a longer one to control shaping.
-            return .{ .ligature = ligature, .component_count = component_count, .component_offsets = component_offsets, .match_end = cursor };
-        }
-    }
-    return null;
 }
 
 fn readU16(table: Table, relative: usize) GsubError!u16 {
@@ -6098,9 +5521,9 @@ test "GSUB LigatureSubst rejects null required offsets" {
         defer glyphs.deinit(std.testing.allocator);
         try glyphs.append(std.testing.allocator, 1);
         try glyphs.append(std.testing.allocator, 2);
-        try applyLigatureSubstitution(table, subtable, &glyphs, std.testing.allocator, 0, .{});
+        try direct_ligature.subtable(table, subtable, &glyphs, std.testing.allocator, 0, .{});
         try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
-        try std.testing.expectEqual(null, try applyLigatureSubstitutionAt(table, subtable, &glyphs, 0, std.testing.allocator, 0, .{}));
+        try std.testing.expectEqual(null, try applyDirectLigatureAt(table, subtable, &glyphs, 0, std.testing.allocator, 0, .{}));
         try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
 
         // A present but empty LigatureSet is still structurally valid; only the
@@ -6131,9 +5554,9 @@ test "GSUB LigatureSubst rejects null required offsets" {
         defer glyphs.deinit(std.testing.allocator);
         try glyphs.append(std.testing.allocator, 1);
         try glyphs.append(std.testing.allocator, 2);
-        try applyLigatureSubstitution(table, subtable, &glyphs, std.testing.allocator, 0, .{});
+        try direct_ligature.subtable(table, subtable, &glyphs, std.testing.allocator, 0, .{});
         try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
-        try std.testing.expectEqual(null, try applyLigatureSubstitutionAt(table, subtable, &glyphs, 0, std.testing.allocator, 0, .{}));
+        try std.testing.expectEqual(null, try applyDirectLigatureAt(table, subtable, &glyphs, 0, std.testing.allocator, 0, .{}));
         try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
     }
 }
@@ -8567,375 +7990,6 @@ test "GSUB extension single substitution subtables do not cascade within lookup"
     // SingleSubst: the glyph created by the first wrapper is not eligible for
     // the later wrapper in the same lookup.
     try std.testing.expectEqualSlices(GlyphId, &.{ 20, 30 }, glyphs.items);
-}
-
-test "GSUB ligature substitution honors LigatureSet order" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 42;
-
-    writeU16Test(&bytes, 0, 4);
-    writeU16Test(&bytes, 4, 1);
-    writeU16Test(&bytes, 6, 8);
-
-    const lig_subst = 8;
-    writeU16Test(&bytes, lig_subst + 0, 1);
-    writeU16Test(&bytes, lig_subst + 2, 28);
-    writeU16Test(&bytes, lig_subst + 4, 1);
-    writeU16Test(&bytes, lig_subst + 6, 8);
-
-    const ligature_set = lig_subst + 8;
-    writeU16Test(&bytes, ligature_set + 0, 2);
-    writeU16Test(&bytes, ligature_set + 2, 6);
-    writeU16Test(&bytes, ligature_set + 4, 14);
-
-    // Both records match the input prefix. OpenType gives priority to the
-    // first Ligature table in the set, even when a later record consumes more
-    // components.
-    const first_ligature = ligature_set + 6;
-    writeU16Test(&bytes, first_ligature + 0, 40);
-    writeU16Test(&bytes, first_ligature + 2, 2);
-    writeU16Test(&bytes, first_ligature + 4, 2);
-
-    const later_longer_ligature = ligature_set + 14;
-    writeU16Test(&bytes, later_longer_ligature + 0, 50);
-    writeU16Test(&bytes, later_longer_ligature + 2, 3);
-    writeU16Test(&bytes, later_longer_ligature + 4, 2);
-    writeU16Test(&bytes, later_longer_ligature + 6, 3);
-
-    writeCoverage1(&bytes, lig_subst + 28, 1);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 2, 3 });
-
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{});
-
-    try std.testing.expectEqualSlices(GlyphId, &.{ 40, 3 }, glyphs.items);
-}
-
-test "GSUB ligature preserves synthetic base provenance" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 32;
-
-    writeU16Test(&bytes, 0, 4);
-    writeU16Test(&bytes, 4, 1);
-    writeU16Test(&bytes, 6, 8);
-    const ligature_subst = 8;
-    writeU16Test(&bytes, ligature_subst + 0, 1);
-    writeU16Test(&bytes, ligature_subst + 2, 18);
-    writeU16Test(&bytes, ligature_subst + 4, 1);
-    writeU16Test(&bytes, ligature_subst + 6, 8);
-    const ligature_set = ligature_subst + 8;
-    writeU16Test(&bytes, ligature_set + 0, 1);
-    writeU16Test(&bytes, ligature_set + 2, 4);
-    const ligature = ligature_set + 4;
-    writeU16Test(&bytes, ligature + 0, 40);
-    writeU16Test(&bytes, ligature + 2, 2);
-    writeU16Test(&bytes, ligature + 4, 2);
-    writeCoverage1(&bytes, ligature_subst + 18, 1);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 2 });
-    var components = ligature_provenance.Store{};
-    defer components.deinit(allocator);
-    try components.infos.appendSlice(allocator, &.{
-        .{ .flags = .{ .synthetic_base = true } },
-        .{},
-    });
-
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
-        .ligature_components = &components,
-    });
-
-    try std.testing.expectEqualSlices(GlyphId, &.{40}, glyphs.items);
-    try std.testing.expect(components.infos.items[0].flags.synthetic_base);
-}
-
-test "GSUB ligature accelerator preserves preference and ignored component offsets" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 42;
-
-    const lig_subst = 0;
-    writeU16Test(&bytes, lig_subst + 0, 1);
-    writeU16Test(&bytes, lig_subst + 2, 34);
-    writeU16Test(&bytes, lig_subst + 4, 1);
-    writeU16Test(&bytes, lig_subst + 6, 8);
-
-    const ligature_set = lig_subst + 8;
-    writeU16Test(&bytes, ligature_set + 0, 2);
-    writeU16Test(&bytes, ligature_set + 2, 6);
-    writeU16Test(&bytes, ligature_set + 4, 14);
-
-    const preferred = ligature_set + 6;
-    writeU16Test(&bytes, preferred + 0, 40);
-    writeU16Test(&bytes, preferred + 2, 2);
-    writeU16Test(&bytes, preferred + 4, 2);
-
-    const later_longer = ligature_set + 14;
-    writeU16Test(&bytes, later_longer + 0, 50);
-    writeU16Test(&bytes, later_longer + 2, 3);
-    writeU16Test(&bytes, later_longer + 4, 2);
-    writeU16Test(&bytes, later_longer + 6, 3);
-    writeCoverage1(&bytes, lig_subst + 34, 1);
-
-    const table = Table{
-        .data = &bytes,
-        .offset = 0,
-        .length = bytes.len,
-        .assume_validated = true,
-    };
-    const accelerator = try buildLigatureSubstAccelerator(table, lig_subst, allocator);
-    defer {
-        allocator.free(accelerator.components);
-        allocator.free(accelerator.definitions);
-        allocator.free(accelerator.set_slots);
-        allocator.free(accelerator.sets);
-    }
-
-    try std.testing.expectEqual(@as(usize, 1), accelerator.sets.len);
-    try std.testing.expectEqual(@as(usize, 2), accelerator.definitions.len);
-    try std.testing.expectEqualSlices(GlyphId, &.{ 2, 2, 3 }, accelerator.components);
-    try std.testing.expect(accelerator.first_component_digest.mayHave(1));
-    try std.testing.expect(!accelerator.first_component_digest.mayHave(99));
-    try std.testing.expectEqual(@as(usize, 0), requiredLigatureSecondComponents(accelerator).len);
-    try std.testing.expect(!accelerator.prefilter_second);
-
-    const set = ligatureSetForGlyph(accelerator.sets, accelerator.set_slots, 1).?;
-    const glyphs = [_]GlyphId{ 1, 4, 2, 3 };
-    const glyph_classes = [_]u16{ 0, 1, 1, 1, 3 };
-    var component_offsets: [max_ligature_components]usize = undefined;
-    const match = ligatureAtAcceleratedPrefiltered(
-        accelerator,
-        set,
-        &glyphs,
-        0,
-        0x0008,
-        .{ .glyph_classes = &glyph_classes },
-        &component_offsets,
-    ).?;
-    try std.testing.expectEqual(@as(GlyphId, 40), match.ligature);
-    try std.testing.expectEqual(@as(usize, 2), match.component_count);
-    try std.testing.expectEqual(@as(usize, 2), match.component_offsets[1]);
-    try std.testing.expectEqual(@as(usize, 3), match.match_end);
-
-    var accelerated_glyphs = std.ArrayList(GlyphId).empty;
-    defer accelerated_glyphs.deinit(allocator);
-    try accelerated_glyphs.appendSlice(allocator, &glyphs);
-    const lookup_accelerators = [_]LookupAccelerator{.{
-        .lookup_offset = 0,
-        .lookup_type = 4,
-        .lookup_flag = 0x0008,
-        .subtable_count = 1,
-        .ligature_subst = accelerator,
-    }};
-    try std.testing.expect(try applyValidatedAcceleratedLookup(
-        table,
-        0,
-        0,
-        &accelerated_glyphs,
-        allocator,
-        .{
-            .glyph_classes = &glyph_classes,
-            .lookup_accelerators = &lookup_accelerators,
-            .assume_validated = true,
-        },
-        null,
-    ));
-    try std.testing.expectEqualSlices(GlyphId, &.{ 40, 4, 3 }, accelerated_glyphs.items);
-}
-
-test "GSUB ligature matching skips CGJ without IgnoreMarks" {
-    var bytes = [_]u8{0} ** 12;
-    writeU16Test(&bytes, 0, 1); // LigatureCount.
-    writeU16Test(&bytes, 2, 4);
-    writeU16Test(&bytes, 4, 40); // Ligature glyph.
-    writeU16Test(&bytes, 6, 2); // First glyph plus one component.
-    writeU16Test(&bytes, 8, 2);
-
-    const glyphs = [_]GlyphId{ 7, 1, 9, 2 };
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(std.testing.allocator);
-    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3 });
-    const codepoints = [_]u21{ 'X', 'A', 0x034f, 'B' };
-
-    var component_offsets: [max_ligature_components]usize = undefined;
-    const match = (try ligatureAt(
-        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
-        0,
-        glyphs[1..],
-        1,
-        0,
-        .{
-            .glyph_source_indices = &sources,
-            .source_codepoints = &codepoints,
-        },
-        &component_offsets,
-    )).?;
-
-    try std.testing.expectEqual(@as(GlyphId, 40), match.ligature);
-    try std.testing.expectEqual(@as(usize, 2), match.component_offsets[1]);
-}
-
-test "GSUB ligature matching does not skip CGJ that blocked mark reordering" {
-    var bytes = [_]u8{0} ** 12;
-    writeU16Test(&bytes, 0, 1); // LigatureCount.
-    writeU16Test(&bytes, 2, 4);
-    writeU16Test(&bytes, 4, 40); // Ligature glyph.
-    writeU16Test(&bytes, 6, 2); // First glyph plus one component.
-    writeU16Test(&bytes, 8, 2);
-
-    const glyphs = [_]GlyphId{ 3, 0, 2 };
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(std.testing.allocator);
-    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2 });
-    const codepoints = [_]u21{ 0x064e, 0x034f, 0x0651 };
-
-    var component_offsets: [max_ligature_components]usize = undefined;
-    const match = try ligatureAt(
-        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
-        0,
-        &glyphs,
-        0,
-        0,
-        .{
-            .glyph_source_indices = &sources,
-            .source_codepoints = &codepoints,
-        },
-        &component_offsets,
-    );
-
-    try std.testing.expect(match == null);
-}
-
-test "GSUB ligature matching skips variation selector fallback glyphs" {
-    var bytes = [_]u8{0} ** 12;
-    writeU16Test(&bytes, 0, 1); // LigatureCount.
-    writeU16Test(&bytes, 2, 4);
-    writeU16Test(&bytes, 4, 40); // Ligature glyph.
-    writeU16Test(&bytes, 6, 2); // First glyph plus one component.
-    writeU16Test(&bytes, 8, 2);
-
-    const glyphs = [_]GlyphId{ 1, 0, 2 };
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(std.testing.allocator);
-    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2 });
-    const codepoints = [_]u21{ 'f', 0xfe00, 'i' };
-
-    var component_offsets: [max_ligature_components]usize = undefined;
-    const match = (try ligatureAt(
-        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
-        0,
-        &glyphs,
-        0,
-        0,
-        .{
-            .glyph_source_indices = &sources,
-            .source_codepoints = &codepoints,
-        },
-        &component_offsets,
-    )).?;
-
-    try std.testing.expectEqual(@as(GlyphId, 40), match.ligature);
-    try std.testing.expectEqual(@as(usize, 2), match.component_offsets[1]);
-}
-
-test "GSUB ligature matching keeps Mongolian FVS fallback glyphs visible" {
-    var bytes = [_]u8{0} ** 12;
-    writeU16Test(&bytes, 0, 1); // LigatureCount.
-    writeU16Test(&bytes, 2, 4);
-    writeU16Test(&bytes, 4, 40); // Ligature glyph.
-    writeU16Test(&bytes, 6, 2); // First glyph plus one component.
-    writeU16Test(&bytes, 8, 2);
-
-    const glyphs = [_]GlyphId{ 1, 0, 2 };
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(std.testing.allocator);
-    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2 });
-    const codepoints = [_]u21{ 0x1868, 0x180d, 0x180a };
-
-    var component_offsets: [max_ligature_components]usize = undefined;
-    const match = try ligatureAt(
-        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
-        0,
-        &glyphs,
-        0,
-        0,
-        .{
-            .glyph_source_indices = &sources,
-            .source_codepoints = &codepoints,
-        },
-        &component_offsets,
-    );
-
-    // Unlike an ordinary unresolved VS, Mongolian FVS is non-skippable during
-    // shaping. It therefore blocks this base-plus-NIRUGU ligature even when its
-    // own nominal cmap lookup produced glyph zero.
-    try std.testing.expect(match == null);
-}
-
-test "GSUB ligature matching keeps variation selectors with real glyphs" {
-    var bytes = [_]u8{0} ** 12;
-    writeU16Test(&bytes, 0, 1); // LigatureCount.
-    writeU16Test(&bytes, 2, 4);
-    writeU16Test(&bytes, 4, 40); // Ligature glyph.
-    writeU16Test(&bytes, 6, 2); // First glyph plus one component.
-    writeU16Test(&bytes, 8, 4);
-
-    const glyphs = [_]GlyphId{ 1, 4, 2 };
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(std.testing.allocator);
-    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2 });
-    const codepoints = [_]u21{ 0x101d, 0xfe00, 0x1031 };
-
-    var component_offsets: [max_ligature_components]usize = undefined;
-    const match = (try ligatureAt(
-        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
-        0,
-        &glyphs,
-        0,
-        0,
-        .{
-            .glyph_source_indices = &sources,
-            .source_codepoints = &codepoints,
-        },
-        &component_offsets,
-    )).?;
-
-    try std.testing.expectEqual(@as(GlyphId, 40), match.ligature);
-    try std.testing.expectEqual(@as(usize, 1), match.component_offsets[1]);
-}
-
-test "GSUB ligature matching stops skipped components at source syllable boundary" {
-    var bytes = [_]u8{0} ** 12;
-    writeU16Test(&bytes, 0, 1); // LigatureCount.
-    writeU16Test(&bytes, 2, 4);
-    writeU16Test(&bytes, 4, 40); // Ligature glyph.
-    writeU16Test(&bytes, 6, 2); // First glyph plus one component.
-    writeU16Test(&bytes, 8, 3);
-
-    const glyphs = [_]GlyphId{ 1, 2, 3 };
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(std.testing.allocator);
-    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2 });
-    const syllables = [_]u8{ 1, 2, 2 };
-
-    var component_offsets: [max_ligature_components]usize = undefined;
-    const match = try ligatureAt(
-        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
-        0,
-        &glyphs,
-        0,
-        0x0002, // ignoreBaseGlyphs skips glyph 2 but must not cross its syllable.
-        .{
-            .glyph_source_indices = &sources,
-            .source_syllables = &syllables,
-            .match_source_syllable = true,
-        },
-        &component_offsets,
-    );
-
-    try std.testing.expect(match == null);
 }
 
 test "GSUB reverse chaining skips lookup-flag ignored context glyphs" {

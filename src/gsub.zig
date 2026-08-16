@@ -50,7 +50,7 @@ pub const acceleration = struct {
 
     pub const build = buildLookupAccelerators;
     pub const deinit = deinitLookupAccelerators;
-    pub const hasRandomFeature = hasRandomFeatureWithAccelerators;
+    pub const hasRandomFeature = accelerator_root.feature_index.hasRandomFeature;
 };
 
 /// GSUB parsing is table-driven and intentionally tolerant of unsupported
@@ -164,8 +164,6 @@ pub const LookupOptions = struct {
 };
 
 const LookupAccelerator = acceleration.Lookup;
-const FeatureLookupRecord = accelerator_model.FeatureRecord;
-const FeatureLookupIndex = accelerator_model.FeatureIndex;
 const SingleSubstAccelerator = accelerator_model.SingleSubstitution;
 const SingleSubstEntry = accelerator_model.SingleEntry;
 const MultipleSubstAccelerator = accelerator_model.MultipleSubstitution;
@@ -395,7 +393,12 @@ pub noinline fn applyCachedLookupSelectionWithOptionsAfterMetadataProof(
     const selected_lookups = options.selected_lookups orelse return false;
     if (selected_lookups.len == 0) return false;
     const accelerators = options.lookup_accelerators orelse return false;
-    _ = exactFeatureLookupIndex(data, offset, length, accelerators) orelse return false;
+    _ = accelerator_root.feature_index.exact(
+        data,
+        offset,
+        length,
+        accelerators,
+    ) orelse return false;
 
     for (selected_lookups) |lookup_index| {
         if (lookup_index >= accelerators.len) return false;
@@ -623,42 +626,6 @@ pub fn isEmptyTable(data: []const u8, offset: usize, length: usize) GsubError!bo
     const major = try readU16BadGsub(table, 0);
     if (major != 1) return error.UnsupportedGsub;
     return isEmptyGsubTopology(table);
-}
-
-/// Return the table-wide `rand` capability retained by an exact accelerator.
-///
-/// `null` means the caller must use the defensive parser. In particular, this
-/// refuses foreign table bytes and accelerators built for a different table
-/// range; the shaping hot path may trust the boolean only after separately
-/// proving the borrowed GSUB table for the current cache lifetime.
-fn hasRandomFeatureWithAccelerators(
-    data: []const u8,
-    offset: usize,
-    length: usize,
-    accelerators: []const LookupAccelerator,
-) ?bool {
-    const feature_index = exactFeatureLookupIndex(data, offset, length, accelerators) orelse return null;
-    return feature_index.has_random_feature;
-}
-
-fn exactFeatureLookupIndex(
-    data: []const u8,
-    offset: usize,
-    length: usize,
-    accelerators: []const LookupAccelerator,
-) ?*const FeatureLookupIndex {
-    if (accelerators.len == 0) return null;
-    const feature_index = accelerators[0].feature_index orelse return null;
-    if (feature_index.data_ptr != data.ptr or
-        feature_index.data_len != data.len or
-        feature_index.table_offset != offset or
-        feature_index.table_length != length or
-        feature_index.accelerators_addr != @intFromPtr(accelerators.ptr) or
-        feature_index.accelerator_count != accelerators.len)
-    {
-        return null;
-    }
-    return feature_index;
 }
 
 /// Apply one Script/LangSys feature to the source positions carrying its tag.
@@ -1123,31 +1090,18 @@ fn borrowedSelectedFeatureLookups(
     if (options.normalized_variation_coords.len != 0) return null;
     if (!table.assume_validated or feature_indices.len == 0) return null;
     const accelerators = options.lookup_accelerators orelse return null;
-    const feature_index = exactFeatureLookupIndex(
+    const feature_index = accelerator_root.feature_index.exact(
         table.data,
         table.offset,
         table.length,
         accelerators,
     ) orelse return null;
-    if (feature_index.records.len != feature_count) return null;
-
-    var matched_record: ?FeatureLookupRecord = null;
-    for (feature_indices) |selection| {
-        if (selection.index >= feature_count) continue;
-        const record = feature_index.records[selection.index];
-        if (record.tag != feature_tag) continue;
-        // Multiple LangSys FeatureRecord indexes with one tag require the
-        // fallback's union/sort/dedup semantics.
-        if (matched_record != null or !record.borrowable) return null;
-        matched_record = record;
-    }
-    const record = matched_record orelse return &.{};
-    if (record.lookup_start > feature_index.lookups.len or
-        record.lookup_len > feature_index.lookups.len - record.lookup_start)
-    {
-        return null;
-    }
-    return feature_index.lookups[record.lookup_start .. record.lookup_start + record.lookup_len];
+    return accelerator_root.feature_index.selectedLookups(
+        feature_index,
+        feature_tag,
+        feature_indices,
+        feature_count,
+    );
 }
 
 fn selectedFeatureLookupsFromPlanOwned(
@@ -1273,24 +1227,13 @@ fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, alloc
         // LookupList. Feature indexing is optional for those callers; a
         // present non-zero FeatureList offset is still parsed strictly.
         if (try readU16(table, 6) != 0) {
-            const feature_data = try buildFeatureLookupRecords(table, lookup_count, allocator);
-            errdefer {
-                allocator.free(feature_data.records);
-                allocator.free(feature_data.lookups);
-            }
-            const feature_index = try allocator.create(FeatureLookupIndex);
-            feature_index.* = .{
-                .data_ptr = table.data.ptr,
-                .data_len = table.data.len,
-                .table_offset = table.offset,
-                .table_length = table.length,
-                .accelerators_addr = @intFromPtr(accelerators.ptr),
-                .accelerator_count = accelerators.len,
-                .has_random_feature = feature_data.has_random_feature,
-                .records = feature_data.records,
-                .lookups = feature_data.lookups,
-            };
-            accelerators[0].feature_index = feature_index;
+            accelerators[0].feature_index =
+                try accelerator_root.feature_index.create(
+                    table,
+                    accelerators,
+                    lookup_count,
+                    allocator,
+                );
         }
     }
     return accelerators;
@@ -1301,64 +1244,14 @@ fn deinitLookupAccelerators(allocator: std.mem.Allocator, accelerators: []Lookup
     allocator.free(accelerators);
 }
 
-const FeatureLookupData = struct {
-    has_random_feature: bool,
-    records: []FeatureLookupRecord,
-    lookups: []u16,
-};
-
-fn buildFeatureLookupRecords(table: Table, lookup_count: u16, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!FeatureLookupData {
-    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
-    const feature_count = try readU16(table, feature_list_offset);
-    const records = try allocator.alloc(FeatureLookupRecord, feature_count);
-    errdefer allocator.free(records);
-    var lookups = std.ArrayList(u16).empty;
-    errdefer lookups.deinit(allocator);
-    var has_random_feature = false;
-
-    for (records, 0..) |*record, feature_index| {
-        const feature_record = feature_list_offset + 2 + feature_index * 6;
-        const tag = try readU32(table, feature_record);
-        has_random_feature = has_random_feature or tag == unicode.tag("rand");
-        const feature_offset = feature_list_offset + try readU16(table, feature_record + 4);
-        const lookup_len = try readU16(table, feature_offset + 2);
-        const lookup_start = lookups.items.len;
-        try lookups.ensureUnusedCapacity(allocator, lookup_len);
-        var previous_lookup: ?u16 = null;
-        var borrowable = true;
-        for (0..lookup_len) |lookup_i| {
-            const lookup_index = try readU16(table, feature_offset + 4 + lookup_i * 2);
-            if (lookup_index >= lookup_count) return error.BadGsub;
-            if (previous_lookup) |previous| {
-                // The owned fallback sorts and deduplicates arbitrary producer
-                // output. Borrow only when this record already has that exact
-                // canonical order.
-                if (lookup_index <= previous) borrowable = false;
-            }
-            previous_lookup = lookup_index;
-            lookups.appendAssumeCapacity(lookup_index);
-        }
-        record.* = .{
-            .tag = tag,
-            .lookup_start = lookup_start,
-            .lookup_len = lookup_len,
-            .borrowable = borrowable,
-        };
-    }
-    return .{
-        .has_random_feature = has_random_feature,
-        .records = records,
-        .lookups = try lookups.toOwnedSlice(allocator),
-    };
-}
-
 fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: []LookupAccelerator) void {
     for (accelerators, 0..) |accelerator, accelerator_index| {
         if (accelerator_index == 0) {
             if (accelerator.feature_index) |feature_index| {
-                allocator.free(feature_index.records);
-                allocator.free(feature_index.lookups);
-                allocator.destroy(feature_index);
+                accelerator_root.feature_index.destroy(
+                    feature_index,
+                    allocator,
+                );
             }
         }
         allocator.free(accelerator.single_subst_entries);
@@ -10893,196 +10786,6 @@ test "GSUB lookup selection sorts and deduplicates repeated feature lookups" {
     defer lookups.deinit(allocator);
 
     try std.testing.expectEqualSlices(u16, &.{ 1, 2, 3 }, lookups.items);
-}
-
-test "GSUB feature lookup accelerator borrows canonical unique records only" {
-    const allocator = std.testing.allocator;
-
-    var unique_bytes = [_]u8{0} ** 72;
-    writeRequiredFeatureSelectionTable(&unique_bytes, unicode.tag("ordn"), unicode.tag("liga"));
-    const unique_table = Table{
-        .data = &unique_bytes,
-        .offset = 0,
-        .length = unique_bytes.len,
-        .assume_validated = true,
-    };
-    const unique_data = try buildFeatureLookupRecords(unique_table, 2, allocator);
-    defer allocator.free(unique_data.records);
-    defer allocator.free(unique_data.lookups);
-    var unique_index = FeatureLookupIndex{
-        .data_ptr = unique_bytes[0..].ptr,
-        .data_len = unique_bytes.len,
-        .table_offset = 0,
-        .table_length = unique_bytes.len,
-        .accelerators_addr = 0,
-        .accelerator_count = 1,
-        .has_random_feature = false,
-        .records = unique_data.records,
-        .lookups = unique_data.lookups,
-    };
-    var unique_accelerators = [_]LookupAccelerator{.{ .feature_index = &unique_index }};
-    unique_index.accelerators_addr = @intFromPtr(&unique_accelerators);
-    const unique_features = [_]FeatureSelection{.{ .index = 0 }};
-    const borrowed = borrowedSelectedFeatureLookups(
-        unique_table,
-        unicode.tag("liga"),
-        &unique_features,
-        2,
-        .{ .lookup_accelerators = &unique_accelerators },
-    ) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualSlices(u16, &.{1}, borrowed);
-
-    // Unvalidated or foreign table identity must retain parser ownership.
-    try std.testing.expect(borrowedSelectedFeatureLookups(
-        .{ .data = &unique_bytes, .offset = 0, .length = unique_bytes.len },
-        unicode.tag("liga"),
-        &unique_features,
-        2,
-        .{ .lookup_accelerators = &unique_accelerators },
-    ) == null);
-    var foreign_bytes = unique_bytes;
-    try std.testing.expect(borrowedSelectedFeatureLookups(
-        .{ .data = &foreign_bytes, .offset = 0, .length = foreign_bytes.len, .assume_validated = true },
-        unicode.tag("liga"),
-        &unique_features,
-        2,
-        .{ .lookup_accelerators = &unique_accelerators },
-    ) == null);
-    var copied_unique_accelerators = unique_accelerators;
-    try std.testing.expect(borrowedSelectedFeatureLookups(
-        unique_table,
-        unicode.tag("liga"),
-        &unique_features,
-        2,
-        .{ .lookup_accelerators = &copied_unique_accelerators },
-    ) == null);
-
-    var repeated_bytes = [_]u8{0} ** 78;
-    writeRepeatedLookupSelectionTable(&repeated_bytes, unicode.tag("liga"));
-    const repeated_table = Table{
-        .data = &repeated_bytes,
-        .offset = 0,
-        .length = repeated_bytes.len,
-        .assume_validated = true,
-    };
-    const repeated_data = try buildFeatureLookupRecords(repeated_table, 4, allocator);
-    defer allocator.free(repeated_data.records);
-    defer allocator.free(repeated_data.lookups);
-    var repeated_index = FeatureLookupIndex{
-        .data_ptr = repeated_bytes[0..].ptr,
-        .data_len = repeated_bytes.len,
-        .table_offset = 0,
-        .table_length = repeated_bytes.len,
-        .accelerators_addr = 0,
-        .accelerator_count = 1,
-        .has_random_feature = false,
-        .records = repeated_data.records,
-        .lookups = repeated_data.lookups,
-    };
-    var repeated_accelerators = [_]LookupAccelerator{.{ .feature_index = &repeated_index }};
-    repeated_index.accelerators_addr = @intFromPtr(&repeated_accelerators);
-    const repeated_features = [_]FeatureSelection{ .{ .index = 0 }, .{ .index = 1 } };
-    try std.testing.expect(borrowedSelectedFeatureLookups(
-        repeated_table,
-        unicode.tag("liga"),
-        &repeated_features,
-        2,
-        .{ .lookup_accelerators = &repeated_accelerators },
-    ) == null);
-}
-
-test "GSUB random capability requires an exact feature accelerator" {
-    const allocator = std.testing.allocator;
-
-    var random_bytes = [_]u8{0} ** 72;
-    writeRequiredFeatureSelectionTable(&random_bytes, unicode.tag("rand"), unicode.tag("liga"));
-    const random_table = Table{
-        .data = &random_bytes,
-        .offset = 0,
-        .length = random_bytes.len,
-        .assume_validated = true,
-    };
-    const random_data = try buildFeatureLookupRecords(random_table, 2, allocator);
-    defer allocator.free(random_data.records);
-    defer allocator.free(random_data.lookups);
-    try std.testing.expect(random_data.has_random_feature);
-    var random_index = FeatureLookupIndex{
-        .data_ptr = random_bytes[0..].ptr,
-        .data_len = random_bytes.len,
-        .table_offset = 0,
-        .table_length = random_bytes.len,
-        .accelerators_addr = 0,
-        .accelerator_count = 1,
-        .has_random_feature = random_data.has_random_feature,
-        .records = random_data.records,
-        .lookups = random_data.lookups,
-    };
-    var random_accelerators = [_]LookupAccelerator{.{ .feature_index = &random_index }};
-    random_index.accelerators_addr = @intFromPtr(&random_accelerators);
-    try std.testing.expectEqual(
-        @as(?bool, true),
-        hasRandomFeatureWithAccelerators(&random_bytes, 0, random_bytes.len, &random_accelerators),
-    );
-
-    var ordinary_bytes = [_]u8{0} ** 72;
-    writeRequiredFeatureSelectionTable(&ordinary_bytes, unicode.tag("ordn"), unicode.tag("liga"));
-    const ordinary_table = Table{
-        .data = &ordinary_bytes,
-        .offset = 0,
-        .length = ordinary_bytes.len,
-        .assume_validated = true,
-    };
-    const ordinary_data = try buildFeatureLookupRecords(ordinary_table, 2, allocator);
-    defer allocator.free(ordinary_data.records);
-    defer allocator.free(ordinary_data.lookups);
-    try std.testing.expect(!ordinary_data.has_random_feature);
-    var ordinary_index = FeatureLookupIndex{
-        .data_ptr = ordinary_bytes[0..].ptr,
-        .data_len = ordinary_bytes.len,
-        .table_offset = 0,
-        .table_length = ordinary_bytes.len,
-        .accelerators_addr = 0,
-        .accelerator_count = 1,
-        .has_random_feature = ordinary_data.has_random_feature,
-        .records = ordinary_data.records,
-        .lookups = ordinary_data.lookups,
-    };
-    var ordinary_accelerators = [_]LookupAccelerator{.{ .feature_index = &ordinary_index }};
-    ordinary_index.accelerators_addr = @intFromPtr(&ordinary_accelerators);
-    try std.testing.expectEqual(
-        @as(?bool, false),
-        hasRandomFeatureWithAccelerators(&ordinary_bytes, 0, ordinary_bytes.len, &ordinary_accelerators),
-    );
-
-    // A copied table, mismatched range, or accelerator without feature
-    // metadata cannot borrow this capability. Callers must retain the
-    // checksum-validating parser for all three cases.
-    var foreign_bytes = random_bytes;
-    try std.testing.expect(hasRandomFeatureWithAccelerators(
-        &foreign_bytes,
-        0,
-        foreign_bytes.len,
-        &random_accelerators,
-    ) == null);
-    try std.testing.expect(hasRandomFeatureWithAccelerators(
-        &random_bytes,
-        1,
-        random_bytes.len - 1,
-        &random_accelerators,
-    ) == null);
-    try std.testing.expect(hasRandomFeatureWithAccelerators(
-        &random_bytes,
-        0,
-        random_bytes.len,
-        &.{.{}},
-    ) == null);
-    var copied_accelerators = random_accelerators;
-    try std.testing.expect(hasRandomFeatureWithAccelerators(
-        &random_bytes,
-        0,
-        random_bytes.len,
-        &copied_accelerators,
-    ) == null);
 }
 
 test "GSUB cached lookup executor requires an exact nonempty plan" {

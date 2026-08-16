@@ -2,4 +2,5 @@
 
 test {
     _ = @import("coverage/root.zig");
+    _ = @import("glyph/root.zig");
 }

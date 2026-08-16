@@ -12,6 +12,8 @@ const contextual_context =
     @import("gsub/execution/contextual/context/root.zig");
 const contextual_chaining_coverage =
     @import("gsub/execution/contextual/chaining/coverage/root.zig");
+const contextual_chaining_glyph =
+    @import("gsub/execution/contextual/chaining/glyph/root.zig");
 const contextual_model = @import("gsub/execution/contextual/model.zig");
 const contextual_records =
     @import("gsub/execution/contextual/records/root.zig");
@@ -128,11 +130,9 @@ const contextNextPosAfterMutation =
 const markUnsafeContextMatch = contextual_safety.markInput;
 const markUnsafeChainingMatch = contextual_safety.markRegions;
 
-const collectForwardUnignoredGlyphs = context_traversal.collectForward;
 const nextUnignoredGlyph = context_traversal.nextGlyph;
 const nextUnignoredGlyphIndex = context_traversal.nextIndex;
 const previousUnignoredGlyph = context_traversal.previousGlyph;
-const collectBacktrackUnignoredGlyphs = context_traversal.collectBacktrack;
 
 /// HarfBuzz enables `rand` globally with HB_OT_MAP_MAX_VALUE. Keep the sentinel
 /// public so explicit script shapers can place the common feature in the same
@@ -1905,23 +1905,15 @@ fn applyDirectLigatureAt(table: Table, subtable_offset: usize, glyphs: *std.Arra
 fn applyChainingContextSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     const subst_format = try readU16(table, subtable_offset);
     switch (subst_format) {
-        1 => {
-            const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-            const chain_set_count = try readU16(table, subtable_offset + 4);
-            var pos: usize = 0;
-            while (pos < glyphs.items.len) {
-                var next_pos = pos + 1;
-                defer pos = next_pos;
-                if (!runtime_filtering.sourceFeatureAllowsGlyph(options, pos)) continue;
-                if (runtime_filtering.lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) continue;
-                const coverage = try table_core.coverage.index(table, coverage_offset, glyphs.items[pos]) orelse continue;
-                if (coverage >= chain_set_count) continue;
-                const set_relative = try readU16(table, subtable_offset + 6 + coverage * 2);
-                if (set_relative == 0) continue;
-                const result = try applyChainingRuleSet(table, subtable_offset + set_relative, glyphs, pos, allocator, lookup_flag, options);
-                if (result.matched) next_pos = @max(next_pos, result.next_pos);
-            }
-        },
+        1 => try contextual_chaining_glyph.subtable(
+            ContextualRecordExecutor,
+            table,
+            subtable_offset,
+            glyphs,
+            allocator,
+            lookup_flag,
+            options,
+        ),
         2 => try applyChainingClassSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, options),
         3 => try contextual_chaining_coverage.subtable(
             ContextualRecordExecutor,
@@ -2306,7 +2298,16 @@ fn applyChainingClassSubstitutionLookupAccelerated(
 fn applyChainingContextSubstitutionAt(table: Table, subtable_offset: usize, parsed_subtable: ?ChainingCoverageSubtable, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
     const subst_format = try readU16(table, subtable_offset);
     return switch (subst_format) {
-        1 => try applyChainingGlyphSubstitutionAt(table, subtable_offset, glyphs, pos, allocator, lookup_flag, options),
+        1 => try contextual_chaining_glyph.at(
+            ContextualRecordExecutor,
+            table,
+            subtable_offset,
+            glyphs,
+            pos,
+            allocator,
+            lookup_flag,
+            options,
+        ),
         2 => try applyChainingClassSubstitutionAt(table, subtable_offset, glyphs, pos, allocator, lookup_flag, options),
         3 => try contextual_chaining_coverage.at(
             ContextualRecordExecutor,
@@ -2324,20 +2325,6 @@ fn applyChainingContextSubstitutionAt(table: Table, subtable_offset: usize, pars
         ),
         else => .{},
     };
-}
-
-fn applyChainingGlyphSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
-    if (!runtime_filtering.sourceFeatureAllowsGlyph(options, pos)) return .{};
-    if (pos >= glyphs.items.len) return .{};
-    if (runtime_filtering.lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) return .{};
-
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const chain_set_count = try readU16(table, subtable_offset + 4);
-    const coverage = try table_core.coverage.index(table, coverage_offset, glyphs.items[pos]) orelse return .{};
-    if (coverage >= chain_set_count) return .{};
-    const set_relative = try readU16(table, subtable_offset + 6 + coverage * 2);
-    if (set_relative == 0) return .{};
-    return try applyChainingRuleSet(table, subtable_offset + set_relative, glyphs, pos, allocator, lookup_flag, options);
 }
 
 fn applyChainingClassSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
@@ -2629,80 +2616,6 @@ fn applyChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_de
         const glyph_count_before = glyphs.items.len;
         try applySubstitutionRecordsMapped(table, glyphs, cursor, subst_count, input_indices, allocator, options);
         const original_next = input_indices[input_count - 1] + 1;
-        return .{
-            .matched = true,
-            .next_pos = contextNextPosAfterMutation(original_next, pos, glyph_count_before, glyphs.items.len),
-        };
-    }
-    return .{};
-}
-
-fn applyChainingRuleSet(table: Table, chain_set_offset: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
-    const rule_count = try readU16(table, chain_set_offset);
-    for (0..rule_count) |rule_i| {
-        const rule_offset = chain_set_offset + try readU16(table, chain_set_offset + 2 + rule_i * 2);
-        var cursor = rule_offset;
-
-        const backtrack_count = try readU16(table, cursor);
-        cursor += 2;
-        var backtrack_indices_buf: [64]usize = undefined;
-        if (backtrack_count > backtrack_indices_buf.len) return error.UnsupportedGsub;
-        if (!collectBacktrackUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, backtrack_indices_buf[0..backtrack_count], true, pos)) continue;
-        var matched = true;
-        for (0..backtrack_count) |i| {
-            const expected = try readU16(table, cursor + i * 2);
-            if (glyphs.items[backtrack_indices_buf[i]] != expected) {
-                matched = false;
-                break;
-            }
-        }
-        if (!matched) continue;
-        cursor += backtrack_count * 2;
-
-        const input_count = try readU16(table, cursor);
-        cursor += 2;
-        if (input_count == 0) continue;
-        var input_indices_buf: [64]usize = undefined;
-        if (input_count > input_indices_buf.len) return error.UnsupportedGsub;
-        if (!collectForwardUnignoredGlyphs(glyphs.items, pos, lookup_flag, options, input_indices_buf[0..input_count], false, pos)) continue;
-        for (1..input_count) |i| {
-            const expected = try readU16(table, cursor + (i - 1) * 2);
-            if (glyphs.items[input_indices_buf[i]] != expected) {
-                matched = false;
-                break;
-            }
-        }
-        if (!matched) continue;
-        cursor += (@as(usize, input_count) - 1) * 2;
-
-        const lookahead_count = try readU16(table, cursor);
-        cursor += 2;
-        const lookahead_start = input_indices_buf[input_count - 1] + 1;
-        var lookahead_indices_buf: [64]usize = undefined;
-        if (lookahead_count > lookahead_indices_buf.len) return error.UnsupportedGsub;
-        if (!collectForwardUnignoredGlyphs(glyphs.items, lookahead_start, lookup_flag, options, lookahead_indices_buf[0..lookahead_count], true, pos)) continue;
-        for (0..lookahead_count) |i| {
-            const expected = try readU16(table, cursor + i * 2);
-            if (glyphs.items[lookahead_indices_buf[i]] != expected) {
-                matched = false;
-                break;
-            }
-        }
-        if (!matched) continue;
-        cursor += lookahead_count * 2;
-
-        const subst_count = try readU16(table, cursor);
-        cursor += 2;
-        try markUnsafeChainingMatch(
-            allocator,
-            options,
-            backtrack_indices_buf[0..backtrack_count],
-            input_indices_buf[0..input_count],
-            lookahead_indices_buf[0..lookahead_count],
-        );
-        const glyph_count_before = glyphs.items.len;
-        try applySubstitutionRecordsMapped(table, glyphs, cursor, subst_count, input_indices_buf[0..input_count], allocator, options);
-        const original_next = input_indices_buf[input_count - 1] + 1;
         return .{
             .matched = true,
             .next_pos = contextNextPosAfterMutation(original_next, pos, glyph_count_before, glyphs.items.len),

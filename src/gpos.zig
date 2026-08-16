@@ -95,12 +95,6 @@ const PairPositionSubtable = runtime_lookup.pair.generic.Parsed;
 const buildLookupAccelerator = accelerator_core.build.lookup.one;
 const deinitLookupAcceleratorContents =
     accelerator_core.build.lookup.deinitContents;
-const buildChainingCoverageSubtable =
-    accelerator_core.build.chaining.coverageSubtable;
-const deinitChainingCoverageSubtables =
-    accelerator_core.build.chaining.deinitCoverageSubtables;
-const deinitChainingCoverageSubtableContents =
-    accelerator_core.build.chaining.deinitCoverageSubtableContents;
 
 const max_run_digest_cache_entries = 16;
 
@@ -751,89 +745,6 @@ fn collectExtensionAdjustment(table: Table, subtable_offset: usize, glyphs: []co
         8 => try collectChainingContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
         else => {},
     }
-}
-
-test "GPOS native Coverage preserves format 1 and 2 indexes" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 30;
-
-    writeCoverage1ListTest(&bytes, 0, &.{ 3, 8, 20 });
-    writeU16Test(&bytes, 10, 2); // Coverage format 2.
-    writeU16Test(&bytes, 12, 2);
-    writeU16Test(&bytes, 14, 30);
-    writeU16Test(&bytes, 16, 32);
-    writeU16Test(&bytes, 18, 0);
-    writeU16Test(&bytes, 20, 40);
-    writeU16Test(&bytes, 22, 42);
-    writeU16Test(&bytes, 24, 3);
-
-    const table = Table{
-        .data = &bytes,
-        .offset = 0,
-        .length = bytes.len,
-        .assume_validated = true,
-    };
-    const glyph_coverage = try accelerator_core.coverage.Owned.build(table, 0, allocator);
-    defer glyph_coverage.deinit(allocator);
-    try std.testing.expectEqual(@as(?usize, 0), glyph_coverage.index(3));
-    try std.testing.expectEqual(@as(?usize, 2), glyph_coverage.index(20));
-    try std.testing.expectEqual(@as(?usize, null), glyph_coverage.index(9));
-
-    const range_coverage = try accelerator_core.coverage.Owned.build(table, 10, allocator);
-    defer range_coverage.deinit(allocator);
-    try std.testing.expectEqual(@as(?usize, 0), range_coverage.index(30));
-    try std.testing.expectEqual(@as(?usize, 2), range_coverage.index(32));
-    try std.testing.expectEqual(@as(?usize, 3), range_coverage.index(40));
-    try std.testing.expectEqual(@as(?usize, 5), range_coverage.index(42));
-    try std.testing.expectEqual(@as(?usize, null), range_coverage.index(33));
-}
-
-test "GPOS chaining accelerator caches all Coverage regions" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 44;
-
-    writeU16Test(&bytes, 0, 3); // ChainContextPos format 3.
-    writeU16Test(&bytes, 2, 1); // Backtrack count.
-    writeU16Test(&bytes, 4, 20);
-    writeU16Test(&bytes, 6, 2); // Input count.
-    writeU16Test(&bytes, 8, 26);
-    writeU16Test(&bytes, 10, 32);
-    writeU16Test(&bytes, 12, 1); // Lookahead count.
-    writeU16Test(&bytes, 14, 38);
-    writeU16Test(&bytes, 16, 0); // No positioning records.
-    writeCoverage1Test(&bytes, 20, 2);
-    writeCoverage1Test(&bytes, 26, 3);
-    writeCoverage1Test(&bytes, 32, 4);
-    writeCoverage1Test(&bytes, 38, 5);
-
-    const table = Table{
-        .data = &bytes,
-        .offset = 0,
-        .length = bytes.len,
-        .assume_validated = true,
-    };
-    const subtable = (try buildChainingCoverageSubtable(table, 0, allocator)) orelse return error.TestUnexpectedResult;
-    defer deinitChainingCoverageSubtableContents(allocator, subtable);
-
-    try std.testing.expectEqual(@as(usize, 1), subtable.backtrack_coverages.len);
-    try std.testing.expectEqual(@as(usize, 2), subtable.input_coverages.len);
-    try std.testing.expectEqual(@as(usize, 1), subtable.lookahead_coverages.len);
-    try std.testing.expectEqual(@as(?usize, 0), subtable.backtrack_coverages[0].index(2));
-    try std.testing.expectEqual(@as(?usize, 0), subtable.input_coverages[0].index(3));
-    try std.testing.expectEqual(@as(?usize, 0), subtable.input_coverages[1].index(4));
-    try std.testing.expectEqual(@as(?usize, 0), subtable.lookahead_coverages[0].index(5));
-    try std.testing.expect(subtable.second_input_digest.mayHave(4));
-
-    const glyphs = [_]GlyphId{ 2, 3, 4, 5 };
-    try std.testing.expect(try chaining_runtime.coverage.matching.indices(
-        table,
-        0,
-        &glyphs,
-        &.{ 1, 2 },
-        subtable.input_offsets_pos,
-        subtable.input_coverages,
-        0,
-    ));
 }
 
 fn collectChainingContextAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {

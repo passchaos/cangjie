@@ -40,6 +40,8 @@ const table_only_fixture = @import("font/tests/fixtures/table_only.zig");
 const bitmap_mod = @import("font/tables/bitmap/root.zig");
 const cmap_mod = @import("font/tables/cmap/root.zig");
 const color_tables = @import("font/tables/color/root.zig");
+const kerning_tables = @import("font/tables/kerning/root.zig");
+const kern_mod = kerning_tables.kern;
 const core_tables = @import("font/tables/core/root.zig");
 const head_mod = core_tables.head;
 const maxp_mod = core_tables.maxp;
@@ -236,31 +238,9 @@ pub const MorxFeatureInfo = morx_mod.Feature;
 pub const MorxInfo = morx_mod.Info;
 pub const MorxSubtableInfo = morx_mod.Subtable;
 
-pub const KernTableDialect = enum {
-    legacy,
-    apple,
-    unsupported,
-};
-
-pub const KernSubtableInfo = struct {
-    offset: usize,
-    length: usize,
-    format: u16,
-    coverage: u16,
-    horizontal: bool,
-    minimum: bool,
-    cross_stream: bool,
-    variation: bool = false,
-    override: bool = false,
-    tuple_index: ?u16 = null,
-    pair_count: ?u16 = null,
-};
-
-pub const KernInfo = struct {
-    dialect: KernTableDialect,
-    version: u32,
-    subtables: []KernSubtableInfo,
-};
+pub const KernTableDialect = kern_mod.Dialect;
+pub const KernSubtableInfo = kern_mod.Subtable;
+pub const KernInfo = kern_mod.Info;
 
 pub const CharmapInfo = cmap_mod.Info;
 
@@ -485,13 +465,12 @@ pub const KernLookupForShaping = struct {
     pub fn kerning(self: KernLookupForShaping, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!i16 {
         if (left >= self.font.glyph_count or right >= self.font.glyph_count) return error.InvalidGlyph;
         const kern = self.kern orelse return 0;
-        if (kern.length < 4) return 0;
-        const version = try bin.readU32At(self.font.data, kern.offset);
-        if (version == 0x00010000) {
-            return try Font.appleKernKerning(self.font.data, kern, left, right);
-        }
-        if ((version >> 16) != 0) return 0;
-        return try Font.legacyKernKerning(self.font.data, kern, left, right);
+        return try kern_mod.kerningAfterProof(
+            self.font.data,
+            kern,
+            left,
+            right,
+        );
     }
 };
 
@@ -966,7 +945,9 @@ pub const Font = struct {
         const cvt_value_count = if (cvt) |cvt_table| try validateCvtTable(cvt_table) else null;
         if (fpgm) |fpgm_table| try validateTrueTypeProgramTable(data, fpgm_table);
         if (prep) |prep_table| try validateTrueTypeProgramTable(data, prep_table);
-        if (kern) |kern_table| try validateKernTable(data, kern_table, glyph_count);
+        if (kern) |kern_table| {
+            try kern_mod.validate(data, kern_table, glyph_count);
+        }
         if (kerx) |kerx_table| try validateKerxTable(data, kerx_table, glyph_count);
         if (hdmx) |hdmx_table| try validateHdmxTable(data, hdmx_table, glyph_count);
         if (ltsh) |ltsh_table| try validateLtshTable(data, ltsh_table, glyph_count);
@@ -2408,14 +2389,13 @@ pub const Font = struct {
         // unsorted format-0 records that binary search would otherwise observe
         // as an innocuous "no pair" result.
         try sfnt.checksum.validate(self.data, kern);
-        try validateKernTable(self.data, kern, self.glyph_count);
-        if (kern.length < 4) return 0;
-        const version = try bin.readU32At(self.data, kern.offset);
-        if (version == 0x00010000) {
-            return try appleKernKerning(self.data, kern, left, right);
-        }
-        if ((version >> 16) != 0) return 0;
-        return try legacyKernKerning(self.data, kern, left, right);
+        try kern_mod.validate(self.data, kern, self.glyph_count);
+        return try kern_mod.kerningAfterProof(
+            self.data,
+            kern,
+            left,
+            right,
+        );
     }
 
     fn kernLookupForShaping(self: *const Font) FontError!KernLookupForShaping {
@@ -2434,91 +2414,12 @@ pub const Font = struct {
     pub fn kernInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?KernInfo {
         const kern = self.kern orelse return null;
         try sfnt.checksum.validate(self.data, kern);
-        try validateKernTable(self.data, kern, self.glyph_count);
-        return try readKernInfo(allocator, self.data, kern);
+        try kern_mod.validate(self.data, kern, self.glyph_count);
+        return try kern_mod.info(allocator, self.data, kern);
     }
 
     pub fn freeKernInfo(_: *const Font, allocator: std.mem.Allocator, info: KernInfo) void {
-        allocator.free(info.subtables);
-    }
-
-    fn legacyKernKerning(data: []const u8, kern: TableRecord, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!i16 {
-        const table_count = try bin.readU16At(data, kern.offset + 2);
-        const table_end = kern.offset + kern.length;
-        var subtable_offset = kern.offset + 4;
-        var total: i32 = 0;
-        var saw_matching_pair = false;
-        for (0..table_count) |_| {
-            if (subtable_offset > table_end or table_end - subtable_offset < 6) return error.BadSfnt;
-            const subtable_version = try bin.readU16At(data, subtable_offset);
-            const length = try bin.readU16At(data, subtable_offset + 2);
-            const coverage = try bin.readU16At(data, subtable_offset + 4);
-            if (length < 6 or length > table_end - subtable_offset) return error.BadSfnt;
-            if (subtable_version != 0) return error.BadSfnt;
-            const format = coverage >> 8;
-            const horizontal = (coverage & 0x0001) != 0;
-            const minimum = (coverage & 0x0002) != 0;
-            const cross_stream = (coverage & 0x0004) != 0;
-            const override = (coverage & 0x0008) != 0;
-            if (format == 0 and horizontal and !minimum and !cross_stream) {
-                // OpenType/Windows subtables have a six-byte common header
-                // before the format-0 binary-search payload.
-                if (try kernFormat0Body(data[subtable_offset + 6 .. subtable_offset + length], left, right)) |value| {
-                    saw_matching_pair = true;
-                    if (override) {
-                        total = value;
-                    } else {
-                        total += value;
-                    }
-                }
-            }
-            subtable_offset += length;
-        }
-        if (!saw_matching_pair) return 0;
-        return @intCast(std.math.clamp(total, std.math.minInt(i16), std.math.maxInt(i16)));
-    }
-
-    fn appleKernKerning(data: []const u8, kern: TableRecord, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!i16 {
-        if (kern.length < 8) return error.BadSfnt;
-        const table_count = try bin.readU32At(data, kern.offset + 4);
-        const table_end = kern.offset + kern.length;
-        var subtable_offset = kern.offset + 8;
-        var total: i32 = 0;
-        var saw_matching_pair = false;
-        for (0..table_count) |_| {
-            if (subtable_offset > table_end or table_end - subtable_offset < 8) return error.BadSfnt;
-            const length = try bin.readU32At(data, subtable_offset);
-            const coverage = try bin.readU16At(data, subtable_offset + 4);
-            if (length < 8 or length > table_end - subtable_offset) return error.BadSfnt;
-
-            // Apple/AAT version-1 subtables use different coverage bits from
-            // the legacy OpenType header: format lives in the low byte, while a
-            // clear vertical bit means normal horizontal kerning. Variation and
-            // cross-stream tables need extra state this API does not provide, so
-            // they are skipped rather than applying incorrect horizontal deltas.
-            const format = coverage & 0x00ff;
-            const vertical = (coverage & 0x8000) != 0;
-            const cross_stream = (coverage & 0x4000) != 0;
-            const variation = (coverage & 0x2000) != 0;
-            if (!vertical and !cross_stream and !variation) {
-                const body = data[subtable_offset + 8 .. subtable_offset + length];
-                const value = if (format == 0)
-                    // AAT subtables have an eight-byte common header (including
-                    // tupleIndex) before the same format-0 pair-search payload.
-                    try kernFormat0Body(body, left, right)
-                else if (format == 2)
-                    try kernFormat2Body(body, left, right)
-                else
-                    null;
-                if (value) |kern_value| {
-                    saw_matching_pair = true;
-                    total += kern_value;
-                }
-            }
-            subtable_offset += length;
-        }
-        if (!saw_matching_pair) return 0;
-        return @intCast(std.math.clamp(total, std.math.minInt(i16), std.math.maxInt(i16)));
+        kern_mod.free(allocator, info);
     }
 
     fn applyGsub(self: *const Font, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator) FontError!void {
@@ -5466,233 +5367,12 @@ fn readArray6At(data: []const u8, offset: usize) FontError![6]u8 {
     return value;
 }
 
-fn readKernInfo(allocator: std.mem.Allocator, data: []const u8, kern: TableRecord) FontError!KernInfo {
-    try sfnt.requireLength(kern, 4);
-    const version = try bin.readU32At(data, kern.offset);
-    if (version == 0x00010000) return try readAppleKernInfo(allocator, data, kern);
-    if ((version >> 16) != 0) {
-        return .{
-            .dialect = .unsupported,
-            .version = version,
-            .subtables = try allocator.alloc(KernSubtableInfo, 0),
-        };
-    }
-    return try readLegacyKernInfo(allocator, data, kern);
-}
-
-fn readLegacyKernInfo(allocator: std.mem.Allocator, data: []const u8, kern: TableRecord) FontError!KernInfo {
-    const table_count = try bin.readU16At(data, kern.offset + 2);
-    const subtables = try allocator.alloc(KernSubtableInfo, table_count);
-    errdefer allocator.free(subtables);
-
-    var subtable_offset = kern.offset + 4;
-    for (subtables) |*info| {
-        const length = try bin.readU16At(data, subtable_offset + 2);
-        const coverage = try bin.readU16At(data, subtable_offset + 4);
-        const format = coverage >> 8;
-        info.* = .{
-            .offset = subtable_offset,
-            .length = length,
-            .format = format,
-            .coverage = coverage,
-            .horizontal = (coverage & 0x0001) != 0,
-            .minimum = (coverage & 0x0002) != 0,
-            .cross_stream = (coverage & 0x0004) != 0,
-            .override = (coverage & 0x0008) != 0,
-            .pair_count = if (format == 0 and length >= 14) try bin.readU16At(data, subtable_offset + 6) else null,
-        };
-        subtable_offset += length;
-    }
-    return .{ .dialect = .legacy, .version = try bin.readU16At(data, kern.offset), .subtables = subtables };
-}
-
-fn readAppleKernInfo(allocator: std.mem.Allocator, data: []const u8, kern: TableRecord) FontError!KernInfo {
-    const table_count: usize = @intCast(try bin.readU32At(data, kern.offset + 4));
-    const subtables = try allocator.alloc(KernSubtableInfo, table_count);
-    errdefer allocator.free(subtables);
-
-    var subtable_offset = kern.offset + 8;
-    for (subtables) |*info| {
-        const length: usize = @intCast(try bin.readU32At(data, subtable_offset));
-        const coverage = try bin.readU16At(data, subtable_offset + 4);
-        const format = coverage & 0x00ff;
-        info.* = .{
-            .offset = subtable_offset,
-            .length = length,
-            .format = format,
-            .coverage = coverage,
-            .horizontal = (coverage & 0x8000) == 0,
-            .minimum = false,
-            .cross_stream = (coverage & 0x4000) != 0,
-            .variation = (coverage & 0x2000) != 0,
-            .tuple_index = try bin.readU16At(data, subtable_offset + 6),
-            .pair_count = if (format == 0 and length >= 16) try bin.readU16At(data, subtable_offset + 8) else null,
-        };
-        subtable_offset += length;
-    }
-    return .{ .dialect = .apple, .version = try bin.readU32At(data, kern.offset), .subtables = subtables };
-}
-
 fn validateKerxTable(data: []const u8, kerx: TableRecord, glyph_count: u16) FontError!void {
     return try kerx_mod.validate(data, kerx.offset, kerx.length, glyph_count);
 }
 
 fn validateMorxTable(data: []const u8, morx: TableRecord, glyph_count: u16) FontError!void {
     return try morx_mod.validate(data, morx.offset, morx.length, glyph_count);
-}
-
-fn validateKernTable(data: []const u8, kern: TableRecord, glyph_count: u16) FontError!void {
-    try sfnt.requireLength(kern, 4);
-    const version = try bin.readU32At(data, kern.offset);
-    if (version == 0x00010000) {
-        try validateAppleKernTable(data, kern, glyph_count);
-        return;
-    }
-    if ((version >> 16) != 0) {
-        // Unknown non-legacy versions are ignored by `kerning`; keep that
-        // compatibility behavior instead of rejecting a table this renderer
-        // intentionally does not interpret.
-        return;
-    }
-    try validateLegacyKernTable(data, kern, glyph_count);
-}
-
-fn validateLegacyKernTable(data: []const u8, kern: TableRecord, glyph_count: u16) FontError!void {
-    const table_count = try bin.readU16At(data, kern.offset + 2);
-    const table_end = kern.offset + kern.length;
-    var subtable_offset = kern.offset + 4;
-    for (0..table_count) |_| {
-        if (subtable_offset > table_end or table_end - subtable_offset < 6) return error.BadSfnt;
-        const subtable_version = try bin.readU16At(data, subtable_offset);
-        const length = try bin.readU16At(data, subtable_offset + 2);
-        const coverage = try bin.readU16At(data, subtable_offset + 4);
-        if (length < 6 or length > table_end - subtable_offset) return error.BadSfnt;
-
-        // Legacy OpenType kern subtables carry their own UInt16 version, which
-        // must be zero. Rejecting private variants here keeps later coverage
-        // bits from being interpreted with the standard format-0 body layout.
-        if (subtable_version != 0) return error.BadSfnt;
-
-        const format = coverage >> 8;
-        const horizontal = (coverage & 0x0001) != 0;
-        const minimum = (coverage & 0x0002) != 0;
-        const cross_stream = (coverage & 0x0004) != 0;
-        if (format == 0 and horizontal and !minimum and !cross_stream) {
-            try validateKernFormat0Body(data[subtable_offset + 6 .. subtable_offset + length], glyph_count);
-        }
-        subtable_offset += length;
-    }
-    // The SFNT directory length is the unpadded kern payload length. Require
-    // nTables and each subtable length to consume it exactly so orphan bytes
-    // cannot hide an unvalidated subtable that another kern consumer might
-    // still interpret.
-    if (subtable_offset != table_end) return error.BadSfnt;
-}
-
-fn validateAppleKernTable(data: []const u8, kern: TableRecord, glyph_count: u16) FontError!void {
-    try sfnt.requireLength(kern, 8);
-    const table_count = try bin.readU32At(data, kern.offset + 4);
-    const table_end = kern.offset + kern.length;
-    var subtable_offset = kern.offset + 8;
-    for (0..table_count) |_| {
-        if (subtable_offset > table_end or table_end - subtable_offset < 8) return error.BadSfnt;
-        const length = try bin.readU32At(data, subtable_offset);
-        const coverage = try bin.readU16At(data, subtable_offset + 4);
-        if (length < 8 or length > table_end - subtable_offset) return error.BadSfnt;
-
-        const format = coverage & 0x00ff;
-        const vertical = (coverage & 0x8000) != 0;
-        const cross_stream = (coverage & 0x4000) != 0;
-        const variation = (coverage & 0x2000) != 0;
-        if (!vertical and !cross_stream and !variation) {
-            const body = data[subtable_offset + 8 .. subtable_offset + length];
-            if (format == 0) {
-                try validateKernFormat0Body(body, glyph_count);
-            } else if (format == 2) {
-                try validateKernFormat2Body(body, glyph_count);
-            }
-        }
-        subtable_offset += length;
-    }
-    // Apple/AAT kern v1 uses 32-bit lengths, but the same ownership rule
-    // applies: the counted subtable sequence must occupy the complete declared
-    // table payload rather than leaving trailing bytes with ambiguous meaning.
-    if (subtable_offset != table_end) return error.BadSfnt;
-}
-
-fn validateKernFormat0Body(data: []const u8, glyph_count: u16) FontError!void {
-    // Format-0 kern subtables are searched with a binary search over packed
-    // left/right glyph pairs. Validate the search header and complete pair
-    // array while parsing so malformed fonts cannot hide out-of-range glyph IDs
-    // or depend on non-canonical binary-search metadata.
-    if (data.len < 8) return error.BadSfnt;
-    const pair_count = try bin.readU16At(data, 0);
-    try validateKernFormat0SearchParameters(data, pair_count);
-    if (@as(usize, pair_count) * 6 > data.len - 8) return error.BadSfnt;
-
-    var previous_pair: ?u32 = null;
-    for (0..pair_count) |index| {
-        const offset = 8 + index * 6;
-        const left = try bin.readU16At(data, offset);
-        const right = try bin.readU16At(data, offset + 2);
-        try validateGlyphIdInMaxp(left, glyph_count);
-        try validateGlyphIdInMaxp(right, glyph_count);
-
-        const pair = (@as(u32, left) << 16) | right;
-        if (previous_pair) |previous| {
-            if (pair <= previous) return error.BadSfnt;
-        }
-        previous_pair = pair;
-    }
-}
-
-fn validateKernFormat0SearchParameters(data: []const u8, pair_count: u16) FontError!void {
-    // FontTools and deployed fonts retain the one-record searchRange (6)
-    // when nPairs is zero, with a zero rangeShift. Treat that de-facto empty
-    // descriptor explicitly rather than subtracting 6 from a zero-byte pair
-    // array, which otherwise underflows before the header can be accepted.
-    var max_power_of_two: usize = 1;
-    var expected_entry_selector: u16 = 0;
-    while (max_power_of_two * 2 <= pair_count) {
-        max_power_of_two *= 2;
-        expected_entry_selector += 1;
-    }
-
-    const expected_search_range = max_power_of_two * 6;
-    const pair_record_bytes = @as(usize, pair_count) * 6;
-    if (expected_search_range > std.math.maxInt(u16) or pair_record_bytes > std.math.maxInt(u16)) return error.BadSfnt;
-    const expected_range_shift = if (pair_count == 0) 0 else pair_record_bytes - expected_search_range;
-
-    // The legacy and Apple kern format-0 bodies share this OpenType binary
-    // search descriptor. Cangjie validates it even though lookups recompute the
-    // search bounds from nPairs; accepting inconsistent values would mean the
-    // same font bytes describe different pair arrays to different consumers.
-    if (try bin.readU16At(data, 2) != expected_search_range or
-        try bin.readU16At(data, 4) != expected_entry_selector or
-        try bin.readU16At(data, 6) != expected_range_shift)
-    {
-        return error.BadSfnt;
-    }
-}
-
-test "kern format 0 accepts the canonical empty pair array" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    // FontTools emits the one-record searchRange for an empty pair array, but
-    // keeps rangeShift zero because no pair-record bytes exist.
-    var kern: [18]u8 = .{0} ** 18;
-    writeU16Test(&kern, 2, 1);
-    writeU16Test(&kern, 4 + 2, 14);
-    writeU16Test(&kern, 4 + 4, 0x0001);
-    writeU16Test(&kern, 4 + 6 + 2, 6);
-
-    const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
-    defer allocator.free(bytes);
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    try std.testing.expectEqual(@as(?i16, 0), try font.kerning(1, 1));
 }
 
 fn locaEntryRequiredLength(glyph_id: u32, index_to_loc_format: i16) FontError!usize {
@@ -6643,85 +6323,6 @@ fn coverageGlyphs(allocator: std.mem.Allocator, data: []const u8, offset: usize)
 fn freeMarkFilteringSets(allocator: std.mem.Allocator, sets: [][]glyph_mod.GlyphId) void {
     for (sets) |set| allocator.free(set);
     allocator.free(sets);
-}
-
-fn kernFormat0Body(data: []const u8, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!?i16 {
-    // The format-0 body begins with the binary-search header; the surrounding
-    // kern table variant owns the common subtable header length.
-    if (data.len < 8) return error.BadSfnt;
-    const pair_count = try bin.readU16At(data, 0);
-    if (@as(usize, pair_count) * 6 > data.len - 8) return error.BadSfnt;
-    const needle = (@as(u32, left) << 16) | right;
-    var lo: usize = 0;
-    var hi: usize = pair_count;
-    while (lo < hi) {
-        const mid = lo + (hi - lo) / 2;
-        const offset = 8 + mid * 6;
-        const pair = (@as(u32, try bin.readU16At(data, offset)) << 16) | try bin.readU16At(data, offset + 2);
-        if (needle < pair) {
-            hi = mid;
-        } else if (needle > pair) {
-            lo = mid + 1;
-        } else {
-            return try bin.readI16At(data, offset + 4);
-        }
-    }
-    return null;
-}
-
-fn kernFormat2Body(data: []const u8, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId) FontError!?i16 {
-    try validateKernFormat2Body(data, std.math.maxInt(u16));
-    const left_class_offset = try bin.readU16At(data, 2);
-    const right_class_offset = try bin.readU16At(data, 4);
-    const left_offset = try kernFormat2ClassValue(data, left_class_offset, left);
-    const right_offset = try kernFormat2ClassValue(data, right_class_offset, right);
-    if (left_offset == 0 or right_offset == 0) return null;
-    const combined_offset = @as(usize, left_offset) + @as(usize, right_offset);
-    if (combined_offset < 8) return null;
-    const value_offset = combined_offset - 8;
-    if (value_offset > data.len - 2) return error.BadSfnt;
-    const value = try bin.readI16At(data, value_offset);
-    return if (value == 0) null else value;
-}
-
-fn validateKernFormat2Body(data: []const u8, glyph_count: u16) FontError!void {
-    if (data.len < 8) return error.BadSfnt;
-    const row_width = try bin.readU16At(data, 0);
-    const left_class_offset = try bin.readU16At(data, 2);
-    const right_class_offset = try bin.readU16At(data, 4);
-    const array_offset = try bin.readU16At(data, 6);
-    if (row_width == 0) return error.BadSfnt;
-    if (array_offset < 8 or array_offset - 8 > data.len - 2) return error.BadSfnt;
-    try validateKernFormat2ClassTable(data, left_class_offset, glyph_count);
-    try validateKernFormat2ClassTable(data, right_class_offset, glyph_count);
-}
-
-fn validateKernFormat2ClassTable(data: []const u8, offset: usize, glyph_count: u16) FontError!void {
-    if (offset < 8) return error.BadSfnt;
-    const body_offset = offset - 8;
-    if (body_offset > data.len - 4) return error.BadSfnt;
-    const first_glyph = try bin.readU16At(data, body_offset);
-    const glyph_len = try bin.readU16At(data, body_offset + 2);
-    if (glyph_len == 0) return;
-    if (@as(usize, first_glyph) + @as(usize, glyph_len) > @as(usize, glyph_count)) return error.BadSfnt;
-    const values_offset = body_offset + 4;
-    if (@as(usize, glyph_len) * 2 > data.len - values_offset) return error.BadSfnt;
-    for (0..glyph_len) |index| {
-        const value = try bin.readU16At(data, values_offset + index * 2);
-        if (@as(usize, value) > data.len + 8 - 2) return error.BadSfnt;
-    }
-}
-
-fn kernFormat2ClassValue(data: []const u8, class_table_offset: usize, glyph: glyph_mod.GlyphId) FontError!u16 {
-    if (class_table_offset < 8) return error.BadSfnt;
-    const body_offset = class_table_offset - 8;
-    if (body_offset > data.len - 4) return error.BadSfnt;
-    const first_glyph = try bin.readU16At(data, body_offset);
-    const glyph_len = try bin.readU16At(data, body_offset + 2);
-    if (glyph < first_glyph or glyph >= first_glyph + glyph_len) return 0;
-    const value_offset = body_offset + 4 + (@as(usize, glyph - first_glyph) * 2);
-    if (value_offset > data.len - 2) return error.BadSfnt;
-    return try bin.readU16At(data, value_offset);
 }
 
 const SimpleGlyphVariation = struct {
@@ -8896,359 +8497,6 @@ test "GDEF lazy mark filtering sets revalidate glyph ids after borrowed bytes mu
     writeU16Test(bytes, gdef_offset + 28, 5); // maxp.numGlyphs is still 5, so glyph id 5 is invalid.
 
     try std.testing.expectError(error.BadSfnt, font.markFilteringSets(allocator));
-}
-
-test "legacy kern format 0 accumulates multiple horizontal subtables" {
-    var data: [44]u8 = .{0} ** 44;
-    writeU16Test(&data, 0, 0);
-    writeU16Test(&data, 2, 2);
-    writeKernFormat0Subtable(&data, 4, 0x0001, 1, 1, -40);
-    writeKernFormat0Subtable(&data, 24, 0x0001, 1, 1, -70);
-
-    const font = kernOnlyFont(&data);
-    try std.testing.expectEqual(@as(i16, -110), try font.kerning(1, 1));
-    try std.testing.expectEqual(@as(i16, 0), try font.kerning(0, 1));
-}
-
-test "legacy kern ignores minimum and cross-stream subtables" {
-    var data: [64]u8 = .{0} ** 64;
-    writeU16Test(&data, 0, 0);
-    writeU16Test(&data, 2, 3);
-    writeKernFormat0Subtable(&data, 4, 0x0003, 1, 1, -100);
-    writeKernFormat0Subtable(&data, 24, 0x0005, 1, 1, -80);
-    writeKernFormat0Subtable(&data, 44, 0x0001, 1, 1, -30);
-
-    const font = kernOnlyFont(&data);
-    try std.testing.expectEqual(@as(i16, -30), try font.kerning(1, 1));
-}
-
-test "kern public API rejects glyph ids outside maxp count" {
-    var data: [24]u8 = .{0} ** 24;
-    writeU16Test(&data, 0, 0);
-    writeU16Test(&data, 2, 1);
-    writeKernFormat0Subtable(&data, 4, 0x0001, 1, 1, -40);
-
-    const font = kernOnlyFont(&data);
-    try std.testing.expectError(error.InvalidGlyph, font.kerning(2, 1));
-    try std.testing.expectError(error.InvalidGlyph, font.kerning(1, 2));
-}
-
-test "kern public API revalidates borrowed pair arrays" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    var kern: [24]u8 = .{0} ** 24;
-    writeU16Test(&kern, 0, 0);
-    writeU16Test(&kern, 2, 1);
-    writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
-
-    const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
-    defer allocator.free(bytes);
-
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    try std.testing.expectEqual(@as(i16, -40), try font.kerning(1, 1));
-
-    const kern_offset: usize = @intCast(try sfntTableOffset(bytes, "kern"));
-    writeU16Test(bytes, kern_offset + 4 + 6 + 8 + 2, 2); // Mutate right glyph outside maxp.numGlyphs.
-    try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
-}
-
-test "kern public API revalidates borrowed table checksum" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    var kern: [24]u8 = .{0} ** 24;
-    writeU16Test(&kern, 0, 0);
-    writeU16Test(&kern, 2, 1);
-    writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
-
-    const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
-    defer allocator.free(bytes);
-
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    try std.testing.expectEqual(@as(i16, -40), try font.kerning(1, 1));
-
-    const kern_offset: usize = @intCast(try sfntTableOffset(bytes, "kern"));
-    // Keep the pair array sorted and glyph IDs in range while changing only
-    // the kerning value. The lazy public API must reject that borrowed payload
-    // because it no longer matches the SFNT checksum validated by Font.parse.
-    writeI16Test(bytes, kern_offset + 22, -20);
-    try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
-}
-
-test "legacy kern subtables must use version zero" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        var kern: [24]u8 = .{0} ** 24;
-        writeU16Test(&kern, 0, 0);
-        writeU16Test(&kern, 2, 1);
-        writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
-        writeU16Test(&kern, 4, 1); // Legacy subtable version must be zero.
-
-        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
-        defer allocator.free(bytes);
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        var kern: [24]u8 = .{0} ** 24;
-        writeU16Test(&kern, 0, 0);
-        writeU16Test(&kern, 2, 1);
-        writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
-
-        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
-        defer allocator.free(bytes);
-
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-
-        const kern_offset: usize = @intCast(try sfntTableOffset(bytes, "kern"));
-        writeU16Test(bytes, kern_offset + 4, 2);
-        try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
-    }
-}
-
-test "kern subtable sequence must consume declared payload" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        var kern: [25]u8 = .{0} ** 25;
-        writeU16Test(&kern, 0, 0);
-        writeU16Test(&kern, 2, 1);
-        writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
-
-        const font = kernOnlyFont(&kern);
-        try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
-    }
-
-    {
-        var kern: [32]u8 = .{0} ** 32;
-        writeU32Test(&kern, 0, 0x00010000);
-        writeU32Test(&kern, 4, 1);
-        writeAppleKernFormat0Subtable(&kern, 8, 0x0000, 1, 1, -35);
-
-        const font = kernOnlyFont(&kern);
-        try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
-    }
-
-    {
-        var kern: [28]u8 = .{0} ** 28;
-        writeU16Test(&kern, 0, 0);
-        writeU16Test(&kern, 2, 1);
-        writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
-        // SFNT table lengths exclude padding. Bytes that remain after the
-        // counted subtable sequence are therefore ambiguous orphan payload, not
-        // ignorable alignment data.
-        writeU32Test(&kern, 24, 0xdead_beef);
-
-        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
-        defer allocator.free(bytes);
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        var kern: [24]u8 = .{0} ** 24;
-        writeU16Test(&kern, 0, 0);
-        writeU16Test(&kern, 2, 1);
-        writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
-
-        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
-        defer allocator.free(bytes);
-
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-
-        try std.testing.expectEqual(@as(i16, -40), try font.kerning(1, 1));
-
-        const kern_offset: usize = @intCast(try sfntTableOffset(bytes, "kern"));
-        writeU16Test(bytes, kern_offset + 2, 0); // Count no subtables while leaving the original payload bytes reachable.
-        try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
-    }
-}
-
-test "legacy kern format 0 rejects truncated binary-search header" {
-    var data: [16]u8 = .{0} ** 16;
-    writeU16Test(&data, 0, 0); // legacy kern table version
-    writeU16Test(&data, 2, 1); // one subtable
-    writeU16Test(&data, 4, 0); // subtable version
-    writeU16Test(&data, 6, 12); // Stops before the required rangeShift field.
-    writeU16Test(&data, 8, 0x0001); // format 0, horizontal
-
-    const font = kernOnlyFont(&data);
-    try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
-}
-
-test "Apple kern v1 format 0 applies horizontal pair subtables" {
-    var data: [54]u8 = .{0} ** 54;
-    writeU32Test(&data, 0, 0x00010000); // Apple/AAT kern table version.
-    writeU32Test(&data, 4, 2);
-    writeAppleKernFormat0Subtable(&data, 8, 0x0000, 1, 1, -35);
-    writeAppleKernFormat0Subtable(&data, 31, 0x0000, 1, 1, -45);
-
-    const font = kernOnlyFont(&data);
-    try std.testing.expectEqual(@as(i16, -80), try font.kerning(1, 1));
-    try std.testing.expectEqual(@as(i16, 0), try font.kerning(0, 1));
-}
-
-test "Apple kern v1 format 2 applies class kerning" {
-    var data: [58]u8 = .{0} ** 58;
-    writeU32Test(&data, 0, 0x00010000);
-    writeU32Test(&data, 4, 1);
-
-    writeU32Test(&data, 8, 50); // Subtable length.
-    writeU16Test(&data, 12, 0x0002); // Horizontal format 2.
-    writeU16Test(&data, 14, 0); // tupleIndex.
-    writeU16Test(&data, 16, 4); // rowWidth.
-    writeU16Test(&data, 18, 24); // left class table offset.
-    writeU16Test(&data, 20, 34); // right class table offset.
-    writeU16Test(&data, 22, 16); // kerning array offset.
-    writeI16Test(&data, 26, -40); // array[16 + 2].
-
-    writeU16Test(&data, 32, 0); // left first glyph.
-    writeU16Test(&data, 34, 1); // left glyph count.
-    writeU16Test(&data, 36, 16); // left class row offset.
-
-    writeU16Test(&data, 42, 1); // right first glyph.
-    writeU16Test(&data, 44, 1); // right glyph count.
-    writeU16Test(&data, 46, 2); // right class column offset.
-
-    const font = kernOnlyFont(&data);
-    try std.testing.expectEqual(@as(i16, -40), try font.kerning(0, 1));
-    try std.testing.expectEqual(@as(i16, 0), try font.kerning(1, 1));
-}
-
-test "Apple kern v1 validates declared subtable lengths" {
-    var data: [22]u8 = .{0} ** 22;
-    writeU32Test(&data, 0, 0x00010000);
-    writeU32Test(&data, 4, 1);
-    writeU32Test(&data, 8, 14); // Stops before the format-0 rangeShift field.
-    writeU16Test(&data, 12, 0x0000); // horizontal format 0.
-
-    const font = kernOnlyFont(&data);
-    try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
-}
-
-test "kern format 0 pair arrays are validated at parse time" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        var kern: [24]u8 = .{0} ** 24;
-        writeU16Test(&kern, 0, 0);
-        writeU16Test(&kern, 2, 1);
-        writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
-
-        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
-        defer allocator.free(bytes);
-        var font = try Font.parse(allocator, bytes);
-        font.deinit();
-    }
-
-    {
-        var kern: [24]u8 = .{0} ** 24;
-        writeU16Test(&kern, 0, 0);
-        writeU16Test(&kern, 2, 1);
-        writeKernFormat0Subtable(&kern, 4, 0x0001, 2, 1, -40);
-
-        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
-        defer allocator.free(bytes);
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        var kern: [30]u8 = .{0} ** 30;
-        writeU16Test(&kern, 0, 0);
-        writeU16Test(&kern, 2, 1);
-        writeU16Test(&kern, 4, 0);
-        writeU16Test(&kern, 6, 26);
-        writeU16Test(&kern, 8, 0x0001);
-        writeU16Test(&kern, 10, 2); // nPairs.
-        writeU16Test(&kern, 12, 6);
-        writeU16Test(&kern, 14, 0);
-        writeU16Test(&kern, 16, 0);
-        writeU16Test(&kern, 18, 1);
-        writeU16Test(&kern, 20, 1);
-        writeI16Test(&kern, 22, -40);
-        writeU16Test(&kern, 24, 0); // Out of sort order after (1, 1).
-        writeU16Test(&kern, 26, 1);
-        writeI16Test(&kern, 28, -20);
-
-        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
-        defer allocator.free(bytes);
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-}
-
-test "kern format 0 search headers are validated at parse time" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        var kern: [24]u8 = .{0} ** 24;
-        writeU16Test(&kern, 0, 0);
-        writeU16Test(&kern, 2, 1);
-        writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
-        writeU16Test(&kern, 4 + 6 + 2, 12); // searchRange should be one 6-byte pair record.
-
-        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
-        defer allocator.free(bytes);
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        var kern: [31]u8 = .{0} ** 31;
-        writeU32Test(&kern, 0, 0x00010000);
-        writeU32Test(&kern, 4, 1);
-        writeAppleKernFormat0Subtable(&kern, 8, 0x0000, 1, 1, -35);
-        writeU16Test(&kern, 8 + 8 + 6, 2); // rangeShift should be zero for one pair.
-
-        const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
-        defer allocator.free(bytes);
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-}
-
-test "kern lazy API revalidates borrowed format 0 search headers" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    var kern: [24]u8 = .{0} ** 24;
-    writeU16Test(&kern, 0, 0);
-    writeU16Test(&kern, 2, 1);
-    writeKernFormat0Subtable(&kern, 4, 0x0001, 1, 1, -40);
-
-    const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
-    defer allocator.free(bytes);
-
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    try std.testing.expectEqual(@as(i16, -40), try font.kerning(1, 1));
-
-    const kern_offset: usize = @intCast(try sfntTableOffset(bytes, "kern"));
-    writeU16Test(bytes, kern_offset + 4 + 6 + 4, 1); // entrySelector should be zero for one pair.
-    try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
-}
-
-test "Apple kern v1 format 0 pair glyph ids are validated at parse time" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    var kern: [31]u8 = .{0} ** 31;
-    writeU32Test(&kern, 0, 0x00010000);
-    writeU32Test(&kern, 4, 1);
-    writeAppleKernFormat0Subtable(&kern, 8, 0x0000, 1, 2, -35);
-
-    const bytes = try test_font.buildMinimalTtfWithKern(allocator, &kern);
-    defer allocator.free(bytes);
-    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
 }
 
 test "cmap format 2 validates subheader and glyph-array bounds" {
@@ -12288,12 +11536,6 @@ fn fvarAvarOnlyFont(data: []const u8, fvar_length: usize) Font {
     return font;
 }
 
-fn kernOnlyFont(data: []const u8) Font {
-    var font = table_only_fixture.init(Font, data, 2, 2);
-    font.kern = table_only_fixture.record(data, .{ 'k', 'e', 'r', 'n' }, 0, data.len);
-    return font;
-}
-
 fn updateSfntTableChecksum(bytes: []u8, comptime table_tag: []const u8) FontError!void {
     if (table_tag.len != 4) @compileError("SFNT table tags must be four bytes");
     const table_count = try bin.readU16At(bytes, 4);
@@ -12452,30 +11694,6 @@ fn writeUtf16NameRecordTest(bytes: []u8, offset: usize, name_id: u16, length: u1
 
 fn nameIndexForTest(name_ids: []const u16) NameIdIndex {
     return NameIdIndex.initForTest(name_ids);
-}
-
-fn writeKernFormat0Subtable(bytes: []u8, offset: usize, coverage: u16, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, value: i16) void {
-    writeU16Test(bytes, offset + 0, 0);
-    writeU16Test(bytes, offset + 2, 20);
-    writeU16Test(bytes, offset + 4, coverage);
-    writeKernFormat0Body(bytes, offset + 6, left, right, value);
-}
-
-fn writeAppleKernFormat0Subtable(bytes: []u8, offset: usize, coverage: u16, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, value: i16) void {
-    writeU32Test(bytes, offset + 0, 23);
-    writeU16Test(bytes, offset + 4, coverage);
-    writeU16Test(bytes, offset + 6, 0); // tupleIndex
-    writeKernFormat0Body(bytes, offset + 8, left, right, value);
-}
-
-fn writeKernFormat0Body(bytes: []u8, offset: usize, left: glyph_mod.GlyphId, right: glyph_mod.GlyphId, value: i16) void {
-    writeU16Test(bytes, offset + 0, 1);
-    writeU16Test(bytes, offset + 2, 6);
-    writeU16Test(bytes, offset + 4, 0);
-    writeU16Test(bytes, offset + 6, 0);
-    writeU16Test(bytes, offset + 8, left);
-    writeU16Test(bytes, offset + 10, right);
-    writeI16Test(bytes, offset + 12, value);
 }
 
 fn writeFvarAxisTest(bytes: []u8, offset: usize, tag_text: []const u8, min: f32, default: f32, max: f32, name_id: u16) void {

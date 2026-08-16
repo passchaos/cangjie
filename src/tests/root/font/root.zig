@@ -11,6 +11,7 @@ test {
     _ = @import("../../../font/tests/bitmap/root.zig");
     _ = @import("../../../font/tests/cmap/root.zig");
     _ = @import("../../../font/tests/core/root.zig");
+    _ = @import("../../../font/tests/kerning/root.zig");
     _ = @import("../../../font/tests/metadata/root.zig");
     _ = @import("../../../font/tests/truetype/root.zig");
     _ = @import("../../../font/tests/variations/root.zig");

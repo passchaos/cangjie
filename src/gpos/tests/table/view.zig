@@ -52,3 +52,16 @@ test "GPOS required optional and extension offsets enforce their contracts" {
     try std.testing.expectError(error.BadGpos, table.offset.extensionPayload(view, 0, 4));
     try std.testing.expectEqual(@as(usize, 8), try table.offset.extensionPayload(view, 0, 8));
 }
+
+test "GPOS scalar reads reject overflowing relative offsets" {
+    const bytes = [_]u8{ 0, 1, 2, 3 };
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+    };
+    const offset = std.math.maxInt(usize);
+    try std.testing.expectError(error.EndOfStream, view.readU16(offset));
+    try std.testing.expectError(error.EndOfStream, view.readI16(offset));
+    try std.testing.expectError(error.EndOfStream, view.readU32(offset));
+}

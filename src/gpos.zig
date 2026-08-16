@@ -957,15 +957,6 @@ fn collectNestedExtensionAdjustment(table: Table, subtable_offset: usize, glyphs
     return false;
 }
 
-const Anchor = positioning.anchor.Value;
-
-fn readAnchor(table: Table, anchor_offset: usize, options: LookupOptions) GposError!Anchor {
-    return positioning.anchor.read(table, anchor_offset, .{
-        .normalized_coords = options.normalized_variation_coords,
-        .variation_store = options.gdef_variation_store,
-    });
-}
-
 test "GPOS rejects ExtensionPos payload offsets outside the table during shaping" {
     var bytes = [_]u8{0} ** 8;
     writeU16Test(&bytes, 0, 1); // ExtensionPos format 1.
@@ -1001,87 +992,6 @@ test "GPOS rejects ExtensionPos payload offsets that alias the wrapper header" {
     try std.testing.expectError(error.BadGpos, collectExtensionAdjustment(table, 0, &.{5}, &adjustments, std.testing.allocator, 0, .{}));
     try std.testing.expectError(error.BadGpos, collectNestedExtensionAdjustment(table, 0, &.{5}, 0, &adjustments, std.testing.allocator, 0, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
-}
-
-test "GPOS validates AnchorFormat3 device offsets" {
-    var bytes = [_]u8{0} ** 18;
-    writeU16Test(&bytes, 0, 3); // AnchorFormat3.
-    writeI16Test(&bytes, 2, 20);
-    writeI16Test(&bytes, 4, -10);
-    writeU16Test(&bytes, 6, 10); // XDeviceTable offset.
-    writeU16Test(&bytes, 8, 0);
-    writeU16Test(&bytes, 10, 12); // startSize.
-    writeU16Test(&bytes, 12, 14); // endSize: three 2-bit deltas fit in one word.
-    writeU16Test(&bytes, 14, 1); // deltaFormat.
-    writeU16Test(&bytes, 16, 0);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try positioning.anchor.validate(table, 0);
-
-    writeU16Test(&bytes, 6, 14); // Points inside an incomplete child DeviceTable.
-    try std.testing.expectError(error.BadGpos, positioning.anchor.validate(table, 0));
-
-    writeU16Test(&bytes, 6, 10);
-    writeU16Test(&bytes, 12, 11); // endSize must not precede startSize.
-    try std.testing.expectError(error.BadGpos, positioning.anchor.validate(table, 0));
-
-    writeU16Test(&bytes, 12, 14);
-    writeU16Test(&bytes, 14, 4); // Unknown delta formats cannot be sized safely.
-    try std.testing.expectError(error.UnsupportedGpos, positioning.anchor.validate(table, 0));
-
-    writeU16Test(&bytes, 14, 0x8000); // VariationIndex table: three uint16 fields only.
-    try positioning.anchor.validate(table, 0);
-}
-
-test "GPOS AnchorFormat3 resolves GDEF VariationIndex deltas" {
-    var bytes: [64]u8 = .{0} ** 64;
-    writeU16Test(&bytes, 0, 3);
-    writeI16Test(&bytes, 2, 20);
-    writeI16Test(&bytes, 4, -10);
-    writeU16Test(&bytes, 6, 10);
-    writeU16Test(&bytes, 8, 16);
-    // Two VariationIndex records select ItemVariationData rows 0 and 1.
-    writeU16Test(&bytes, 10, 0);
-    writeU16Test(&bytes, 12, 0);
-    writeU16Test(&bytes, 14, 0x8000);
-    writeU16Test(&bytes, 16, 0);
-    writeU16Test(&bytes, 18, 1);
-    writeU16Test(&bytes, 20, 0x8000);
-
-    const store = 24;
-    writeU16Test(&bytes, store + 0, 1);
-    writeU32Test(&bytes, store + 2, 12);
-    writeU16Test(&bytes, store + 6, 1);
-    writeU32Test(&bytes, store + 8, 24);
-    writeU16Test(&bytes, store + 12, 1);
-    writeU16Test(&bytes, store + 14, 1);
-    writeI16Test(&bytes, store + 16, 0);
-    writeI16Test(&bytes, store + 18, 0x4000);
-    writeI16Test(&bytes, store + 20, 0x4000);
-    writeU16Test(&bytes, store + 24, 2);
-    writeU16Test(&bytes, store + 26, 1);
-    writeU16Test(&bytes, store + 28, 1);
-    writeU16Test(&bytes, store + 30, 0);
-    writeI16Test(&bytes, store + 32, 8);
-    writeI16Test(&bytes, store + 34, -6);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectEqual(Anchor{ .x = 20, .y = -10 }, try readAnchor(table, 0, .{}));
-    const options = LookupOptions{
-        .normalized_variation_coords = &.{0.5},
-        .gdef_variation_store = .{
-            .data = &bytes,
-            .table_offset = 0,
-            .table_length = bytes.len,
-            .store_offset = store,
-        },
-    };
-    try std.testing.expectEqual(Anchor{ .x = 24, .y = -13 }, try readAnchor(table, 0, options));
-
-    // A legal Device table is PPEM-dependent, not a VariationIndex. It remains
-    // a zero delta in this font-unit shaping API even when coordinates exist.
-    writeU16Test(&bytes, 14, 1);
-    try std.testing.expectEqual(Anchor{ .x = 20, .y = -13 }, try readAnchor(table, 0, options));
 }
 
 test "GPOS cached lookup dispatch requires validated matching metadata" {
@@ -1517,90 +1427,6 @@ test "GPOS ChainingContextPos rejects null required rule offsets" {
     writeU16Test(&bytes, rule + 4, 0); // LookaheadGlyphCount.
     writeU16Test(&bytes, rule + 6, 0); // PosCount.
     try ensureChainingPositionRuleSetWithin(table, rule_set, 0);
-}
-
-test "GPOS anchors validate format-specific record sizes" {
-    var bytes = [_]u8{0} ** 10;
-    writeU16Test(&bytes, 0, 1);
-    writeI16Test(&bytes, 2, 10);
-    writeI16Test(&bytes, 4, 20);
-    try std.testing.expectEqual(Anchor{ .x = 10, .y = 20 }, try readAnchor(.{ .data = &bytes, .offset = 0, .length = 6 }, 0, .{}));
-
-    writeU16Test(&bytes, 0, 2);
-    writeU16Test(&bytes, 6, 3);
-    try std.testing.expectError(error.EndOfStream, readAnchor(.{ .data = &bytes, .offset = 0, .length = 6 }, 0, .{}));
-    try std.testing.expectEqual(Anchor{ .x = 10, .y = 20 }, try readAnchor(.{ .data = &bytes, .offset = 0, .length = 8 }, 0, .{}));
-
-    writeU16Test(&bytes, 0, 3);
-    writeU16Test(&bytes, 8, 0);
-    try std.testing.expectError(error.EndOfStream, readAnchor(.{ .data = &bytes, .offset = 0, .length = 8 }, 0, .{}));
-    try std.testing.expectEqual(Anchor{ .x = 10, .y = 20 }, try readAnchor(.{ .data = &bytes, .offset = 0, .length = 10 }, 0, .{}));
-}
-
-test "GPOS scalar reads reject overflowing relative offsets" {
-    const bytes = [_]u8{ 0, 1, 2, 3 };
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-
-    try std.testing.expectError(error.EndOfStream, readU16(table, std.math.maxInt(usize)));
-    try std.testing.expectError(error.EndOfStream, readI16(table, std.math.maxInt(usize)));
-    try std.testing.expectError(error.EndOfStream, readU32(table, std.math.maxInt(usize)));
-}
-
-test "GPOS value records tolerate device and variation offset fields" {
-    var bytes = [_]u8{0} ** 32;
-    writeI16Test(&bytes, 0, 50);
-    writeI16Test(&bytes, 2, -25);
-    writeI16Test(&bytes, 4, 30);
-    writeI16Test(&bytes, 6, -10);
-    writeU16Test(&bytes, 8, 16);
-    writeU16Test(&bytes, 10, 0);
-    writeU16Test(&bytes, 12, 22);
-    writeU16Test(&bytes, 14, 0);
-    writeU16Test(&bytes, 16, 12);
-    writeU16Test(&bytes, 18, 12);
-    writeU16Test(&bytes, 20, 1);
-    writeU16Test(&bytes, 22, 7);
-    writeU16Test(&bytes, 24, 3);
-    writeU16Test(&bytes, 26, 0x8000);
-
-    const value = try positioning.value_record.read(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, 0x00ff, 0);
-    try std.testing.expectEqual(@as(i16, 50), value.x_placement);
-    try std.testing.expectEqual(@as(i16, -25), value.y_placement);
-    try std.testing.expectEqual(@as(i16, 30), value.x_advance);
-    try std.testing.expectEqual(@as(i16, -10), value.y_advance);
-}
-
-test "GPOS value records reject overflowing offset plus size" {
-    const table = Table{ .data = &.{}, .offset = 0, .length = 8 };
-
-    // The value record itself is small, but callers may hand us an already
-    // corrupted absolute table-relative offset. Validate the offset/size pair
-    // before reading any field so malformed subtables fail cleanly instead of
-    // wrapping `offset + size` in safety builds.
-    try std.testing.expectError(error.BadGpos, positioning.value_record.validate(table, std.math.maxInt(usize) - 1, 0x0004, 0));
-    try std.testing.expectError(error.BadGpos, positioning.value_record.read(table, std.math.maxInt(usize) - 1, 0x0004, 0));
-}
-
-test "GPOS value records validate device offsets against parent base" {
-    var bytes = [_]u8{0} ** 22;
-    writeU16Test(&bytes, 0, 1); // SinglePos format 1.
-    writeU16Test(&bytes, 2, 16); // Coverage table.
-    writeU16Test(&bytes, 4, 0x0011); // xPlacement and xPlaDeviceOffset.
-    writeI16Test(&bytes, 6, 25);
-    writeU16Test(&bytes, 8, 10); // Device offset from SinglePos, not ValueRecord.
-    writeU16Test(&bytes, 10, 9); // Truncated Device table when base is correct.
-    writeCoverage1Test(&bytes, 16, 5);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, positioning.lookup.single.validate(table, 0));
-
-    // If the same offset were incorrectly interpreted relative to the
-    // ValueRecord at byte 6 it would point into this valid Coverage table.
-    // Repairing the parent-relative Device table makes the subtable valid.
-    writeU16Test(&bytes, 10, 12);
-    writeU16Test(&bytes, 12, 12);
-    writeU16Test(&bytes, 14, 1);
-    try positioning.lookup.single.validate(table, 0);
 }
 
 test "GPOS PairPos format 1 value device offsets use PairSet base" {
@@ -5353,10 +5179,6 @@ fn writeU32Test(bytes: []u8, offset: usize, value: u32) void {
 
 fn readU16(table: Table, relative: usize) GposError!u16 {
     return table.readU16(relative);
-}
-
-fn readI16(table: Table, relative: usize) GposError!i16 {
-    return table.readI16(relative);
 }
 
 fn readU32(table: Table, relative: usize) GposError!u32 {

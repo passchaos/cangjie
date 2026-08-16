@@ -52,6 +52,23 @@ test "ValueRecord decodes scalars and validates parent-relative children" {
     );
 }
 
+test "ValueRecord rejects overflowing absolute offsets" {
+    const view = table.View{
+        .data = &.{},
+        .offset = 0,
+        .length = 8,
+    };
+    const offset = std.math.maxInt(usize) - 1;
+    try std.testing.expectError(
+        error.BadGpos,
+        positioning.value_record.validate(view, offset, 0x0004, 0),
+    );
+    try std.testing.expectError(
+        error.BadGpos,
+        positioning.value_record.read(view, offset, 0x0004, 0),
+    );
+}
+
 test "Device validation distinguishes packed deltas and VariationIndex" {
     var bytes = [_]u8{0} ** 10;
     writeU16(&bytes, 0, 12);
@@ -78,6 +95,52 @@ test "Device validation distinguishes packed deltas and VariationIndex" {
     );
     writeU16(&bytes, 4, 0x8000);
     try positioning.device.validate(view, 0);
+}
+
+test "Anchor format 3 validates device children and fixed header size" {
+    var bytes = [_]u8{0} ** 18;
+    writeU16(&bytes, 0, 3);
+    writeI16(&bytes, 2, 20);
+    writeI16(&bytes, 4, -10);
+    writeU16(&bytes, 6, 10);
+    writeU16(&bytes, 8, 0);
+    writeU16(&bytes, 10, 12);
+    writeU16(&bytes, 12, 14);
+    writeU16(&bytes, 14, 1);
+    writeU16(&bytes, 16, 0);
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+    };
+    try positioning.anchor.validate(view, 0);
+
+    var truncated = view;
+    truncated.length = 8;
+    try std.testing.expectError(
+        error.EndOfStream,
+        positioning.anchor.read(truncated, 0, .{}),
+    );
+
+    writeU16(&bytes, 6, 14);
+    try std.testing.expectError(
+        error.BadGpos,
+        positioning.anchor.validate(view, 0),
+    );
+    writeU16(&bytes, 6, 10);
+    writeU16(&bytes, 12, 11);
+    try std.testing.expectError(
+        error.BadGpos,
+        positioning.anchor.validate(view, 0),
+    );
+    writeU16(&bytes, 12, 14);
+    writeU16(&bytes, 14, 4);
+    try std.testing.expectError(
+        error.UnsupportedGpos,
+        positioning.anchor.validate(view, 0),
+    );
+    writeU16(&bytes, 14, 0x8000);
+    try positioning.anchor.validate(view, 0);
 }
 
 test "Anchor formats preserve size contracts and VariationIndex deltas" {

@@ -44,6 +44,34 @@ test "SinglePos parsing exposes scalar and array layouts" {
     );
 }
 
+test "SinglePos resolves device offsets from its subtable base" {
+    var bytes = [_]u8{0} ** 22;
+    writeU16(&bytes, 0, 1);
+    writeU16(&bytes, 2, 16);
+    writeU16(&bytes, 4, 0x0011);
+    writeI16(&bytes, 6, 25);
+    writeU16(&bytes, 8, 10);
+    writeU16(&bytes, 10, 9);
+    writeCoverage1(&bytes, 16, 5);
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+    };
+    try std.testing.expectError(
+        error.BadGpos,
+        positioning.lookup.single.validate(view, 0),
+    );
+
+    // Interpreting the offset relative to the ValueRecord would alias the
+    // valid Coverage at 16. Repairing the child at subtable-relative 10 proves
+    // the parser uses the SinglePos base instead.
+    writeU16(&bytes, 10, 12);
+    writeU16(&bytes, 12, 12);
+    writeU16(&bytes, 14, 1);
+    try positioning.lookup.single.validate(view, 0);
+}
+
 test "PairPos format 1 validates and searches ordered PairSets" {
     var bytes = [_]u8{0} ** 32;
     writeU16(&bytes, 0, 1);

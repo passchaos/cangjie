@@ -1,0 +1,30 @@
+//! OpenType GDEF table grammar and class/filtering-set reads.
+
+const class_def = @import("class_def.zig");
+const header_mod = @import("header.zig");
+const mark_sets = @import("mark_sets.zig");
+const validation = @import("validation.zig");
+const types = @import("types.zig");
+
+pub const GlyphClass = types.GlyphClass;
+pub const Header = types.Header;
+
+pub const header = header_mod.read;
+pub const validateChildOffset = header_mod.validateChildOffset;
+pub const validate = validation.validate;
+
+pub fn validateBasic(
+    data: []const u8,
+    table: @import("../../../sfnt/root.zig").Record,
+    glyph_count: u16,
+) validation.Error!void {
+    return validation.validate(data, table, glyph_count, null);
+}
+
+pub const classValue = class_def.value;
+pub const readClassDefDense = class_def.readDense;
+pub const validateGlyphClassValue = class_def.validateGlyphClassValue;
+
+pub const validateMarkSets = mark_sets.validate;
+pub const readMarkSets = mark_sets.read;
+pub const freeMarkSets = mark_sets.free;

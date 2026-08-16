@@ -42,6 +42,8 @@ const cmap_mod = @import("font/tables/cmap/root.zig");
 const color_tables = @import("font/tables/color/root.zig");
 const kerning_tables = @import("font/tables/kerning/root.zig");
 const kern_mod = kerning_tables.kern;
+const layout_tables = @import("font/tables/layout/root.zig");
+const gdef_mod = layout_tables.gdef;
 const core_tables = @import("font/tables/core/root.zig");
 const head_mod = core_tables.head;
 const maxp_mod = core_tables.maxp;
@@ -349,14 +351,7 @@ pub const BitmapGlyphInfo = bitmap_mod.GlyphInfo;
 pub const BitmapStrikeSource = bitmap_mod.StrikeSource;
 pub const BitmapStrikeInfo = bitmap_mod.StrikeInfo;
 
-pub const GlyphClass = enum(u16) {
-    unclassified = 0,
-    base = 1,
-    ligature = 2,
-    mark = 3,
-    component = 4,
-    _,
-};
+pub const GlyphClass = gdef_mod.GlyphClass;
 
 const TableRecord = sfnt.Record;
 
@@ -422,7 +417,9 @@ pub const GdefLookupMetadata = struct {
     pub fn deinit(self: *GdefLookupMetadata, allocator: std.mem.Allocator) void {
         if (self.glyph_classes) |classes| allocator.free(classes);
         if (self.mark_attach_classes) |classes| allocator.free(classes);
-        if (self.mark_filtering_sets) |sets| freeMarkFilteringSets(allocator, sets);
+        if (self.mark_filtering_sets) |sets| {
+            gdef_mod.freeMarkSets(allocator, sets);
+        }
         if (self.variation_store_data) |data| allocator.free(data);
         self.* = .{};
     }
@@ -995,7 +992,14 @@ pub const Font = struct {
             null;
         try validateVariationDataTablesWithCvar(data, glyph_count, fvar, gvar, hvar, mvar, vvar, cvar, cvt_value_count, gvar_target_context);
         try validateVariationNameReferences(allocator, data, fvar, stat, name, .{ .compat_ttc_face = is_ttc_face });
-        if (gdef) |gdef_table| try validateGdefTableWithVariationData(data, gdef_table, glyph_count, fvar);
+        if (gdef) |gdef_table| {
+            try gdef_mod.validate(
+                data,
+                gdef_table,
+                glyph_count,
+                if (fvar_axis_count) |count| count else null,
+            );
+        }
         if (gsub) |gsub_table| try gsub_mod.validateGlyphBoundsForShaping(data, gsub_table.offset, gsub_table.length, glyph_count);
         if (gpos) |gpos_table| try gpos_mod.validateGlyphBounds(data, gpos_table.offset, gpos_table.length, glyph_count);
         if (cpal) |cpal_table| {
@@ -2893,32 +2897,53 @@ pub const Font = struct {
         // every single glyph query; shaping only needs one call-boundary proof
         // for the already-parsed font before expanding dense metadata arrays.
         try sfnt.checksum.validate(self.data, gdef);
-        const header_len = try validateGdefHeaderForLazyApi(self.data, gdef);
+        const gdef_header = try gdef_mod.header(self.data, gdef);
         const table = self.data[gdef.offset .. gdef.offset + gdef.length];
 
-        const glyph_class_def_offset = try bin.readU16At(self.data, gdef.offset + 4);
+        const glyph_class_def_offset = gdef_header.glyph_class_def_offset;
         if (glyph_class_def_offset != 0) {
-            try validateGdefChildOffset(glyph_class_def_offset, gdef.length, header_len);
+            try gdef_mod.validateChildOffset(
+                glyph_class_def_offset,
+                gdef.length,
+                gdef_header.length,
+            );
             const classes = try allocator.alloc(u16, self.glyph_count);
             errdefer allocator.free(classes);
-            try readClassDefDense(table, glyph_class_def_offset, self.glyph_count, classes, true);
+            try gdef_mod.readClassDefDense(
+                table,
+                glyph_class_def_offset,
+                self.glyph_count,
+                classes,
+                true,
+            );
             metadata.glyph_classes = classes;
         }
 
-        const mark_attach_class_def_offset = try bin.readU16At(self.data, gdef.offset + 10);
+        const mark_attach_class_def_offset =
+            gdef_header.mark_attach_class_def_offset;
         if (mark_attach_class_def_offset != 0) {
-            try validateGdefChildOffset(mark_attach_class_def_offset, gdef.length, header_len);
+            try gdef_mod.validateChildOffset(
+                mark_attach_class_def_offset,
+                gdef.length,
+                gdef_header.length,
+            );
             const attach_classes = try allocator.alloc(u16, self.glyph_count);
             errdefer allocator.free(attach_classes);
-            try readClassDefDense(table, mark_attach_class_def_offset, self.glyph_count, attach_classes, false);
+            try gdef_mod.readClassDefDense(
+                table,
+                mark_attach_class_def_offset,
+                self.glyph_count,
+                attach_classes,
+                false,
+            );
             metadata.mark_attach_classes = attach_classes;
         }
 
         if (try self.markFilteringSets(allocator)) |sets| {
             metadata.mark_filtering_sets = sets;
         }
-        if (header_len >= 18) {
-            const store_offset: usize = @intCast(try bin.readU32At(self.data, gdef.offset + 14));
+        if (gdef_header.item_variation_store_offset) |raw_offset| {
+            const store_offset: usize = @intCast(raw_offset);
             if (store_offset != 0) {
                 // The metadata cache can outlive caller mutations to Font's
                 // borrowed SFNT bytes. Dense classes and mark sets are already
@@ -3085,15 +3110,23 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const gdef = self.gdef orelse return .unclassified;
         try sfnt.checksum.validate(self.data, gdef);
-        const header_len = try validateGdefHeaderForLazyApi(self.data, gdef);
-        const glyph_class_def_offset = try bin.readU16At(self.data, gdef.offset + 4);
+        const gdef_header = try gdef_mod.header(self.data, gdef);
+        const glyph_class_def_offset = gdef_header.glyph_class_def_offset;
         if (glyph_class_def_offset == 0) return .unclassified;
         // Font owns only borrowed bytes. Re-check the same top-level child
         // offset contract enforced at parse time so post-parse mutations cannot
         // make GDEF public APIs reinterpret header fields as ClassDef payloads.
-        try validateGdefChildOffset(glyph_class_def_offset, gdef.length, header_len);
-        const class = try classDefValue(self.data[gdef.offset .. gdef.offset + gdef.length], glyph_class_def_offset, glyph_id);
-        try validateGlyphClassValue(class);
+        try gdef_mod.validateChildOffset(
+            glyph_class_def_offset,
+            gdef.length,
+            gdef_header.length,
+        );
+        const class = try gdef_mod.classValue(
+            self.data[gdef.offset .. gdef.offset + gdef.length],
+            glyph_class_def_offset,
+            glyph_id,
+        );
+        try gdef_mod.validateGlyphClassValue(class);
         return @enumFromInt(class);
     }
 
@@ -3101,37 +3134,54 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const gdef = self.gdef orelse return 0;
         try sfnt.checksum.validate(self.data, gdef);
-        const header_len = try validateGdefHeaderForLazyApi(self.data, gdef);
-        const mark_attach_class_def_offset = try bin.readU16At(self.data, gdef.offset + 10);
+        const gdef_header = try gdef_mod.header(self.data, gdef);
+        const mark_attach_class_def_offset =
+            gdef_header.mark_attach_class_def_offset;
         if (mark_attach_class_def_offset == 0) return 0;
-        try validateGdefChildOffset(mark_attach_class_def_offset, gdef.length, header_len);
-        return try classDefValue(self.data[gdef.offset .. gdef.offset + gdef.length], mark_attach_class_def_offset, glyph_id);
+        try gdef_mod.validateChildOffset(
+            mark_attach_class_def_offset,
+            gdef.length,
+            gdef_header.length,
+        );
+        return try gdef_mod.classValue(
+            self.data[gdef.offset .. gdef.offset + gdef.length],
+            mark_attach_class_def_offset,
+            glyph_id,
+        );
     }
 
     fn markFilteringSets(self: *const Font, allocator: std.mem.Allocator) FontError!?[][]glyph_mod.GlyphId {
         const gdef = self.gdef orelse return null;
         try sfnt.checksum.validate(self.data, gdef);
-        if (gdef.length < 4) return error.BadSfnt;
-        const major = try bin.readU16At(self.data, gdef.offset);
-        const minor = try bin.readU16At(self.data, gdef.offset + 2);
-        if (major != 1) return error.BadSfnt;
+        const gdef_header = try gdef_mod.header(self.data, gdef);
         // MarkGlyphSetsDef was added in GDEF 1.2.  Version 1.0/1.1 tables may
         // still be longer than the base header because their earlier offsets
         // point to subtables placed immediately after it; reading byte 12 as a
         // mark-set offset in those fonts misinterprets subtable data and can
         // make otherwise valid fonts fail shaping.
-        if (minor < 2) return null;
-        if (gdef.length < 14) return null;
-        const mark_glyph_sets_def_offset = try bin.readU16At(self.data, gdef.offset + 12);
+        const mark_glyph_sets_def_offset =
+            gdef_header.mark_glyph_sets_def_offset orelse return null;
         if (mark_glyph_sets_def_offset == 0) return null;
-        try validateGdefChildOffset(mark_glyph_sets_def_offset, gdef.length, minimumGdefHeaderLength(minor));
+        try gdef_mod.validateChildOffset(
+            mark_glyph_sets_def_offset,
+            gdef.length,
+            gdef_header.length,
+        );
         const table = self.data[gdef.offset .. gdef.offset + gdef.length];
         // Mark-filtering sets are assembled lazily for GSUB/GPOS lookup flags
         // from borrowed SFNT bytes. Recheck the parse-time maxp glyph bound
         // contract here so post-parse mutations cannot inject an out-of-range
         // mark set that shaping would later treat as a valid filter class.
-        try validateMarkGlyphSetsDefGlyphBounds(table, mark_glyph_sets_def_offset, self.glyph_count);
-        return try readMarkGlyphSetsDef(allocator, table, mark_glyph_sets_def_offset);
+        try gdef_mod.validateMarkSets(
+            table,
+            mark_glyph_sets_def_offset,
+            self.glyph_count,
+        );
+        return try gdef_mod.readMarkSets(
+            allocator,
+            table,
+            mark_glyph_sets_def_offset,
+        );
     }
 
     pub fn styleAttributes(self: *const Font) FontError!StyleAttributes {
@@ -5740,591 +5790,6 @@ fn compoundGlyphPointCount(adjacency: []const CompoundGlyphLinks, point_counts: 
     return total;
 }
 
-fn classDefValue(data: []const u8, offset: usize, glyph_id: glyph_mod.GlyphId) FontError!u16 {
-    if (offset + 2 > data.len) return error.BadSfnt;
-    const format = try bin.readU16At(data, offset);
-    switch (format) {
-        1 => {
-            if (offset + 6 > data.len) return error.BadSfnt;
-            const start_glyph = try bin.readU16At(data, offset + 2);
-            const glyph_count = try bin.readU16At(data, offset + 4);
-            if (@as(usize, glyph_count) * 2 > data.len - (offset + 6)) return error.BadSfnt;
-            // ClassDef format 1 covers `glyph_count` glyph IDs starting at
-            // `startGlyphID`. GDEF tables often use the same ClassDef shape as
-            // GSUB/GPOS; validate the full declared class array and keep the
-            // boundary arithmetic widened so edge ranges near 0xffff do not
-            // overflow before validation can run.
-            const glyph_index = @as(usize, glyph_id);
-            const start_index = @as(usize, start_glyph);
-            const end_exclusive = start_index + @as(usize, glyph_count);
-            if (glyph_index < start_index or glyph_index >= end_exclusive) return 0;
-            const class_offset = offset + 6 + (glyph_index - start_index) * 2;
-            if (class_offset + 2 > data.len) return error.BadSfnt;
-            return try bin.readU16At(data, class_offset);
-        },
-        2 => {
-            if (offset + 4 > data.len) return error.BadSfnt;
-            const range_count = try bin.readU16At(data, offset + 2);
-            if (@as(usize, range_count) * 6 > data.len - (offset + 4)) return error.BadSfnt;
-            try validateClassDefFormat2Ranges(data, offset, range_count);
-            for (0..range_count) |index| {
-                const range_offset = offset + 4 + index * 6;
-                const start = try bin.readU16At(data, range_offset);
-                const end = try bin.readU16At(data, range_offset + 2);
-                const class = try bin.readU16At(data, range_offset + 4);
-                if (glyph_id >= start and glyph_id <= end) return class;
-            }
-            return 0;
-        },
-        else => return error.BadSfnt,
-    }
-}
-
-fn readClassDefDense(data: []const u8, offset: usize, glyph_count: u16, out: []u16, comptime validate_glyph_class_values: bool) FontError!void {
-    if (out.len != glyph_count) return error.BadSfnt;
-    @memset(out, 0);
-
-    if (offset + 2 > data.len) return error.BadSfnt;
-    const format = try bin.readU16At(data, offset);
-    switch (format) {
-        1 => {
-            if (offset + 6 > data.len) return error.BadSfnt;
-            const start_glyph = try bin.readU16At(data, offset + 2);
-            const count = try bin.readU16At(data, offset + 4);
-            if (@as(usize, count) * 2 > data.len - (offset + 6)) return error.BadSfnt;
-            if (count == 0) return;
-            if (start_glyph >= glyph_count) return error.BadSfnt;
-            if (@as(usize, count) > @as(usize, glyph_count - start_glyph)) return error.BadSfnt;
-
-            const dst_start: usize = start_glyph;
-            for (out[dst_start .. dst_start + count], 0..) |*class, index| {
-                const value = try bin.readU16At(data, offset + 6 + index * 2);
-                if (validate_glyph_class_values) try validateGlyphClassValue(value);
-                class.* = value;
-            }
-        },
-        2 => {
-            if (offset + 4 > data.len) return error.BadSfnt;
-            const range_count = try bin.readU16At(data, offset + 2);
-            if (@as(usize, range_count) * 6 > data.len - (offset + 4)) return error.BadSfnt;
-
-            var previous_end: ?glyph_mod.GlyphId = null;
-            for (0..range_count) |index| {
-                const range_offset = offset + 4 + index * 6;
-                const start = try bin.readU16At(data, range_offset);
-                const end = try bin.readU16At(data, range_offset + 2);
-                const class = try bin.readU16At(data, range_offset + 4);
-                if (end < start) return error.BadSfnt;
-                if (previous_end) |last_end| {
-                    if (start <= last_end) return error.BadSfnt;
-                }
-                if (end >= glyph_count) return error.BadSfnt;
-                if (validate_glyph_class_values) try validateGlyphClassValue(class);
-
-                // The shaping hot path wants glyph-id indexed metadata, not
-                // repeated ClassDef interpretation. Fill each canonical range
-                // once here so GSUB/GPOS lookup-flag filtering becomes a
-                // branch-light slice lookup.
-                @memset(out[@as(usize, start) .. @as(usize, end) + 1], class);
-                previous_end = end;
-            }
-        },
-        else => return error.BadSfnt,
-    }
-}
-
-fn validateClassDefFormat2Ranges(data: []const u8, offset: usize, range_count: u16) FontError!void {
-    // OpenType ClassDef format 2 records are sorted by StartGlyphID and must not
-    // overlap. GDEF class data feeds lookup-flag filtering, so accepting
-    // overlapping/reversed ranges can misclassify glyphs before GSUB/GPOS even
-    // see the run.
-    var previous_end: ?glyph_mod.GlyphId = null;
-    for (0..range_count) |index| {
-        const range_offset = offset + 4 + index * 6;
-        const start = try bin.readU16At(data, range_offset);
-        const end = try bin.readU16At(data, range_offset + 2);
-        if (end < start) return error.BadSfnt;
-        if (previous_end) |last_end| {
-            if (start <= last_end) return error.BadSfnt;
-        }
-        previous_end = end;
-    }
-}
-
-fn validateGdefTable(data: []const u8, gdef: TableRecord, glyph_count: u16) FontError!void {
-    return validateGdefTableWithVariationData(data, gdef, glyph_count, null);
-}
-
-fn validateGdefTableWithVariationData(data: []const u8, gdef: TableRecord, glyph_count: u16, fvar: ?TableRecord) FontError!void {
-    if (gdef.offset > data.len or gdef.length > data.len - gdef.offset) return error.BadSfnt;
-    if (gdef.length < 12) return error.BadSfnt;
-    const table = data[gdef.offset .. gdef.offset + gdef.length];
-    const major = try bin.readU16At(table, 0);
-    const minor = try bin.readU16At(table, 2);
-    if (major != 1) return error.BadSfnt;
-
-    const header_len = minimumGdefHeaderLength(minor);
-    if (gdef.length < header_len) return error.BadSfnt;
-
-    const glyph_class_def_offset = try bin.readU16At(table, 4);
-    const attach_list_offset = try bin.readU16At(table, 6);
-    const lig_caret_list_offset = try bin.readU16At(table, 8);
-    const mark_attach_class_def_offset = try bin.readU16At(table, 10);
-    if (glyph_class_def_offset != 0) {
-        try validateGdefChildOffset(glyph_class_def_offset, gdef.length, header_len);
-        try validateClassDefGlyphBounds(table, glyph_class_def_offset, glyph_count);
-        try validateGlyphClassDefValues(table, glyph_class_def_offset);
-    }
-    if (attach_list_offset != 0) {
-        try validateGdefChildOffset(attach_list_offset, gdef.length, header_len);
-        try validateGdefAttachList(table, attach_list_offset, glyph_count);
-    }
-    if (lig_caret_list_offset != 0) {
-        try validateGdefChildOffset(lig_caret_list_offset, gdef.length, header_len);
-        try validateGdefLigCaretList(table, lig_caret_list_offset, glyph_count);
-    }
-    if (mark_attach_class_def_offset != 0) {
-        try validateGdefChildOffset(mark_attach_class_def_offset, gdef.length, header_len);
-        try validateClassDefGlyphBounds(table, mark_attach_class_def_offset, glyph_count);
-    }
-
-    if (minor >= 2) {
-        const mark_glyph_sets_def_offset = try bin.readU16At(table, 12);
-        if (mark_glyph_sets_def_offset != 0) {
-            try validateGdefChildOffset(mark_glyph_sets_def_offset, gdef.length, header_len);
-            try validateMarkGlyphSetsDefGlyphBounds(table, mark_glyph_sets_def_offset, glyph_count);
-        }
-    }
-    if (minor >= 3) {
-        const item_var_store_offset: usize = @intCast(try bin.readU32At(table, 14));
-        if (item_var_store_offset != 0) {
-            try validateGdefChildOffset(item_var_store_offset, gdef.length, header_len);
-            // GDEF 1.3 ItemVariationStore uses the same VariationRegionList
-            // axis contract as HVAR/MVAR/COLR variation stores: its axisCount
-            // must match the fvar axis order. A store without fvar cannot be
-            // interpreted safely, so reject it instead of accepting a payload
-            // that only happens to fit inside the GDEF byte range.
-            const fvar_info = try readFvarInfo(data, fvar orelse return error.BadSfnt);
-            _ = try item_store.validate(
-                data,
-                variationTable(gdef),
-                item_var_store_offset,
-                fvar_info.axis_count,
-                header_len,
-            );
-        }
-    }
-}
-
-fn validateGdefHeaderForLazyApi(data: []const u8, gdef: TableRecord) FontError!usize {
-    if (gdef.length < 12) return error.BadSfnt;
-    const major = try bin.readU16At(data, gdef.offset);
-    const minor = try bin.readU16At(data, gdef.offset + 2);
-    if (major != 1) return error.BadSfnt;
-    const header_len = minimumGdefHeaderLength(minor);
-    if (gdef.length < header_len) return error.BadSfnt;
-    return header_len;
-}
-
-fn minimumGdefHeaderLength(minor: u16) usize {
-    return if (minor >= 3) 18 else if (minor >= 2) 14 else 12;
-}
-
-fn validateGdefChildOffset(offset: usize, table_len: usize, header_len: usize) FontError!void {
-    // GDEF top-level offsets are relative to the GDEF table and name child
-    // subtables, not bytes inside the versioned header.  Keeping them past the
-    // header prevents a malformed table from reinterpreting offset fields as a
-    // ClassDef or Coverage payload during lookup-flag filtering.
-    if (offset < header_len or offset >= table_len) return error.BadSfnt;
-}
-
-fn validateGdefAttachList(data: []const u8, offset: usize, glyph_count_bound: u16) FontError!void {
-    if (offset + 4 > data.len) return error.BadSfnt;
-    const coverage_relative = try bin.readU16At(data, offset);
-    const glyph_count = try bin.readU16At(data, offset + 2);
-    const attach_offsets_pos = offset + 4;
-    if (@as(usize, glyph_count) * 2 > data.len - attach_offsets_pos) return error.BadSfnt;
-
-    const attach_data_start = 4 + @as(usize, glyph_count) * 2;
-    const coverage_offset = try checkedGdefRelativeOffset(data, offset, coverage_relative, attach_data_start);
-    try validateCoverageGlyphBounds(data, coverage_offset, glyph_count_bound);
-    if (try coverageGlyphCount(data, coverage_offset) != glyph_count) return error.BadSfnt;
-
-    for (0..glyph_count) |index| {
-        const attach_relative = try bin.readU16At(data, attach_offsets_pos + index * 2);
-        // AttachPoint offsets are parallel to Coverage indexes and are not
-        // nullable in GDEF. Requiring them to start after the declared offset
-        // array prevents malformed fonts from reinterpreting AttachList header
-        // bytes as point-count data for covered glyphs.
-        const attach_offset = try checkedGdefRelativeOffset(data, offset, attach_relative, attach_data_start);
-        try validateGdefAttachPoint(data, attach_offset);
-    }
-}
-
-fn checkedGdefRelativeOffset(data: []const u8, base: usize, relative: usize, minimum_relative: usize) FontError!usize {
-    if (relative < minimum_relative) return error.BadSfnt;
-    if (relative > data.len - base) return error.BadSfnt;
-    return base + relative;
-}
-
-fn validateGdefAttachPoint(data: []const u8, offset: usize) FontError!void {
-    if (offset + 2 > data.len) return error.BadSfnt;
-    const point_count = try bin.readU16At(data, offset);
-    if (@as(usize, point_count) * 2 > data.len - (offset + 2)) return error.BadSfnt;
-
-    var previous: ?u16 = null;
-    for (0..point_count) |index| {
-        const point = try bin.readU16At(data, offset + 2 + index * 2);
-        // OpenType requires AttachPoint point indexes to be sorted. Enforcing
-        // that canonical form at parse time keeps attachment metadata stable
-        // instead of making later consumers choose between duplicate or
-        // order-dependent point records.
-        if (previous) |last| {
-            if (point <= last) return error.BadSfnt;
-        }
-        previous = point;
-    }
-}
-
-fn validateGdefLigCaretList(data: []const u8, offset: usize, glyph_count_bound: u16) FontError!void {
-    if (offset + 4 > data.len) return error.BadSfnt;
-    const coverage_relative = try bin.readU16At(data, offset);
-    const lig_glyph_count = try bin.readU16At(data, offset + 2);
-    const lig_glyph_offsets_pos = offset + 4;
-    if (@as(usize, lig_glyph_count) * 2 > data.len - lig_glyph_offsets_pos) return error.BadSfnt;
-
-    const lig_caret_data_start = 4 + @as(usize, lig_glyph_count) * 2;
-    const coverage_offset = try checkedGdefRelativeOffset(data, offset, coverage_relative, lig_caret_data_start);
-    try validateCoverageGlyphBounds(data, coverage_offset, glyph_count_bound);
-    if (try coverageGlyphCount(data, coverage_offset) != lig_glyph_count) return error.BadSfnt;
-
-    for (0..lig_glyph_count) |index| {
-        const lig_glyph_relative = try bin.readU16At(data, lig_glyph_offsets_pos + index * 2);
-        // LigGlyph offsets are parallel to Coverage indexes, and a LigGlyph's
-        // own CaretValue offsets are parallel to its caret array.  Rejecting
-        // offsets into either offset array keeps malformed GDEF data from
-        // turning count/offset words into synthetic caret records.
-        const lig_glyph_offset = try checkedGdefRelativeOffset(data, offset, lig_glyph_relative, lig_caret_data_start);
-        try validateGdefLigGlyph(data, lig_glyph_offset);
-    }
-}
-
-fn validateGdefLigGlyph(data: []const u8, offset: usize) FontError!void {
-    if (offset + 2 > data.len) return error.BadSfnt;
-    const caret_count = try bin.readU16At(data, offset);
-    if (@as(usize, caret_count) * 2 > data.len - (offset + 2)) return error.BadSfnt;
-
-    const caret_data_start = 2 + @as(usize, caret_count) * 2;
-    for (0..caret_count) |index| {
-        const caret_relative = try bin.readU16At(data, offset + 2 + index * 2);
-        const caret_offset = try checkedGdefRelativeOffset(data, offset, caret_relative, caret_data_start);
-        try validateGdefCaretValue(data, caret_offset);
-    }
-}
-
-fn validateGdefCaretValue(data: []const u8, offset: usize) FontError!void {
-    if (offset + 2 > data.len) return error.BadSfnt;
-    const format = try bin.readU16At(data, offset);
-    switch (format) {
-        1 => try ensureGdefBytesWithin(data, offset, 4),
-        2 => try ensureGdefBytesWithin(data, offset, 4),
-        3 => {
-            try ensureGdefBytesWithin(data, offset, 6);
-            const device_relative = try bin.readU16At(data, offset + 4);
-            if (device_relative == 0) return error.BadSfnt;
-            const device_offset = try checkedGdefRelativeOffset(data, offset, device_relative, 6);
-            try validateGdefDeviceOrVariationIndexTable(data, device_offset);
-        },
-        else => return error.BadSfnt,
-    }
-}
-
-fn validateGdefDeviceOrVariationIndexTable(data: []const u8, offset: usize) FontError!void {
-    try ensureGdefBytesWithin(data, offset, 6);
-    const start_size = try bin.readU16At(data, offset);
-    const end_size = try bin.readU16At(data, offset + 2);
-    const delta_format = try bin.readU16At(data, offset + 4);
-
-    // Variable fonts reuse Device offsets for VariationIndex tables using
-    // DeltaFormat 0x8000.  The table remains exactly the three uint16 fields;
-    // the first two fields are outer/inner variation indexes instead of PPEM
-    // sizes, so no packed delta payload follows.
-    if (delta_format == 0x8000) return;
-    if (end_size < start_size) return error.BadSfnt;
-
-    const bits_per_delta: usize = switch (delta_format) {
-        1 => 2,
-        2 => 4,
-        3 => 8,
-        else => return error.BadSfnt,
-    };
-    const delta_count = @as(usize, end_size) - @as(usize, start_size) + 1;
-    const words = (delta_count * bits_per_delta + 15) / 16;
-    try ensureGdefBytesWithin(data, offset + 6, words * 2);
-}
-
-fn ensureGdefBytesWithin(data: []const u8, offset: usize, len: usize) FontError!void {
-    if (offset > data.len or len > data.len - offset) return error.BadSfnt;
-}
-
-fn validateClassDefGlyphBounds(data: []const u8, offset: usize, glyph_count: u16) FontError!void {
-    if (offset + 2 > data.len) return error.BadSfnt;
-    const format = try bin.readU16At(data, offset);
-    switch (format) {
-        1 => {
-            if (offset + 6 > data.len) return error.BadSfnt;
-            const start_glyph = try bin.readU16At(data, offset + 2);
-            const count = try bin.readU16At(data, offset + 4);
-            if (@as(usize, count) * 2 > data.len - (offset + 6)) return error.BadSfnt;
-            if (count == 0) return;
-            if (start_glyph >= glyph_count) return error.BadSfnt;
-            if (@as(usize, count) > @as(usize, glyph_count - start_glyph)) return error.BadSfnt;
-        },
-        2 => {
-            if (offset + 4 > data.len) return error.BadSfnt;
-            const range_count = try bin.readU16At(data, offset + 2);
-            if (@as(usize, range_count) * 6 > data.len - (offset + 4)) return error.BadSfnt;
-            try validateClassDefFormat2Ranges(data, offset, range_count);
-            for (0..range_count) |index| {
-                const range_offset = offset + 4 + index * 6;
-                const end = try bin.readU16At(data, range_offset + 2);
-                if (end >= glyph_count) return error.BadSfnt;
-            }
-        },
-        else => return error.BadSfnt,
-    }
-}
-
-fn validateGlyphClassDefValues(data: []const u8, offset: usize) FontError!void {
-    if (offset + 2 > data.len) return error.BadSfnt;
-    const format = try bin.readU16At(data, offset);
-    switch (format) {
-        1 => {
-            if (offset + 6 > data.len) return error.BadSfnt;
-            const count = try bin.readU16At(data, offset + 4);
-            if (@as(usize, count) * 2 > data.len - (offset + 6)) return error.BadSfnt;
-            for (0..count) |index| {
-                const class = try bin.readU16At(data, offset + 6 + index * 2);
-                try validateGlyphClassValue(class);
-            }
-        },
-        2 => {
-            if (offset + 4 > data.len) return error.BadSfnt;
-            const range_count = try bin.readU16At(data, offset + 2);
-            if (@as(usize, range_count) * 6 > data.len - (offset + 4)) return error.BadSfnt;
-            try validateClassDefFormat2Ranges(data, offset, range_count);
-            for (0..range_count) |index| {
-                const class = try bin.readU16At(data, offset + 4 + index * 6 + 4);
-                try validateGlyphClassValue(class);
-            }
-        },
-        else => return error.BadSfnt,
-    }
-}
-
-fn validateGlyphClassValue(class: u16) FontError!void {
-    // GDEF's GlyphClassDef has a closed public vocabulary: 0 means
-    // "unclassified" and 1..4 map to base, ligature, mark, and component.
-    // MarkAttachClassDef deliberately does not use this helper because its
-    // class numbers are font-defined attachment groups rather than glyph kinds.
-    if (class > @intFromEnum(GlyphClass.component)) return error.BadSfnt;
-}
-
-fn validateMarkGlyphSetsDefGlyphBounds(data: []const u8, offset: usize, glyph_count: u16) FontError!void {
-    if (offset + 4 > data.len) return error.BadSfnt;
-    const format = try bin.readU16At(data, offset);
-    if (format != 1) return error.BadSfnt;
-    const set_count = try bin.readU16At(data, offset + 2);
-    if (@as(usize, set_count) * 4 > data.len - (offset + 4)) return error.BadSfnt;
-    const coverage_data_start = 4 + @as(usize, set_count) * 4;
-    for (0..set_count) |index| {
-        const coverage_relative = try bin.readU32At(data, offset + 4 + index * 4);
-        if (coverage_relative < coverage_data_start) return error.BadSfnt;
-        if (coverage_relative > data.len - offset) return error.BadSfnt;
-        try validateCoverageGlyphBoundsForReadMode(data, offset + coverage_relative, glyph_count, .mark_filtering_set);
-    }
-}
-
-const CoverageReadMode = enum {
-    canonical,
-    mark_filtering_set,
-};
-
-fn validateCoverageGlyphBounds(data: []const u8, offset: usize, glyph_count: u16) FontError!void {
-    return validateCoverageGlyphBoundsForReadMode(data, offset, glyph_count, .canonical);
-}
-
-fn validateCoverageGlyphBoundsForReadMode(data: []const u8, offset: usize, glyph_count: u16, read_mode: CoverageReadMode) FontError!void {
-    if (offset + 2 > data.len) return error.BadSfnt;
-    const format = try bin.readU16At(data, offset);
-    switch (format) {
-        1 => {
-            if (offset + 4 > data.len) return error.BadSfnt;
-            const count = try bin.readU16At(data, offset + 2);
-            if (@as(usize, count) * 2 > data.len - (offset + 4)) return error.BadSfnt;
-            var previous: ?glyph_mod.GlyphId = null;
-            for (0..count) |index| {
-                const glyph_id = try bin.readU16At(data, offset + 4 + index * 2);
-                if (previous) |last| {
-                    switch (read_mode) {
-                        .canonical => if (glyph_id <= last) return error.BadSfnt,
-                        // Roboto's GDEF MarkGlyphSetsDef contains duplicate
-                        // glyph ids in format-1 Coverage arrays. HarfBuzz and
-                        // FreeType tolerate that shape for mark filtering, and
-                        // downstream membership checks are set-like, so accept
-                        // non-decreasing order here while still rejecting
-                        // genuinely unsorted data.
-                        .mark_filtering_set => if (glyph_id < last) return error.BadSfnt,
-                    }
-                }
-                if (glyph_id >= glyph_count) return error.BadSfnt;
-                previous = glyph_id;
-            }
-        },
-        2 => {
-            if (offset + 4 > data.len) return error.BadSfnt;
-            const range_count = try bin.readU16At(data, offset + 2);
-            if (@as(usize, range_count) * 6 > data.len - (offset + 4)) return error.BadSfnt;
-            var previous_end: ?glyph_mod.GlyphId = null;
-            for (0..range_count) |index| {
-                const range_offset = offset + 4 + index * 6;
-                const start = try bin.readU16At(data, range_offset);
-                const end = try bin.readU16At(data, range_offset + 2);
-                if (end < start) return error.BadSfnt;
-                if (previous_end) |last_end| {
-                    if (start <= last_end) return error.BadSfnt;
-                }
-                if (end >= glyph_count) return error.BadSfnt;
-                previous_end = end;
-            }
-        },
-        else => return error.BadSfnt,
-    }
-}
-
-fn coverageGlyphCount(data: []const u8, offset: usize) FontError!u16 {
-    if (offset + 2 > data.len) return error.BadSfnt;
-    const format = try bin.readU16At(data, offset);
-    switch (format) {
-        1 => {
-            if (offset + 4 > data.len) return error.BadSfnt;
-            const count = try bin.readU16At(data, offset + 2);
-            if (@as(usize, count) * 2 > data.len - (offset + 4)) return error.BadSfnt;
-            return count;
-        },
-        2 => {
-            if (offset + 4 > data.len) return error.BadSfnt;
-            const range_count = try bin.readU16At(data, offset + 2);
-            if (@as(usize, range_count) * 6 > data.len - (offset + 4)) return error.BadSfnt;
-            var total: usize = 0;
-            for (0..range_count) |index| {
-                const range_offset = offset + 4 + index * 6;
-                const start = try bin.readU16At(data, range_offset);
-                const end = try bin.readU16At(data, range_offset + 2);
-                if (end < start) return error.BadSfnt;
-                total += @as(usize, end) - @as(usize, start) + 1;
-                if (total > std.math.maxInt(u16)) return error.BadSfnt;
-            }
-            return @intCast(total);
-        },
-        else => return error.BadSfnt,
-    }
-}
-
-fn readMarkGlyphSetsDef(allocator: std.mem.Allocator, data: []const u8, offset: usize) FontError![][]glyph_mod.GlyphId {
-    if (offset + 4 > data.len) return error.BadSfnt;
-    const format = try bin.readU16At(data, offset);
-    if (format != 1) return error.BadSfnt;
-    const set_count = try bin.readU16At(data, offset + 2);
-    if (@as(usize, set_count) * 4 > data.len - (offset + 4)) return error.BadSfnt;
-    const coverage_data_start = 4 + @as(usize, set_count) * 4;
-
-    const sets = try allocator.alloc([]glyph_mod.GlyphId, set_count);
-    errdefer allocator.free(sets);
-    var initialized: usize = 0;
-    errdefer {
-        for (sets[0..initialized]) |set| allocator.free(set);
-    }
-
-    for (sets, 0..) |*set, index| {
-        const coverage_relative = try bin.readU32At(data, offset + 4 + index * 4);
-        // Coverage offsets are relative to the MarkGlyphSetsDef table. Require
-        // every child Coverage table to start after the declared offset array so
-        // malformed GDEF data cannot reinterpret the MarkGlyphSetsDef header or
-        // sibling offset entries as a synthetic glyph set.
-        if (coverage_relative < coverage_data_start) return error.BadSfnt;
-        if (coverage_relative > data.len - offset) return error.BadSfnt;
-        set.* = try coverageGlyphs(allocator, data, offset + coverage_relative);
-        initialized += 1;
-    }
-    return sets;
-}
-
-fn coverageGlyphs(allocator: std.mem.Allocator, data: []const u8, offset: usize) FontError![]glyph_mod.GlyphId {
-    if (offset + 2 > data.len) return error.BadSfnt;
-    const format = try bin.readU16At(data, offset);
-    switch (format) {
-        1 => {
-            if (offset + 4 > data.len) return error.BadSfnt;
-            const glyph_count = try bin.readU16At(data, offset + 2);
-            if (@as(usize, glyph_count) * 2 > data.len - (offset + 4)) return error.BadSfnt;
-            const glyphs = try allocator.alloc(glyph_mod.GlyphId, glyph_count);
-            errdefer allocator.free(glyphs);
-            var previous: ?glyph_mod.GlyphId = null;
-            var out: usize = 0;
-            for (0..glyph_count) |index| {
-                const glyph_id = try bin.readU16At(data, offset + 4 + index * 2);
-                if (previous) |last| {
-                    if (glyph_id < last) return error.BadSfnt;
-                    if (glyph_id == last) continue;
-                }
-                previous = glyph_id;
-                glyphs[out] = glyph_id;
-                out += 1;
-            }
-            return try allocator.realloc(glyphs, out);
-        },
-        2 => {
-            if (offset + 4 > data.len) return error.BadSfnt;
-            const range_count = try bin.readU16At(data, offset + 2);
-            if (@as(usize, range_count) * 6 > data.len - (offset + 4)) return error.BadSfnt;
-            var glyph_total: usize = 0;
-            var previous_end: ?glyph_mod.GlyphId = null;
-            for (0..range_count) |index| {
-                const range_offset = offset + 4 + index * 6;
-                const start = try bin.readU16At(data, range_offset);
-                const end = try bin.readU16At(data, range_offset + 2);
-                if (end < start) return error.BadSfnt;
-                if (previous_end) |last_end| {
-                    if (start <= last_end) return error.BadSfnt;
-                }
-                previous_end = end;
-                glyph_total += @as(usize, end) - @as(usize, start) + 1;
-            }
-
-            const glyphs = try allocator.alloc(glyph_mod.GlyphId, glyph_total);
-            errdefer allocator.free(glyphs);
-            var out: usize = 0;
-            for (0..range_count) |index| {
-                const range_offset = offset + 4 + index * 6;
-                const start = try bin.readU16At(data, range_offset);
-                const end = try bin.readU16At(data, range_offset + 2);
-                for (start..@as(usize, end) + 1) |glyph| {
-                    glyphs[out] = @intCast(glyph);
-                    out += 1;
-                }
-            }
-            return glyphs;
-        },
-        else => return error.BadSfnt,
-    }
-}
-
-fn freeMarkFilteringSets(allocator: std.mem.Allocator, sets: [][]glyph_mod.GlyphId) void {
-    for (sets) |set| allocator.free(set);
-    allocator.free(sets);
-}
-
 const SimpleGlyphVariation = struct {
     data: []const u8,
     table_offset: usize,
@@ -8051,452 +7516,6 @@ fn readI16FromSlice(data: []const u8, offset: usize) FontError!i16 {
     return bin.readI16At(data, offset) catch |err| switch (err) {
         error.EndOfStream => error.BadSfnt,
     };
-}
-
-test "reads GDEF mark glyph filtering sets" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 52;
-
-    writeU16Test(&bytes, 0, 1);
-    writeU16Test(&bytes, 2, 2);
-    writeU32Test(&bytes, 4, 12);
-    writeU32Test(&bytes, 8, 22);
-
-    writeU16Test(&bytes, 12, 1);
-    writeU16Test(&bytes, 14, 2);
-    writeU16Test(&bytes, 16, 5);
-    writeU16Test(&bytes, 18, 9);
-
-    writeU16Test(&bytes, 22, 2);
-    writeU16Test(&bytes, 24, 2);
-    writeU16Test(&bytes, 26, 20);
-    writeU16Test(&bytes, 28, 21);
-    writeU16Test(&bytes, 30, 0);
-    writeU16Test(&bytes, 32, 30);
-    writeU16Test(&bytes, 34, 32);
-    writeU16Test(&bytes, 36, 2);
-
-    const sets = try readMarkGlyphSetsDef(allocator, &bytes, 0);
-    defer freeMarkFilteringSets(allocator, sets);
-
-    try std.testing.expectEqual(@as(usize, 2), sets.len);
-    try std.testing.expectEqualSlices(glyph_mod.GlyphId, &.{ 5, 9 }, sets[0]);
-    try std.testing.expectEqualSlices(glyph_mod.GlyphId, &.{ 20, 21, 30, 31, 32 }, sets[1]);
-}
-
-test "GDEF MarkGlyphSetsDef rejects coverage offsets into its header" {
-    var bytes: [16]u8 = .{0} ** 16;
-    writeU16Test(&bytes, 0, 1); // MarkGlyphSetsDef format.
-    writeU16Test(&bytes, 2, 1); // One CoverageOffset entry follows.
-    writeU32Test(&bytes, 4, 0); // Would reinterpret the MarkGlyphSetsDef header as Coverage format 1.
-
-    try std.testing.expectError(error.BadSfnt, readMarkGlyphSetsDef(std.testing.allocator, &bytes, 0));
-}
-
-test "GDEF MarkGlyphSetsDef handles duplicate and unsorted coverage glyphs" {
-    const allocator = std.testing.allocator;
-    var bytes: [28]u8 = .{0} ** 28;
-    writeU16Test(&bytes, 0, 1); // MarkGlyphSetsDef format.
-    writeU16Test(&bytes, 2, 1);
-    writeU32Test(&bytes, 4, 8);
-
-    writeU16Test(&bytes, 8, 1); // Coverage format 1.
-    writeU16Test(&bytes, 10, 3);
-    writeU16Test(&bytes, 12, 5);
-    writeU16Test(&bytes, 14, 5); // Duplicate glyphs appear in real GDEF mark-filtering sets.
-    writeU16Test(&bytes, 16, 9);
-    const sets = try readMarkGlyphSetsDef(allocator, &bytes, 0);
-    defer freeMarkFilteringSets(allocator, sets);
-    try std.testing.expectEqualSlices(glyph_mod.GlyphId, &.{ 5, 9 }, sets[0]);
-
-    writeU16Test(&bytes, 12, 9);
-    writeU16Test(&bytes, 14, 5); // Genuinely unsorted; still reject.
-    writeU16Test(&bytes, 16, 10);
-    try std.testing.expectError(error.BadSfnt, readMarkGlyphSetsDef(allocator, &bytes, 0));
-
-    writeU16Test(&bytes, 8, 2); // Coverage format 2.
-    writeU16Test(&bytes, 10, 2);
-    writeU16Test(&bytes, 12, 5);
-    writeU16Test(&bytes, 14, 9);
-    writeU16Test(&bytes, 16, 0);
-    writeU16Test(&bytes, 18, 9); // Overlaps the previous inclusive range.
-    writeU16Test(&bytes, 20, 11);
-    writeU16Test(&bytes, 22, 5);
-    try std.testing.expectError(error.BadSfnt, readMarkGlyphSetsDef(allocator, &bytes, 0));
-}
-
-test "ignores mark glyph filtering offset field before GDEF 1.2" {
-    var bytes: [32]u8 = .{0} ** 32;
-    writeU16Test(&bytes, 0, 1); // major
-    writeU16Test(&bytes, 2, 0); // GDEF 1.0: no MarkGlyphSetsDef field.
-    writeU16Test(&bytes, 4, 14); // GlyphClassDef offset.
-    writeU16Test(&bytes, 12, 1); // First bytes of the class def, not a mark-set offset.
-    writeU16Test(&bytes, 14, 1); // ClassDef format 1.
-    writeU16Test(&bytes, 16, 3); // startGlyphID
-    writeU16Test(&bytes, 18, 1); // glyphCount
-    writeU16Test(&bytes, 20, 3); // class value: mark
-
-    const font = gdefOnlyFont(&bytes);
-    try std.testing.expectEqual(GlyphClass.mark, try font.glyphClass(3));
-    try std.testing.expect((try font.markFilteringSets(std.testing.allocator)) == null);
-}
-
-test "GDEF ClassDef format 1 validates upper glyph boundary without overflow" {
-    var bytes: [14]u8 = .{0} ** 14;
-    writeU16Test(&bytes, 0, 1); // ClassDef format 1.
-    writeU16Test(&bytes, 2, 0xffff); // startGlyphID at the u16 boundary.
-    writeU16Test(&bytes, 4, 1); // Only one class value follows.
-    writeU16Test(&bytes, 6, @intFromEnum(GlyphClass.mark));
-
-    try std.testing.expectEqual(@as(u16, @intFromEnum(GlyphClass.mark)), try classDefValue(&bytes, 0, 0xffff));
-
-    // The declared ClassDef span can exceed the physical table when widened.
-    // This must report malformed GDEF/SFNT data, not wrap `startGlyphID +
-    // glyphCount` and silently treat the boundary glyph as unclassified.
-    writeU16Test(&bytes, 4, 5);
-    try std.testing.expectError(error.BadSfnt, classDefValue(&bytes, 0, 0xffff));
-}
-
-test "GDEF ClassDef format 2 rejects overlapping and reversed ranges" {
-    var bytes: [22]u8 = .{0} ** 22;
-    writeU16Test(&bytes, 0, 2); // ClassDef format 2.
-    writeU16Test(&bytes, 2, 3); // Three ClassRangeRecords.
-    writeU16Test(&bytes, 4, 10);
-    writeU16Test(&bytes, 6, 12);
-    writeU16Test(&bytes, 8, @intFromEnum(GlyphClass.base));
-    writeU16Test(&bytes, 10, 12); // Overlaps the previous inclusive range.
-    writeU16Test(&bytes, 12, 14);
-    writeU16Test(&bytes, 14, @intFromEnum(GlyphClass.mark));
-    writeU16Test(&bytes, 16, 20);
-    writeU16Test(&bytes, 18, 18); // Reversed range.
-    writeU16Test(&bytes, 20, @intFromEnum(GlyphClass.component));
-
-    try std.testing.expectError(error.BadSfnt, classDefValue(&bytes, 0, 12));
-
-    writeU16Test(&bytes, 10, 13); // Repair overlap so the reversed range is checked.
-    try std.testing.expectError(error.BadSfnt, classDefValue(&bytes, 0, 18));
-}
-
-test "GDEF dense ClassDef reader fills glyph-indexed metadata" {
-    var format1: [12]u8 = .{0} ** 12;
-    writeU16Test(&format1, 0, 1); // ClassDef format 1.
-    writeU16Test(&format1, 2, 2); // startGlyphID.
-    writeU16Test(&format1, 4, 3); // glyphCount.
-    writeU16Test(&format1, 6, @intFromEnum(GlyphClass.base));
-    writeU16Test(&format1, 8, @intFromEnum(GlyphClass.mark));
-    writeU16Test(&format1, 10, @intFromEnum(GlyphClass.component));
-
-    var dense1: [8]u16 = undefined;
-    try readClassDefDense(&format1, 0, @intCast(dense1.len), dense1[0..], true);
-    try std.testing.expectEqualSlices(u16, &.{
-        0,
-        0,
-        @intFromEnum(GlyphClass.base),
-        @intFromEnum(GlyphClass.mark),
-        @intFromEnum(GlyphClass.component),
-        0,
-        0,
-        0,
-    }, &dense1);
-
-    var format2: [16]u8 = .{0} ** 16;
-    writeU16Test(&format2, 0, 2); // ClassDef format 2.
-    writeU16Test(&format2, 2, 2); // Two ranges.
-    writeU16Test(&format2, 4, 1);
-    writeU16Test(&format2, 6, 3);
-    writeU16Test(&format2, 8, @intFromEnum(GlyphClass.ligature));
-    writeU16Test(&format2, 10, 5);
-    writeU16Test(&format2, 12, 5);
-    writeU16Test(&format2, 14, 7); // MarkAttachClassDef values are font-defined, not GlyphClass enum values.
-
-    var dense2: [8]u16 = undefined;
-    try readClassDefDense(&format2, 0, @intCast(dense2.len), dense2[0..], false);
-    try std.testing.expectEqualSlices(u16, &.{ 0, 2, 2, 2, 0, 7, 0, 0 }, &dense2);
-
-    try std.testing.expectError(error.BadSfnt, readClassDefDense(&format2, 0, @intCast(dense2.len), dense2[0..], true));
-}
-
-test "GDEF parse validation rejects class and mark-set glyph ids past maxp" {
-    var valid_classdef: [22]u8 = .{0} ** 22;
-    writeU16Test(&valid_classdef, 0, 1); // GDEF major.
-    writeU16Test(&valid_classdef, 2, 0); // GDEF 1.0 header.
-    writeU16Test(&valid_classdef, 4, 12); // GlyphClassDef follows the header.
-    writeU16Test(&valid_classdef, 12, 1); // ClassDef format 1.
-    writeU16Test(&valid_classdef, 14, 2); // startGlyphID.
-    writeU16Test(&valid_classdef, 16, 2); // Covers glyphs 2 and 3 in a four-glyph font.
-    writeU16Test(&valid_classdef, 18, @intFromEnum(GlyphClass.mark));
-    writeU16Test(&valid_classdef, 20, @intFromEnum(GlyphClass.mark));
-    try validateGdefTable(&valid_classdef, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = valid_classdef.len }, 4);
-
-    var classdef_past_maxp = valid_classdef;
-    writeU16Test(&classdef_past_maxp, 16, 3); // Would cover glyph 4, outside maxp.numGlyphs.
-    try std.testing.expectError(error.BadSfnt, validateGdefTable(&classdef_past_maxp, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = classdef_past_maxp.len }, 4));
-
-    var child_offset_overlap = valid_classdef;
-    writeU16Test(&child_offset_overlap, 4, 4); // Reinterprets GDEF header bytes as ClassDef data.
-    try std.testing.expectError(error.BadSfnt, validateGdefTable(&child_offset_overlap, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = child_offset_overlap.len }, 4));
-
-    var class_value_past_enum = valid_classdef;
-    writeU16Test(&class_value_past_enum, 18, 5); // GlyphClassDef has only classes 0..4.
-    try std.testing.expectError(error.BadSfnt, validateGdefTable(&class_value_past_enum, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = class_value_past_enum.len }, 4));
-
-    var format2_class_value_past_enum: [22]u8 = .{0} ** 22;
-    writeU16Test(&format2_class_value_past_enum, 0, 1); // GDEF major.
-    writeU16Test(&format2_class_value_past_enum, 2, 0);
-    writeU16Test(&format2_class_value_past_enum, 4, 12);
-    writeU16Test(&format2_class_value_past_enum, 12, 2); // ClassDef format 2.
-    writeU16Test(&format2_class_value_past_enum, 14, 1);
-    writeU16Test(&format2_class_value_past_enum, 16, 2);
-    writeU16Test(&format2_class_value_past_enum, 18, 3);
-    writeU16Test(&format2_class_value_past_enum, 20, 5);
-    try std.testing.expectError(error.BadSfnt, validateGdefTable(&format2_class_value_past_enum, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = format2_class_value_past_enum.len }, 4));
-
-    var mark_set_past_maxp: [30]u8 = .{0} ** 30;
-    writeU16Test(&mark_set_past_maxp, 0, 1); // GDEF major.
-    writeU16Test(&mark_set_past_maxp, 2, 2); // GDEF 1.2 includes MarkGlyphSetsDef.
-    writeU16Test(&mark_set_past_maxp, 12, 14); // MarkGlyphSetsDef follows the v1.2 header.
-    writeU16Test(&mark_set_past_maxp, 14, 1); // MarkGlyphSetsDef format 1.
-    writeU16Test(&mark_set_past_maxp, 16, 1);
-    writeU32Test(&mark_set_past_maxp, 18, 8); // Coverage starts after the set offset array.
-    writeU16Test(&mark_set_past_maxp, 22, 1); // Coverage format 1.
-    writeU16Test(&mark_set_past_maxp, 24, 2);
-    writeU16Test(&mark_set_past_maxp, 26, 1);
-    writeU16Test(&mark_set_past_maxp, 28, 4); // Invalid for maxp.numGlyphs == 4.
-    try std.testing.expectError(error.BadSfnt, validateGdefTable(&mark_set_past_maxp, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = mark_set_past_maxp.len }, 4));
-}
-
-test "GDEF parse validation walks AttachList child tables" {
-    var valid_attach: [30]u8 = .{0} ** 30;
-    writeU16Test(&valid_attach, 0, 1); // GDEF major.
-    writeU16Test(&valid_attach, 2, 0);
-    writeU16Test(&valid_attach, 6, 12); // AttachList follows the GDEF 1.0 header.
-
-    writeU16Test(&valid_attach, 12, 6); // Coverage offset, relative to AttachList.
-    writeU16Test(&valid_attach, 14, 1); // One covered glyph and one AttachPoint.
-    writeU16Test(&valid_attach, 16, 12); // AttachPoint offset, relative to AttachList.
-    writeU16Test(&valid_attach, 18, 1); // Coverage format 1.
-    writeU16Test(&valid_attach, 20, 1);
-    writeU16Test(&valid_attach, 22, 3);
-    writeU16Test(&valid_attach, 24, 2); // AttachPoint: two sorted point indices.
-    writeU16Test(&valid_attach, 26, 4);
-    writeU16Test(&valid_attach, 28, 7);
-    try validateGdefTable(&valid_attach, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = valid_attach.len }, 4);
-
-    var attach_offset_aliases_header = valid_attach;
-    writeU16Test(&attach_offset_aliases_header, 16, 2); // Would reinterpret AttachList glyphCount as pointCount.
-    try std.testing.expectError(error.BadSfnt, validateGdefTable(&attach_offset_aliases_header, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = attach_offset_aliases_header.len }, 4));
-
-    var unsorted_points = valid_attach;
-    writeU16Test(&unsorted_points, 28, 4); // Duplicate/decreasing point order is not canonical.
-    try std.testing.expectError(error.BadSfnt, validateGdefTable(&unsorted_points, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = unsorted_points.len }, 4));
-
-    var coverage_past_maxp = valid_attach;
-    writeU16Test(&coverage_past_maxp, 22, 4); // Invalid for maxp.numGlyphs == 4.
-    try std.testing.expectError(error.BadSfnt, validateGdefTable(&coverage_past_maxp, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = coverage_past_maxp.len }, 4));
-
-    var mismatched_coverage: [34]u8 = .{0} ** 34;
-    writeU16Test(&mismatched_coverage, 0, 1);
-    writeU16Test(&mismatched_coverage, 2, 0);
-    writeU16Test(&mismatched_coverage, 6, 12);
-    writeU16Test(&mismatched_coverage, 12, 8); // Coverage starts after two AttachPoint offsets.
-    writeU16Test(&mismatched_coverage, 14, 2); // Two AttachPoint offsets advertised.
-    writeU16Test(&mismatched_coverage, 16, 14);
-    writeU16Test(&mismatched_coverage, 18, 18);
-    writeU16Test(&mismatched_coverage, 20, 1); // Coverage format 1, but only one glyph.
-    writeU16Test(&mismatched_coverage, 22, 1);
-    writeU16Test(&mismatched_coverage, 24, 1);
-    writeU16Test(&mismatched_coverage, 26, 1);
-    writeU16Test(&mismatched_coverage, 28, 4);
-    writeU16Test(&mismatched_coverage, 30, 1);
-    writeU16Test(&mismatched_coverage, 32, 7);
-    try std.testing.expectError(error.BadSfnt, validateGdefTable(&mismatched_coverage, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = mismatched_coverage.len }, 4));
-}
-
-test "GDEF parse validation walks LigCaretList child tables" {
-    var valid_lig_caret: [42]u8 = .{0} ** 42;
-    writeU16Test(&valid_lig_caret, 0, 1); // GDEF major.
-    writeU16Test(&valid_lig_caret, 2, 0);
-    writeU16Test(&valid_lig_caret, 8, 12); // LigCaretList follows the GDEF 1.0 header.
-
-    writeU16Test(&valid_lig_caret, 12, 6); // Coverage offset, relative to LigCaretList.
-    writeU16Test(&valid_lig_caret, 14, 1); // One covered ligature glyph and one LigGlyph.
-    writeU16Test(&valid_lig_caret, 16, 12); // LigGlyph offset, relative to LigCaretList.
-    writeU16Test(&valid_lig_caret, 18, 1); // Coverage format 1.
-    writeU16Test(&valid_lig_caret, 20, 1);
-    writeU16Test(&valid_lig_caret, 22, 3);
-    writeU16Test(&valid_lig_caret, 24, 1); // LigGlyph: one CaretValue offset.
-    writeU16Test(&valid_lig_caret, 26, 4);
-    writeU16Test(&valid_lig_caret, 28, 1); // CaretValue format 1.
-    writeI16Test(&valid_lig_caret, 30, 120);
-    try validateGdefTable(&valid_lig_caret, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = valid_lig_caret.len }, 4);
-
-    var lig_glyph_offset_aliases_header = valid_lig_caret;
-    writeU16Test(&lig_glyph_offset_aliases_header, 16, 2); // Would reinterpret LigGlyphCount as CaretCount.
-    try std.testing.expectError(error.BadSfnt, validateGdefTable(&lig_glyph_offset_aliases_header, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = lig_glyph_offset_aliases_header.len }, 4));
-
-    var caret_offset_aliases_array = valid_lig_caret;
-    writeU16Test(&caret_offset_aliases_array, 26, 2); // Would reinterpret the CaretValue offset array as a CaretValue.
-    try std.testing.expectError(error.BadSfnt, validateGdefTable(&caret_offset_aliases_array, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = caret_offset_aliases_array.len }, 4));
-
-    var coverage_past_maxp = valid_lig_caret;
-    writeU16Test(&coverage_past_maxp, 22, 4); // Invalid for maxp.numGlyphs == 4.
-    try std.testing.expectError(error.BadSfnt, validateGdefTable(&coverage_past_maxp, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = coverage_past_maxp.len }, 4));
-
-    var mismatched_coverage = valid_lig_caret;
-    writeU16Test(&mismatched_coverage, 20, 0); // Coverage count no longer matches LigGlyphCount.
-    try std.testing.expectError(error.BadSfnt, validateGdefTable(&mismatched_coverage, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = mismatched_coverage.len }, 4));
-
-    var format3_caret = valid_lig_caret;
-    writeU16Test(&format3_caret, 28, 3); // CaretValue format 3.
-    writeI16Test(&format3_caret, 30, 120);
-    writeU16Test(&format3_caret, 32, 6); // Device table offset, relative to CaretValue.
-    writeU16Test(&format3_caret, 34, 12); // Device StartSize.
-    writeU16Test(&format3_caret, 36, 13); // Device EndSize.
-    writeU16Test(&format3_caret, 38, 1); // Two 2-bit deltas need one uint16 word.
-    writeU16Test(&format3_caret, 40, 0);
-    try validateGdefTable(&format3_caret, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = format3_caret.len }, 4);
-
-    var truncated_device = format3_caret;
-    try std.testing.expectError(error.BadSfnt, validateGdefTable(&truncated_device, .{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = 0, .length = truncated_device.len - 1 }, 4));
-}
-
-test "GDEF v1.3 validates ItemVariationStore payload" {
-    const fvar_len: usize = 36;
-    const gdef_offset: usize = fvar_len;
-    const item_store_offset: usize = 20;
-    var bytes: [fvar_len + item_store_offset + 34]u8 = .{0} ** (fvar_len + item_store_offset + 34);
-
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 16); // axesArrayOffset.
-    writeU16Test(&bytes, 6, 2); // countSizePairs.
-    writeU16Test(&bytes, 8, 1); // one design axis.
-    writeU16Test(&bytes, 10, 20); // axisSize.
-    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
-
-    writeU16Test(&bytes, gdef_offset + 0, 1); // GDEF major.
-    writeU16Test(&bytes, gdef_offset + 2, 3); // GDEF 1.3 adds ItemVariationStoreOffset.
-    writeU32Test(&bytes, gdef_offset + 14, item_store_offset);
-    writeItemVariationStoreWithOneItem(&bytes, gdef_offset + item_store_offset);
-
-    const fvar = TableRecord{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = fvar_len };
-    const gdef = TableRecord{ .tag = .{ 'G', 'D', 'E', 'F' }, .checksum = 0, .offset = gdef_offset, .length = bytes.len - gdef_offset };
-    try validateGdefTableWithVariationData(&bytes, gdef, 4, fvar);
-
-    // A GDEF ItemVariationStore is meaningful only in the fvar variation-axis
-    // coordinate system. Keeping that dependency explicit prevents a table that
-    // merely fits in the GDEF byte range from being accepted as usable
-    // variation data.
-    try std.testing.expectError(error.BadSfnt, validateGdefTableWithVariationData(&bytes, gdef, 4, null));
-
-    var bad_store_format = bytes;
-    writeU16Test(&bad_store_format, gdef_offset + item_store_offset, 2);
-    try std.testing.expectError(error.BadSfnt, validateGdefTableWithVariationData(&bad_store_format, gdef, 4, fvar));
-
-    var axis_mismatch = bytes;
-    writeU16Test(&axis_mismatch, gdef_offset + item_store_offset + 12, 2); // VariationRegionList axisCount.
-    try std.testing.expectError(error.BadSfnt, validateGdefTableWithVariationData(&axis_mismatch, gdef, 4, fvar));
-}
-
-test "GDEF lazy glyph class rejects mutated class values outside enum" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    const bytes = try test_font.buildGdefClassTtf(allocator);
-    defer allocator.free(bytes);
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    const gdef_offset: usize = @intCast(try sfntTableOffset(bytes, "GDEF"));
-    try std.testing.expectEqual(GlyphClass.base, try font.glyphClass(1));
-
-    // The parsed Font keeps a borrowed GDEF table. Rechecking the class value
-    // before enum conversion prevents post-parse mutations from manufacturing
-    // undeclared glyph classes while preserving arbitrary MarkAttachClassDef
-    // group numbers.
-    writeU16Test(bytes, gdef_offset + 20, 5);
-    try std.testing.expectError(error.BadSfnt, font.glyphClass(1));
-
-    writeU16Test(bytes, gdef_offset + 20, @intFromEnum(GlyphClass.base));
-    try updateSfntTableChecksum(bytes, "GDEF");
-    try std.testing.expectEqual(@as(u16, 7), try font.markAttachClass(3));
-}
-
-test "GDEF lazy class APIs revalidate borrowed table checksum" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    const bytes = try test_font.buildGdefClassTtf(allocator);
-    defer allocator.free(bytes);
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    try std.testing.expectEqual(GlyphClass.base, try font.glyphClass(1));
-
-    const gdef_offset: usize = @intCast(try sfntTableOffset(bytes, "GDEF"));
-    // Keep the ClassDef value inside the valid GDEF enum while changing the
-    // borrowed table after parse. The lazy public API must reject the table
-    // because it no longer matches the SFNT checksum that Font.parse accepted.
-    writeU16Test(bytes, gdef_offset + 20, @intFromEnum(GlyphClass.ligature));
-    try std.testing.expectError(error.BadSfnt, font.glyphClass(1));
-}
-
-test "GDEF lazy class APIs revalidate child offsets after borrowed bytes mutate" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        const bytes = try test_font.buildGdefClassTtf(allocator);
-        defer allocator.free(bytes);
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-
-        const gdef_offset: usize = @intCast(try sfntTableOffset(bytes, "GDEF"));
-        writeU16Test(bytes, gdef_offset + 4, 6); // GlyphClassDef now points into the GDEF header.
-        writeU16Test(bytes, gdef_offset + 6, 1); // Malicious header bytes decode as ClassDef format 1.
-        writeU16Test(bytes, gdef_offset + 8, 0); // startGlyphID.
-        writeU16Test(bytes, gdef_offset + 10, 1); // glyphCount.
-        writeU16Test(bytes, gdef_offset + 12, @intFromEnum(GlyphClass.mark));
-
-        try std.testing.expectError(error.BadSfnt, font.glyphClass(0));
-    }
-
-    {
-        const bytes = try test_font.buildGdefClassTtf(allocator);
-        defer allocator.free(bytes);
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-
-        const gdef_offset: usize = @intCast(try sfntTableOffset(bytes, "GDEF"));
-        writeU16Test(bytes, gdef_offset + 10, 4); // MarkAttachClassDef now aliases the GDEF header.
-        writeU16Test(bytes, gdef_offset + 4, 1); // Header bytes at offset 4 form ClassDef format 1.
-        writeU16Test(bytes, gdef_offset + 6, 3); // startGlyphID.
-        writeU16Test(bytes, gdef_offset + 8, 1); // glyphCount.
-
-        try std.testing.expectError(error.BadSfnt, font.markAttachClass(3));
-    }
-}
-
-test "GDEF lazy mark filtering sets revalidate glyph ids after borrowed bytes mutate" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    const bytes = try test_font.buildGdefClassTtf(allocator);
-    defer allocator.free(bytes);
-
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    const gdef_offset: usize = @intCast(try sfntTableOffset(bytes, "GDEF"));
-    writeU16Test(bytes, gdef_offset + 2, 2); // Enable MarkGlyphSetsDef in the lazy GDEF reader.
-    writeU16Test(bytes, gdef_offset + 12, 14); // Reuse the original class payload as a mark-set table.
-    writeU16Test(bytes, gdef_offset + 14, 1); // MarkGlyphSetsDef format 1.
-    writeU16Test(bytes, gdef_offset + 16, 1);
-    writeU32Test(bytes, gdef_offset + 18, 10); // Coverage follows the one Offset32 entry.
-    writeU16Test(bytes, gdef_offset + 24, 1); // Coverage format 1.
-    writeU16Test(bytes, gdef_offset + 26, 1);
-    writeU16Test(bytes, gdef_offset + 28, 5); // maxp.numGlyphs is still 5, so glyph id 5 is invalid.
-
-    try std.testing.expectError(error.BadSfnt, font.markFilteringSets(allocator));
 }
 
 test "cmap format 2 validates subheader and glyph-array bounds" {
@@ -11498,12 +10517,6 @@ test "OS/2 table is validated at parse time" {
         writeU16Test(bytes, os2_offset, 6);
         try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
     }
-}
-
-fn gdefOnlyFont(data: []const u8) Font {
-    var font = table_only_fixture.init(Font, data, 64, 1);
-    font.gdef = table_only_fixture.record(data, .{ 'G', 'D', 'E', 'F' }, 0, data.len);
-    return font;
 }
 
 fn os2OnlyFont(data: []const u8, declared_length: usize) Font {

@@ -1,7 +1,6 @@
 const std = @import("std");
 const accelerator_core = @import("gpos/accelerator/root.zig");
 const feature_core = @import("gpos/feature/root.zig");
-const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
 const positioning = @import("gpos/positioning/root.zig");
 pub const runtime = @import("gpos/runtime/root.zig");
@@ -90,49 +89,7 @@ const buildLookupAccelerator = accelerator_core.build.lookup.one;
 const deinitLookupAcceleratorContents =
     accelerator_core.build.lookup.deinitContents;
 
-const max_run_digest_cache_entries = 16;
-
-const RunDigestCache = struct {
-    const Entry = struct {
-        lookup_flag: u16,
-        active_mark_filtering_set: ?u16,
-        digest: GlyphDigest,
-    };
-
-    entries: [max_run_digest_cache_entries]Entry = undefined,
-    len: usize = 0,
-
-    fn init() RunDigestCache {
-        // Entries become readable only after `get` fully assigns them and
-        // increments `len`. Leave inactive storage undefined instead of
-        // clearing the complete 16-entry cache for every short shaping run.
-        var cache: RunDigestCache = undefined;
-        cache.len = 0;
-        return cache;
-    }
-
-    fn get(self: *RunDigestCache, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GlyphDigest {
-        const active_mark_filtering_set = options.active_mark_filtering_set;
-        for (self.entries[0..self.len]) |entry| {
-            if (entry.lookup_flag == lookup_flag and entry.active_mark_filtering_set == active_mark_filtering_set) {
-                return entry.digest;
-            }
-        }
-
-        const digest = glyphRunDigest(glyphs, lookup_flag, options);
-        if (self.len < self.entries.len) {
-            self.entries[self.len] = .{
-                .lookup_flag = lookup_flag,
-                .active_mark_filtering_set = active_mark_filtering_set,
-                .digest = digest,
-            };
-            self.len += 1;
-        }
-        return digest;
-    }
-};
-
-const ChainingSubtableGroup = accelerator_core.glyph_groups.Group;
+const RunDigestCache = runtime_lookup.prefilter.DigestCache;
 const max_context_preflight_depth = validation.lookup.max_context_depth;
 const ensurePositionRecordsWithin = validation.lookup.records;
 const ensurePositionRecordMarkFilteringSetsValid =
@@ -377,7 +334,11 @@ noinline fn collectLookupWithIndexPrepared(
         const run_digest = if (run_digest_cache) |cache|
             cache.get(glyphs, lookup_flag, lookup_options)
         else
-            glyphRunDigest(glyphs, lookup_flag, lookup_options);
+            runtime_lookup.prefilter.runDigest(
+                glyphs,
+                lookup_flag,
+                lookup_options,
+            );
         if (run_digest.isEmpty() or !accelerator.coverage_digest.mayIntersect(run_digest)) return;
         // The coverage-only chaining collector performs this same exact group
         // lookup as its first action for every glyph. Running a whole-run exact
@@ -386,7 +347,13 @@ noinline fn collectLookupWithIndexPrepared(
         // equivalent grouped dispatcher and retain the preflight.
         if (!accelerator.chaining_coverage_only and
             accelerator.coverage_groups.len != 0 and
-            !lookupCoverageGroupsMayMatchRun(accelerator.coverage_groups, accelerator.coverage_group_slots, glyphs, lookup_flag, lookup_options))
+            !runtime_lookup.prefilter.groupsMayMatchRun(
+                accelerator.coverage_groups,
+                accelerator.coverage_group_slots,
+                glyphs,
+                lookup_flag,
+                lookup_options,
+            ))
         {
             return;
         }
@@ -523,23 +490,6 @@ noinline fn collectLookupWithIndexPrepared(
             else => {},
         }
     }
-}
-
-fn lookupCoverageGroupsMayMatchRun(groups: []const ChainingSubtableGroup, slots: []const u16, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) bool {
-    for (glyphs) |glyph| {
-        if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
-        if (accelerator_core.glyph_groups.find(groups, slots, glyph) != null) return true;
-    }
-    return false;
-}
-
-fn glyphRunDigest(glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GlyphDigest {
-    var digest = GlyphDigest.empty();
-    for (glyphs) |glyph| {
-        if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
-        digest.add(glyph);
-    }
-    return digest;
 }
 
 const stack_matched_capacity = 128;

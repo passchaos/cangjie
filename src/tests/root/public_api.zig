@@ -131,6 +131,49 @@ test "concrete face views cover the normal application workflow" {
     try std.testing.expectEqual(&face, run.font);
 }
 
+test "core font inspection is reachable through the public metadata domain" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    const inspection = cangjie.font.metadata.core.inspect(&face);
+
+    const header = try inspection.header();
+    try std.testing.expectEqual(@as(u16, 1000), header.units_per_em);
+    const max_profile = try inspection.maxProfile();
+    try std.testing.expectEqual(@as(u16, 2), max_profile.glyph_count);
+
+    const tables = try inspection.tables(allocator);
+    defer allocator.free(tables);
+    try std.testing.expect(tables.len != 0);
+    const head_data = (try inspection.tableData(.{ 'h', 'e', 'a', 'd' })).?;
+    try std.testing.expect(head_data.len >= 54);
+
+    const charmaps = try inspection.charmaps(allocator);
+    defer allocator.free(charmaps);
+    try std.testing.expect(charmaps.len != 0);
+    const selected = (try inspection.defaultCharmap()).?;
+    try std.testing.expectEqual(
+        @as(cangjie.font.GlyphId, 1),
+        try inspection.glyphIndex(selected, 'A'),
+    );
+    const first = (try inspection.firstMapping(selected)).?;
+    try std.testing.expect(first.codepoint <= 'A');
+
+    const names = try inspection.nameRecords(allocator);
+    defer allocator.free(names);
+    const meta = try inspection.metaRecords(allocator);
+    defer allocator.free(meta);
+    try std.testing.expect((try inspection.digitalSignature(allocator)) == null);
+    try std.testing.expect((try inspection.gridFitAndScan(allocator)) == null);
+
+    const locations = try inspection.glyphLocations(allocator);
+    defer allocator.free(locations);
+    try std.testing.expectEqual(max_profile.glyph_count, locations.len);
+}
+
 test "concrete engine remains valid after a value move" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalTtf(allocator);

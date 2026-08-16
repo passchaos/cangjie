@@ -4,6 +4,7 @@ const accelerator_model = accelerator_root.model;
 const cluster_safety = @import("shaping/cluster_safety.zig");
 const feature_domain = @import("gsub/feature/root.zig");
 const direct_alternate = @import("gsub/execution/direct/alternate/root.zig");
+const direct_multiple = @import("gsub/execution/direct/multiple/root.zig");
 const direct_single = @import("gsub/execution/direct/single/root.zig");
 const GlyphId = @import("glyph.zig").GlyphId;
 const ligature_provenance = @import("ligature_provenance.zig");
@@ -77,8 +78,6 @@ const LookupOptions = runtime.Options;
 
 const LookupAccelerator = acceleration.Lookup;
 const SingleSubstAccelerator = accelerator_model.SingleSubstitution;
-const MultipleSubstAccelerator = accelerator_model.MultipleSubstitution;
-const MultipleSubstEntry = accelerator_model.MultipleEntry;
 const LigatureSubstAccelerator = accelerator_model.LigatureSubstitution;
 const LigatureSetEntry = accelerator_model.LigatureSet;
 const LigatureDefinition = accelerator_model.LigatureDefinition;
@@ -1461,10 +1460,10 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
             lookup_index,
             lookup_options,
         )) |accelerator| {
-            try applyMultipleSubstitutionAccelerated(table, accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
+            try direct_multiple.accelerated(table, accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
             return;
         }
-        try applyMultipleSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
+        try direct_multiple.lookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
         return;
     }
     if (lookup_type == 3) {
@@ -1495,7 +1494,7 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
                 return;
             },
             2 => {
-                try applyExtensionMultipleSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
+                try direct_multiple.extensionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
                 return;
             },
             3 => {
@@ -1715,83 +1714,6 @@ fn extensionSubtablePayload(table: Table, subtable_offset: usize, expected_looku
         subtable_offset,
         expected_lookup_type,
     );
-}
-
-fn applyMultipleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
-    if (subtable_count == 1) {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
-        try applyMultipleSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, options);
-        return;
-    }
-
-    // MultipleSubst can change cardinality, but lookup subtables are still
-    // alternatives for a single original input position. Process one target
-    // position through the subtable list before advancing, so a replacement
-    // glyph produced by an earlier subtable is not fed into a later subtable in
-    // the same lookup.
-    var glyph_index: usize = 0;
-    while (glyph_index < glyphs.items.len) {
-        if (!runtime_filtering.sourceFeatureAllowsGlyph(options, glyph_index)) {
-            glyph_index += 1;
-            continue;
-        }
-        if (runtime_filtering.lookupIgnoresGlyph(lookup_flag, options, glyphs.items[glyph_index])) {
-            glyph_index += 1;
-            continue;
-        }
-
-        var matched = false;
-        for (0..subtable_count) |subtable_i| {
-            const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-            if (try applyMultipleSubstitutionAt(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, options)) |change| {
-                // Advance past the glyphs inserted for this original input.
-                // For deletion, stay at the same physical index so the next
-                // original glyph that shifted left is considered from the
-                // first subtable on the next loop iteration.
-                glyph_index += change.inserted_len;
-                matched = true;
-                break;
-            }
-        }
-        if (!matched) glyph_index += 1;
-    }
-}
-
-fn applyExtensionMultipleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
-    if (subtable_count == 1) {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
-        const extension_subtable = try extensionSubtablePayload(table, subtable_offset, 2);
-        try applyMultipleSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options);
-        return;
-    }
-
-    // Homogeneous ExtensionSubst(MultipleSubst) lookups need the same
-    // per-position ordering as direct MultipleSubst. Delegating each extension
-    // subtable over the whole run would allow 10=>20 in subtable 0 to cascade
-    // into 20=>[...] in subtable 1, even though both subtables belong to one
-    // lookup and should be alternatives for the original glyph.
-    var glyph_index: usize = 0;
-    while (glyph_index < glyphs.items.len) {
-        if (!runtime_filtering.sourceFeatureAllowsGlyph(options, glyph_index)) {
-            glyph_index += 1;
-            continue;
-        }
-        if (runtime_filtering.lookupIgnoresGlyph(lookup_flag, options, glyphs.items[glyph_index])) {
-            glyph_index += 1;
-            continue;
-        }
-
-        var matched = false;
-        for (0..subtable_count) |subtable_i| {
-            const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-            if (try applyNestedExtensionSubstitutionAt(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, options)) |change| {
-                glyph_index += change.inserted_len;
-                matched = true;
-                break;
-            }
-        }
-        if (!matched) glyph_index += 1;
-    }
 }
 
 fn shapeProfileNow(
@@ -2094,94 +2016,6 @@ fn setLigatureMetadata(options: LookupOptions, glyph_index: usize, info: ligatur
     }
 }
 
-fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
-    const subst_format = try readU16(table, subtable_offset);
-    if (subst_format != 1) return error.UnsupportedGsub;
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const sequence_count = try readU16(table, subtable_offset + 4);
-
-    var i: usize = 0;
-    while (i < glyphs.items.len) : (i += 1) {
-        if (!runtime_filtering.sourceFeatureAllowsGlyph(options, i)) continue;
-        if (runtime_filtering.lookupIgnoresGlyph(lookup_flag, options, glyphs.items[i])) continue;
-        const coverage = try table_core.coverage.index(table, coverage_offset, glyphs.items[i]) orelse continue;
-        if (coverage >= sequence_count) continue;
-        const sequence_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + coverage * 2));
-        const glyph_count = try readU16(table, sequence_offset);
-        if (glyph_count == 0) {
-            // A zero-length sequence deletes the covered glyph.
-            try runtime.limits.consumeMutation(options, glyphs.items.len, 1, 0);
-            const prepared = try runtime_mutation.prepareReplacement(allocator, glyphs, options, i, 1, 0, 0);
-            prepared.commit(glyphs, &.{});
-            if (i > 0) i -= 1;
-            continue;
-        }
-        if (glyph_count == 1) {
-            try runtime.limits.consumeMutation(options, glyphs.items.len, 1, 1);
-            glyphs.items[i] = try readU16(table, sequence_offset + 2);
-            runtime_mutation.markSubstituted(options, i);
-            continue;
-        }
-        const replacement = try allocator.alloc(GlyphId, glyph_count);
-        defer allocator.free(replacement);
-        for (replacement, 0..) |*glyph, replacement_index| {
-            glyph.* = try readU16(table, sequence_offset + 2 + replacement_index * 2);
-        }
-        try runtime.limits.consumeMutation(options, glyphs.items.len, 1, replacement.len);
-        const prepared = try runtime_mutation.prepareReplacement(allocator, glyphs, options, i, 1, replacement.len, runtime_filtering.sourceForGlyph(options, i));
-        prepared.commit(glyphs, replacement);
-        i += glyph_count - 1;
-    }
-}
-
-fn applyMultipleSubstitutionAccelerated(table: Table, accelerator: MultipleSubstAccelerator, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
-    var i: usize = 0;
-    while (i < glyphs.items.len) : (i += 1) {
-        if (!runtime_filtering.sourceFeatureAllowsGlyph(options, i)) continue;
-        if (runtime_filtering.lookupIgnoresGlyph(lookup_flag, options, glyphs.items[i])) continue;
-        const entry = multipleSubstEntryForGlyph(accelerator.entries, glyphs.items[i]) orelse continue;
-        if (entry.glyph_count == 0) {
-            try runtime.limits.consumeMutation(options, glyphs.items.len, 1, 0);
-            const prepared = try runtime_mutation.prepareReplacement(allocator, glyphs, options, i, 1, 0, 0);
-            prepared.commit(glyphs, &.{});
-            if (i > 0) i -= 1;
-            continue;
-        }
-        if (entry.glyph_count == 1) {
-            try runtime.limits.consumeMutation(options, glyphs.items.len, 1, 1);
-            glyphs.items[i] = entry.single_to;
-            runtime_mutation.markSubstituted(options, i);
-            continue;
-        }
-        const replacement = try allocator.alloc(GlyphId, entry.glyph_count);
-        defer allocator.free(replacement);
-        for (replacement, 0..) |*glyph, replacement_index| {
-            glyph.* = try readU16(table, entry.sequence_offset + 2 + replacement_index * 2);
-        }
-        try runtime.limits.consumeMutation(options, glyphs.items.len, 1, replacement.len);
-        const prepared = try runtime_mutation.prepareReplacement(allocator, glyphs, options, i, 1, replacement.len, runtime_filtering.sourceForGlyph(options, i));
-        prepared.commit(glyphs, replacement);
-        i += replacement.len - 1;
-    }
-}
-
-fn multipleSubstEntryForGlyph(entries: []const MultipleSubstEntry, glyph: GlyphId) ?MultipleSubstEntry {
-    var lo: usize = 0;
-    var hi: usize = entries.len;
-    while (lo < hi) {
-        const mid = lo + (hi - lo) / 2;
-        const candidate = entries[mid].glyph;
-        if (glyph < candidate) {
-            hi = mid;
-        } else if (glyph > candidate) {
-            lo = mid + 1;
-        } else {
-            return entries[mid];
-        }
-    }
-    return null;
-}
-
 test "GSUB staged plans retain random AlternateSubst semantics" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 80;
@@ -2271,7 +2105,7 @@ fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std
     // wrapper lookup still owns LookupFlag filtering for the enclosed lookup.
     switch (extension_lookup_type) {
         1 => try direct_single.subtable(table, extension_subtable, glyphs, lookup_flag, options),
-        2 => try applyMultipleSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options),
+        2 => try direct_multiple.subtable(table, extension_subtable, glyphs, allocator, lookup_flag, options),
         3 => try direct_alternate.subtable(table, extension_subtable, glyphs, lookup_flag, options),
         4 => try applyLigatureSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options),
         5 => try applyContextSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options),
@@ -2477,35 +2311,9 @@ fn ligatureAtAcceleratedPrefiltered(accelerator: LigatureSubstAccelerator, set: 
     return null;
 }
 
-fn applyMultipleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!?NestedGlyphChange {
-    const subst_format = try readU16(table, subtable_offset);
-    if (subst_format != 1) return error.UnsupportedGsub;
-    if (glyph_index >= glyphs.items.len) return null;
-    if (runtime_filtering.lookupIgnoresGlyph(lookup_flag, options, glyphs.items[glyph_index])) return null;
-
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const sequence_count = try readU16(table, subtable_offset + 4);
-    const coverage = try table_core.coverage.index(table, coverage_offset, glyphs.items[glyph_index]) orelse return null;
-    if (coverage >= sequence_count) return null;
-    const sequence_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + coverage * 2));
-    const glyph_count = try readU16(table, sequence_offset);
-    if (glyph_count == 1) {
-        try runtime.limits.consumeMutation(options, glyphs.items.len, 1, 1);
-        glyphs.items[glyph_index] = try readU16(table, sequence_offset + 2);
-        runtime_mutation.markSubstituted(options, glyph_index);
-        return .{};
-    }
-
-    const replacement = try allocator.alloc(GlyphId, glyph_count);
-    defer allocator.free(replacement);
-    for (replacement, 0..) |*glyph, replacement_index| {
-        glyph.* = try readU16(table, sequence_offset + 2 + replacement_index * 2);
-    }
-
-    try runtime.limits.consumeMutation(options, glyphs.items.len, 1, replacement.len);
-    const prepared = try runtime_mutation.prepareReplacement(allocator, glyphs, options, glyph_index, 1, replacement.len, runtime_filtering.sourceForGlyph(options, glyph_index));
-    prepared.commit(glyphs, replacement);
-    return .{ .removed_len = 1, .inserted_len = replacement.len };
+fn applyDirectMultipleAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!?NestedGlyphChange {
+    const change = try direct_multiple.at(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, options) orelse return null;
+    return .{ .removed_len = change.removed_len, .inserted_len = change.inserted_len };
 }
 
 fn applyLigatureSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!?NestedGlyphChange {
@@ -4862,7 +4670,7 @@ fn applyNestedGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), glyph_i
         // later subtables and report the wrong insert count to the record map.
         for (0..subtable_count) |subtable_i| {
             const subtable_offset = nested_lookup_offset + try readU16(table, nested_lookup_offset + 6 + subtable_i * 2);
-            if (try applyMultipleSubstitutionAt(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, lookup_options)) |change| {
+            if (try applyDirectMultipleAt(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, lookup_options)) |change| {
                 return change;
             }
         }
@@ -4930,7 +4738,7 @@ fn applyNestedExtensionSubstitutionAt(table: Table, subtable_offset: usize, glyp
             if (try direct_single.at(table, extension_subtable, glyphs, glyph_index, lookup_flag, options)) return .{};
             return null;
         },
-        2 => return try applyMultipleSubstitutionAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options),
+        2 => return try applyDirectMultipleAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options),
         4 => return try applyLigatureSubstitutionAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options),
         5 => return if ((try applyContextSubstitutionAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options)).matched) .{} else null,
         6 => return if ((try applyChainingContextSubstitutionAt(table, extension_subtable, null, glyphs, glyph_index, allocator, lookup_flag, options)).matched) .{} else null,
@@ -6234,7 +6042,7 @@ test "GSUB MultipleSubst rejects null Sequence offsets" {
     var glyphs = std.ArrayList(GlyphId).empty;
     defer glyphs.deinit(std.testing.allocator);
     try glyphs.append(std.testing.allocator, 1);
-    try std.testing.expectError(error.BadGsub, applyMultipleSubstitution(table, subtable, &glyphs, std.testing.allocator, 0, .{}));
+    try std.testing.expectError(error.BadGsub, direct_multiple.subtable(table, subtable, &glyphs, std.testing.allocator, 0, .{}));
     try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
 
     // An empty Sequence can still be represented explicitly; only the child
@@ -6788,68 +6596,6 @@ test "GSUB explicit feature sequence can chain Bengali half and pres ligatures" 
         .source_syllables = &staged_syllables,
     });
     try std.testing.expectEqualSlices(GlyphId, &.{6}, staged.items);
-}
-
-test "GSUB multiple substitution preserves ligature provenance" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 32;
-
-    writeU16Test(&bytes, 0, 2); // MultipleSubst lookup.
-    writeU16Test(&bytes, 2, 0);
-    writeU16Test(&bytes, 4, 1);
-    writeU16Test(&bytes, 6, 8);
-    const multiple = 8;
-    writeU16Test(&bytes, multiple + 0, 1);
-    writeU16Test(&bytes, multiple + 2, 12);
-    writeU16Test(&bytes, multiple + 4, 1);
-    writeU16Test(&bytes, multiple + 6, 18);
-    writeCoverage1(&bytes, multiple + 12, 10);
-    const sequence = multiple + 18;
-    writeU16Test(&bytes, sequence + 0, 2);
-    writeU16Test(&bytes, sequence + 2, 20);
-    writeU16Test(&bytes, sequence + 4, 21);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.append(allocator, 10);
-
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(allocator);
-    try sources.append(allocator, 3);
-
-    var stage_substituted = std.ArrayList(bool).empty;
-    defer stage_substituted.deinit(allocator);
-    try stage_substituted.append(allocator, false);
-
-    var components = ligature_provenance.Store{};
-    defer components.deinit(allocator);
-    const ligature_info = try components.addLigature(allocator, &.{ 3, 4 });
-    try components.infos.append(allocator, ligature_info);
-
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
-        .glyph_source_indices = &sources,
-        .glyph_stage_substituted = &stage_substituted,
-        .ligature_components = &components,
-    });
-
-    try std.testing.expectEqualSlices(GlyphId, &.{ 20, 21 }, glyphs.items);
-    try std.testing.expectEqualSlices(usize, &.{ 3, 3 }, sources.items);
-    try std.testing.expectEqualSlices(bool, &.{ true, true }, stage_substituted.items);
-    try std.testing.expectEqual(@as(u8, 2), components.infos.items[0].component_count);
-    try std.testing.expectEqual(@as(u8, 2), components.infos.items[1].component_count);
-    try std.testing.expect(components.infos.items[0].flags.multiplied);
-    try std.testing.expect(components.infos.items[1].flags.multiplied);
-    try std.testing.expectEqual(@as(u4, 0), components.infos.items[0].flags.multiple_component);
-    try std.testing.expectEqual(@as(u4, 1), components.infos.items[1].flags.multiple_component);
-    try std.testing.expectEqual(
-        components.infos.items[0].source_start,
-        components.infos.items[1].source_start,
-    );
-    try std.testing.expectEqualSlices(
-        usize,
-        &.{ 3, 4 },
-        components.componentSources(components.infos.items[0]).?,
-    );
 }
 
 test "GSUB LangSys required feature bypasses optional feature filtering" {
@@ -8782,38 +8528,6 @@ test "GSUB single substitution subtables do not cascade within lookup" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 20, 30 }, glyphs.items);
 }
 
-test "GSUB multiple substitution skips lookup-flag ignored glyphs" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 32;
-
-    writeU16Test(&bytes, 0, 2);
-    writeU16Test(&bytes, 2, 0x0008);
-    writeU16Test(&bytes, 4, 1);
-    writeU16Test(&bytes, 6, 8);
-
-    const multiple = 8;
-    writeU16Test(&bytes, multiple + 0, 1);
-    writeU16Test(&bytes, multiple + 2, 12);
-    writeU16Test(&bytes, multiple + 4, 1);
-    writeU16Test(&bytes, multiple + 6, 18);
-    writeCoverage1(&bytes, multiple + 12, 3);
-    const sequence = multiple + 18;
-    writeU16Test(&bytes, sequence + 0, 2);
-    writeU16Test(&bytes, sequence + 2, 30);
-    writeU16Test(&bytes, sequence + 4, 31);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 3, 4, 3 });
-
-    const glyph_classes = [_]u16{ 0, 0, 0, 3, 0 };
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
-        .glyph_classes = &glyph_classes,
-    });
-
-    try std.testing.expectEqualSlices(GlyphId, &.{ 3, 4, 3 }, glyphs.items);
-}
-
 test "GSUB extension single substitution subtables do not cascade within lookup" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 54;
@@ -8853,100 +8567,6 @@ test "GSUB extension single substitution subtables do not cascade within lookup"
     // SingleSubst: the glyph created by the first wrapper is not eligible for
     // the later wrapper in the same lookup.
     try std.testing.expectEqualSlices(GlyphId, &.{ 20, 30 }, glyphs.items);
-}
-
-test "GSUB multiple substitution subtables do not cascade within lookup" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 58;
-
-    writeU16Test(&bytes, 0, 2);
-    writeU16Test(&bytes, 4, 2);
-    writeU16Test(&bytes, 6, 10);
-    writeU16Test(&bytes, 8, 34);
-
-    const first_multiple = 10;
-    writeU16Test(&bytes, first_multiple + 0, 1);
-    writeU16Test(&bytes, first_multiple + 2, 14);
-    writeU16Test(&bytes, first_multiple + 4, 1);
-    writeU16Test(&bytes, first_multiple + 6, 8);
-    const first_sequence = first_multiple + 8;
-    writeU16Test(&bytes, first_sequence + 0, 2);
-    writeU16Test(&bytes, first_sequence + 2, 20);
-    writeU16Test(&bytes, first_sequence + 4, 21);
-    writeCoverage1(&bytes, first_multiple + 14, 10);
-
-    const second_multiple = 34;
-    writeU16Test(&bytes, second_multiple + 0, 1);
-    writeU16Test(&bytes, second_multiple + 2, 14);
-    writeU16Test(&bytes, second_multiple + 4, 1);
-    writeU16Test(&bytes, second_multiple + 6, 8);
-    const second_sequence = second_multiple + 8;
-    writeU16Test(&bytes, second_sequence + 0, 2);
-    writeU16Test(&bytes, second_sequence + 2, 30);
-    writeU16Test(&bytes, second_sequence + 4, 31);
-    writeCoverage1(&bytes, second_multiple + 14, 20);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 10, 20 });
-
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{});
-
-    // The first subtable expands glyph 10 into a sequence whose first glyph is
-    // also covered by the second subtable. Subtables in one lookup are
-    // alternatives for each original input position, so only the original
-    // second glyph 20 may be considered by the later subtable.
-    try std.testing.expectEqualSlices(GlyphId, &.{ 20, 21, 30, 31 }, glyphs.items);
-}
-
-test "GSUB extension multiple substitution subtables do not cascade within lookup" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 82;
-
-    writeU16Test(&bytes, 0, 7);
-    writeU16Test(&bytes, 4, 2);
-    writeU16Test(&bytes, 6, 10);
-    writeU16Test(&bytes, 8, 50);
-
-    const first_extension = 10;
-    writeU16Test(&bytes, first_extension + 0, 1);
-    writeU16Test(&bytes, first_extension + 2, 2);
-    writeU32Test(&bytes, first_extension + 4, 8);
-    const first_multiple = first_extension + 8;
-    writeU16Test(&bytes, first_multiple + 0, 1);
-    writeU16Test(&bytes, first_multiple + 2, 14);
-    writeU16Test(&bytes, first_multiple + 4, 1);
-    writeU16Test(&bytes, first_multiple + 6, 8);
-    const first_sequence = first_multiple + 8;
-    writeU16Test(&bytes, first_sequence + 0, 2);
-    writeU16Test(&bytes, first_sequence + 2, 20);
-    writeU16Test(&bytes, first_sequence + 4, 21);
-    writeCoverage1(&bytes, first_multiple + 14, 10);
-
-    const second_extension = 50;
-    writeU16Test(&bytes, second_extension + 0, 1);
-    writeU16Test(&bytes, second_extension + 2, 2);
-    writeU32Test(&bytes, second_extension + 4, 8);
-    const second_multiple = second_extension + 8;
-    writeU16Test(&bytes, second_multiple + 0, 1);
-    writeU16Test(&bytes, second_multiple + 2, 14);
-    writeU16Test(&bytes, second_multiple + 4, 1);
-    writeU16Test(&bytes, second_multiple + 6, 8);
-    const second_sequence = second_multiple + 8;
-    writeU16Test(&bytes, second_sequence + 0, 2);
-    writeU16Test(&bytes, second_sequence + 2, 30);
-    writeU16Test(&bytes, second_sequence + 4, 31);
-    writeCoverage1(&bytes, second_multiple + 14, 20);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 10, 20 });
-
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{});
-
-    // ExtensionSubst only widens offsets; homogeneous ExtensionSubst wrappers
-    // around MultipleSubst must still preserve lookup-level subtable ordering.
-    try std.testing.expectEqualSlices(GlyphId, &.{ 20, 21, 30, 31 }, glyphs.items);
 }
 
 test "GSUB ligature substitution honors LigatureSet order" {

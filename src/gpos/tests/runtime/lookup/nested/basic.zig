@@ -1,7 +1,7 @@
 //! Nested PosLookupRecord dispatch contracts.
 
 const std = @import("std");
-const nested = @import("../../../runtime/lookup/nested.zig");
+const nested = @import("../../../../runtime/lookup/nested.zig");
 
 test "nested records map sequence indexes to lookup targets" {
     const allocator = std.testing.allocator;

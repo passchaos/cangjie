@@ -6,7 +6,7 @@ test {
     _ = @import("dispatcher/root.zig");
     _ = @import("extension/root.zig");
     _ = @import("marks/root.zig");
-    _ = @import("nested.zig");
+    _ = @import("nested/root.zig");
     _ = @import("pair/root.zig");
     _ = @import("prefilter.zig");
     _ = @import("single/root.zig");

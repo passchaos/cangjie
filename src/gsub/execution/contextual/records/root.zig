@@ -40,7 +40,11 @@ pub fn apply(
             run,
         );
     }
-    if (try fast_single.apply(
+    const enable_fast_single = if (@hasDecl(Executor, "enable_fast_single"))
+        Executor.enable_fast_single
+    else
+        true;
+    if (enable_fast_single and try fast_single.apply(
         view,
         glyphs,
         records_offset,

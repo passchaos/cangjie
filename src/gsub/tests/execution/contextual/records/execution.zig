@@ -7,6 +7,8 @@ const Options = @import("../../../../runtime/options.zig").Options;
 const table = @import("../../../../table/root.zig");
 
 const Executor = struct {
+    pub const enable_fast_single = false;
+
     pub fn applyNested(
         _: table.View,
         glyphs: *std.ArrayList(u16),
@@ -38,14 +40,9 @@ const Executor = struct {
 
 test "records extend the map and apply a newly valid sequence index" {
     const allocator = std.testing.allocator;
-    // More than the bounded SingleSubst batch forces the generic concrete
-    // executor path. The remaining records use an unreachable SequenceIndex.
-    var bytes = [_]u8{0} ** (65 * 4);
+    var bytes = [_]u8{0} ** 8;
     writeRecord(&bytes, 0, 0, 0);
     writeRecord(&bytes, 4, 1, 1);
-    for (2..65) |record_index| {
-        writeRecord(&bytes, record_index * 4, 63, 1);
-    }
 
     var glyphs = std.ArrayList(u16).empty;
     defer glyphs.deinit(allocator);
@@ -55,7 +52,7 @@ test "records extend the map and apply a newly valid sequence index" {
         validatedView(&bytes),
         &glyphs,
         0,
-        65,
+        2,
         &.{0},
         allocator,
         .{},

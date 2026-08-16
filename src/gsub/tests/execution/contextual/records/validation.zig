@@ -5,6 +5,8 @@ const records = @import("../../../../execution/contextual/records/root.zig");
 const table = @import("../../../../table/root.zig");
 
 const Validator = struct {
+    pub const enable_fast_single = false;
+
     pub fn validateNested(_: table.View, lookup_offset: usize) !void {
         if (lookup_offset != 14) return error.BadGsub;
     }

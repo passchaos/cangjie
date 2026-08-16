@@ -2,6 +2,7 @@
 
 pub const model = @import("model.zig");
 pub const selection = @import("selection.zig");
+pub const validation = @import("validation.zig");
 pub const variations = @import("variations.zig");
 
 pub const Application = model.Application;

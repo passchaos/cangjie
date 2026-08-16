@@ -602,7 +602,7 @@ fn canFallbackFromBadGsubSelection(table: Table) GsubError!bool {
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
     try ensureBytesWithin(table, lookup_list_offset + 2, @as(usize, lookup_count) * 2);
-    _ = try ensureFeatureLookupReferencesWithin(table, lookup_count);
+    _ = try feature_domain.validation.lookupReferences(table, lookup_count);
     return true;
 }
 
@@ -2567,8 +2567,8 @@ pub fn validateGlyphBounds(data: []const u8, offset: usize, length: usize, glyph
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16BadGsub(table, lookup_list_offset);
     try ensureBytesWithin(table, lookup_list_offset + 2, @as(usize, lookup_count) * 2);
-    const feature_count = try ensureFeatureLookupReferencesWithin(table, lookup_count);
-    try ensureScriptFeatureReferencesWithin(table, feature_count);
+    const feature_count = try feature_domain.validation.lookupReferences(table, lookup_count);
+    try feature_domain.validation.scriptReferences(table, feature_count);
     for (0..lookup_count) |lookup_i| {
         const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGsub(table, lookup_list_offset + 2 + lookup_i * 2));
         try ensureLookupHeaderWithin(table, lookup_offset);
@@ -2594,8 +2594,8 @@ pub fn validateGlyphBoundsForShaping(data: []const u8, offset: usize, length: us
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16BadGsub(table, lookup_list_offset);
     try ensureBytesWithin(table, lookup_list_offset + 2, @as(usize, lookup_count) * 2);
-    const feature_count = try ensureFeatureLookupReferencesWithin(table, lookup_count);
-    ensureScriptFeatureReferencesWithin(table, feature_count) catch {};
+    const feature_count = try feature_domain.validation.lookupReferences(table, lookup_count);
+    feature_domain.validation.scriptReferences(table, feature_count) catch {};
     for (0..lookup_count) |lookup_i| {
         const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGsub(table, lookup_list_offset + 2 + lookup_i * 2));
         try ensureLookupHeaderWithin(table, lookup_offset);
@@ -7303,71 +7303,6 @@ fn ensureLigatureLookupSubtablesWithinForShaping(table: Table, lookup_offset: us
         const subtable_offset = try checkedRequiredSubtableOffset(table, lookup_offset, try readU16BadGsub(table, lookup_offset + 6 + subtable_i * 2));
         try ensureSubstitutionSubtableFixedHeaderWithin(table, subtable_offset, 4);
         try ensureLigatureSubstitutionSubtableWithinForShaping(table, subtable_offset);
-    }
-}
-
-fn ensureFeatureLookupReferencesWithin(table: Table, lookup_count: u16) GsubError!u16 {
-    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
-    const feature_count = try readU16BadGsub(table, feature_list_offset);
-    try ensureBytesWithin(table, feature_list_offset + 2, @as(usize, feature_count) * 6);
-
-    for (0..feature_count) |feature_i| {
-        const feature_record = feature_list_offset + 2 + feature_i * 6;
-        const feature_offset = try checkedSubtableOffset(table, feature_list_offset, try readU16BadGsub(table, feature_record + 4));
-        const lookup_index_count = try readU16BadGsub(table, feature_offset + 2);
-        try ensureBytesWithin(table, feature_offset + 4, @as(usize, lookup_index_count) * 2);
-
-        for (0..lookup_index_count) |lookup_i| {
-            const lookup_index = try readU16BadGsub(table, feature_offset + 4 + lookup_i * 2);
-            // Feature tables are the public activation graph for lookups. If a
-            // feature points past LookupList, shaping would silently skip that
-            // requested substitution and make script/language selection depend
-            // on malformed table topology rather than declared lookup data.
-            if (lookup_index >= lookup_count) return error.BadGsub;
-        }
-    }
-    return feature_count;
-}
-
-fn ensureScriptFeatureReferencesWithin(table: Table, feature_count: u16) GsubError!void {
-    const script_list_offset = try checkedRequiredScriptListOffset(table);
-    const script_count = try readU16BadGsub(table, script_list_offset);
-    try ensureBytesWithin(table, script_list_offset + 2, @as(usize, script_count) * 6);
-    try feature_domain.selection.validateScriptRecords(table, script_list_offset, script_count);
-
-    for (0..script_count) |script_i| {
-        const script_record = script_list_offset + 2 + script_i * 6;
-        const script_offset = try checkedSubtableOffset(table, script_list_offset, try readU16BadGsub(table, script_record + 4));
-        const default_lang_sys_relative = try readU16BadGsub(table, script_offset);
-        const lang_sys_count = try readU16BadGsub(table, script_offset + 2);
-        try ensureBytesWithin(table, script_offset + 4, @as(usize, lang_sys_count) * 6);
-        try feature_domain.selection.validateLanguageRecords(table, script_offset, lang_sys_count);
-
-        if (default_lang_sys_relative != 0) {
-            try ensureLangSysFeatureReferencesWithin(table, try checkedSubtableOffset(table, script_offset, default_lang_sys_relative), feature_count);
-        }
-        for (0..lang_sys_count) |lang_i| {
-            const lang_record = script_offset + 4 + lang_i * 6;
-            const lang_sys_offset = try checkedSubtableOffset(table, script_offset, try readU16BadGsub(table, lang_record + 4));
-            try ensureLangSysFeatureReferencesWithin(table, lang_sys_offset, feature_count);
-        }
-    }
-}
-
-fn ensureLangSysFeatureReferencesWithin(table: Table, lang_sys_offset: usize, feature_count: u16) GsubError!void {
-    // ScriptList is the entry point for default lookup selection. Validate
-    // every LangSys feature index against FeatureList so malformed scripts do
-    // not silently disable required shaping or make feature selection depend on
-    // out-of-range topology.
-    try ensureBytesWithin(table, lang_sys_offset, 6);
-    const required_feature_index = try readU16BadGsub(table, lang_sys_offset + 2);
-    if (required_feature_index != 0xffff and required_feature_index >= feature_count) return error.BadGsub;
-
-    const lang_feature_count = try readU16BadGsub(table, lang_sys_offset + 4);
-    try ensureBytesWithin(table, lang_sys_offset + 6, @as(usize, lang_feature_count) * 2);
-    for (0..lang_feature_count) |feature_i| {
-        const feature_index = try readU16BadGsub(table, lang_sys_offset + 6 + feature_i * 2);
-        if (feature_index >= feature_count) return error.BadGsub;
     }
 }
 

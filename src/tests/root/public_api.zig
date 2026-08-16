@@ -5,11 +5,12 @@ const cangjie = @import("../../root.zig");
 const test_font = @import("../../test_font.zig");
 
 test "public facade uses domain names without legacy aliases" {
-    try std.testing.expect(@hasDecl(cangjie, "Engine"));
+    try std.testing.expect(!@hasDecl(cangjie, "Engine"));
     try std.testing.expect(@hasDecl(cangjie.font, "Face"));
     try std.testing.expect(@hasDecl(cangjie.font, "Cascade"));
     try std.testing.expect(@hasDecl(cangjie.font.container, "OwnedFace"));
     try std.testing.expect(@hasDecl(cangjie.shaping, "Glyph"));
+    try std.testing.expect(@hasDecl(cangjie.shaping, "Engine"));
     try std.testing.expect(@hasDecl(cangjie.text, "segmentation"));
     try std.testing.expect(@hasDecl(cangjie.font.metadata, "variations"));
 
@@ -98,7 +99,7 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(
         @typeInfo(cangjie.font.container.OwnedFace) == .@"struct",
     );
-    try std.testing.expect(@typeInfo(cangjie.Engine) == .@"struct");
+    try std.testing.expect(@typeInfo(cangjie.shaping.Engine) == .@"struct");
     try std.testing.expect(
         @typeInfo(cangjie.text.segmentation.WordDictionary) == .@"struct",
     );
@@ -119,7 +120,7 @@ test "concrete face views cover the normal application workflow" {
     const metrics = try face.metrics().horizontal(1);
     try std.testing.expect(metrics.advance_width > 0);
 
-    var engine = cangjie.Engine.init(allocator, .{});
+    var engine = cangjie.shaping.Engine.init(allocator, .{});
     defer engine.deinit();
     const run = try engine.shape(&face, .{ .text = "A", .font_size = 20 });
     try std.testing.expectEqual(@as(usize, 1), run.glyphs.len);
@@ -134,7 +135,7 @@ test "concrete engine remains valid after a value move" {
     var face = try cangjie.font.Face.parse(allocator, bytes);
     defer face.deinit();
 
-    var original = cangjie.Engine.init(allocator, .{});
+    var original = cangjie.shaping.Engine.init(allocator, .{});
     // Moving before first use is the normal return-value path. Moving after a
     // call additionally proves that work methods rebind cache pointers that
     // previously targeted the old value address.
@@ -148,6 +149,107 @@ test "concrete engine remains valid after a value move" {
         .{ .text = "AA", .font_size = 20 },
     );
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
+}
+
+test "text domains are usable without font or shaping state" {
+    const allocator = std.testing.allocator;
+    const segmentation = cangjie.text.segmentation;
+    const text = "A\u{0301} beta. \u{05d0}";
+
+    var graphemes = try segmentation.graphemes(text);
+    const first = graphemes.next().?;
+    try std.testing.expectEqual(@as(usize, 0), first.byte_start);
+    try std.testing.expectEqual("A\u{0301}".len, first.byte_len);
+
+    var words = try segmentation.words(text);
+    var saw_word = false;
+    while (words.next()) |segment| {
+        saw_word = saw_word or segment.is_word;
+    }
+    try std.testing.expect(saw_word);
+
+    var sentences = try segmentation.sentences(text);
+    try std.testing.expect(sentences.next() != null);
+    var line_breaks = try segmentation.lineBreaks(text);
+    try std.testing.expect(line_breaks.next() != null);
+
+    var bidi = try cangjie.text.bidi.resolve(
+        allocator,
+        text,
+        .auto,
+    );
+    defer bidi.deinit();
+    try std.testing.expect(bidi.scalars.len != 0);
+
+    const runs = try cangjie.text.script.collectRuns(allocator, text);
+    defer allocator.free(runs);
+    try std.testing.expect(runs.len != 0);
+    try std.testing.expectEqual(
+        cangjie.text.joining.Type.dual,
+        cangjie.text.joining.typeOf(0x0628),
+    );
+    try std.testing.expectEqual(
+        cangjie.text.vertical.Orientation.upright,
+        cangjie.text.vertical.orientation(0x4e00),
+    );
+}
+
+test "dictionary line segmentation is independently consumable" {
+    const allocator = std.testing.allocator;
+    const segmentation = cangjie.text.segmentation;
+    const text = "\u{0e20}\u{0e32}\u{0e29}\u{0e32}\u{0e44}\u{0e17}\u{0e22}";
+    var dictionary = try segmentation.WordDictionary.init(
+        allocator,
+        .thai,
+        &.{ "\u{0e20}\u{0e32}\u{0e29}\u{0e32}", "\u{0e44}\u{0e17}\u{0e22}" },
+    );
+    defer dictionary.deinit();
+
+    const breaks = try segmentation.collect.lineBreaks(
+        allocator,
+        text,
+        &dictionary,
+    );
+    defer allocator.free(breaks);
+    var found_dictionary_boundary = false;
+    for (breaks) |opportunity| {
+        found_dictionary_boundary =
+            found_dictionary_boundary or opportunity.byte_offset == 12;
+    }
+    try std.testing.expect(found_dictionary_boundary);
+}
+
+test "shaping and paragraph domains expose reusable library workflows" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    const cascade = cangjie.font.Cascade.init(&.{&face});
+    var engine = cangjie.shaping.Engine.init(allocator, .{});
+    defer engine.deinit();
+
+    const shaped = try engine.shapeText(cascade, .{
+        .text = "AAA",
+        .font_size = 20,
+    });
+    try std.testing.expectEqual(@as(usize, 3), shaped.glyphs.len);
+    try std.testing.expectEqual(@as(usize, 1), shaped.runs.len);
+
+    var paragraph = try engine.prepareParagraph(cascade, .{
+        .text = "A A A",
+        .font_size = 20,
+        .options = .{ .max_width = 100 },
+    });
+    defer paragraph.deinit();
+    var reflow = cangjie.paragraph.ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const narrow = try paragraph.layout(
+        &reflow,
+        .{ .max_width = 15 },
+    );
+    try std.testing.expect(narrow.lines.len > 1);
 }
 
 test "public container value keeps decoded bytes alive for its face" {

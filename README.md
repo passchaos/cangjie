@@ -6,7 +6,7 @@ paragraph layout, and CPU rasterization behind domain-oriented APIs:
 
 - `cangjie.font` — font faces, outlines, containers, metadata, and databases
 - `cangjie.text` — Unicode boundaries, bidi, scripts, styles, and OpenType tags
-- `cangjie.Engine` — reusable shaping/layout state and font-derived caches
+- `cangjie.shaping.Engine` — reusable shaping/layout state and font-derived caches
 - `cangjie.shaping` — shaping requests, options, results, and diagnostics
 - `cangjie.paragraph` — retained paragraphs, reflow, lines, and hit-test records
 - `cangjie.render` — grayscale/color targets, rasterization, and draw lists
@@ -21,7 +21,7 @@ const cangjie = @import("cangjie");
 var face = try cangjie.font.Face.parse(allocator, font_bytes);
 defer face.deinit();
 
-var engine = cangjie.Engine.init(allocator, .{});
+var engine = cangjie.shaping.Engine.init(allocator, .{});
 defer engine.deinit();
 
 const run = try engine.shape(&face, .{

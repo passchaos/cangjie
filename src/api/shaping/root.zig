@@ -7,6 +7,10 @@ const layout = @import("../../layout.zig");
 const unicode = @import("../../unicode.zig");
 const context = @import("../../shaping/context/root.zig");
 
+/// Reusable owner of shaping, fallback, paragraph output, and font-derived
+/// caches. One engine serves one worker at a time; returned views remain valid
+/// until its next operation.
+pub const Engine = context.Engine;
 pub const Request = context.ShapeRequest;
 pub const TextRequest = context.CascadeRequest;
 pub const Options = layout.ShapeOptions;

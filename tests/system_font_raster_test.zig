@@ -40,7 +40,7 @@ test "macOS SFNSMono parses shapes and rasterizes stable grayscale glyphs" {
     try std.testing.expect((try font.glyphs().index('C')) > 0);
     try std.testing.expect((try font.glyphs().index('j')) > 0);
 
-    var engine = cangjie.Engine.init(allocator, .{});
+    var engine = cangjie.shaping.Engine.init(allocator, .{});
     defer engine.deinit();
     const run = try engine.shape(&font, .{ .text = "Cangjie", .font_size = 36 });
     try std.testing.expectEqual(@as(usize, 7), run.glyphs.len);
@@ -80,7 +80,7 @@ test "Linux Noto Sans Arabic parses duplicate contextual GPOS coverage" {
     defer font.deinit();
     try std.testing.expect((try font.glyphs().index(0x0645)) > 0); // Arabic meem.
 
-    var engine = cangjie.Engine.init(allocator, .{});
+    var engine = cangjie.shaping.Engine.init(allocator, .{});
     defer engine.deinit();
     const run = try engine.shape(
         &font,
@@ -128,7 +128,7 @@ test "Linux Noto Sans CJK vertical shaping uses real vert substitutions and vmtx
     defer font.deinit();
     try std.testing.expect(font.metrics().hasVertical());
 
-    var engine = cangjie.Engine.init(allocator, .{});
+    var engine = cangjie.shaping.Engine.init(allocator, .{});
     defer engine.deinit();
     const horizontal = try engine.shape(&font, .{ .text = "中、（", .font_size = 32 });
     var horizontal_ids: [3]cangjie.font.GlyphId = undefined;

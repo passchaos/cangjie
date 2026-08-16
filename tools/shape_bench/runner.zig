@@ -156,7 +156,7 @@ pub fn resolvedVariationCoords(allocator: std.mem.Allocator, font: *const cangji
 }
 
 pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.Face, options: options_mod.Options) !BenchResult {
-    var engine = cangjie.Engine.init(allocator, .{
+    var engine = cangjie.shaping.Engine.init(allocator, .{
         .cache_font_data = options.use_caches,
         .cache_shaped_runs = options.use_shaped_cache,
     });
@@ -496,7 +496,7 @@ fn fontUnitPosition(font: *const cangjie.font.Face, font_size: f32, value: f32) 
 }
 
 fn shapeOnce(
-    engine: *cangjie.Engine,
+    engine: *cangjie.shaping.Engine,
     font: *const cangjie.font.Face,
     cascade: cangjie.font.Cascade,
     text: []const u8,
@@ -547,7 +547,7 @@ fn shapeOnce(
 // otherwise its code-size change would contaminate the zero-range A/B intended
 // to measure the shaping library rather than this dispatch wrapper.
 noinline fn shapeOnceWithGsubFeatureRanges(
-    engine: *cangjie.Engine,
+    engine: *cangjie.shaping.Engine,
     font: *const cangjie.font.Face,
     text: []const u8,
     options: options_mod.Options,

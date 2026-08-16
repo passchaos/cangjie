@@ -1,6 +1,10 @@
 //! Streaming Unicode grapheme, word, sentence, and line boundaries.
 
+const std = @import("std");
+
 const dictionary = @import("../../../text/segmentation/root.zig");
+const dictionary_breaks =
+    @import("../../../text/segmentation/dictionary_breaks.zig");
 const unicode = @import("../../../unicode.zig");
 
 pub const Grapheme = unicode.GraphemeCluster;
@@ -27,9 +31,44 @@ pub const sentences = unicode.sentenceSegments;
 pub const lineBreaks = unicode.lineBreaks;
 pub const lineBreakClass = unicode.lineBreakClassForCodepoint;
 
+fn collectLineBreaks(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    word_dictionary: ?*const WordDictionary,
+) ![]LineBreak {
+    const grapheme_items = try unicode.itemizeGraphemeClusters(
+        allocator,
+        text,
+    );
+    defer allocator.free(grapheme_items);
+    const base = try unicode.itemizeLineBreaks(allocator, text);
+    defer allocator.free(base);
+    const tailoring = word_dictionary orelse
+        return try allocator.dupe(LineBreak, base);
+    return dictionary_breaks.mergeLineBreaks(
+        allocator,
+        tailoring,
+        text,
+        grapheme_items,
+        base,
+    );
+}
+
 pub const collect = struct {
     pub const graphemes = unicode.itemizeGraphemeClusters;
     pub const words = unicode.itemizeWordSegments;
     pub const sentences = unicode.itemizeSentenceSegments;
-    pub const lineBreaks = unicode.itemizeLineBreaks;
+
+    /// Collect line-break opportunities with optional dictionary tailoring.
+    ///
+    /// The returned slice is allocator-owned. Passing `null` yields the
+    /// default UAX #14 opportunities; a dictionary adds soft boundaries for
+    /// its script while preserving hard breaks and grapheme safety.
+    pub fn lineBreaks(
+        allocator: std.mem.Allocator,
+        text: []const u8,
+        word_dictionary: ?*const WordDictionary,
+    ) ![]LineBreak {
+        return collectLineBreaks(allocator, text, word_dictionary);
+    }
 };

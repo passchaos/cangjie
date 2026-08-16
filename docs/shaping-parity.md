@@ -1600,7 +1600,7 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   intermediate lookup states before a later lookup maps them back. The final
   post-GSUB run is still checked against `maxp` before GPOS and metrics. The
   three AlternateSubst rows now use
-  `cangjie.Engine.shape` requests with public UTF-8 byte-scoped
+  `cangjie.shaping.Engine.shape` requests with public UTF-8 byte-scoped
   `FeatureRange` values, including disabled spans, one-based alternate values,
   lookup-flag skipping, and overlapping declarations where the later value
   wins. The request keeps rare range data out of run-wide `Options` while

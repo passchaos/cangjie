@@ -388,7 +388,7 @@ without another GSUB/GPOS pass and without accumulating mutations. Reflow
 rejects direction, script, language, feature, or variation changes because
 those options require reshaping.
 
-`cangjie.Engine` is the public ownership boundary for this pipeline.
+`cangjie.shaping.Engine` is the public ownership boundary for this pipeline.
 It is a concrete value type that owns reusable output/scratch arrays
 plus cmap, metric, fallback, GDEF, GSUB/GPOS proof/plan, and optional whole-run
 caches. `Engine.Options` independently controls font-derived and whole-run
@@ -404,7 +404,7 @@ next shaping/layout call. Faces must outlive the engine, or the caller must
 invoke `clearCaches` before destroying them.
 
 The package root is intentionally small and grouped by responsibility:
-`cangjie.Engine`, `cangjie.font`, `cangjie.text`, `cangjie.shaping`, `cangjie.paragraph`,
+`cangjie.shaping.Engine`, `cangjie.font`, `cangjie.text`, `cangjie.shaping`, `cangjie.paragraph`,
 `cangjie.render`, `cangjie.editor`, and `cangjie.debug`. Specialized font-table
 records are grouped by responsibility under `font.metadata`; Unicode analysis
 is similarly split under `text.bidi`, `text.segmentation`, `text.script`, and
@@ -636,7 +636,7 @@ Future changes must preserve these rules:
 1. Extend the existing HarfBuzz-compatible shaping-boundary flags only when a
    new portable shaping relationship can change retained-run reuse semantics.
 2. Continue moving internal cache and scratch implementations under the
-   `shaping/context` module boundary now that `cangjie.Engine` owns
+   `shaping/context` module boundary now that `cangjie.shaping.Engine` owns
    their public lifetime.
 3. Add language-aware hyphenation as the next optional tailoring layer; keep
    dictionary segmentation and hyphenation outside the default UAX #14 state

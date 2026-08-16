@@ -25,9 +25,9 @@ pub fn main(init: std.process.Init) !void {
     defer font.deinit();
     const fonts = [_]*const cangjie.font.Face{&font};
     const cascade = cangjie.font.Cascade.init(&fonts);
-    var uncached_context = cangjie.Engine.init(allocator, .{});
+    var uncached_context = cangjie.shaping.Engine.init(allocator, .{});
     defer uncached_context.deinit();
-    var cached_context = cangjie.Engine.init(
+    var cached_context = cangjie.shaping.Engine.init(
         allocator,
         .{ .cache_shaped_runs = true },
     );

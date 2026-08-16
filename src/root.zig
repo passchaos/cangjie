@@ -4,11 +4,6 @@
 //! domain namespace instead of searching a flat package containing hundreds of
 //! unrelated font-table, shaping, editor, and renderer declarations.
 
-/// Reusable owner of shaping, fallback, paragraph output, and font-derived
-/// caches. One engine serves one worker at a time; returned views remain valid
-/// until its next operation.
-pub const Engine = @import("shaping/context/root.zig").Engine;
-
 pub const font = @import("api/font/root.zig");
 pub const text = @import("api/text/root.zig");
 pub const shaping = @import("api/shaping/root.zig");

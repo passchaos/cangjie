@@ -43,7 +43,7 @@ pub fn main(init: std.process.Init) !void {
     var face = try cangjie.font.Face.parse(allocator, font_bytes);
     defer face.deinit();
 
-    var engine = cangjie.Engine.init(allocator, .{});
+    var engine = cangjie.shaping.Engine.init(allocator, .{});
     defer engine.deinit();
     const run = try engine.shape(
         &face,

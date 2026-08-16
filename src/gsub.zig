@@ -1199,8 +1199,8 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     if (lookup_type == 7) {
         accelerator.extension_lookup_type = try extensionLookupType(table, lookup_offset, subtable_count);
         if (accelerator.extension_lookup_type) |wrapped_type| {
-            if (wrapped_type == 6 and try extensionChainingLookupUsesCoverageOnly(table, lookup_offset, subtable_count)) {
-                var chaining = try buildChainingCoverageLookupAccelerator(table, lookup_offset, subtable_count, true, accelerator.single_subst, accelerator.extension_lookup_type, allocator);
+            if (wrapped_type == 6 and try accelerator_root.build.chaining_coverage.lookupUsesCoverageOnly(table, lookup_offset, subtable_count, true)) {
+                var chaining = try accelerator_root.build.chaining_coverage.build(table, lookup_offset, subtable_count, true, accelerator.single_subst, accelerator.extension_lookup_type, allocator);
                 copyLookupDispatch(&chaining, accelerator);
                 return chaining;
             }
@@ -1226,7 +1226,14 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
                     const subtable_offset = try extensionSubtablePayload(table, wrapper_offset, 8);
                     const parsed = try parseReverseChainingSingleSubtable(table, subtable_offset);
                     reverse_subtables[subtable_i] = parsed;
-                    try appendChainingSubtablePairs(table, parsed.coverage_offset, @intCast(subtable_i), &group_pairs, allocator);
+                    try accelerator_root.build.chaining_coverage
+                        .appendCoveragePairs(
+                        table,
+                        parsed.coverage_offset,
+                        @intCast(subtable_i),
+                        &group_pairs,
+                        allocator,
+                    );
                     try appendReverseChainingExactContext(table, parsed, @intCast(subtable_i), &exact_contexts, allocator);
                     saw_coverage = true;
                 }
@@ -1263,9 +1270,9 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
         );
         if (accelerator.chaining_class_subtables.len != 0) return accelerator;
     }
-    if (lookup_type != 6 or !try chainingLookupUsesCoverageOnly(table, lookup_offset, subtable_count)) return accelerator;
+    if (lookup_type != 6 or !try accelerator_root.build.chaining_coverage.lookupUsesCoverageOnly(table, lookup_offset, subtable_count, false)) return accelerator;
 
-    var chaining = try buildChainingCoverageLookupAccelerator(table, lookup_offset, subtable_count, false, accelerator.single_subst, accelerator.extension_lookup_type, allocator);
+    var chaining = try accelerator_root.build.chaining_coverage.build(table, lookup_offset, subtable_count, false, accelerator.single_subst, accelerator.extension_lookup_type, allocator);
     copyLookupDispatch(&chaining, accelerator);
     return chaining;
 }
@@ -1276,150 +1283,6 @@ fn copyLookupDispatch(target: *LookupAccelerator, source: LookupAccelerator) voi
     target.lookup_flag = source.lookup_flag;
     target.subtable_count = source.subtable_count;
     target.mark_filtering_set = source.mark_filtering_set;
-}
-
-fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, subtable_count: u16, extension_wrapped: bool, single_subst: SingleSubstAccelerator, extension_lookup_type_value: ?u16, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!LookupAccelerator {
-    var digest = GlyphDigest.empty();
-    var group_pairs = std.ArrayList(ChainingSubtablePair).empty;
-    errdefer group_pairs.deinit(allocator);
-    var pair_group_pairs = std.ArrayList(ChainingPairSubtablePair).empty;
-    errdefer pair_group_pairs.deinit(allocator);
-    var pair_index_complete = true;
-    const subtable_digests = try allocator.alloc(GlyphDigest, subtable_count);
-    errdefer allocator.free(subtable_digests);
-    @memset(subtable_digests, .{});
-    const chaining_subtables = try allocator.alloc(ChainingCoverageSubtable, subtable_count);
-    errdefer allocator.free(chaining_subtables);
-    @memset(chaining_subtables, .{});
-    var saw_input_coverage = false;
-    var needs_second_input = false;
-    var needs_backtrack = false;
-    var needs_single_input_lookahead = false;
-    for (0..subtable_count) |subtable_i| {
-        const raw_subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-        const subtable_offset = if (extension_wrapped)
-            try extensionSubtablePayload(table, raw_subtable_offset, 6)
-        else
-            raw_subtable_offset;
-        const parsed_subtable = try parseChainingCoverageSubtable(table, subtable_offset) orelse continue;
-        chaining_subtables[subtable_i] = parsed_subtable;
-        try fillFastChainingSingleRecords(table, &chaining_subtables[subtable_i]);
-        const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.input_offsets_pos));
-        try appendChainingSubtablePairs(table, coverage_offset, @intCast(subtable_i), &group_pairs, allocator);
-        if (parsed_subtable.input_count > 1) {
-            needs_second_input = true;
-            const second_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.input_offsets_pos + 2));
-            chaining_subtables[subtable_i].second_input_coverage_offset = second_coverage_offset;
-            chaining_subtables[subtable_i].second_input_digest = try table_core.coverage.digest(table, second_coverage_offset);
-            if (pair_index_complete) {
-                pair_index_complete = try appendChainingPairSubtablePairs(table, coverage_offset, second_coverage_offset, @intCast(subtable_i), &pair_group_pairs, allocator);
-            }
-        } else {
-            pair_index_complete = false;
-        }
-        if (parsed_subtable.input_count > 2) {
-            const third_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.input_offsets_pos + 4));
-            chaining_subtables[subtable_i].third_input_coverage_offset = third_coverage_offset;
-            chaining_subtables[subtable_i].third_input_digest = try table_core.coverage.digest(table, third_coverage_offset);
-        }
-        if (parsed_subtable.backtrack_count != 0) {
-            needs_backtrack = true;
-            const first_backtrack_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.backtrack_offsets_pos));
-            chaining_subtables[subtable_i].first_backtrack_digest = try table_core.coverage.digest(table, first_backtrack_coverage_offset);
-        }
-        if (parsed_subtable.input_count == 1 and parsed_subtable.lookahead_count != 0) {
-            needs_single_input_lookahead = true;
-            const first_lookahead_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.lookahead_offsets_pos));
-            chaining_subtables[subtable_i].first_lookahead_digest = try table_core.coverage.digest(table, first_lookahead_coverage_offset);
-        }
-        const subtable_digest = try table_core.coverage.digest(table, coverage_offset);
-        subtable_digests[subtable_i] = subtable_digest;
-        digest.unionWith(subtable_digest);
-        saw_input_coverage = true;
-    }
-    if (!saw_input_coverage or digest.isEmpty()) {
-        group_pairs.deinit(allocator);
-        allocator.free(subtable_digests);
-        allocator.free(chaining_subtables);
-        return .{};
-    }
-    const chaining_groups = try accelerator_root.index.chaining.buildGroups(group_pairs.items, allocator);
-    group_pairs.deinit(allocator);
-    errdefer {
-        for (chaining_groups) |group| allocator.free(group.subtable_indices);
-        allocator.free(chaining_groups);
-    }
-    accelerator_root.index.chaining.fillSecondInputMetadata(chaining_groups, chaining_subtables);
-    const chaining_group_slots = try accelerator_root.index.chaining.buildSlots(chaining_groups, allocator);
-    errdefer allocator.free(chaining_group_slots);
-    const chaining_pair_groups = if (pair_index_complete)
-        try accelerator_root.index.chaining.buildPairGroups(pair_group_pairs.items, allocator)
-    else
-        try allocator.alloc(ChainingPairSubtableGroup, 0);
-    pair_group_pairs.deinit(allocator);
-    errdefer {
-        for (chaining_pair_groups) |group| allocator.free(group.subtable_indices);
-        allocator.free(chaining_pair_groups);
-    }
-    const chaining_pair_group_slots = if (pair_index_complete)
-        try accelerator_root.index.chaining.buildPairSlots(chaining_pair_groups, allocator)
-    else
-        try allocator.alloc(u16, 0);
-    errdefer allocator.free(chaining_pair_group_slots);
-    return .{
-        .single_subst = single_subst,
-        .extension_lookup_type = extension_lookup_type_value,
-        .chaining_coverage_only = true,
-        .chaining_needs_second_input = needs_second_input,
-        .chaining_needs_backtrack = needs_backtrack,
-        .chaining_needs_single_input_lookahead = needs_single_input_lookahead,
-        .chaining_input_digest = digest,
-        .chaining_subtable_digests = subtable_digests,
-        .chaining_subtables = chaining_subtables,
-        .chaining_groups = chaining_groups,
-        .chaining_group_slots = chaining_group_slots,
-        .chaining_pair_groups = chaining_pair_groups,
-        .chaining_pair_group_slots = chaining_pair_group_slots,
-        .chaining_pair_index_complete = pair_index_complete,
-    };
-}
-
-fn fillFastChainingSingleRecords(table: Table, subtable: *ChainingCoverageSubtable) GsubError!void {
-    if (subtable.subst_count == 0 or subtable.subst_count > ChainingCoverageSubtable.max_fast_records) return;
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16(table, lookup_list_offset);
-
-    var records: [ChainingCoverageSubtable.max_fast_records]FastSingleRecord = [_]FastSingleRecord{.{}} ** ChainingCoverageSubtable.max_fast_records;
-    for (0..subtable.subst_count) |record_i| {
-        const record_offset = subtable.records_pos + record_i * 4;
-        const sequence_index = try readU16(table, record_offset);
-        if (sequence_index >= subtable.input_count) return;
-        const lookup_index = try readU16(table, record_offset + 2);
-        if (lookup_index >= lookup_count) return;
-        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
-        if (try readU16(table, lookup_offset) != 1) return;
-        const lookup_flag = try readU16(table, lookup_offset + 2);
-        if (lookup_flag != 0) return;
-        const subtable_count = try readU16(table, lookup_offset + 4);
-        if (subtable_count != 1) return;
-        const single_subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
-        records[record_i] = .{
-            .sequence_index = sequence_index,
-            .accelerator = try buildSingleSubstAccelerator(table, single_subtable_offset),
-        };
-        if (!records[record_i].accelerator.enabled) return;
-    }
-    subtable.fast_record_count = subtable.subst_count;
-    subtable.fast_records = records;
-}
-
-fn extensionChainingLookupUsesCoverageOnly(table: Table, lookup_offset: usize, subtable_count: u16) GsubError!bool {
-    for (0..subtable_count) |subtable_i| {
-        const wrapper_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-        const subtable_offset = try extensionSubtablePayload(table, wrapper_offset, 6);
-        if (try readU16(table, subtable_offset) != 3) return false;
-    }
-    return true;
 }
 
 fn buildExtensionContextClassSubtableAccelerators(table: Table, lookup_offset: usize, subtable_count: u16, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]ContextClassSubtableAccelerator {
@@ -2410,7 +2273,7 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
             try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, accelerator);
             return;
         }
-        if (try chainingLookupUsesCoverageOnly(table, lookup_offset, subtable_count)) {
+        if (try accelerator_root.build.chaining_coverage.lookupUsesCoverageOnly(table, lookup_offset, subtable_count, false)) {
             if (!try chainingCoverageLookupMayMatch(table, lookup_offset, subtable_count, glyphs.items, lookup_flag, lookup_options)) return;
             try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, null);
             return;
@@ -4426,14 +4289,6 @@ fn applyChainingContextSubstitution(table: Table, subtable_offset: usize, glyphs
     }
 }
 
-fn chainingLookupUsesCoverageOnly(table: Table, lookup_offset: usize, subtable_count: u16) GsubError!bool {
-    for (0..subtable_count) |subtable_i| {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-        if (try readU16(table, subtable_offset) != 3) return false;
-    }
-    return true;
-}
-
 fn chainingCoverageLookupMayMatch(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GsubError!bool {
     if (glyphs.len == 0) return false;
     // Arabic shaping often reaches this path one short word at a time. For
@@ -4444,7 +4299,7 @@ fn chainingCoverageLookupMayMatch(table: Table, lookup_offset: usize, subtable_c
     if (run_digest.isEmpty()) return false;
     for (0..subtable_count) |subtable_i| {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-        const coverage_offset = try firstChainingInputCoverageOffset(table, subtable_offset) orelse continue;
+        const coverage_offset = try accelerator_root.build.chaining_coverage.parser.firstInputCoverage(table, subtable_offset) orelse continue;
         const coverage_digest = try table_core.coverage.digest(table, coverage_offset);
         if (coverage_digest.mayIntersect(run_digest)) return true;
     }
@@ -4454,7 +4309,7 @@ fn chainingCoverageLookupMayMatch(table: Table, lookup_offset: usize, subtable_c
 fn chainingCoverageLookupMayMatchByScan(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GsubError!bool {
     for (0..subtable_count) |subtable_i| {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-        const coverage_offset = try firstChainingInputCoverageOffset(table, subtable_offset) orelse continue;
+        const coverage_offset = try accelerator_root.build.chaining_coverage.parser.firstInputCoverage(table, subtable_offset) orelse continue;
         for (glyphs, 0..) |glyph, glyph_index| {
             if (!sourceFeatureAllowsGlyph(options, glyph_index)) continue;
             if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
@@ -4691,148 +4546,6 @@ test "GSUB ligature run digest invalidates after an earlier ligature" {
     try std.testing.expectEqual(generation, cache.generation);
 }
 
-fn firstChainingInputCoverageOffset(table: Table, subtable_offset: usize) GsubError!?usize {
-    var cursor = subtable_offset + 2;
-    const backtrack_count = try readU16(table, cursor);
-    cursor += 2 + backtrack_count * 2;
-    const input_count = try readU16(table, cursor);
-    cursor += 2;
-    if (input_count == 0) return null;
-    return try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, cursor));
-}
-
-fn parseChainingCoverageSubtable(table: Table, subtable_offset: usize) GsubError!?ChainingCoverageSubtable {
-    if (try readU16(table, subtable_offset) != 3) return null;
-    var cursor = subtable_offset + 2;
-    const backtrack_count = try readU16(table, cursor);
-    cursor += 2;
-    const backtrack_offsets_pos = cursor;
-    cursor += backtrack_count * 2;
-
-    const input_count = try readU16(table, cursor);
-    cursor += 2;
-    if (input_count == 0) return null;
-    const input_offsets_pos = cursor;
-    cursor += input_count * 2;
-
-    const lookahead_count = try readU16(table, cursor);
-    cursor += 2;
-    const lookahead_offsets_pos = cursor;
-    cursor += lookahead_count * 2;
-
-    const subst_count = try readU16(table, cursor);
-    cursor += 2;
-    return .{
-        .subtable_offset = subtable_offset,
-        .backtrack_offsets_pos = backtrack_offsets_pos,
-        .backtrack_count = backtrack_count,
-        .input_offsets_pos = input_offsets_pos,
-        .input_count = input_count,
-        .lookahead_offsets_pos = lookahead_offsets_pos,
-        .lookahead_count = lookahead_count,
-        .records_pos = cursor,
-        .subst_count = subst_count,
-    };
-}
-
-test "GSUB chaining accelerator records adjacent context requirements" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 68;
-
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 8, 10);
-    writeU16Test(&bytes, 10, 1);
-    writeU16Test(&bytes, 12, 4);
-
-    const lookup = 14;
-    writeU16Test(&bytes, lookup + 0, 6);
-    writeU16Test(&bytes, lookup + 2, 0);
-    writeU16Test(&bytes, lookup + 4, 1);
-    writeU16Test(&bytes, lookup + 6, 8);
-
-    const chain = lookup + 8;
-    writeU16Test(&bytes, chain + 0, 3);
-    writeU16Test(&bytes, chain + 2, 0);
-    writeU16Test(&bytes, chain + 4, 1);
-    writeU16Test(&bytes, chain + 6, 12);
-    writeU16Test(&bytes, chain + 8, 0);
-    writeU16Test(&bytes, chain + 10, 0);
-    writeCoverage1(&bytes, chain + 12, 1);
-
-    var accelerator = try buildChainingCoverageLookupAccelerator(
-        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
-        lookup,
-        1,
-        false,
-        .{},
-        null,
-        allocator,
-    );
-    try std.testing.expect(!accelerator.chaining_needs_second_input);
-    try std.testing.expect(!accelerator.chaining_needs_backtrack);
-    try std.testing.expect(!accelerator.chaining_needs_single_input_lookahead);
-    {
-        var accelerators = [_]LookupAccelerator{accelerator};
-        deinitLookupAcceleratorContents(allocator, &accelerators);
-    }
-
-    writeU16Test(&bytes, chain + 4, 2);
-    writeU16Test(&bytes, chain + 6, 14);
-    writeU16Test(&bytes, chain + 8, 20);
-    writeU16Test(&bytes, chain + 10, 0);
-    writeU16Test(&bytes, chain + 12, 0);
-    writeCoverage1(&bytes, chain + 14, 1);
-    writeCoverage1(&bytes, chain + 20, 2);
-
-    accelerator = try buildChainingCoverageLookupAccelerator(
-        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
-        lookup,
-        1,
-        false,
-        .{},
-        null,
-        allocator,
-    );
-    defer {
-        var accelerators = [_]LookupAccelerator{accelerator};
-        deinitLookupAcceleratorContents(allocator, &accelerators);
-    }
-    try std.testing.expect(accelerator.chaining_needs_second_input);
-
-    // Convert the same fixture to one input with one backtrack and one
-    // lookahead. The accelerator must retain both adjacent coverage digests
-    // while the lookup-level flags avoid resolving absent regions.
-    {
-        var accelerators = [_]LookupAccelerator{accelerator};
-        deinitLookupAcceleratorContents(allocator, &accelerators);
-    }
-    writeU16Test(&bytes, chain + 2, 1);
-    writeU16Test(&bytes, chain + 4, 16);
-    writeU16Test(&bytes, chain + 6, 1);
-    writeU16Test(&bytes, chain + 8, 22);
-    writeU16Test(&bytes, chain + 10, 1);
-    writeU16Test(&bytes, chain + 12, 28);
-    writeU16Test(&bytes, chain + 14, 0);
-    writeCoverage1(&bytes, chain + 16, 3);
-    writeCoverage1(&bytes, chain + 22, 1);
-    writeCoverage1(&bytes, chain + 28, 4);
-
-    accelerator = try buildChainingCoverageLookupAccelerator(
-        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
-        lookup,
-        1,
-        false,
-        .{},
-        null,
-        allocator,
-    );
-    try std.testing.expect(!accelerator.chaining_needs_second_input);
-    try std.testing.expect(accelerator.chaining_needs_backtrack);
-    try std.testing.expect(accelerator.chaining_needs_single_input_lookahead);
-    try std.testing.expect(accelerator.chaining_subtables[0].first_backtrack_digest.mayHave(3));
-    try std.testing.expect(accelerator.chaining_subtables[0].first_lookahead_digest.mayHave(4));
-}
-
 fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: ?*const LookupAccelerator) (GsubError || std.mem.Allocator.Error)!void {
     var pos: usize = 0;
     while (pos < glyphs.items.len) {
@@ -5054,7 +4767,7 @@ fn applyChainingContextSubstitutionAt(table: Table, subtable_offset: usize, pars
     return switch (subst_format) {
         1 => try applyChainingGlyphSubstitutionAt(table, subtable_offset, glyphs, pos, allocator, lookup_flag, options),
         2 => try applyChainingClassSubstitutionAt(table, subtable_offset, glyphs, pos, allocator, lookup_flag, options),
-        3 => try applyChainingCoverageSubstitutionAt(table, parsed_subtable orelse (try parseChainingCoverageSubtable(table, subtable_offset) orelse return .{}), glyphs, pos, allocator, lookup_flag, options),
+        3 => try applyChainingCoverageSubstitutionAt(table, parsed_subtable orelse (try accelerator_root.build.chaining_coverage.parser.parse(table, subtable_offset) orelse return .{}), glyphs, pos, allocator, lookup_flag, options),
         else => .{},
     };
 }
@@ -5370,7 +5083,7 @@ fn applyChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_de
 }
 
 fn applyChainingCoverageSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
-    const parsed_subtable = try parseChainingCoverageSubtable(table, subtable_offset) orelse return;
+    const parsed_subtable = try accelerator_root.build.chaining_coverage.parser.parse(table, subtable_offset) orelse return;
     var pos: usize = 0;
     while (pos < glyphs.items.len) {
         const result = try applyChainingCoverageSubstitutionAt(table, parsed_subtable, glyphs, pos, allocator, lookup_flag, options);
@@ -7114,72 +6827,6 @@ fn ligatureAt(table: Table, set_offset: usize, glyphs: []const GlyphId, glyph_ba
         }
     }
     return null;
-}
-
-fn appendChainingSubtablePairs(table: Table, coverage_offset: usize, subtable_index: u16, pairs: *std.ArrayList(ChainingSubtablePair), allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!void {
-    const format = try readU16(table, coverage_offset);
-    switch (format) {
-        1 => {
-            const glyph_count = try readU16(table, coverage_offset + 2);
-            if (!table.assume_validated) try table_core.coverage.validateFormat1Order(table, coverage_offset, glyph_count);
-            try pairs.ensureUnusedCapacity(allocator, glyph_count);
-            for (0..glyph_count) |glyph_i| {
-                pairs.appendAssumeCapacity(.{
-                    .glyph = try readU16(table, coverage_offset + 4 + glyph_i * 2),
-                    .subtable_index = subtable_index,
-                });
-            }
-        },
-        2 => {
-            const range_count = try readU16(table, coverage_offset + 2);
-            if (!table.assume_validated) try table_core.coverage.validateFormat2Ranges(table, coverage_offset, range_count);
-            for (0..range_count) |range_i| {
-                const range_offset = coverage_offset + 4 + range_i * 6;
-                const start = try readU16(table, range_offset);
-                const end = try readU16(table, range_offset + 2);
-                try pairs.ensureUnusedCapacity(allocator, @as(usize, end) - @as(usize, start) + 1);
-                for (@as(usize, start)..@as(usize, end) + 1) |glyph| {
-                    pairs.appendAssumeCapacity(.{
-                        .glyph = @intCast(glyph),
-                        .subtable_index = subtable_index,
-                    });
-                }
-            }
-        },
-        else => return error.UnsupportedGsub,
-    }
-}
-
-const max_chaining_pair_index_pairs = 8192;
-
-fn appendChainingPairSubtablePairs(
-    table: Table,
-    first_coverage_offset: usize,
-    second_coverage_offset: usize,
-    subtable_index: u16,
-    pairs: *std.ArrayList(ChainingPairSubtablePair),
-    allocator: std.mem.Allocator,
-) (GsubError || std.mem.Allocator.Error)!bool {
-    const first_count = try table_core.coverage.glyphCount(table, first_coverage_offset);
-    const second_count = try table_core.coverage.glyphCount(table, second_coverage_offset);
-    if (first_count == 0 or second_count == 0) return true;
-    if (first_count > max_chaining_pair_index_pairs / second_count) return false;
-    const total = first_count * second_count;
-    if (pairs.items.len + total > max_chaining_pair_index_pairs) return false;
-
-    try pairs.ensureUnusedCapacity(allocator, total);
-    for (0..first_count) |first_i| {
-        const first = (try table_core.coverage.glyphAt(table, first_coverage_offset, first_i)) orelse continue;
-        for (0..second_count) |second_i| {
-            const second = (try table_core.coverage.glyphAt(table, second_coverage_offset, second_i)) orelse continue;
-            pairs.appendAssumeCapacity(.{
-                .first = first,
-                .second = second,
-                .subtable_index = subtable_index,
-            });
-        }
-    }
-    return true;
 }
 
 fn readU16(table: Table, relative: usize) GsubError!u16 {

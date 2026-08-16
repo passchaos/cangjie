@@ -27,10 +27,7 @@ pub const GposError = error{
 pub const Adjustment = positioning.Adjustment;
 pub const AttachmentType = positioning.AttachmentType;
 
-const PositionContextResult = struct {
-    matched: bool = false,
-    next_pos: usize = 0,
-};
+const PositionContextResult = runtime_lookup.contextual.context.Result;
 
 const Table = table_core.View;
 
@@ -48,9 +45,9 @@ const appendAdjustmentEx = runtime_output.adjustments.appendWithFlags;
 const findAdjustment = runtime_output.adjustments.find;
 const markUnsafePositioningPair = runtime_output.safety.markPair;
 const markUnsafePairApplication = runtime_output.safety.markPairApplication;
-const markUnsafePositioningContext = runtime_output.safety.markContext;
 const markUnsafePositioningChainingContext =
     runtime_output.safety.markChainingContext;
+const context_runtime = runtime_lookup.contextual.context;
 const collectCursiveAdjustment = runtime_lookup.cursive.collect;
 const collectCursiveAdjustmentParsed = runtime_lookup.cursive.collectParsed;
 const collectCursiveAdjustmentAt = runtime_lookup.cursive.collectAt;
@@ -176,6 +173,13 @@ const ensureCoverageTableWithin = validation.lookup.coverage;
 const ensureClassDefTableWithin = validation.lookup.classDef;
 const ensureClassDefTableWithinLimit =
     validation.lookup.classDefWithLimit;
+const contextual_matching =
+    @import("gpos/runtime/lookup/contextual/matching.zig");
+const nextUnignoredGlyph = contextual_matching.next;
+const collectForwardUnignoredGlyphs =
+    contextual_matching.forward;
+const collectBacktrackUnignoredGlyphs =
+    contextual_matching.backtrack;
 
 /// Validate GPOS glyph references that are meaningful at font-load time.
 ///
@@ -609,7 +613,7 @@ noinline fn collectLookupWithIndexPrepared(
             },
             5 => if (runtime.matching.runMayHaveMarkAttachments(glyphs, lookup_options)) try collectMarkToLigatureAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             6 => if (runtime.matching.runMayHaveMarkAttachments(glyphs, lookup_options)) try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
-            7 => try collectContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            7 => try context_runtime.collect(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options, collectPositionRecordsMapped),
             8 => try collectChainingContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             9 => try collectExtensionAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             else => {},
@@ -727,7 +731,7 @@ fn collectExtensionAdjustmentLookup(table: Table, lookup_offset: usize, subtable
             4 => try collectMarkToBaseAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
             5 => try collectMarkToLigatureAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
             6 => try collectMarkToMarkAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
-            7 => try collectContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
+            7 => try context_runtime.collect(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options, collectPositionRecordsMapped),
             8 => try collectChainingContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
             else => {},
         }
@@ -757,41 +761,10 @@ fn collectExtensionAdjustment(table: Table, subtable_offset: usize, glyphs: []co
         4 => try collectMarkToBaseAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
         5 => try collectMarkToLigatureAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
         6 => try collectMarkToMarkAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
-        7 => try collectContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
+        7 => try context_runtime.collect(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options, collectPositionRecordsMapped),
         8 => try collectChainingContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
         else => {},
     }
-}
-
-fn nextUnignoredGlyph(glyphs: []const GlyphId, start: usize, lookup_flag: u16, options: LookupOptions) ?usize {
-    var i = start;
-    while (i < glyphs.len) : (i += 1) {
-        if (!runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, i)) return i;
-    }
-    return null;
-}
-
-fn collectForwardUnignoredGlyphs(glyphs: []const GlyphId, start: usize, lookup_flag: u16, options: LookupOptions, out: []usize) bool {
-    var out_i: usize = 0;
-    var glyph_i = start;
-    while (glyph_i < glyphs.len and out_i < out.len) : (glyph_i += 1) {
-        if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, glyph_i)) continue;
-        out[out_i] = glyph_i;
-        out_i += 1;
-    }
-    return out_i == out.len;
-}
-
-fn collectBacktrackUnignoredGlyphs(glyphs: []const GlyphId, pos: usize, lookup_flag: u16, options: LookupOptions, out: []usize) bool {
-    var out_i: usize = 0;
-    var glyph_i = pos;
-    while (glyph_i > 0 and out_i < out.len) {
-        glyph_i -= 1;
-        if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, glyph_i)) continue;
-        out[out_i] = glyph_i;
-        out_i += 1;
-    }
-    return out_i == out.len;
 }
 
 test "GPOS native Coverage preserves format 1 and 2 indexes" {
@@ -875,96 +848,6 @@ test "GPOS chaining accelerator caches all Coverage regions" {
         subtable.input_coverages,
         0,
     ));
-}
-
-fn collectContextAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    switch (try positioning.lookup.contextual.parseContext(table, subtable_offset)) {
-        .glyph => |subtable| {
-            var pos: usize = 0;
-            while (pos < glyphs.len) {
-                var next_pos = pos + 1;
-                defer pos = next_pos;
-                if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, pos)) continue;
-                const coverage = try table_core.coverage.index(table, subtable.coverage_offset, glyphs[pos]) orelse continue;
-                if (coverage >= subtable.sets.count) continue;
-                const set_offset = try subtable.sets.resolve(table, coverage) orelse continue;
-                const result = try collectPositionRuleSet(table, set_offset, glyphs, pos, adjustments, allocator, lookup_flag, options);
-                if (result.matched) next_pos = @max(next_pos, result.next_pos);
-            }
-        },
-        .class => |subtable| try collectClassPositioning(table, subtable, glyphs, adjustments, allocator, lookup_flag, options),
-        .coverage => |subtable| try collectCoveragePositioning(table, subtable, glyphs, adjustments, allocator, lookup_flag, options),
-    }
-}
-
-fn collectContextAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
-    if (pos >= glyphs.len) return false;
-    switch (try positioning.lookup.contextual.parseContext(table, subtable_offset)) {
-        .glyph => |subtable| {
-            if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, pos)) return false;
-            const coverage = try table_core.coverage.index(table, subtable.coverage_offset, glyphs[pos]) orelse return false;
-            if (coverage >= subtable.sets.count) return false;
-            const set_offset = try subtable.sets.resolve(table, coverage) orelse return false;
-            return (try collectPositionRuleSet(table, set_offset, glyphs, pos, adjustments, allocator, lookup_flag, options)).matched;
-        },
-        .class => |subtable| return try collectClassPositioningAt(table, subtable, glyphs, pos, adjustments, allocator, lookup_flag, options),
-        .coverage => |subtable| return (try collectCoveragePositioningAt(table, subtable, glyphs, pos, adjustments, allocator, lookup_flag, options)).matched,
-    }
-}
-
-fn collectClassPositioning(table: Table, subtable: positioning.lookup.contextual.ContextClass, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    var pos: usize = 0;
-    while (pos < glyphs.len) {
-        var next_pos = pos + 1;
-        defer pos = next_pos;
-        if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, pos)) continue;
-        if (try table_core.coverage.index(table, subtable.coverage_offset, glyphs[pos]) == null) continue;
-        const class = try table_core.class_def.value(table, subtable.class_def_offset, glyphs[pos]);
-        if (class >= subtable.sets.count) continue;
-        const set_offset = try subtable.sets.resolve(table, class) orelse continue;
-        const result = try collectClassPositionRuleSet(table, set_offset, subtable.class_def_offset, glyphs, pos, adjustments, allocator, lookup_flag, options);
-        if (result.matched) next_pos = @max(next_pos, result.next_pos);
-    }
-}
-
-fn collectClassPositioningAt(table: Table, subtable: positioning.lookup.contextual.ContextClass, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
-    if (pos >= glyphs.len) return false;
-    if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, pos)) return false;
-    if (try table_core.coverage.index(table, subtable.coverage_offset, glyphs[pos]) == null) return false;
-    const class = try table_core.class_def.value(table, subtable.class_def_offset, glyphs[pos]);
-    if (class >= subtable.sets.count) return false;
-    const set_offset = try subtable.sets.resolve(table, class) orelse return false;
-    return (try collectClassPositionRuleSet(table, set_offset, subtable.class_def_offset, glyphs, pos, adjustments, allocator, lookup_flag, options)).matched;
-}
-
-fn collectCoveragePositioning(table: Table, subtable: positioning.lookup.contextual.ContextCoverage, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    var pos: usize = 0;
-    while (pos < glyphs.len) {
-        const result = try collectCoveragePositioningAt(table, subtable, glyphs, pos, adjustments, allocator, lookup_flag, options);
-        pos = if (result.matched) @max(pos + 1, result.next_pos) else pos + 1;
-    }
-}
-
-fn collectCoveragePositioningAt(table: Table, subtable: positioning.lookup.contextual.ContextCoverage, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!PositionContextResult {
-    if (pos >= glyphs.len) return .{};
-    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return .{};
-    const glyph_count = subtable.records.input_count;
-    if (glyph_count == 0) return .{};
-    var input_indices_buf: [64]usize = undefined;
-    if (glyph_count > input_indices_buf.len) return error.UnsupportedGpos;
-    if (!collectForwardUnignoredGlyphs(glyphs, pos, lookup_flag, options, input_indices_buf[0..glyph_count])) return .{};
-
-    for (0..glyph_count) |i| {
-        const coverage_offset = try subtable.input_coverages.coverageOffset(table, i);
-        if (!try table_core.coverage.contains(table, coverage_offset, glyphs[input_indices_buf[i]], .membership)) return .{};
-    }
-    try markUnsafePositioningContext(
-        allocator,
-        &options,
-        input_indices_buf[0..glyph_count],
-    );
-    try collectPositionRecordsMapped(table, subtable.records.records_pos, subtable.records.count, input_indices_buf[0..glyph_count], glyphs, adjustments, allocator, options);
-    return .{ .matched = true, .next_pos = input_indices_buf[glyph_count - 1] + 1 };
 }
 
 fn collectChainingContextAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -1565,101 +1448,6 @@ fn gposCoverageIndicesMatchCached(table: Table, base_offset: usize, glyphs: []co
     return true;
 }
 
-fn collectPositionRuleSet(table: Table, rule_set_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!PositionContextResult {
-    const set = try positioning.lookup.contextual.parseRuleSet(
-        table,
-        rule_set_offset,
-    );
-    for (0..set.rule_count) |rule_i| {
-        const rule = try positioning.lookup.contextual.parseContextRule(
-            table,
-            try set.ruleOffset(table, rule_i),
-        );
-        const glyph_count = rule.input_count;
-        if (glyph_count == 0) continue;
-        var input_indices_buf: [64]usize = undefined;
-        if (glyph_count > input_indices_buf.len) return error.UnsupportedGpos;
-        if (!collectForwardUnignoredGlyphs(glyphs, pos, lookup_flag, options, input_indices_buf[0..glyph_count])) continue;
-        var matched = true;
-        for (1..glyph_count) |i| {
-            const expected = try readU16(
-                table,
-                rule.input_values_pos + (i - 1) * 2,
-            );
-            if (glyphs[input_indices_buf[i]] != expected) {
-                matched = false;
-                break;
-            }
-        }
-        if (!matched) continue;
-        try markUnsafePositioningContext(
-            allocator,
-            &options,
-            input_indices_buf[0..glyph_count],
-        );
-        try collectPositionRecordsMapped(
-            table,
-            rule.records.records_pos,
-            rule.records.count,
-            input_indices_buf[0..glyph_count],
-            glyphs,
-            adjustments,
-            allocator,
-            options,
-        );
-        return .{ .matched = true, .next_pos = input_indices_buf[glyph_count - 1] + 1 };
-    }
-    return .{};
-}
-
-fn collectClassPositionRuleSet(table: Table, set_offset: usize, class_def_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!PositionContextResult {
-    const set = try positioning.lookup.contextual.parseRuleSet(
-        table,
-        set_offset,
-    );
-    for (0..set.rule_count) |rule_i| {
-        const rule = try positioning.lookup.contextual.parseContextRule(
-            table,
-            try set.ruleOffset(table, rule_i),
-        );
-        const glyph_count = rule.input_count;
-        if (glyph_count == 0) continue;
-        var input_indices_buf: [64]usize = undefined;
-        if (glyph_count > input_indices_buf.len) return error.UnsupportedGpos;
-        if (!collectForwardUnignoredGlyphs(glyphs, pos, lookup_flag, options, input_indices_buf[0..glyph_count])) continue;
-        var matched = true;
-        for (1..glyph_count) |i| {
-            const expected_class = try readU16(
-                table,
-                rule.input_values_pos + (i - 1) * 2,
-            );
-            const actual_class = try table_core.class_def.value(table, class_def_offset, glyphs[input_indices_buf[i]]);
-            if (actual_class != expected_class) {
-                matched = false;
-                break;
-            }
-        }
-        if (!matched) continue;
-        try markUnsafePositioningContext(
-            allocator,
-            &options,
-            input_indices_buf[0..glyph_count],
-        );
-        try collectPositionRecordsMapped(
-            table,
-            rule.records.records_pos,
-            rule.records.count,
-            input_indices_buf[0..glyph_count],
-            glyphs,
-            adjustments,
-            allocator,
-            options,
-        );
-        return .{ .matched = true, .next_pos = input_indices_buf[glyph_count - 1] + 1 };
-    }
-    return .{};
-}
-
 fn collectPositionRecordsMapped(table: Table, records_pos: usize, record_count: usize, input_indices: []const usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     if (!table.assume_validated) {
         try ensurePositionRecordsWithin(table, records_pos, record_count, input_indices.len);
@@ -1802,7 +1590,7 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
             4 => _ = try collectMarkToBaseAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, &.{}),
             5 => _ = try collectMarkToLigatureAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
             6 => _ = try collectMarkToMarkAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
-            7 => if (try collectContextAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
+            7 => if (try context_runtime.collectAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, collectPositionRecordsMapped)) return,
             8 => if (try collectChainingContextAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
             9 => if (try collectNestedExtensionAdjustment(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
             else => {},
@@ -1835,7 +1623,7 @@ fn collectNestedExtensionAdjustment(table: Table, subtable_offset: usize, glyphs
         4 => _ = try collectMarkToBaseAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options, &.{}),
         5 => _ = try collectMarkToLigatureAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
         6 => _ = try collectMarkToMarkAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
-        7 => return try collectContextAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
+        7 => return try context_runtime.collectAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options, collectPositionRecordsMapped),
         8 => return try collectChainingContextAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
         else => {},
     }
@@ -3439,12 +3227,12 @@ test "GPOS class-based positioning rejects null ClassDef offsets" {
 
     table = .{ .data = &context_bytes, .offset = 0, .length = context_bytes.len };
     try std.testing.expectError(error.BadGpos, ensureContextPositionSubtableWithin(table, 0, 0));
-    try std.testing.expectError(error.BadGpos, collectContextAdjustment(table, 0, &.{5}, &adjustments, allocator, 0, .{}));
+    try std.testing.expectError(error.BadGpos, context_runtime.collect(table, 0, &.{5}, &adjustments, allocator, 0, .{}, collectPositionRecordsMapped));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 
     writeU16Test(&context_bytes, 4, 18);
     try ensureContextPositionSubtableWithin(table, 0, 0);
-    try collectContextAdjustment(table, 0, &.{5}, &adjustments, allocator, 0, .{});
+    try context_runtime.collect(table, 0, &.{5}, &adjustments, allocator, 0, .{}, collectPositionRecordsMapped);
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 
     var chaining_bytes = [_]u8{0} ** 46;

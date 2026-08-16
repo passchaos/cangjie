@@ -320,25 +320,16 @@ test "GSUB ranged feature helper selects and applies only assigned sources" {
 }
 
 pub fn hasFeature(data: []const u8, offset: usize, length: usize, feature_tag: u32) GsubError!bool {
-    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = true };
-    const major = try readU16(table, 0);
-    if (major != 1) return error.UnsupportedGsub;
-    if (try isEmptyGsubTopology(table)) return false;
-    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
-    const feature_count = try readU16(table, feature_list_offset);
-    for (0..feature_count) |feature_i| {
-        if (try readU32(table, feature_list_offset + 2 + feature_i * 6) == feature_tag) return true;
-    }
-    return false;
+    return table_core.service.hasFeature(
+        try table_core.service.view(data, offset, length, true),
+        feature_tag,
+    );
 }
 
 pub fn isEmptyTable(data: []const u8, offset: usize, length: usize) GsubError!bool {
-    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    const table = Table{ .data = data, .offset = offset, .length = length };
-    const major = try readU16BadGsub(table, 0);
-    if (major != 1) return error.UnsupportedGsub;
-    return isEmptyGsubTopology(table);
+    return table_core.service.isEmpty(
+        try table_core.service.view(data, offset, length, false),
+    );
 }
 
 /// Apply one Script/LangSys feature to the source positions carrying its tag.
@@ -624,71 +615,25 @@ fn applyMergedFeatureLookupPlan(
 /// table, preserving the shaping path's "skip unsupported lookup types" policy
 /// while rejecting malformed supported subtables and out-of-range glyph ids.
 pub fn validateGlyphBounds(data: []const u8, offset: usize, length: usize, glyph_count: u16) GsubError!void {
-    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    const table = Table{ .data = data, .offset = offset, .length = length, .glyph_count = glyph_count };
-    const major = try readU16BadGsub(table, 0);
-    if (major != 1) return error.UnsupportedGsub;
-    if (try isEmptyGsubTopology(table)) return;
-
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16BadGsub(table, lookup_list_offset);
-    try ensureBytesWithin(table, lookup_list_offset + 2, @as(usize, lookup_count) * 2);
-    const feature_count = try feature_domain.validation.lookupReferences(table, lookup_count);
-    try feature_domain.validation.scriptReferences(table, feature_count);
-    for (0..lookup_count) |lookup_i| {
-        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGsub(table, lookup_list_offset + 2 + lookup_i * 2));
-        const lookup_type = try validation.lookup.validateHeader(
-            ContextualRecordExecutor,
-            table,
-            lookup_offset,
-        );
-        const subtable_count = try readU16BadGsub(table, lookup_offset + 4);
-        try validation.lookup.validateSubtables(
-            ContextualRecordExecutor,
-            table,
-            lookup_offset,
-            lookup_type,
-            subtable_count,
-            .strict,
-        );
-    }
+    return validation.table.glyphBounds(
+        ContextualRecordExecutor,
+        data,
+        offset,
+        length,
+        glyph_count,
+        .strict,
+    );
 }
 
 pub fn validateGlyphBoundsForShaping(data: []const u8, offset: usize, length: usize, glyph_count: u16) GsubError!void {
-    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    const table = Table{
-        .data = data,
-        .offset = offset,
-        .length = length,
-        .glyph_count = glyph_count,
-        .allow_transient_single_delta = true,
-    };
-    const major = try readU16BadGsub(table, 0);
-    if (major != 1) return error.UnsupportedGsub;
-    if (try isEmptyGsubTopology(table)) return;
-
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16BadGsub(table, lookup_list_offset);
-    try ensureBytesWithin(table, lookup_list_offset + 2, @as(usize, lookup_count) * 2);
-    const feature_count = try feature_domain.validation.lookupReferences(table, lookup_count);
-    feature_domain.validation.scriptReferences(table, feature_count) catch {};
-    for (0..lookup_count) |lookup_i| {
-        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGsub(table, lookup_list_offset + 2 + lookup_i * 2));
-        const lookup_type = try validation.lookup.validateHeader(
-            ContextualRecordExecutor,
-            table,
-            lookup_offset,
-        );
-        const subtable_count = try readU16BadGsub(table, lookup_offset + 4);
-        try validation.lookup.validateSubtables(
-            ContextualRecordExecutor,
-            table,
-            lookup_offset,
-            lookup_type,
-            subtable_count,
-            .shaping,
-        );
-    }
+    return validation.table.glyphBounds(
+        ContextualRecordExecutor,
+        data,
+        offset,
+        length,
+        glyph_count,
+        .shaping,
+    );
 }
 
 fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!std.ArrayList(u16) {
@@ -1191,68 +1136,36 @@ fn applySubstitutionRecordsMapped(
     );
 }
 
-fn checkedRequiredSubtableOffset(table: Table, base_offset: usize, relative_offset: u16) GsubError!usize {
-    return table_core.offset.required16(table, base_offset, relative_offset);
-}
-
 fn checkedExtensionSubtablePayloadOffset(table: Table, extension_offset: usize, relative_offset: u32) GsubError!usize {
     return table_core.offset.extensionPayload(table, extension_offset, relative_offset);
 }
 
 fn isEmptyGsubTopology(table: Table) GsubError!bool {
-    const script_list = try readU16BadGsub(table, 4);
-    const feature_list = try readU16BadGsub(table, 6);
-    const lookup_list = try readU16BadGsub(table, 8);
-    return script_list == 0 and feature_list == 0 and lookup_list == 0;
+    return table_core.service.isEmpty(table);
 }
 
 fn checkedRequiredScriptListOffset(table: Table) GsubError!usize {
-    return checkedRequiredSubtableOffset(table, 0, try readU16BadGsub(table, 4));
+    return table_core.service.requiredScriptList(table);
 }
 
 fn checkedRequiredFeatureListOffset(table: Table) GsubError!usize {
-    return checkedRequiredSubtableOffset(table, 0, try readU16BadGsub(table, 6));
+    return table_core.service.requiredFeatureList(table);
 }
 
 fn checkedRequiredLookupListOffset(table: Table) GsubError!usize {
-    return checkedRequiredSubtableOffset(table, 0, try readU16BadGsub(table, 8));
+    return table_core.service.requiredLookupList(table);
 }
 
 fn checkedRequiredLookupOffset(table: Table, lookup_list_offset: usize, relative_offset: u16) GsubError!usize {
-    return checkedRequiredSubtableOffset(table, lookup_list_offset, relative_offset);
-}
-
-fn ensureBytesWithin(table: Table, offset: usize, len: usize) GsubError!void {
-    return table.ensure(offset, len);
-}
-
-fn readU16BadGsub(table: Table, relative: usize) GsubError!u16 {
-    return readU16(table, relative) catch |err| switch (err) {
-        error.EndOfStream => error.BadGsub,
-        else => err,
-    };
-}
-
-fn readI16BadGsub(table: Table, relative: usize) GsubError!i16 {
-    return readI16(table, relative) catch |err| switch (err) {
-        error.EndOfStream => error.BadGsub,
-        else => err,
-    };
-}
-
-fn readU32BadGsub(table: Table, relative: usize) GsubError!u32 {
-    return readU32(table, relative) catch |err| switch (err) {
-        error.EndOfStream => error.BadGsub,
-        else => err,
-    };
+    return table_core.service.requiredLookup(
+        table,
+        lookup_list_offset,
+        relative_offset,
+    );
 }
 
 fn readU16(table: Table, relative: usize) GsubError!u16 {
     return table.readU16(relative);
-}
-
-fn readI16(table: Table, relative: usize) GsubError!i16 {
-    return table.readI16(relative);
 }
 
 fn readU32(table: Table, relative: usize) GsubError!u32 {

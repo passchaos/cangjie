@@ -1213,7 +1213,7 @@ fn buildContextCoverageLookupAccelerator(
             .records_pos = subtable_offset + 6 + @as(usize, glyph_count) * 2,
         };
     }
-    const groups = try buildChainingSubtableGroups(group_pairs.items, allocator);
+    const groups = try accelerator_root.index.chaining.buildGroups(group_pairs.items, allocator);
     group_pairs.deinit(allocator);
     errdefer {
         for (groups) |group| allocator.free(group.subtable_indices);
@@ -1324,7 +1324,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
                     allocator.free(reverse_subtables);
                     return accelerator;
                 }
-                const reverse_groups = try buildChainingSubtableGroups(group_pairs.items, allocator);
+                const reverse_groups = try accelerator_root.index.chaining.buildGroups(group_pairs.items, allocator);
                 group_pairs.deinit(allocator);
                 errdefer {
                     for (reverse_groups) |group| allocator.free(group.subtable_indices);
@@ -1431,17 +1431,17 @@ fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, su
         allocator.free(chaining_subtables);
         return .{};
     }
-    const chaining_groups = try buildChainingSubtableGroups(group_pairs.items, allocator);
+    const chaining_groups = try accelerator_root.index.chaining.buildGroups(group_pairs.items, allocator);
     group_pairs.deinit(allocator);
     errdefer {
         for (chaining_groups) |group| allocator.free(group.subtable_indices);
         allocator.free(chaining_groups);
     }
-    fillChainingGroupSecondInputMetadata(chaining_groups, chaining_subtables);
-    const chaining_group_slots = try buildChainingGroupSlots(chaining_groups, allocator);
+    accelerator_root.index.chaining.fillSecondInputMetadata(chaining_groups, chaining_subtables);
+    const chaining_group_slots = try accelerator_root.index.chaining.buildSlots(chaining_groups, allocator);
     errdefer allocator.free(chaining_group_slots);
     const chaining_pair_groups = if (pair_index_complete)
-        try buildChainingPairSubtableGroups(pair_group_pairs.items, allocator)
+        try accelerator_root.index.chaining.buildPairGroups(pair_group_pairs.items, allocator)
     else
         try allocator.alloc(ChainingPairSubtableGroup, 0);
     pair_group_pairs.deinit(allocator);
@@ -1450,7 +1450,7 @@ fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, su
         allocator.free(chaining_pair_groups);
     }
     const chaining_pair_group_slots = if (pair_index_complete)
-        try buildChainingPairGroupSlots(chaining_pair_groups, allocator)
+        try accelerator_root.index.chaining.buildPairSlots(chaining_pair_groups, allocator)
     else
         try allocator.alloc(u16, 0);
     errdefer allocator.free(chaining_pair_group_slots);
@@ -2017,17 +2017,6 @@ fn selectedLookupRecords(table: Table, allocator: std.mem.Allocator, options: Lo
 
 fn mergedFeatureLookupLessThan(_: void, lhs: MergedFeatureLookup, rhs: MergedFeatureLookup) bool {
     return lhs.lookup < rhs.lookup;
-}
-
-fn chainingSubtablePairLessThan(_: void, lhs: ChainingSubtablePair, rhs: ChainingSubtablePair) bool {
-    if (lhs.glyph != rhs.glyph) return lhs.glyph < rhs.glyph;
-    return lhs.subtable_index < rhs.subtable_index;
-}
-
-fn chainingPairSubtablePairLessThan(_: void, lhs: ChainingPairSubtablePair, rhs: ChainingPairSubtablePair) bool {
-    if (lhs.first != rhs.first) return lhs.first < rhs.first;
-    if (lhs.second != rhs.second) return lhs.second < rhs.second;
-    return lhs.subtable_index < rhs.subtable_index;
 }
 
 fn recordGsubLookupProfile(profile: ?*shape_profile_mod.ShapeStageProfile, lookup_type: u16) void {
@@ -4410,7 +4399,7 @@ fn applyContextCoverageLookupAccelerated(
                 if (group.glyph != first) return error.BadGsub;
                 break :candidates group.subtable_indices;
             }
-            break :candidates chainingSubtableGroupForGlyph(
+            break :candidates accelerator_root.index.chaining.findIndices(
                 accelerator.context_groups,
                 &.{},
                 first,
@@ -4949,7 +4938,7 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
             if (!accel.chaining_input_digest.mayHave(current_glyph)) continue;
             if (!sourceFeatureAllowsGlyph(options, pos)) continue;
             if (lookupIgnoresGlyph(lookup_flag, options, current_glyph)) continue;
-            const group = chainingSubtableGroupEntryForGlyph(accel.chaining_groups, accel.chaining_group_slots, current_glyph) orelse continue;
+            const group = accelerator_root.index.chaining.find(accel.chaining_groups, accel.chaining_group_slots, current_glyph) orelse continue;
             const grouped_subtables = group.subtable_indices;
             const second_glyph_index = if (accel.chaining_needs_second_input)
                 nextUnignoredGlyphIndex(glyphs.items, pos + 1, lookup_flag, options, false, pos)
@@ -4962,7 +4951,7 @@ fn applyChainingContextSubstitutionLookup(table: Table, lookup_offset: usize, su
             }
             const candidate_subtables = if (accel.chaining_pair_index_complete and !group.has_no_second_input) pair: {
                 const glyph = second_glyph orelse continue;
-                break :pair chainingPairSubtableGroupForGlyphs(
+                break :pair accelerator_root.index.chaining.findPairIndices(
                     accel.chaining_pair_groups,
                     accel.chaining_pair_group_slots,
                     current_glyph,
@@ -5133,7 +5122,7 @@ fn applyExtensionReverseChainingSingleSubstitutionLookup(table: Table, lookup_of
                 markGlyphSubstituted(options, pos);
                 continue;
             }
-            const grouped_subtables = chainingSubtableGroupForGlyph(accel.reverse_chaining_groups, &.{}, glyph) orelse continue;
+            const grouped_subtables = accelerator_root.index.chaining.findIndices(accel.reverse_chaining_groups, &.{}, glyph) orelse continue;
             for (grouped_subtables) |subtable_i| {
                 if (subtable_i >= accel.reverse_chaining_subtables.len) return error.BadGsub;
                 if (try applyParsedReverseChainingSingleSubstitutionAt(table, accel.reverse_chaining_subtables[subtable_i], glyphs, pos, lookup_flag, options)) break;
@@ -7279,241 +7268,6 @@ fn appendChainingPairSubtablePairs(
         }
     }
     return true;
-}
-
-fn buildChainingSubtableGroups(pairs: []ChainingSubtablePair, allocator: std.mem.Allocator) std.mem.Allocator.Error![]ChainingSubtableGroup {
-    if (pairs.len == 0) return try allocator.alloc(ChainingSubtableGroup, 0);
-    std.sort.heap(ChainingSubtablePair, pairs, {}, chainingSubtablePairLessThan);
-
-    var group_count: usize = 1;
-    var previous_glyph = pairs[0].glyph;
-    for (pairs[1..]) |pair| {
-        if (pair.glyph == previous_glyph) continue;
-        group_count += 1;
-        previous_glyph = pair.glyph;
-    }
-
-    const groups = try allocator.alloc(ChainingSubtableGroup, group_count);
-    var built_group_count: usize = 0;
-    errdefer {
-        for (groups[0..built_group_count]) |group| allocator.free(group.subtable_indices);
-        allocator.free(groups);
-    }
-    var pair_index: usize = 0;
-    for (groups) |*group| {
-        const glyph = pairs[pair_index].glyph;
-        const start = pair_index;
-        while (pair_index < pairs.len and pairs[pair_index].glyph == glyph) : (pair_index += 1) {}
-        const indices = try allocator.alloc(u16, pair_index - start);
-        for (indices, 0..) |*index, i| {
-            index.* = pairs[start + i].subtable_index;
-        }
-        group.* = .{ .glyph = glyph, .subtable_indices = indices };
-        built_group_count += 1;
-    }
-    return groups;
-}
-
-fn buildChainingPairSubtableGroups(pairs: []ChainingPairSubtablePair, allocator: std.mem.Allocator) std.mem.Allocator.Error![]ChainingPairSubtableGroup {
-    if (pairs.len == 0) return try allocator.alloc(ChainingPairSubtableGroup, 0);
-    std.sort.heap(ChainingPairSubtablePair, pairs, {}, chainingPairSubtablePairLessThan);
-
-    var group_count: usize = 1;
-    var previous_first = pairs[0].first;
-    var previous_second = pairs[0].second;
-    for (pairs[1..]) |pair| {
-        if (pair.first == previous_first and pair.second == previous_second) continue;
-        group_count += 1;
-        previous_first = pair.first;
-        previous_second = pair.second;
-    }
-
-    const groups = try allocator.alloc(ChainingPairSubtableGroup, group_count);
-    var built_group_count: usize = 0;
-    errdefer {
-        for (groups[0..built_group_count]) |group| allocator.free(group.subtable_indices);
-        allocator.free(groups);
-    }
-    var pair_index: usize = 0;
-    for (groups) |*group| {
-        const first = pairs[pair_index].first;
-        const second = pairs[pair_index].second;
-        const start = pair_index;
-        while (pair_index < pairs.len and pairs[pair_index].first == first and pairs[pair_index].second == second) : (pair_index += 1) {}
-        const indices = try allocator.alloc(u16, pair_index - start);
-        for (indices, 0..) |*index, i| {
-            index.* = pairs[start + i].subtable_index;
-        }
-        group.* = .{ .first = first, .second = second, .subtable_indices = indices };
-        built_group_count += 1;
-    }
-    return groups;
-}
-
-fn fillChainingGroupSecondInputMetadata(groups: []ChainingSubtableGroup, subtables: []const ChainingCoverageSubtable) void {
-    for (groups) |*group| {
-        var digest = GlyphDigest.empty();
-        var has_second_input = false;
-        var has_no_second_input = false;
-        for (group.subtable_indices) |subtable_i| {
-            if (subtable_i >= subtables.len) {
-                has_no_second_input = true;
-                continue;
-            }
-            const subtable = subtables[subtable_i];
-            if (subtable.input_count <= 1) {
-                has_no_second_input = true;
-                continue;
-            }
-            has_second_input = true;
-            digest.unionWith(subtable.second_input_digest);
-        }
-        group.has_no_second_input = has_no_second_input;
-        if (has_second_input) group.second_input_digest = digest;
-    }
-}
-
-const min_chaining_groups_for_hash = 8;
-
-fn buildChainingGroupSlots(groups: []const ChainingSubtableGroup, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u16 {
-    if (groups.len < min_chaining_groups_for_hash or groups.len > std.math.maxInt(u16)) return try allocator.alloc(u16, 0);
-    // A 50% maximum load factor bounds unsuccessful probes while keeping the
-    // accelerator proportional to unique first-input glyphs, not glyph-id
-    // span. Slot zero denotes empty; populated slots store group_index + 1.
-    const slot_count = std.math.ceilPowerOfTwo(usize, groups.len * 2) catch return error.OutOfMemory;
-    const slots = try allocator.alloc(u16, slot_count);
-    @memset(slots, 0);
-    for (groups, 0..) |group, group_i| {
-        var slot = accelerator_root.index.class_first.hashGlyph(group.glyph) & (slots.len - 1);
-        while (slots[slot] != 0) slot = (slot + 1) & (slots.len - 1);
-        slots[slot] = @intCast(group_i + 1);
-    }
-    return slots;
-}
-
-fn buildChainingPairGroupSlots(groups: []const ChainingPairSubtableGroup, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u16 {
-    if (groups.len < min_chaining_groups_for_hash or groups.len > std.math.maxInt(u16)) return try allocator.alloc(u16, 0);
-    const slot_count = std.math.ceilPowerOfTwo(usize, groups.len * 2) catch return error.OutOfMemory;
-    const slots = try allocator.alloc(u16, slot_count);
-    @memset(slots, 0);
-    for (groups, 0..) |group, group_i| {
-        var slot = chainingPairGroupHash(group.first, group.second) & (slots.len - 1);
-        while (slots[slot] != 0) slot = (slot + 1) & (slots.len - 1);
-        slots[slot] = @intCast(group_i + 1);
-    }
-    return slots;
-}
-
-fn chainingSubtableGroupForGlyph(groups: []const ChainingSubtableGroup, slots: []const u16, glyph: GlyphId) ?[]const u16 {
-    const group = chainingSubtableGroupEntryForGlyph(groups, slots, glyph) orelse return null;
-    return group.subtable_indices;
-}
-
-fn chainingSubtableGroupEntryForGlyph(groups: []const ChainingSubtableGroup, slots: []const u16, glyph: GlyphId) ?ChainingSubtableGroup {
-    if (slots.len != 0) {
-        var slot = accelerator_root.index.class_first.hashGlyph(glyph) & (slots.len - 1);
-        while (slots[slot] != 0) : (slot = (slot + 1) & (slots.len - 1)) {
-            const group = groups[slots[slot] - 1];
-            if (group.glyph == glyph) return group;
-        }
-        return null;
-    }
-
-    var lo: usize = 0;
-    var hi: usize = groups.len;
-    while (lo < hi) {
-        const mid = lo + (hi - lo) / 2;
-        const candidate = groups[mid].glyph;
-        if (glyph < candidate) {
-            hi = mid;
-        } else if (glyph > candidate) {
-            lo = mid + 1;
-        } else {
-            return groups[mid];
-        }
-    }
-    return null;
-}
-
-fn chainingPairSubtableGroupForGlyphs(groups: []const ChainingPairSubtableGroup, slots: []const u16, first: GlyphId, second: GlyphId) ?[]const u16 {
-    if (slots.len != 0) {
-        var slot = chainingPairGroupHash(first, second) & (slots.len - 1);
-        while (slots[slot] != 0) : (slot = (slot + 1) & (slots.len - 1)) {
-            const group = groups[slots[slot] - 1];
-            if (group.first == first and group.second == second) return group.subtable_indices;
-        }
-        return null;
-    }
-
-    var lo: usize = 0;
-    var hi: usize = groups.len;
-    while (lo < hi) {
-        const mid = lo + (hi - lo) / 2;
-        const candidate = groups[mid];
-        if (first < candidate.first or (first == candidate.first and second < candidate.second)) {
-            hi = mid;
-        } else if (first > candidate.first or (first == candidate.first and second > candidate.second)) {
-            lo = mid + 1;
-        } else {
-            return candidate.subtable_indices;
-        }
-    }
-    return null;
-}
-
-fn chainingPairGroupHash(first: GlyphId, second: GlyphId) usize {
-    var mixed = @as(usize, first) *% 0x9e37;
-    mixed ^= @as(usize, second) *% 0x85eb;
-    return mixed ^ (mixed >> 7);
-}
-
-test "GSUB chaining group slots preserve hits and misses" {
-    const allocator = std.testing.allocator;
-    var groups: [min_chaining_groups_for_hash]ChainingSubtableGroup = undefined;
-    var group_indices: [min_chaining_groups_for_hash][1]u16 = undefined;
-    for (&groups, 0..) |*group, i| {
-        group_indices[i][0] = @intCast(i);
-        group.* = .{
-            .glyph = @intCast(10 + i * 17),
-            .subtable_indices = &group_indices[i],
-        };
-    }
-    const slots = try buildChainingGroupSlots(&groups, allocator);
-    defer allocator.free(slots);
-    try std.testing.expect(slots.len >= groups.len * 2);
-    for (groups, 0..) |group, i| {
-        const indices = chainingSubtableGroupForGlyph(&groups, slots, group.glyph) orelse return error.TestUnexpectedResult;
-        try std.testing.expectEqualSlices(u16, &.{@intCast(i)}, indices);
-    }
-    try std.testing.expect(chainingSubtableGroupForGlyph(&groups, slots, 9) == null);
-}
-
-test "GSUB chaining pair group slots preserve hits and misses" {
-    const allocator = std.testing.allocator;
-    var pairs = [_]ChainingPairSubtablePair{
-        .{ .first = 30, .second = 7, .subtable_index = 4 },
-        .{ .first = 10, .second = 2, .subtable_index = 1 },
-        .{ .first = 10, .second = 2, .subtable_index = 3 },
-        .{ .first = 10, .second = 5, .subtable_index = 2 },
-        .{ .first = 42, .second = 8, .subtable_index = 9 },
-        .{ .first = 11, .second = 1, .subtable_index = 6 },
-        .{ .first = 12, .second = 1, .subtable_index = 7 },
-        .{ .first = 13, .second = 1, .subtable_index = 8 },
-    };
-
-    const groups = try buildChainingPairSubtableGroups(&pairs, allocator);
-    defer {
-        for (groups) |group| allocator.free(group.subtable_indices);
-        allocator.free(groups);
-    }
-    const slots = try buildChainingPairGroupSlots(groups, allocator);
-    defer allocator.free(slots);
-
-    const repeated = chainingPairSubtableGroupForGlyphs(groups, slots, 10, 2) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualSlices(u16, &.{ 1, 3 }, repeated);
-    const single = chainingPairSubtableGroupForGlyphs(groups, slots, 30, 7) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualSlices(u16, &.{4}, single);
-    try std.testing.expect(chainingPairSubtableGroupForGlyphs(groups, slots, 10, 9) == null);
 }
 
 fn readU16(table: Table, relative: usize) GsubError!u16 {

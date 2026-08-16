@@ -2777,13 +2777,19 @@ fn applyValidatedAcceleratedLookup(
     options: LookupOptions,
     run_digest_cache: ?*RunDigestCache,
 ) (GsubError || std.mem.Allocator.Error)!bool {
-    const accelerator = lookupAcceleratorAny(lookup_index, options) orelse return false;
+    const accelerator =
+        runtime.dispatch.any(lookup_index, options) orelse return false;
     if (accelerator.lookup_offset != lookup_offset or accelerator.lookup_type == 0) return false;
     const lookup_start = shapeProfileNow(options.shape_profile, options.profile_io);
     const glyph_count_before = if (options.shape_profile != null) glyphs.items.len else 0;
 
-    const scoped_syllable = lookupMatchesSourceSyllable(lookup_index, options);
-    if (acceleratedLookupNeedsCustomizedOptions(accelerator.lookup_flag, scoped_syllable, options)) {
+    const scoped_syllable =
+        runtime.dispatch.matchesSourceSyllable(lookup_index, options);
+    if (runtime.dispatch.needsCustomizedOptions(
+        accelerator.lookup_flag,
+        scoped_syllable,
+        options,
+    )) {
         // LookupOptions carries all source-parallel shaping metadata and is
         // intentionally large. Materialize a customized copy only for lookups
         // that actually override mark-filtering or syllable scope; ordinary
@@ -2820,20 +2826,6 @@ fn applyValidatedAcceleratedLookup(
         lookup_start,
         glyph_count_before,
     );
-}
-
-fn acceleratedLookupNeedsCustomizedOptions(lookup_flag: u16, scoped_syllable: bool, options: LookupOptions) bool {
-    return (lookup_flag & 0x0010) != 0 or
-        scoped_syllable != options.match_source_syllable;
-}
-
-test "accelerated lookup customization is limited to lookup-local overrides" {
-    try std.testing.expect(!acceleratedLookupNeedsCustomizedOptions(0, false, .{}));
-    try std.testing.expect(acceleratedLookupNeedsCustomizedOptions(0x0010, false, .{}));
-    try std.testing.expect(acceleratedLookupNeedsCustomizedOptions(0, true, .{}));
-    try std.testing.expect(!acceleratedLookupNeedsCustomizedOptions(0, true, .{
-        .match_source_syllable = true,
-    }));
 }
 
 noinline fn applyValidatedAcceleratedLookupPrepared(
@@ -2972,7 +2964,15 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
             profile.recordGsubLookupGlyphs(lookup_index, glyph_count_before, glyphs.items.len, glyph_hash_before, glyphRunHash(glyphs.items), first_diff, window_start, before_window, after_window);
         }
     }
-    const dispatch = try lookupDispatch(lookup_offset, lookup_index, table, options);
+    // Header validation remains coupled to ExtensionSubst payload preflight;
+    // dispatch itself only parses fixed fields or trusts an exact sidecar.
+    try ensureLookupHeaderWithin(table, lookup_offset);
+    const dispatch = try runtime.dispatch.header(
+        table,
+        lookup_offset,
+        lookup_index,
+        options,
+    );
     const lookup_type = dispatch.lookup_type;
     const lookup_flag = dispatch.lookup_flag;
     const subtable_count = dispatch.subtable_count;
@@ -2990,9 +2990,13 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
         lookup_options.active_mark_filtering_set = dispatch.mark_filtering_set;
         try validateMarkFilteringSetIndex(lookup_options);
     }
-    lookup_options.match_source_syllable = lookupMatchesSourceSyllable(lookup_index, options);
+    lookup_options.match_source_syllable =
+        runtime.dispatch.matchesSourceSyllable(lookup_index, options);
     if (lookup_type == 1) {
-        if (singleLookupEntries(lookup_index, lookup_options)) |entries| {
+        if (runtime.dispatch.singleEntries(
+            lookup_index,
+            lookup_options,
+        )) |entries| {
             applySingleSubstitutionEntries(entries, glyphs, lookup_flag, lookup_options);
             return;
         }
@@ -3000,7 +3004,10 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
         return;
     }
     if (lookup_type == 2) {
-        if (multipleLookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+        if (runtime.dispatch.multiple(
+            lookup_index,
+            lookup_options,
+        )) |accelerator| {
             try applyMultipleSubstitutionAccelerated(table, accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
             return;
         }
@@ -3018,7 +3025,10 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
         // before choosing the optimized homogeneous path below so the lookup
         // remains all-or-nothing for truncated variable arrays.
         if (!table.assume_validated) try ensureExtensionSubstitutionLookupPayloadsWithin(table, lookup_offset, subtable_count);
-        const wrapped_type = if (extensionLookupTypeAccelerator(lookup_index, lookup_options)) |accelerator|
+        const wrapped_type = if (runtime.dispatch.extensionType(
+            lookup_index,
+            lookup_options,
+        )) |accelerator|
             accelerator.extension_lookup_type orelse 0
         else
             try extensionLookupType(table, lookup_offset, subtable_count) orelse 0;
@@ -3036,7 +3046,10 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
                 return;
             },
             5 => {
-                if (contextClassLookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+                if (runtime.dispatch.contextClass(
+                    lookup_index,
+                    lookup_options,
+                )) |accelerator| {
                     try applyExtensionContextClassSubstitutionLookupAccelerated(table, subtable_count, glyphs, allocator, lookup_flag, lookup_options, accelerator);
                 } else {
                     try applyExtensionContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
@@ -3044,9 +3057,15 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
                 return;
             },
             6 => {
-                if (chainingClassLookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+                if (runtime.dispatch.chainingClass(
+                    lookup_index,
+                    lookup_options,
+                )) |accelerator| {
                     try applyExtensionChainingClassSubstitutionLookupAccelerated(table, subtable_count, glyphs, allocator, lookup_flag, lookup_options, accelerator);
-                } else if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+                } else if (runtime.dispatch.chainingCoverage(
+                    lookup_index,
+                    lookup_options,
+                )) |accelerator| {
                     try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, accelerator);
                 } else {
                     try applyExtensionChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
@@ -3054,18 +3073,35 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
                 return;
             },
             8 => {
-                try applyExtensionReverseChainingSingleSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, lookup_flag, lookup_options, reverseChainingLookupAccelerator(lookup_index, lookup_options));
+                try applyExtensionReverseChainingSingleSubstitutionLookup(
+                    table,
+                    lookup_offset,
+                    subtable_count,
+                    glyphs,
+                    lookup_flag,
+                    lookup_options,
+                    runtime.dispatch.reverseChaining(
+                        lookup_index,
+                        lookup_options,
+                    ),
+                );
                 return;
             },
             else => {},
         }
     }
     if (lookup_type == 5) {
-        if (contextClassLookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+        if (runtime.dispatch.contextClass(
+            lookup_index,
+            lookup_options,
+        )) |accelerator| {
             try applyContextClassSubstitutionLookupAccelerated(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, accelerator);
             return;
         }
-        if (contextCoverageLookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+        if (runtime.dispatch.contextCoverage(
+            lookup_index,
+            lookup_options,
+        )) |accelerator| {
             try applyContextCoverageLookupAccelerated(
                 table,
                 glyphs,
@@ -3088,7 +3124,10 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
         return;
     }
     if (lookup_type == 6) {
-        if (chainingClassLookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+        if (runtime.dispatch.chainingClass(
+            lookup_index,
+            lookup_options,
+        )) |accelerator| {
             try applyChainingClassSubstitutionLookupAccelerated(
                 table,
                 subtable_count,
@@ -3100,7 +3139,10 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
             );
             return;
         }
-        if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+        if (runtime.dispatch.chainingCoverage(
+            lookup_index,
+            lookup_options,
+        )) |accelerator| {
             const run_digest = if (run_digest_cache) |cache|
                 cache.get(glyphs.items, lookup_flag, lookup_options)
             else
@@ -3122,7 +3164,10 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
         return;
     }
     if (lookup_type == 4 and subtable_count == 1) {
-        if (ligatureLookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+        if (runtime.dispatch.ligature(
+            lookup_index,
+            lookup_options,
+        )) |accelerator| {
             if (run_digest_cache) |cache| {
                 const run_digest = cache.get(glyphs.items, lookup_flag, lookup_options);
                 if (run_digest.isEmpty() or
@@ -3162,46 +3207,6 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
     }
 }
 
-const LookupDispatch = struct {
-    lookup_type: u16,
-    lookup_flag: u16,
-    subtable_count: u16,
-    mark_filtering_set: ?u16,
-};
-
-fn lookupDispatch(
-    lookup_offset: usize,
-    lookup_index: ?u16,
-    table: Table,
-    options: LookupOptions,
-) GsubError!LookupDispatch {
-    if (table.assume_validated) {
-        if (lookupAcceleratorAny(lookup_index, options)) |accelerator| {
-            if (accelerator.lookup_offset == lookup_offset and accelerator.lookup_type != 0) {
-                return .{
-                    .lookup_type = accelerator.lookup_type,
-                    .lookup_flag = accelerator.lookup_flag,
-                    .subtable_count = accelerator.subtable_count,
-                    .mark_filtering_set = accelerator.mark_filtering_set,
-                };
-            }
-        }
-    }
-
-    try ensureLookupHeaderWithin(table, lookup_offset);
-    const lookup_flag = try readU16(table, lookup_offset + 2);
-    const subtable_count = try readU16(table, lookup_offset + 4);
-    return .{
-        .lookup_type = try readU16(table, lookup_offset),
-        .lookup_flag = lookup_flag,
-        .subtable_count = subtable_count,
-        .mark_filtering_set = if ((lookup_flag & 0x0010) != 0)
-            try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2)
-        else
-            null,
-    };
-}
-
 fn glyphRunHash(glyphs: []const GlyphId) u64 {
     var hash: u64 = 0xcbf29ce484222325;
     for (glyphs) |glyph| {
@@ -3219,109 +3224,11 @@ fn firstDifferentGlyphIndex(before: []const GlyphId, after: []const GlyphId) usi
     return len;
 }
 
-fn lookupMatchesSourceSyllable(lookup_index: ?u16, options: LookupOptions) bool {
-    if (options.match_source_syllable) return true;
-    const index = lookup_index orelse return false;
-    const lookups = options.match_source_syllable_lookups orelse return false;
-    for (lookups) |candidate| {
-        if (candidate == index) return true;
-    }
-    return false;
-}
-
-fn lookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
-    const accelerator = lookupAcceleratorAny(lookup_index, options) orelse return null;
-    if (!accelerator.chaining_coverage_only) return null;
-    return accelerator;
-}
-
-fn lookupAcceleratorAny(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
-    const accelerators = options.lookup_accelerators orelse return null;
-    const index = lookup_index orelse return null;
-    if (index >= accelerators.len) return null;
-    return &accelerators[index];
-}
-
-fn reverseChainingLookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
-    const accelerators = options.lookup_accelerators orelse return null;
-    const index = lookup_index orelse return null;
-    if (index >= accelerators.len) return null;
-    const accelerator = &accelerators[index];
-    if (accelerator.reverse_chaining_subtables.len == 0 or accelerator.reverse_chaining_groups.len == 0) return null;
-    return accelerator;
-}
-
-fn multipleLookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const MultipleSubstAccelerator {
-    const accelerators = options.lookup_accelerators orelse return null;
-    const index = lookup_index orelse return null;
-    if (index >= accelerators.len) return null;
-    const accelerator = &accelerators[index].multiple_subst;
-    if (accelerator.entries.len == 0) return null;
-    return accelerator;
-}
-
-fn singleLookupEntries(lookup_index: ?u16, options: LookupOptions) ?[]const SingleSubstEntry {
-    const accelerators = options.lookup_accelerators orelse return null;
-    const index = lookup_index orelse return null;
-    if (index >= accelerators.len) return null;
-    const entries = accelerators[index].single_subst_entries;
-    if (entries.len == 0) return null;
-    return entries;
-}
-
-fn ligatureLookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LigatureSubstAccelerator {
-    const accelerators = options.lookup_accelerators orelse return null;
-    const index = lookup_index orelse return null;
-    if (index >= accelerators.len) return null;
-    const accelerator = &accelerators[index].ligature_subst;
-    if (accelerator.sets.len == 0) return null;
-    return accelerator;
-}
-
-fn contextClassLookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
-    const accelerators = options.lookup_accelerators orelse return null;
-    const index = lookup_index orelse return null;
-    if (index >= accelerators.len) return null;
-    const accelerator = &accelerators[index];
-    if (accelerator.context_class_subtables.len == 0) return null;
-    return accelerator;
-}
-
-fn contextCoverageLookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
-    const accelerators = options.lookup_accelerators orelse return null;
-    const index = lookup_index orelse return null;
-    if (index >= accelerators.len) return null;
-    const accelerator = &accelerators[index];
-    if (accelerator.context_coverage_subtables.len == 0) return null;
-    return accelerator;
-}
-
-fn chainingClassLookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
-    const accelerators = options.lookup_accelerators orelse return null;
-    const index = lookup_index orelse return null;
-    if (index >= accelerators.len) return null;
-    const accelerator = &accelerators[index];
-    if (accelerator.chaining_class_subtables.len == 0) return null;
-    return accelerator;
-}
-
-fn extensionLookupTypeAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
-    const accelerators = options.lookup_accelerators orelse return null;
-    const index = lookup_index orelse return null;
-    if (index >= accelerators.len) return null;
-    const accelerator = &accelerators[index];
-    if (accelerator.extension_lookup_type == null) return null;
-    return accelerator;
-}
-
-fn lookupAcceleratorsUseRunDigestCache(accelerators: ?[]const LookupAccelerator) bool {
-    const items = accelerators orelse return false;
-    return items.len != 0 and items[0].table_uses_run_digest_cache;
-}
-
 fn optionsWithRunDigestGeneration(options: LookupOptions, generation: *usize) LookupOptions {
     var result = options;
-    if (lookupAcceleratorsUseRunDigestCache(result.lookup_accelerators) and result.glyph_mutation_generation == null) {
+    if (runtime.dispatch.tableUsesRunDigestCache(
+        result.lookup_accelerators,
+    ) and result.glyph_mutation_generation == null) {
         result.glyph_mutation_generation = generation;
     }
     return result;
@@ -8557,51 +8464,6 @@ test "GSUB class format 1 handles upper glyph boundary" {
     try std.testing.expectEqual(@as(u16, 7), try table_core.class_def.value(table, 0, 0xfffe));
     try std.testing.expectEqual(@as(u16, 9), try table_core.class_def.value(table, 0, 0xffff));
     try std.testing.expectEqual(@as(u16, 0), try table_core.class_def.value(table, 0, 0xfffd));
-}
-
-test "GSUB cached lookup dispatch requires validated matching metadata" {
-    var bytes = [_]u8{0} ** 12;
-    writeU16Test(&bytes, 0, 1);
-    writeU16Test(&bytes, 2, 0x0010);
-    writeU16Test(&bytes, 4, 1);
-    writeU16Test(&bytes, 6, 10);
-    writeU16Test(&bytes, 8, 0xffff);
-
-    const accelerators = [_]LookupAccelerator{.{
-        .lookup_offset = 0,
-        .lookup_type = 7,
-        .lookup_flag = 0,
-        .subtable_count = 3,
-        .mark_filtering_set = 9,
-    }};
-    const cached = try lookupDispatch(0, 0, .{
-        .data = &bytes,
-        .offset = 0,
-        .length = bytes.len,
-        .assume_validated = true,
-    }, .{ .lookup_accelerators = &accelerators });
-    try std.testing.expectEqual(@as(u16, 7), cached.lookup_type);
-    try std.testing.expectEqual(@as(u16, 3), cached.subtable_count);
-    try std.testing.expectEqual(@as(?u16, 9), cached.mark_filtering_set);
-
-    const parsed = try lookupDispatch(0, 0, .{
-        .data = &bytes,
-        .offset = 0,
-        .length = bytes.len,
-    }, .{ .lookup_accelerators = &accelerators });
-    try std.testing.expectEqual(@as(u16, 1), parsed.lookup_type);
-    try std.testing.expectEqual(@as(u16, 0x0010), parsed.lookup_flag);
-    try std.testing.expectEqual(@as(?u16, 0xffff), parsed.mark_filtering_set);
-
-    var stale = accelerators;
-    stale[0].lookup_offset = 2;
-    const stale_fallback = try lookupDispatch(0, 0, .{
-        .data = &bytes,
-        .offset = 0,
-        .length = bytes.len,
-        .assume_validated = true,
-    }, .{ .lookup_accelerators = &stale });
-    try std.testing.expectEqual(@as(u16, 1), stale_fallback.lookup_type);
 }
 
 test "GSUB parse-time contextual records avoid recursively validating lookup payloads" {

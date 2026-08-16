@@ -132,13 +132,11 @@ pub fn apply(data: []const u8, offset: usize, length: usize, glyphs: *std.ArrayL
 pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
     try runtime.metadata.validate(options, glyphs.items.len);
-    var mutation_generation: usize = 0;
-    var operations_left: usize = 0;
-    const shaping_options = try optionsWithTopLevelState(
+    var run_storage = runtime.state.Storage{};
+    const shaping_options = try runtime.state.prepare(
         options,
         glyphs.items.len,
-        &mutation_generation,
-        &operations_left,
+        &run_storage,
     );
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
     const major = try readU16(table, 0);
@@ -267,7 +265,10 @@ pub noinline fn applyCachedLookupSelectionWithOptionsAfterMetadataProof(
     }
 
     var mutation_generation: usize = 0;
-    const shaping_options = optionsWithRunDigestGeneration(options, &mutation_generation);
+    const shaping_options = runtime.state.withDigestGeneration(
+        options,
+        &mutation_generation,
+    );
     const table = Table{
         .data = data,
         .offset = offset,
@@ -366,7 +367,7 @@ fn applySelectedSourceFeatureWithOptions(
     scoped_options.active_feature_value = feature_value;
     try runtime.metadata.validate(scoped_options, glyphs.items.len);
     var mutation_generation: usize = 0;
-    const shaping_options = optionsWithRunDigestGeneration(
+    const shaping_options = runtime.state.withDigestGeneration(
         scoped_options,
         &mutation_generation,
     );
@@ -381,7 +382,8 @@ fn applySelectedSourceFeatureWithOptions(
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
     var run_digest_cache = runtime_prefilter.Cache.init();
-    try applyLookupIndices(
+    try feature_domain.plan.apply.shared.indices(
+        ContextualRecordExecutor,
         table,
         lookup_list_offset,
         lookup_count,
@@ -515,76 +517,24 @@ fn applyFeatureSequenceWithOptions(
     allocator: std.mem.Allocator,
     options: LookupOptions,
 ) (GsubError || std.mem.Allocator.Error)!void {
-    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    try runtime.metadata.validateApplications(options, glyphs.items.len, applications);
-    var mutation_generation: usize = 0;
-    var operations_left: usize = 0;
-    const shaping_options = try optionsWithTopLevelState(
-        options,
-        glyphs.items.len,
-        &mutation_generation,
-        &operations_left,
-    );
-    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
-    const major = try readU16(table, 0);
-    if (major != 1) return error.UnsupportedGsub;
-    if (try isEmptyGsubTopology(table)) return;
-    var run_digest_cache = runtime_prefilter.Cache.init();
-
-    // Preserve arbitrary LangSys-required features even when a higher-level
-    // script plan names only the well-known stages it needs to interleave.
-    // Required tags already present in the explicit plan are handled there so
-    // position-scoped form features do not run once globally and once scoped.
-    var feature_indices_stack: [64]FeatureSelection = undefined;
-    var feature_indices_stack_len: usize = 0;
-    var owned_feature_indices = std.ArrayList(FeatureSelection).empty;
-    defer owned_feature_indices.deinit(allocator);
-    const script_list_offset = try checkedRequiredScriptListOffset(table);
-    const script_offset = (try feature_domain.selection.script(
+    if (length < 10 or offset > data.len or length > data.len - offset) {
+        return error.BadGsub;
+    }
+    const table = Table{
+        .data = data,
+        .offset = offset,
+        .length = length,
+        .assume_validated = options.assume_validated,
+    };
+    if (try readU16(table, 0) != 1) return error.UnsupportedGsub;
+    return feature_domain.plan.apply.sequence.apply(
+        ContextualRecordExecutor,
         table,
-        script_list_offset,
-        shaping_options.script_tag,
-    )) orelse 0;
-    if (script_offset != 0) {
-        if (try feature_domain.selection.languageSystem(table, script_offset, shaping_options.language_tag)) |lang_sys_offset| {
-            try feature_domain.selection.collectLanguageStackFirst(
-                table,
-                lang_sys_offset,
-                &feature_indices_stack,
-                &feature_indices_stack_len,
-                &owned_feature_indices,
-                allocator,
-            );
-        }
-    }
-    const feature_indices = if (owned_feature_indices.items.len != 0)
-        owned_feature_indices.items
-    else
-        feature_indices_stack[0..feature_indices_stack_len];
-    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
-    const feature_count = try readU16(table, feature_list_offset);
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16(table, lookup_list_offset);
-    for (feature_indices) |selection| {
-        if (!selection.required or selection.index >= feature_count) continue;
-        const feature_record = feature_list_offset + 2 + @as(usize, selection.index) * 6;
-        const required_tag = try readU32(table, feature_record);
-        if (featurePlanContains(applications, required_tag)) continue;
-        var required_options = shaping_options;
-        required_options.active_source_feature = null;
-        try applySelectedFeatureFromPlan(table, required_tag, feature_indices, feature_list_offset, feature_count, lookup_list_offset, lookup_count, glyphs, allocator, required_options, &run_digest_cache);
-    }
-
-    for (applications) |application| {
-        var selected_options = shaping_options;
-        selected_options.active_source_feature = if (application.source_scoped) application.tag else null;
-        selected_options.match_source_syllable = application.match_source_syllable;
-        selected_options.active_auto_zwnj = application.auto_zwnj;
-        selected_options.active_auto_zwj = application.auto_zwj;
-        selected_options.active_feature_value = application.value;
-        selected_options.active_feature_random = featureApplicationIsRandom(application);
-        try applySelectedFeatureFromPlan(table, application.tag, feature_indices, feature_list_offset, feature_count, lookup_list_offset, lookup_count, glyphs, allocator, selected_options, &run_digest_cache);
-    }
+        applications,
+        glyphs,
+        allocator,
+        options,
+    );
 }
 
 fn buildFeatureLookupPlan(
@@ -657,9 +607,7 @@ fn applyFeatureLookupPlanWithOptions(
     allocator: std.mem.Allocator,
     options: LookupOptions,
 ) (GsubError || std.mem.Allocator.Error)!void {
-    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    try runtime.metadata.validateLookupPlan(options, glyphs.items.len, plan);
-    return try applyFeatureLookupPlanWithOptionsAfterMetadataProof(
+    return applyFeatureLookupPlan(
         data,
         offset,
         length,
@@ -667,19 +615,10 @@ fn applyFeatureLookupPlanWithOptions(
         glyphs,
         allocator,
         options,
+        true,
     );
 }
 
-/// Apply a cached feature plan after the caller has proved glyph/source
-/// metadata for this shaping run.
-///
-/// This is an internal shaping fast path. It is sound across consecutive GSUB
-/// stages because every supported substitution updates glyph ids and all
-/// source-parallel arrays atomically. SingleSubst format 1 may temporarily
-/// leave maxp's renderable range, so the complete shaper must validate final
-/// glyph IDs before GPOS or metrics. Callers must not use it for an
-/// independently supplied or externally mutated run;
-/// `applyFeatureLookupPlanWithOptions` remains the defensive API.
 fn applyFeatureLookupPlanWithOptionsAfterMetadataProof(
     data: []const u8,
     offset: usize,
@@ -689,39 +628,47 @@ fn applyFeatureLookupPlanWithOptionsAfterMetadataProof(
     allocator: std.mem.Allocator,
     options: LookupOptions,
 ) (GsubError || std.mem.Allocator.Error)!void {
-    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    var mutation_generation: usize = 0;
-    var operations_left: usize = 0;
-    const shaping_options = try optionsWithTopLevelState(
+    return applyFeatureLookupPlan(
+        data,
+        offset,
+        length,
+        plan,
+        glyphs,
+        allocator,
         options,
-        glyphs.items.len,
-        &mutation_generation,
-        &operations_left,
+        false,
     );
-    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
-    const major = try readU16(table, 0);
-    if (major != 1) return error.UnsupportedGsub;
-    if (try isEmptyGsubTopology(table)) {
-        // Cached plans built for this topology are necessarily empty. Keep the
-        // executor independently safe because callers may retain a plan across
-        // cache layers rather than re-entering the builder on every run.
-        if (plan.entries.len != 0) return error.BadGsub;
-        return;
-    }
+}
 
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16(table, lookup_list_offset);
-    var run_digest_cache = runtime_prefilter.Cache.init();
-    for (plan.entries) |entry| {
-        var selected_options = shaping_options;
-        selected_options.active_source_feature = if (entry.application.source_scoped) entry.application.tag else null;
-        selected_options.match_source_syllable = entry.application.match_source_syllable;
-        selected_options.active_auto_zwnj = entry.application.auto_zwnj;
-        selected_options.active_auto_zwj = entry.application.auto_zwj;
-        selected_options.active_feature_value = entry.application.value;
-        selected_options.active_feature_random = featureApplicationIsRandom(entry.application);
-        try applyLookupPlanEntry(table, lookup_count, entry, glyphs, allocator, selected_options, &run_digest_cache);
+fn applyFeatureLookupPlan(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    plan: feature.LookupPlan,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+    prove_metadata: bool,
+) (GsubError || std.mem.Allocator.Error)!void {
+    if (length < 10 or offset > data.len or length > data.len - offset) {
+        return error.BadGsub;
     }
+    const table = Table{
+        .data = data,
+        .offset = offset,
+        .length = length,
+        .assume_validated = options.assume_validated,
+    };
+    if (try readU16(table, 0) != 1) return error.UnsupportedGsub;
+    return feature_domain.plan.apply.cached.staged(
+        ContextualRecordExecutor,
+        table,
+        plan,
+        glyphs,
+        allocator,
+        options,
+        prove_metadata,
+    );
 }
 
 fn applyMergedFeatureLookupPlanWithOptions(
@@ -733,9 +680,7 @@ fn applyMergedFeatureLookupPlanWithOptions(
     allocator: std.mem.Allocator,
     options: LookupOptions,
 ) (GsubError || std.mem.Allocator.Error)!void {
-    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    try runtime.metadata.validateMergedLookupPlan(options, glyphs.items.len, plan);
-    return try applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof(
+    return applyMergedFeatureLookupPlan(
         data,
         offset,
         length,
@@ -743,11 +688,10 @@ fn applyMergedFeatureLookupPlanWithOptions(
         glyphs,
         allocator,
         options,
+        true,
     );
 }
 
-/// Merged-plan counterpart to
-/// `applyFeatureLookupPlanWithOptionsAfterMetadataProof`.
 fn applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof(
     data: []const u8,
     offset: usize,
@@ -757,140 +701,47 @@ fn applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof(
     allocator: std.mem.Allocator,
     options: LookupOptions,
 ) (GsubError || std.mem.Allocator.Error)!void {
-    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    var mutation_generation: usize = 0;
-    var operations_left: usize = 0;
-    const shaping_options = try optionsWithTopLevelState(
-        options,
-        glyphs.items.len,
-        &mutation_generation,
-        &operations_left,
-    );
-    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
-    const major = try readU16(table, 0);
-    if (major != 1) return error.UnsupportedGsub;
-    if (try isEmptyGsubTopology(table)) {
-        if (plan.lookups.len != 0 or plan.lookup_offsets.len != 0) return error.BadGsub;
-        return;
-    }
-
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16(table, lookup_list_offset);
-    if (plan.lookups.len != plan.lookup_offsets.len) return error.BadGsub;
-    var run_digest_cache = runtime_prefilter.Cache.init();
-    for (plan.lookups, plan.lookup_offsets) |lookup, lookup_offset| {
-        if (lookup.lookup >= lookup_count) return error.BadGsub;
-        var selected_options = shaping_options;
-        selected_options.active_source_feature = null;
-        selected_options.active_source_feature_mask = lookup.source_mask;
-        selected_options.active_auto_zwnj = lookup.auto_zwnj;
-        selected_options.active_auto_zwj = lookup.auto_zwj;
-        selected_options.match_source_syllable = lookup.match_source_syllable;
-        selected_options.active_feature_value = lookup.value;
-        selected_options.active_feature_random = lookup.random;
-        try applyLookupWithIndex(table, lookup_offset, lookup.lookup, glyphs, allocator, selected_options, &run_digest_cache);
-    }
-}
-
-fn featurePlanContains(applications: []const FeatureApplication, feature_tag: u32) bool {
-    for (applications) |application| {
-        if (application.tag == feature_tag) return true;
-    }
-    return false;
-}
-
-fn featureApplicationIsRandom(application: FeatureApplication) bool {
-    return application.tag == unicode.tag("rand") and
-        application.value == random_feature_value;
-}
-
-fn applySelectedFeature(
-    table: Table,
-    feature_tag: u32,
-    glyphs: *std.ArrayList(GlyphId),
-    allocator: std.mem.Allocator,
-    options: LookupOptions,
-) (GsubError || std.mem.Allocator.Error)!void {
-    var feature_indices = std.ArrayList(FeatureSelection).empty;
-    defer feature_indices.deinit(allocator);
-    const script_list_offset = try checkedRequiredScriptListOffset(table);
-    const script_offset = (try feature_domain.selection.script(
-        table,
-        script_list_offset,
-        options.script_tag,
-    )) orelse return;
-    try feature_domain.selection.collect(table, script_offset, options.language_tag, &feature_indices, allocator);
-
-    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
-    const feature_count = try readU16(table, feature_list_offset);
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16(table, lookup_list_offset);
-    try applySelectedFeatureFromPlan(table, feature_tag, feature_indices.items, feature_list_offset, feature_count, lookup_list_offset, lookup_count, glyphs, allocator, options, null);
-}
-
-fn applySelectedFeatureFromPlan(
-    table: Table,
-    feature_tag: u32,
-    feature_indices: []const FeatureSelection,
-    feature_list_offset: usize,
-    feature_count: u16,
-    lookup_list_offset: usize,
-    lookup_count: u16,
-    glyphs: *std.ArrayList(GlyphId),
-    allocator: std.mem.Allocator,
-    options: LookupOptions,
-    run_digest_cache: ?*runtime_prefilter.Cache,
-) (GsubError || std.mem.Allocator.Error)!void {
-    if (feature_domain.plan.selection.borrowedLookups(
-        table,
-        feature_tag,
-        feature_indices,
-        feature_count,
-        options,
-    )) |selected_lookups| {
-        try applyLookupIndices(table, lookup_list_offset, lookup_count, selected_lookups, glyphs, allocator, options, run_digest_cache);
-        return;
-    }
-    const selected_lookups = try feature_domain.plan.selection.selectedLookupsOwned(
-        table,
-        feature_tag,
-        feature_indices,
-        .{
-            .feature_list = feature_list_offset,
-            .feature_count = feature_count,
-            .lookup_list = lookup_list_offset,
-            .lookup_count = lookup_count,
-        },
+    return applyMergedFeatureLookupPlan(
+        data,
+        offset,
+        length,
+        plan,
+        glyphs,
         allocator,
         options,
+        false,
     );
-    defer allocator.free(selected_lookups);
-    try applyLookupIndices(table, lookup_list_offset, lookup_count, selected_lookups, glyphs, allocator, options, run_digest_cache);
 }
 
-fn applyLookupIndices(
-    table: Table,
-    lookup_list_offset: usize,
-    lookup_count: u16,
-    selected_lookups: []const u16,
+fn applyMergedFeatureLookupPlan(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    plan: feature.MergedLookupPlan,
     glyphs: *std.ArrayList(GlyphId),
     allocator: std.mem.Allocator,
     options: LookupOptions,
-    run_digest_cache: ?*runtime_prefilter.Cache,
+    prove_metadata: bool,
 ) (GsubError || std.mem.Allocator.Error)!void {
-    for (selected_lookups) |lookup_index| {
-        if (lookup_index >= lookup_count) return error.BadGsub;
-        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
-        try applyLookupWithIndex(table, lookup_offset, lookup_index, glyphs, allocator, options, run_digest_cache);
+    if (length < 10 or offset > data.len or length > data.len - offset) {
+        return error.BadGsub;
     }
-}
-
-fn applyLookupPlanEntry(table: Table, lookup_count: u16, entry: FeatureLookupPlanEntry, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*runtime_prefilter.Cache) (GsubError || std.mem.Allocator.Error)!void {
-    if (entry.lookup_offsets.len != entry.lookups.len) return error.BadGsub;
-    for (entry.lookups, entry.lookup_offsets) |lookup_index, lookup_offset| {
-        if (lookup_index >= lookup_count) return error.BadGsub;
-        try applyLookupWithIndex(table, lookup_offset, lookup_index, glyphs, allocator, options, run_digest_cache);
-    }
+    const table = Table{
+        .data = data,
+        .offset = offset,
+        .length = length,
+        .assume_validated = options.assume_validated,
+    };
+    if (try readU16(table, 0) != 1) return error.UnsupportedGsub;
+    return feature_domain.plan.apply.cached.merged(
+        ContextualRecordExecutor,
+        table,
+        plan,
+        glyphs,
+        allocator,
+        options,
+        prove_metadata,
+    );
 }
 
 /// Validate GSUB glyph references that are meaningful at font-load time.
@@ -1030,34 +881,6 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
         options,
         run_digest_cache,
     );
-}
-
-fn optionsWithRunDigestGeneration(options: LookupOptions, generation: *usize) LookupOptions {
-    var result = options;
-    if (runtime.dispatch.tableUsesRunDigestCache(
-        result.lookup_accelerators,
-    ) and result.glyph_mutation_generation == null) {
-        result.glyph_mutation_generation = generation;
-    }
-    return result;
-}
-
-fn optionsWithTopLevelState(
-    options: LookupOptions,
-    initial_glyph_count: usize,
-    mutation_generation: *usize,
-    operations_left: *usize,
-) GsubError!LookupOptions {
-    var result = optionsWithRunDigestGeneration(options, mutation_generation);
-    if (result.operations_left == null) {
-        const limits = try runtime.Limits.init(initial_glyph_count);
-        operations_left.* = limits.operations_left;
-        result.operations_left = operations_left;
-        if (result.max_glyph_count == null) result.max_glyph_count = limits.max_glyph_count;
-    } else if (result.max_glyph_count == null) {
-        result.max_glyph_count = (try runtime.Limits.init(initial_glyph_count)).max_glyph_count;
-    }
-    return result;
 }
 
 fn extensionSubtablePayload(table: Table, subtable_offset: usize, expected_lookup_type: u16) GsubError!usize {
@@ -1286,7 +1109,7 @@ test "GSUB ligature run digest activates only when reusable" {
     // exact scan is about to consume. Keep mutation-epoch bookkeeping disabled
     // until at least two independent first-component coverages can share it.
     var generation: usize = 0;
-    const single_options = optionsWithRunDigestGeneration(
+    const single_options = runtime.state.withDigestGeneration(
         .{ .lookup_accelerators = single_accelerators },
         &generation,
     );
@@ -1312,7 +1135,7 @@ test "GSUB ligature run digest activates only when reusable" {
     try std.testing.expect(two_accelerators[0].ligature_subst.first_component_digest.mayHave(1));
     try std.testing.expect(two_accelerators[1].ligature_subst.first_component_digest.mayHave(5));
 
-    const two_options = optionsWithRunDigestGeneration(
+    const two_options = runtime.state.withDigestGeneration(
         .{ .lookup_accelerators = two_accelerators },
         &generation,
     );
@@ -1368,6 +1191,26 @@ test "GSUB ligature run digest invalidates after an earlier ligature" {
 }
 
 const ContextualRecordExecutor = struct {
+    pub fn applyLookup(
+        table: Table,
+        lookup_offset: usize,
+        lookup_index: u16,
+        glyphs: *std.ArrayList(GlyphId),
+        allocator: std.mem.Allocator,
+        options: LookupOptions,
+        run_digest_cache: *runtime_prefilter.Cache,
+    ) (GsubError || std.mem.Allocator.Error)!void {
+        return applyLookupWithIndex(
+            table,
+            lookup_offset,
+            lookup_index,
+            glyphs,
+            allocator,
+            options,
+            run_digest_cache,
+        );
+    }
+
     pub fn applyExtensionSubtable(
         table: Table,
         subtable_offset: usize,

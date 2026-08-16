@@ -8,4 +8,5 @@ test {
     _ = @import("mutation.zig");
     _ = @import("options.zig");
     _ = @import("prefilter/root.zig");
+    _ = @import("state.zig");
 }

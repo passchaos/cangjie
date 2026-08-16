@@ -2059,128 +2059,23 @@ fn chainingClassGroupForGlyph(subtable: ChainingClassSubtableAccelerator, glyph:
 }
 
 fn buildSingleSubstAccelerator(table: Table, subtable_offset: usize) GsubError!SingleSubstAccelerator {
-    const subst_format = try readU16(table, subtable_offset);
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    switch (subst_format) {
-        1 => {
-            const delta = try readI16(table, subtable_offset + 4);
-            var accelerator = SingleSubstAccelerator{
-                .enabled = true,
-                .subst_format = subst_format,
-                .coverage_offset = coverage_offset,
-                .delta = delta,
-            };
-            try fillSingleMapping(table, coverage_offset, delta, null, &accelerator);
-            return accelerator;
-        },
-        2 => {
-            const glyph_count = try readU16(table, subtable_offset + 4);
-            var accelerator = SingleSubstAccelerator{
-                .enabled = true,
-                .subst_format = subst_format,
-                .coverage_offset = coverage_offset,
-                .glyph_count = glyph_count,
-                .substitutes_pos = subtable_offset + 6,
-            };
-            try fillSingleMapping(table, coverage_offset, 0, subtable_offset + 6, &accelerator);
-            return accelerator;
-        },
-        else => return .{},
-    }
+    return accelerator_root.build.single.compact(table, subtable_offset);
 }
 
 fn buildSingleSubstEntries(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]SingleSubstEntry {
-    const subst_format = try readU16(table, subtable_offset);
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const entry_count = try table_core.coverage.glyphCount(table, coverage_offset);
-    const entries = try allocator.alloc(SingleSubstEntry, entry_count);
-    errdefer allocator.free(entries);
-
-    switch (subst_format) {
-        1 => {
-            const delta = try readI16(table, subtable_offset + 4);
-            for (entries, 0..) |*entry, i| {
-                const from = (try table_core.coverage.glyphAt(table, coverage_offset, i)) orelse return error.BadGsub;
-                entry.* = .{
-                    .from = from,
-                    .to = @bitCast(@as(i16, @bitCast(from)) +% delta),
-                };
-            }
-        },
-        2 => {
-            const glyph_count = try readU16(table, subtable_offset + 4);
-            if (glyph_count != entry_count) return error.BadGsub;
-            for (entries, 0..) |*entry, i| {
-                entry.* = .{
-                    .from = (try table_core.coverage.glyphAt(table, coverage_offset, i)) orelse return error.BadGsub,
-                    .to = try readU16(table, subtable_offset + 6 + i * 2),
-                };
-            }
-        },
-        else => return error.UnsupportedGsub,
-    }
-    // Coverage validation proves source glyphs are strictly ordered. Keep that
-    // order so top-level application can binary-search native-endian records
-    // without reparsing the Coverage and substitute arrays for every glyph.
-    return entries;
-}
-
-fn fillSingleMapping(table: Table, coverage_offset: usize, delta: i16, substitutes_pos: ?usize, accelerator: *SingleSubstAccelerator) GsubError!void {
-    const format = try readU16(table, coverage_offset);
-    const glyph = switch (format) {
-        1 => glyph: {
-            const glyph_count = try readU16(table, coverage_offset + 2);
-            if (glyph_count != 1) return;
-            try table_core.coverage.validateFormat1Order(table, coverage_offset, glyph_count);
-            break :glyph try readU16(table, coverage_offset + 4);
-        },
-        2 => glyph: {
-            const range_count = try readU16(table, coverage_offset + 2);
-            if (range_count != 1) return;
-            try table_core.coverage.validateFormat2Ranges(table, coverage_offset, range_count);
-            const start = try readU16(table, coverage_offset + 4);
-            const end = try readU16(table, coverage_offset + 6);
-            if (start != end) return;
-            break :glyph start;
-        },
-        else => return,
-    };
-    accelerator.single_mapping = true;
-    accelerator.single_from = glyph;
-    accelerator.single_to = if (substitutes_pos) |pos|
-        try readU16(table, pos)
-    else
-        @bitCast(@as(i16, @bitCast(glyph)) +% delta);
+    return accelerator_root.build.single.entries(
+        table,
+        subtable_offset,
+        allocator,
+    );
 }
 
 fn buildMultipleSubstAccelerator(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!MultipleSubstAccelerator {
-    if (try readU16(table, subtable_offset) != 1) return .{};
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const sequence_count = try readU16(table, subtable_offset + 4);
-    const entries = try allocator.alloc(MultipleSubstEntry, sequence_count);
-    errdefer allocator.free(entries);
-
-    var sequence_i: usize = 0;
-    while (sequence_i < sequence_count) : (sequence_i += 1) {
-        const glyph = (try table_core.coverage.glyphAt(table, coverage_offset, sequence_i)) orelse {
-            allocator.free(entries);
-            return .{};
-        };
-        const sequence_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + sequence_i * 2));
-        const glyph_count = try readU16(table, sequence_offset);
-        entries[sequence_i] = .{
-            .glyph = glyph,
-            .sequence_offset = sequence_offset,
-            .glyph_count = glyph_count,
-            .single_to = if (glyph_count == 1) try readU16(table, sequence_offset + 2) else 0,
-        };
-    }
-    std.sort.heap(MultipleSubstEntry, entries, {}, multipleSubstEntryLessThan);
-    return .{ .entries = entries };
-}
-
-fn multipleSubstEntryLessThan(_: void, lhs: MultipleSubstEntry, rhs: MultipleSubstEntry) bool {
-    return lhs.glyph < rhs.glyph;
+    return accelerator_root.build.multiple.build(
+        table,
+        subtable_offset,
+        allocator,
+    );
 }
 
 fn buildLigatureSubstAccelerator(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!LigatureSubstAccelerator {

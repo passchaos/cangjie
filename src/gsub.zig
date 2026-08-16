@@ -18,6 +18,8 @@ const contextual_chaining_glyph =
     @import("gsub/execution/contextual/chaining/glyph/root.zig");
 const contextual_chaining_lookup =
     @import("gsub/execution/contextual/chaining/lookup/root.zig");
+const contextual_nested =
+    @import("gsub/execution/contextual/nested/root.zig");
 const contextual_model = @import("gsub/execution/contextual/model.zig");
 const contextual_records =
     @import("gsub/execution/contextual/records/root.zig");
@@ -30,7 +32,6 @@ const ligature_provenance = @import("ligature_provenance.zig");
 const class_context = @import("opentype/class_context.zig");
 pub const runtime = @import("gsub/runtime/root.zig");
 const runtime_filtering = @import("gsub/runtime/filtering.zig");
-const runtime_mutation = @import("gsub/runtime/mutation.zig");
 const runtime_prefilter = @import("gsub/runtime/prefilter/root.zig");
 const table_core = @import("gsub/table/root.zig");
 const validation = @import("gsub/validation/root.zig");
@@ -1392,21 +1393,6 @@ fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std
     }
 }
 
-fn applyDirectMultipleAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!?NestedGlyphChange {
-    const change = try direct_multiple.at(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, options) orelse return null;
-    return .{ .removed_len = change.removed_len, .inserted_len = change.inserted_len };
-}
-
-fn applyDirectLigatureAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!?NestedGlyphChange {
-    const change = try direct_ligature.at(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, options) orelse return null;
-    return .{
-        .removed_len = change.removed_len,
-        .inserted_len = change.inserted_len,
-        .component_offsets = change.component_offsets,
-        .component_count = change.component_count,
-    };
-}
-
 test "GSUB run digest cache reuses no-op runs and invalidates on substitution" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 12;
@@ -1656,7 +1642,8 @@ const ContextualRecordExecutor = struct {
         allocator: std.mem.Allocator,
         options: LookupOptions,
     ) (GsubError || std.mem.Allocator.Error)!NestedGlyphChange {
-        return applyNestedGlyphLookup(
+        return contextual_nested.apply(
+            ContextualRecordExecutor,
             table,
             glyphs,
             glyph_index,
@@ -1759,137 +1746,6 @@ fn readU32BadGsub(table: Table, relative: usize) GsubError!u32 {
     };
 }
 
-fn applyNestedGlyphLookup(table: Table, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, lookup_index: u16, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!NestedGlyphChange {
-    try runtime.limits.consumeNested(options);
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16(table, lookup_list_offset);
-    if (lookup_index >= lookup_count) return error.BadGsub;
-    const nested_lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
-    const lookup_type = try readU16(table, nested_lookup_offset);
-    const lookup_flag = try readU16(table, nested_lookup_offset + 2);
-    const subtable_count = try readU16(table, nested_lookup_offset + 4);
-    var lookup_options = options;
-    if ((lookup_flag & 0x0010) != 0) {
-        lookup_options.active_mark_filtering_set = try readU16(table, nested_lookup_offset + 6 + @as(usize, subtable_count) * 2);
-        try runtime_filtering.validateMarkFilteringSetIndex(lookup_options);
-    }
-    if (lookup_type == 1) {
-        for (0..subtable_count) |subtable_i| {
-            const subtable_offset = nested_lookup_offset + try readU16(table, nested_lookup_offset + 6 + subtable_i * 2);
-            if (try direct_single.at(table, subtable_offset, glyphs, glyph_index, lookup_flag, lookup_options)) return .{};
-        }
-        return .{};
-    }
-    if (lookup_type == 4) {
-        for (0..subtable_count) |subtable_i| {
-            const subtable_offset = nested_lookup_offset + try readU16(table, nested_lookup_offset + 6 + subtable_i * 2);
-            if (try applyDirectLigatureAt(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, lookup_options)) |change| {
-                return change;
-            }
-        }
-        return .{};
-    }
-    if (lookup_type == 2) {
-        // MultipleSubst is cardinality-changing, so contextual records must
-        // observe only the first matching subtable for the target glyph. Running
-        // the whole lookup on a scratch glyph can feed the replacement into
-        // later subtables and report the wrong insert count to the record map.
-        for (0..subtable_count) |subtable_i| {
-            const subtable_offset = nested_lookup_offset + try readU16(table, nested_lookup_offset + 6 + subtable_i * 2);
-            if (try applyDirectMultipleAt(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, lookup_options)) |change| {
-                return change;
-            }
-        }
-        return .{};
-    }
-    if (lookup_type == 7) {
-        for (0..subtable_count) |subtable_i| {
-            const subtable_offset = nested_lookup_offset + try readU16(table, nested_lookup_offset + 6 + subtable_i * 2);
-            if (try applyNestedExtensionSubstitutionAt(table, subtable_offset, glyphs, glyph_index, allocator, lookup_flag, lookup_options)) |change| {
-                return change;
-            }
-        }
-    }
-    if (lookup_type == 5) {
-        for (0..subtable_count) |subtable_i| {
-            const subtable_offset = nested_lookup_offset + try readU16(table, nested_lookup_offset + 6 + subtable_i * 2);
-            if ((try contextual_context.at(
-                ContextualRecordExecutor,
-                table,
-                subtable_offset,
-                glyphs,
-                glyph_index,
-                allocator,
-                lookup_flag,
-                lookup_options,
-            )).matched) return .{};
-        }
-        return .{};
-    }
-    if (lookup_type == 6) {
-        for (0..subtable_count) |subtable_i| {
-            const subtable_offset = nested_lookup_offset + try readU16(table, nested_lookup_offset + 6 + subtable_i * 2);
-            if ((try contextual_chaining_lookup.at(ContextualRecordExecutor, table, subtable_offset, null, glyphs, glyph_index, allocator, lookup_flag, lookup_options)).matched) return .{};
-        }
-        return .{};
-    }
-
-    // Contextual records target one glyph in the matched input sequence. Run
-    // the nested lookup on a one-glyph scratch buffer so it cannot accidentally
-    // scan and modify later glyphs for single-glyph lookup types, then splice
-    // the result back even when the lookup changes cardinality (for example
-    // MultipleSubst). LigatureSubst is handled above because it intentionally
-    // consumes following glyphs from the real run.
-    var slice = std.ArrayList(GlyphId).empty;
-    defer slice.deinit(allocator);
-    try slice.append(allocator, glyphs.items[glyph_index]);
-    var scratch_options = options;
-    scratch_options.glyph_source_indices = null;
-    scratch_options.glyph_substituted = null;
-    scratch_options.glyph_stage_substituted = null;
-    scratch_options.ligature_components = null;
-    scratch_options.source_features = null;
-    scratch_options.active_source_feature = null;
-    scratch_options.active_source_feature_mask = 0;
-    try applyLookup(table, nested_lookup_offset, &slice, allocator, scratch_options);
-    const prepared = try runtime_mutation.prepareReplacement(allocator, glyphs, options, glyph_index, 1, slice.items.len, runtime_filtering.sourceForGlyph(options, glyph_index));
-    prepared.commit(glyphs, slice.items);
-    return .{ .removed_len = 1, .inserted_len = slice.items.len };
-}
-
-fn applyNestedExtensionSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), glyph_index: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!?NestedGlyphChange {
-    const subst_format = try readU16(table, subtable_offset);
-    if (subst_format != 1) return error.UnsupportedGsub;
-    const extension_lookup_type = try readU16(table, subtable_offset + 2);
-    if (extension_lookup_type == 7) return error.UnsupportedGsub;
-    const extension_subtable = try checkedExtensionSubtablePayloadOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
-
-    // ExtensionSubst is only an offset-widening wrapper. Contextual records,
-    // however, name one target glyph inside the pre-match input sequence. Apply
-    // wrapped cardinality-changing subtables at that real target so the caller
-    // can remap later records from the actual removal/insertion shape.
-    switch (extension_lookup_type) {
-        1 => {
-            if (try direct_single.at(table, extension_subtable, glyphs, glyph_index, lookup_flag, options)) return .{};
-            return null;
-        },
-        2 => return try applyDirectMultipleAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options),
-        4 => return try applyDirectLigatureAt(table, extension_subtable, glyphs, glyph_index, allocator, lookup_flag, options),
-        5 => return if ((try contextual_context.at(
-            ContextualRecordExecutor,
-            table,
-            extension_subtable,
-            glyphs,
-            glyph_index,
-            allocator,
-            lookup_flag,
-            options,
-        )).matched) .{} else null,
-        6 => return if ((try contextual_chaining_lookup.at(ContextualRecordExecutor, table, extension_subtable, null, glyphs, glyph_index, allocator, lookup_flag, options)).matched) .{} else null,
-        else => return null,
-    }
-}
-
 fn readU16(table: Table, relative: usize) GsubError!u16 {
     return table.readU16(relative);
 }
@@ -1919,7 +1775,7 @@ test "GSUB rejects ExtensionSubst payload offsets outside the table during shapi
     // wrapped payload or mutating the glyph stream.
     try std.testing.expectError(error.BadGsub, extensionSubtablePayload(table, 0, 1));
     try std.testing.expectError(error.BadGsub, applyExtensionSubstitution(table, 0, &glyphs, std.testing.allocator, 0, .{}));
-    try std.testing.expectError(error.BadGsub, applyNestedExtensionSubstitutionAt(table, 0, &glyphs, 0, std.testing.allocator, 0, .{}));
+    try std.testing.expectError(error.BadGsub, contextual_nested.extension.applyAt(ContextualRecordExecutor, table, 0, &glyphs, 0, std.testing.allocator, 0, .{}));
     try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
 }
 
@@ -1947,7 +1803,7 @@ test "GSUB rejects ExtensionSubst payload offsets that alias the wrapper header"
         ),
     );
     try std.testing.expectError(error.BadGsub, applyExtensionSubstitution(table, 0, &glyphs, std.testing.allocator, 0, .{}));
-    try std.testing.expectError(error.BadGsub, applyNestedExtensionSubstitutionAt(table, 0, &glyphs, 0, std.testing.allocator, 0, .{}));
+    try std.testing.expectError(error.BadGsub, contextual_nested.extension.applyAt(ContextualRecordExecutor, table, 0, &glyphs, 0, std.testing.allocator, 0, .{}));
     try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
 }
 
@@ -2817,7 +2673,7 @@ test "GSUB LigatureSubst rejects null required offsets" {
         try glyphs.append(std.testing.allocator, 2);
         try direct_ligature.subtable(table, subtable, &glyphs, std.testing.allocator, 0, .{});
         try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
-        try std.testing.expectEqual(null, try applyDirectLigatureAt(table, subtable, &glyphs, 0, std.testing.allocator, 0, .{}));
+        try std.testing.expectEqual(null, try contextual_nested.direct.ligature(table, subtable, &glyphs, 0, std.testing.allocator, 0, .{}));
         try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
 
         // A present but empty LigatureSet is still structurally valid; only the
@@ -2850,7 +2706,7 @@ test "GSUB LigatureSubst rejects null required offsets" {
         try glyphs.append(std.testing.allocator, 2);
         try direct_ligature.subtable(table, subtable, &glyphs, std.testing.allocator, 0, .{});
         try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
-        try std.testing.expectEqual(null, try applyDirectLigatureAt(table, subtable, &glyphs, 0, std.testing.allocator, 0, .{}));
+        try std.testing.expectEqual(null, try contextual_nested.direct.ligature(table, subtable, &glyphs, 0, std.testing.allocator, 0, .{}));
         try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
     }
 }

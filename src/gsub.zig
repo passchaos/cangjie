@@ -185,11 +185,7 @@ const FeatureLookupPlan = feature.LookupPlan;
 const source_feature_mask_marker = feature.source_mask_marker;
 const sourceFeatureMaskForTag = feature.sourceMaskForTag;
 
-const SelectedLookup = struct {
-    index: u16,
-    value: u32 = 1,
-    random: bool = false,
-};
+const SelectedLookup = feature_domain.run_selection.SelectedLookup;
 
 /// HarfBuzz enables `rand` globally with HB_OT_MAP_MAX_VALUE. Keep the sentinel
 /// public so explicit script shapers can place the common feature in the same
@@ -2453,174 +2449,19 @@ pub fn validateGlyphBoundsForShaping(data: []const u8, offset: usize, length: us
 }
 
 fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!std.ArrayList(u16) {
-    var selected = try selectedLookupRecords(table, allocator, options);
-    defer selected.deinit(allocator);
-    var lookups = std.ArrayList(u16).empty;
-    errdefer lookups.deinit(allocator);
-    try lookups.ensureUnusedCapacity(allocator, selected.items.len);
-    for (selected.items) |item| lookups.appendAssumeCapacity(item.index);
-    return lookups;
+    return feature_domain.run_selection.lookupIndices(
+        table,
+        allocator,
+        options,
+    );
 }
 
 fn selectedLookupRecords(table: Table, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!std.ArrayList(SelectedLookup) {
-    var feature_indices = std.ArrayList(FeatureSelection).empty;
-    defer feature_indices.deinit(allocator);
-    var lookups = std.ArrayList(SelectedLookup).empty;
-    errdefer lookups.deinit(allocator);
-
-    const script_list_offset = try checkedRequiredScriptListOffset(table);
-    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
-
-    // Prefer the requested script, then fall back to DFLT. Language selection
-    // mirrors OpenType: a matching LangSys overrides the default LangSys.
-    const script_offset = (try feature_domain.selection.script(
+    return feature_domain.run_selection.lookupRecords(
         table,
-        script_list_offset,
-        options.script_tag,
-    )) orelse 0;
-    if (script_offset != 0) {
-        try feature_domain.selection.collect(table, script_offset, options.language_tag, &feature_indices, allocator);
-    }
-
-    const feature_count = try readU16(table, feature_list_offset);
-    if (!table.assume_validated) {
-        try feature_domain.selection.validateFeatureRecords(
-            table,
-            feature_list_offset,
-            feature_count,
-        );
-    }
-    const feature_variation_index = try feature_domain.variations.matchingRecord(
-        table,
-        options.normalized_variation_coords,
+        allocator,
+        options,
     );
-    var active_langsys_has_vert = false;
-    for (feature_indices.items) |selection| {
-        const feature_index = selection.index;
-        if (feature_index >= feature_count) continue;
-        const feature_record = feature_list_offset + 2 + @as(usize, feature_index) * 6;
-        const feature_tag = try readU32(table, feature_record);
-        active_langsys_has_vert = active_langsys_has_vert or feature_tag == unicode.tag("vert");
-        // LangSys.ReqFeatureIndex is an OpenType contract: the feature is
-        // necessary for that script/language system and must be applied even
-        // when its tag is normally optional or an override disables that tag.
-        if (!selection.required and !featureEnabled(feature_tag, options)) continue;
-        const feature_value = if (selection.required)
-            @as(u32, 1)
-        else
-            featureValue(feature_tag, options);
-        const random = !selection.required and feature_tag == unicode.tag("rand") and feature_value == random_feature_value;
-        try appendFeatureRecordLookups(
-            table,
-            feature_list_offset,
-            feature_index,
-            feature_record,
-            feature_variation_index,
-            feature_value,
-            random,
-            &lookups,
-            allocator,
-        );
-    }
-
-    // HarfBuzz marks vertical `vert` as F_GLOBAL_SEARCH: if the active
-    // Script/LangSys does not advertise it, select the first table-wide
-    // FeatureRecord with that tag. Old CJK fonts commonly put vertical forms
-    // only under `kana`, while Common punctuation resolves to no ScriptList
-    // entry. This is a feature fallback, not permission to borrow the other
-    // script's required/default features.
-    if (options.vertical and
-        !active_langsys_has_vert and
-        featureEnabled(unicode.tag("vert"), options))
-    {
-        for (0..feature_count) |feature_index| {
-            const feature_record = feature_list_offset + 2 + feature_index * 6;
-            if (try readU32(table, feature_record) != unicode.tag("vert")) continue;
-            try appendFeatureRecordLookups(
-                table,
-                feature_list_offset,
-                @intCast(feature_index),
-                feature_record,
-                feature_variation_index,
-                featureValue(unicode.tag("vert"), options),
-                false,
-                &lookups,
-                allocator,
-            );
-            break;
-        }
-    }
-
-    sortUniqueSelectedLookups(&lookups);
-    return lookups;
-}
-
-fn appendFeatureRecordLookups(
-    table: Table,
-    feature_list_offset: usize,
-    feature_index: u16,
-    feature_record: usize,
-    feature_variation_index: ?usize,
-    feature_value: u32,
-    random: bool,
-    lookups: *std.ArrayList(SelectedLookup),
-    allocator: std.mem.Allocator,
-) (GsubError || std.mem.Allocator.Error)!void {
-    const default_feature_offset = feature_list_offset + try readU16(table, feature_record + 4);
-    const feature_offset = if (feature_variation_index) |variation_index|
-        try feature_domain.variations.substitutedFeatureOffset(
-            table,
-            variation_index,
-            feature_index,
-        ) orelse default_feature_offset
-    else
-        default_feature_offset;
-    const lookup_index_count = try readU16(table, feature_offset + 2);
-    for (0..lookup_index_count) |i| {
-        const lookup_index = try readU16(table, feature_offset + 4 + i * 2);
-        try lookups.append(allocator, .{
-            .index = lookup_index,
-            .value = feature_value,
-            .random = random,
-        });
-    }
-}
-
-fn featureEnabled(feature_tag: u32, options: LookupOptions) bool {
-    for (options.features) |override| {
-        if (override.tag == feature_tag) return override.enabled;
-    }
-    if (feature_tag == unicode.tag("rand")) return true;
-    return defaultFeatureEnabled(feature_tag) or
-        (options.script_tag == .tibt and (feature_tag == unicode.tag("abvs") or feature_tag == unicode.tag("blws"))) or
-        (options.vertical and (feature_tag == unicode.tag("vert") or feature_tag == unicode.tag("vrt2"))) or
-        (options.text_direction == .ltr and (feature_tag == unicode.tag("ltra") or feature_tag == unicode.tag("ltrm"))) or
-        (options.text_direction == .rtl and (feature_tag == unicode.tag("rtla") or feature_tag == unicode.tag("rtlm")));
-}
-
-fn featureValue(feature_tag: u32, options: LookupOptions) u32 {
-    for (options.features) |override| {
-        if (override.tag == feature_tag) return override.effectiveValue();
-    }
-    if (feature_tag == unicode.tag("rand")) return random_feature_value;
-    return 1;
-}
-
-fn defaultFeatureEnabled(feature_tag: u32) bool {
-    // Keep only shaping features that are expected to be on by default. Optional
-    // stylistic features remain disabled unless the caller passes overrides.
-    return feature_tag == unicode.tag("ccmp") or
-        feature_tag == unicode.tag("locl") or
-        feature_tag == unicode.tag("rvrn") or
-        feature_tag == unicode.tag("rlig") or
-        feature_tag == unicode.tag("liga") or
-        feature_tag == unicode.tag("clig") or
-        feature_tag == unicode.tag("calt") or
-        feature_tag == unicode.tag("rclt");
-}
-
-fn lookupIndexLessThan(_: void, lhs: u16, rhs: u16) bool {
-    return lhs < rhs;
 }
 
 fn mergedFeatureLookupLessThan(_: void, lhs: MergedFeatureLookup, rhs: MergedFeatureLookup) bool {
@@ -2653,41 +2494,7 @@ fn recordGsubLookupProfile(profile: ?*shape_profile_mod.ShapeStageProfile, looku
 }
 
 fn sortUniqueLookupIndices(lookups: *std.ArrayList(u16)) void {
-    if (lookups.items.len < 2) return;
-
-    std.sort.heap(u16, lookups.items, {}, lookupIndexLessThan);
-    var write: usize = 1;
-    var previous = lookups.items[0];
-    for (lookups.items[1..]) |lookup_index| {
-        if (lookup_index == previous) continue;
-        lookups.items[write] = lookup_index;
-        write += 1;
-        previous = lookup_index;
-    }
-    lookups.shrinkRetainingCapacity(write);
-}
-
-fn sortUniqueSelectedLookups(lookups: *std.ArrayList(SelectedLookup)) void {
-    if (lookups.items.len < 2) return;
-
-    std.sort.heap(SelectedLookup, lookups.items, {}, selectedLookupLessThan);
-    var write: usize = 1;
-    var previous = lookups.items[0];
-    for (lookups.items[1..]) |lookup| {
-        if (lookup.index == previous.index) {
-            if (lookups.items[write - 1].value == 1) lookups.items[write - 1].value = lookup.value;
-            lookups.items[write - 1].random = lookups.items[write - 1].random or lookup.random;
-        } else {
-            lookups.items[write] = lookup;
-            write += 1;
-            previous = lookup;
-        }
-    }
-    lookups.shrinkRetainingCapacity(write);
-}
-
-fn selectedLookupLessThan(_: void, a: SelectedLookup, b: SelectedLookup) bool {
-    return a.index < b.index;
+    feature_domain.run_selection.sortUniqueIndices(lookups);
 }
 
 fn appendMergedFeatureLookups(
@@ -9952,13 +9759,6 @@ test "GSUB validates layout tag record ordering" {
 
     writeU32Test(&bytes, 76, unicode.tag("aalt"));
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-}
-
-test "GSUB default features do not enable ordinals" {
-    try std.testing.expect(defaultFeatureEnabled(unicode.tag("liga")));
-    try std.testing.expect(defaultFeatureEnabled(unicode.tag("ccmp")));
-    try std.testing.expect(!defaultFeatureEnabled(unicode.tag("ordn")));
-    try std.testing.expect(!defaultFeatureEnabled(unicode.tag("sups")));
 }
 
 test "GSUB source-scoped feature gates substitution starts" {

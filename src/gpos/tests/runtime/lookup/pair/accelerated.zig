@@ -53,3 +53,67 @@ test "PairPos native data detection ignores generic sidecars" {
         .{ .kind = .format_1_x_advance },
     }));
 }
+
+test "accelerated PairPos switches adjacency only with an ignorable proof" {
+    const lookup = pair.accelerated.Lookup{
+        .coverage_groups = &.{
+            .{ .glyph = 5, .subtable_indices = &.{0} },
+        },
+        .pair_pos_subtables = &.{.{
+            .kind = .format_1_x_advance,
+            .record_start = 0,
+            .record_len = 1,
+        }},
+        .pair_pos_records = &.{.{
+            .first = 5,
+            .second = 7,
+            .x_advance = -25,
+        }},
+    };
+    const bytes = [_]u8{0} ** 8;
+    const view = @import("../../../../table/root.zig").View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    };
+    var adjustments =
+        std.ArrayList(pair.accelerated.Adjustment).empty;
+    defer adjustments.deinit(std.testing.allocator);
+
+    try pair.accelerated.collectLookup(
+        view,
+        0,
+        1,
+        &lookup,
+        &.{ 5, 7 },
+        &adjustments,
+        std.testing.allocator,
+        0,
+        .{ .run_has_default_ignorables = false },
+    );
+    try std.testing.expectEqual(@as(i16, -25), adjustments.items[0].x_advance);
+
+    adjustments.clearRetainingCapacity();
+    const sources = [_]usize{ 0, 1, 2 };
+    const codepoints = [_]u21{ 'A', 0x034f, 'B' };
+    try pair.accelerated.collectLookup(
+        view,
+        0,
+        1,
+        &lookup,
+        &.{ 5, 9, 7 },
+        &adjustments,
+        std.testing.allocator,
+        0,
+        .{
+            .run_has_default_ignorables = true,
+            .run_metadata = &.{
+                .glyph_source_indices = &sources,
+                .source_codepoints = &codepoints,
+                .glyph_substituted = &.{ false, false, false },
+            },
+        },
+    );
+    try std.testing.expectEqual(@as(i16, -25), adjustments.items[0].x_advance);
+}

@@ -110,6 +110,42 @@ test "dense class ranges enforce the shared total cap" {
         .class_2_base = 0,
         .class_2_len = 1,
     }));
+    try std.testing.expect(!accelerator.pair.shouldBuildDense(.{
+        .coverage_base = 0,
+        .coverage_len = accelerator.pair.max_dense_class_entries + 1,
+        .class_2_base = 0,
+        .class_2_len = 0,
+    }));
+}
+
+test "dense class ranges reject entries outside endpoint spans" {
+    try std.testing.expect(accelerator.pair.denseRanges(
+        &.{
+            .{ .glyph = 20, .class = 1 },
+            .{ .glyph = 5, .class = 0 },
+            .{ .glyph = 12, .class = 2 },
+        },
+        &.{
+            .{ .glyph = 100, .class = 1 },
+            .{ .glyph = 7, .class = 2 },
+        },
+    ) == null);
+
+    const ranges = accelerator.pair.DenseRanges{
+        .coverage_base = 5,
+        .coverage_len = 16,
+        .class_2_base = 7,
+        .class_2_len = 94,
+    };
+    try std.testing.expect(!accelerator.pair.entriesFitDenseRanges(
+        &.{
+            .{ .glyph = 5, .class = 0 },
+            .{ .glyph = 30, .class = 1 },
+            .{ .glyph = 20, .class = 2 },
+        },
+        &.{.{ .glyph = 7, .class = 1 }},
+        ranges,
+    ));
 }
 
 fn writeCoverage1(bytes: []u8, offset: usize, glyph: u16) void {

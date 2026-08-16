@@ -202,6 +202,12 @@ test "PairPos format 2 validates class matrix cardinality" {
         error.BadGpos,
         positioning.lookup.pair.validate(view, 0),
     );
+    writeU16(&bytes, 40, 1);
+    writeU16(&bytes, 48, 2);
+    try std.testing.expectError(
+        error.BadGpos,
+        positioning.lookup.pair.validate(view, 0),
+    );
 }
 
 fn writeCoverage1(bytes: []u8, offset: usize, glyph: u16) void {

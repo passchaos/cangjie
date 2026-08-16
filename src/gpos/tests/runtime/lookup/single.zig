@@ -132,6 +132,39 @@ test "accelerated SinglePos preserves authored subtable alternatives" {
     );
 }
 
+test "SinglePos rejects unsorted indexed coverage during execution" {
+    var bytes = [_]u8{0} ** 20;
+    writeU16(&bytes, 0, 1);
+    writeU16(&bytes, 2, 10);
+    writeU16(&bytes, 4, 0x0004);
+    writeI16(&bytes, 6, 30);
+    writeU16(&bytes, 10, 1);
+    writeU16(&bytes, 12, 2);
+    writeU16(&bytes, 14, 10);
+    writeU16(&bytes, 16, 5);
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+    };
+    var adjustments = std.ArrayList(single.Adjustment).empty;
+    defer adjustments.deinit(std.testing.allocator);
+
+    try std.testing.expectError(
+        error.BadGpos,
+        single.collect(
+            view,
+            0,
+            &.{10},
+            &adjustments,
+            std.testing.allocator,
+            0,
+            .{},
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
 fn writeCoverage1(bytes: []u8, offset: usize, glyph: u16) void {
     writeU16(bytes, offset, 1);
     writeU16(bytes, offset + 2, 1);

@@ -119,6 +119,52 @@ test "GPOS ClassDef validates glyph and consumer class bounds" {
     );
 }
 
+test "GPOS coverage and classes reach the full glyph-id boundary" {
+    var coverage_bytes = [_]u8{0} ** 10;
+    writeU16(&coverage_bytes, 0, 2);
+    writeU16(&coverage_bytes, 2, 1);
+    writeU16(&coverage_bytes, 4, 0);
+    writeU16(&coverage_bytes, 6, 0xffff);
+    writeU16(&coverage_bytes, 8, 0);
+    const coverage_view = table.View{
+        .data = &coverage_bytes,
+        .offset = 0,
+        .length = coverage_bytes.len,
+    };
+    try std.testing.expectEqual(
+        @as(?usize, 0xfffe),
+        try table.coverage.index(coverage_view, 0, 0xfffe),
+    );
+    try std.testing.expectEqual(
+        @as(?usize, 0xffff),
+        try table.coverage.index(coverage_view, 0, 0xffff),
+    );
+
+    var class_bytes = [_]u8{0} ** 10;
+    writeU16(&class_bytes, 0, 1);
+    writeU16(&class_bytes, 2, 0xfffe);
+    writeU16(&class_bytes, 4, 2);
+    writeU16(&class_bytes, 6, 7);
+    writeU16(&class_bytes, 8, 9);
+    const class_view = table.View{
+        .data = &class_bytes,
+        .offset = 0,
+        .length = class_bytes.len,
+    };
+    try std.testing.expectEqual(
+        @as(u16, 7),
+        try table.class_def.value(class_view, 0, 0xfffe),
+    );
+    try std.testing.expectEqual(
+        @as(u16, 9),
+        try table.class_def.value(class_view, 0, 0xffff),
+    );
+    try std.testing.expectEqual(
+        @as(u16, 0),
+        try table.class_def.value(class_view, 0, 0xfffd),
+    );
+}
+
 test "GPOS ClassDef format 2 rejects overlapping and reversed ranges" {
     var bytes = [_]u8{0} ** 16;
     writeU16(&bytes, 0, 2);

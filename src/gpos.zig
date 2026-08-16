@@ -156,11 +156,6 @@ const ensureChainingContextPositionSubtableWithin =
     validation.lookup.chainingSubtable;
 const ensureChainingPositionRuleSetWithin =
     validation.lookup.chainingRuleSet;
-const ensureCoverageTableWithin = validation.lookup.coverage;
-const ensureClassDefTableWithin = validation.lookup.classDef;
-const ensureClassDefTableWithinLimit =
-    validation.lookup.classDefWithLimit;
-
 /// Validate GPOS glyph references that are meaningful at font-load time.
 ///
 /// Shaping only visits records whose coverage matches a supplied glyph run, so
@@ -1089,119 +1084,6 @@ test "GPOS AnchorFormat3 resolves GDEF VariationIndex deltas" {
     try std.testing.expectEqual(Anchor{ .x = 20, .y = -13 }, try readAnchor(table, 0, options));
 }
 
-test "GPOS coverage format 2 handles full glyph-space index boundary" {
-    var bytes = [_]u8{0} ** 10;
-    writeU16Test(&bytes, 0, 2);
-    writeU16Test(&bytes, 2, 1);
-    writeU16Test(&bytes, 4, 0);
-    writeU16Test(&bytes, 6, 0xffff);
-    writeU16Test(&bytes, 8, 0);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectEqual(@as(?usize, 0xfffe), try table_core.coverage.index(table, 0, 0xfffe));
-    try std.testing.expectEqual(@as(?usize, 0xffff), try table_core.coverage.index(table, 0, 0xffff));
-}
-
-test "GPOS coverage format 2 rejects inconsistent start coverage indexes" {
-    var bytes = [_]u8{0} ** 16;
-    writeU16Test(&bytes, 0, 2);
-    writeU16Test(&bytes, 2, 2);
-    writeU16Test(&bytes, 4, 1);
-    writeU16Test(&bytes, 6, 1);
-    writeU16Test(&bytes, 8, 0);
-    writeU16Test(&bytes, 10, 3);
-    writeU16Test(&bytes, 12, 3);
-    writeU16Test(&bytes, 14, 2); // Must be 1: indexes are dense over preceding ranges.
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, ensureCoverageTableWithin(table, 0));
-    try std.testing.expectError(error.BadGpos, table_core.coverage.index(table, 0, 3));
-}
-
-test "GPOS rejects malformed coverage ordering before positioning" {
-    var bytes = [_]u8{0} ** 20;
-    writeU16Test(&bytes, 0, 1); // SinglePos format 1.
-    writeU16Test(&bytes, 2, 10); // Coverage table.
-    writeU16Test(&bytes, 4, 0x0004); // ValueFormat: xAdvance.
-    writeU16Test(&bytes, 6, 30);
-    writeU16Test(&bytes, 10, 1); // Coverage format 1.
-    writeU16Test(&bytes, 12, 2);
-    writeU16Test(&bytes, 14, 10);
-    writeU16Test(&bytes, 16, 5); // Out-of-order; binary search would be unsound.
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    var adjustments = std.ArrayList(Adjustment).empty;
-    defer adjustments.deinit(std.testing.allocator);
-
-    try std.testing.expectError(error.BadGpos, collectSingleAdjustment(table, 0, &.{10}, &adjustments, std.testing.allocator, 0, .{}));
-    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
-}
-
-test "GPOS contextual membership coverage tolerates duplicate glyphs" {
-    var bytes = [_]u8{0} ** 10;
-    writeU16Test(&bytes, 0, 1); // Coverage format 1.
-    writeU16Test(&bytes, 2, 3);
-    writeU16Test(&bytes, 4, 5);
-    writeU16Test(&bytes, 6, 5); // Harmless duplicate in a membership-only set.
-    writeU16Test(&bytes, 8, 7);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .glyph_count = 8 };
-    try table_core.coverage.validate(table, 0, .membership);
-    try std.testing.expect(try table_core.coverage.contains(table, 0, 5, .membership));
-    try std.testing.expect(!(try table_core.coverage.contains(table, 0, 6, .membership)));
-    try std.testing.expect(try table_core.coverage.contains(table, 0, 7, .membership));
-
-    // Indexed consumers still reject duplicate CoverageIndex values because
-    // they select parallel arrays and cannot discard an index deterministically.
-    try std.testing.expectError(error.BadGpos, ensureCoverageTableWithin(table, 0));
-    try std.testing.expectError(error.BadGpos, table_core.coverage.index(table, 0, 5));
-
-    writeU16Test(&bytes, 8, 4);
-    try std.testing.expectError(error.BadGpos, table_core.coverage.validate(table, 0, .membership));
-    try std.testing.expectError(error.BadGpos, table_core.coverage.contains(table, 0, 5, .membership));
-}
-
-test "GPOS rejects reserved ValueFormat bits" {
-    var bytes = [_]u8{0} ** 18;
-    writeU16Test(&bytes, 0, 1); // SinglePos format 1.
-    writeU16Test(&bytes, 2, 8);
-    writeU16Test(&bytes, 4, 0x0100); // Reserved ValueFormat bit.
-    writeCoverage1Test(&bytes, 8, 5);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, positioning.lookup.single.validate(table, 0));
-}
-
-test "GPOS SinglePos format 2 rejects dangling coverage indexes" {
-    var bytes = [_]u8{0} ** 20;
-    writeU16Test(&bytes, 0, 2); // SinglePos format 2.
-    writeU16Test(&bytes, 2, 12); // Coverage table.
-    writeU16Test(&bytes, 4, 0x0004); // ValueFormat: xAdvance.
-    writeU16Test(&bytes, 6, 1); // One ValueRecord.
-    writeI16Test(&bytes, 8, 40);
-    writeU16Test(&bytes, 12, 1); // Coverage format 1.
-    writeU16Test(&bytes, 14, 2); // But two covered glyphs need value records.
-    writeU16Test(&bytes, 16, 5);
-    writeU16Test(&bytes, 18, 6);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, positioning.lookup.single.validate(table, 0));
-}
-
-test "GPOS class format 1 handles upper glyph boundary" {
-    var bytes = [_]u8{0} ** 12;
-    writeU16Test(&bytes, 0, 1);
-    writeU16Test(&bytes, 2, 0xfffe);
-    writeU16Test(&bytes, 4, 2);
-    writeU16Test(&bytes, 6, 7);
-    writeU16Test(&bytes, 8, 9);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectEqual(@as(u16, 7), try table_core.class_def.value(table, 0, 0xfffe));
-    try std.testing.expectEqual(@as(u16, 9), try table_core.class_def.value(table, 0, 0xffff));
-    try std.testing.expectEqual(@as(u16, 0), try table_core.class_def.value(table, 0, 0xfffd));
-}
-
 test "GPOS cached lookup dispatch requires validated matching metadata" {
     var bytes = [_]u8{0} ** 12;
     writeU16Test(&bytes, 0, 1);
@@ -1591,29 +1473,6 @@ test "GPOS validates ScriptList LangSys feature indexes against FeatureList" {
 
     writeU16Test(&bytes, 24, 1); // ReqFeatureIndex is checked too.
     try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-}
-
-test "GPOS rejects malformed ClassDef format 2 ranges" {
-    var bytes = [_]u8{0} ** 22;
-    writeU16Test(&bytes, 0, 2); // ClassDef format 2.
-    writeU16Test(&bytes, 2, 3); // Three ClassRangeRecords.
-    writeU16Test(&bytes, 4, 10);
-    writeU16Test(&bytes, 6, 12);
-    writeU16Test(&bytes, 8, 1);
-    writeU16Test(&bytes, 10, 12); // Overlaps the previous inclusive range.
-    writeU16Test(&bytes, 12, 14);
-    writeU16Test(&bytes, 14, 2);
-    writeU16Test(&bytes, 16, 20);
-    writeU16Test(&bytes, 18, 18); // Reversed range must also be rejected.
-    writeU16Test(&bytes, 20, 3);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, table_core.class_def.value(table, 0, 12));
-    const validated_table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true };
-    try std.testing.expectEqual(@as(u16, 1), try table_core.class_def.value(validated_table, 0, 12));
-
-    writeU16Test(&bytes, 10, 13); // Repair overlap so the reversed range is checked.
-    try std.testing.expectError(error.BadGpos, table_core.class_def.value(table, 0, 18));
 }
 
 test "GPOS ContextPos rejects null required rule offsets" {

@@ -322,38 +322,19 @@ fn selectedFeatureLookupIndicesForOptions(
         .length = length,
         .assume_validated = options.assume_validated,
     };
-    const major = try readU16(table, 0);
-    if (major != 1) return error.UnsupportedGsub;
-    if (try isEmptyGsubTopology(table)) return try allocator.alloc(u16, 0);
-
-    var feature_indices = std.ArrayList(FeatureSelection).empty;
-    defer feature_indices.deinit(allocator);
-    const script_list_offset = try checkedRequiredScriptListOffset(table);
-    const script_offset = (try feature_domain.selection.script(
+    if (try readU16(table, 0) != 1) return error.UnsupportedGsub;
+    if (try isEmptyGsubTopology(table)) return allocator.alloc(u16, 0);
+    var items = try feature_domain.plan.selection.collectForRun(
         table,
-        script_list_offset,
-        options.script_tag,
-    )) orelse 0;
-    if (script_offset != 0) {
-        try feature_domain.selection.collect(
-            table,
-            script_offset,
-            options.language_tag,
-            &feature_indices,
-            allocator,
-        );
-    }
-    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
-    const feature_count = try readU16(table, feature_list_offset);
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16(table, lookup_list_offset);
-    return selectedFeatureLookupsFromPlanOwned(
+        allocator,
+        options,
+    );
+    defer items.deinit(allocator);
+    return feature_domain.plan.selection.selectedLookups(
         table,
         feature_tag,
-        feature_indices.items,
-        feature_list_offset,
-        feature_count,
-        lookup_count,
+        items.items,
+        try feature_domain.plan.selection.context(table),
         allocator,
         options,
     );
@@ -614,60 +595,25 @@ fn buildFeatureLookupPlan(
     allocator: std.mem.Allocator,
     options: LookupOptions,
 ) (GsubError || std.mem.Allocator.Error)!feature.LookupPlan {
-    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
-    const major = try readU16(table, 0);
-    if (major != 1) return error.UnsupportedGsub;
+    if (length < 10 or offset > data.len or length > data.len - offset) {
+        return error.BadGsub;
+    }
+    const table = Table{
+        .data = data,
+        .offset = offset,
+        .length = length,
+        .assume_validated = options.assume_validated,
+    };
+    if (try readU16(table, 0) != 1) return error.UnsupportedGsub;
     if (try isEmptyGsubTopology(table)) {
         return .{ .entries = try allocator.alloc(FeatureLookupPlanEntry, 0) };
     }
-
-    var feature_indices = std.ArrayList(FeatureSelection).empty;
-    defer feature_indices.deinit(allocator);
-    const script_list_offset = try checkedRequiredScriptListOffset(table);
-    const script_offset = (try feature_domain.selection.script(
+    return feature_domain.plan.build.lookupPlan(
         table,
-        script_list_offset,
-        options.script_tag,
-    )) orelse 0;
-    if (script_offset != 0) try feature_domain.selection.collect(table, script_offset, options.language_tag, &feature_indices, allocator);
-    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
-    const feature_count = try readU16(table, feature_list_offset);
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16(table, lookup_list_offset);
-
-    var entries = std.ArrayList(FeatureLookupPlanEntry).empty;
-    errdefer {
-        for (entries.items) |entry| allocator.free(entry.lookups);
-        entries.deinit(allocator);
-    }
-    for (feature_indices.items) |selection| {
-        if (!selection.required or selection.index >= feature_count) continue;
-        const feature_record = feature_list_offset + 2 + @as(usize, selection.index) * 6;
-        const required_tag = try readU32(table, feature_record);
-        if (featurePlanContains(applications, required_tag)) continue;
-        const lookups = try selectedFeatureLookupsFromPlanOwned(table, required_tag, feature_indices.items, feature_list_offset, feature_count, lookup_count, allocator, options);
-        errdefer allocator.free(lookups);
-        const lookup_offsets = try lookupOffsetsForIndices(table, lookup_list_offset, lookups, allocator);
-        errdefer allocator.free(lookup_offsets);
-        try entries.append(allocator, .{
-            .application = .{ .tag = required_tag },
-            .lookups = lookups,
-            .lookup_offsets = lookup_offsets,
-        });
-    }
-    for (applications) |application| {
-        const lookups = try selectedFeatureLookupsFromPlanOwned(table, application.tag, feature_indices.items, feature_list_offset, feature_count, lookup_count, allocator, options);
-        errdefer allocator.free(lookups);
-        const lookup_offsets = try lookupOffsetsForIndices(table, lookup_list_offset, lookups, allocator);
-        errdefer allocator.free(lookup_offsets);
-        try entries.append(allocator, .{
-            .application = application,
-            .lookups = lookups,
-            .lookup_offsets = lookup_offsets,
-        });
-    }
-    return .{ .entries = try entries.toOwnedSlice(allocator) };
+        applications,
+        allocator,
+        options,
+    );
 }
 
 fn buildMergedFeatureLookupPlan(
@@ -678,58 +624,28 @@ fn buildMergedFeatureLookupPlan(
     allocator: std.mem.Allocator,
     options: LookupOptions,
 ) (GsubError || std.mem.Allocator.Error)!feature.MergedLookupPlan {
-    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
-    const major = try readU16(table, 0);
-    if (major != 1) return error.UnsupportedGsub;
+    if (length < 10 or offset > data.len or length > data.len - offset) {
+        return error.BadGsub;
+    }
+    const table = Table{
+        .data = data,
+        .offset = offset,
+        .length = length,
+        .assume_validated = options.assume_validated,
+    };
+    if (try readU16(table, 0) != 1) return error.UnsupportedGsub;
     if (try isEmptyGsubTopology(table)) {
         return .{
             .lookups = try allocator.alloc(MergedFeatureLookup, 0),
             .lookup_offsets = try allocator.alloc(usize, 0),
         };
     }
-
-    var feature_indices = std.ArrayList(FeatureSelection).empty;
-    defer feature_indices.deinit(allocator);
-    const script_list_offset = try checkedRequiredScriptListOffset(table);
-    const script_offset = (try feature_domain.selection.script(
+    return feature_domain.plan.build.mergedPlan(
         table,
-        script_list_offset,
-        options.script_tag,
-    )) orelse 0;
-    if (script_offset != 0) try feature_domain.selection.collect(table, script_offset, options.language_tag, &feature_indices, allocator);
-    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
-    const feature_count = try readU16(table, feature_list_offset);
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16(table, lookup_list_offset);
-
-    var lookups = std.ArrayList(MergedFeatureLookup).empty;
-    errdefer lookups.deinit(allocator);
-    for (feature_indices.items) |selection| {
-        if (!selection.required or selection.index >= feature_count) continue;
-        const feature_record = feature_list_offset + 2 + @as(usize, selection.index) * 6;
-        const required_tag = try readU32(table, feature_record);
-        if (featurePlanContains(applications, required_tag)) continue;
-        const selected = try selectedFeatureLookupsFromPlanOwned(table, required_tag, feature_indices.items, feature_list_offset, feature_count, lookup_count, allocator, options);
-        defer allocator.free(selected);
-        try appendMergedFeatureLookups(&lookups, allocator, selected, .{ .tag = required_tag });
-    }
-    for (applications) |application| {
-        const selected = try selectedFeatureLookupsFromPlanOwned(table, application.tag, feature_indices.items, feature_list_offset, feature_count, lookup_count, allocator, options);
-        defer allocator.free(selected);
-        try appendMergedFeatureLookups(&lookups, allocator, selected, application);
-    }
-
-    sortMergeFeatureLookups(&lookups);
-    const owned_lookups = try lookups.toOwnedSlice(allocator);
-    errdefer allocator.free(owned_lookups);
-    const selected_lookup_indices = try allocator.alloc(u16, owned_lookups.len);
-    defer allocator.free(selected_lookup_indices);
-    for (owned_lookups, selected_lookup_indices) |lookup, *selected_lookup_index| {
-        selected_lookup_index.* = lookup.lookup;
-    }
-    const lookup_offsets = try lookupOffsetsForIndices(table, lookup_list_offset, selected_lookup_indices, allocator);
-    return .{ .lookups = owned_lookups, .lookup_offsets = lookup_offsets };
+        applications,
+        allocator,
+        options,
+    );
 }
 
 fn applyFeatureLookupPlanWithOptions(
@@ -925,7 +841,7 @@ fn applySelectedFeatureFromPlan(
     options: LookupOptions,
     run_digest_cache: ?*runtime_prefilter.Cache,
 ) (GsubError || std.mem.Allocator.Error)!void {
-    if (borrowedSelectedFeatureLookups(
+    if (feature_domain.plan.selection.borrowedLookups(
         table,
         feature_tag,
         feature_indices,
@@ -935,78 +851,21 @@ fn applySelectedFeatureFromPlan(
         try applyLookupIndices(table, lookup_list_offset, lookup_count, selected_lookups, glyphs, allocator, options, run_digest_cache);
         return;
     }
-    const selected_lookups = try selectedFeatureLookupsFromPlanOwned(table, feature_tag, feature_indices, feature_list_offset, feature_count, lookup_count, allocator, options);
-    defer allocator.free(selected_lookups);
-    try applyLookupIndices(table, lookup_list_offset, lookup_count, selected_lookups, glyphs, allocator, options, run_digest_cache);
-}
-
-fn borrowedSelectedFeatureLookups(
-    table: Table,
-    feature_tag: u32,
-    feature_indices: []const FeatureSelection,
-    feature_count: u16,
-    options: LookupOptions,
-) ?[]const u16 {
-    if (options.normalized_variation_coords.len != 0) return null;
-    if (!table.assume_validated or feature_indices.len == 0) return null;
-    const accelerators = options.lookup_accelerators orelse return null;
-    const feature_index = accelerator_root.feature_index.exact(
-        table.data,
-        table.offset,
-        table.length,
-        accelerators,
-    ) orelse return null;
-    return accelerator_root.feature_index.selectedLookups(
-        feature_index,
+    const selected_lookups = try feature_domain.plan.selection.selectedLookupsOwned(
+        table,
         feature_tag,
         feature_indices,
-        feature_count,
+        .{
+            .feature_list = feature_list_offset,
+            .feature_count = feature_count,
+            .lookup_list = lookup_list_offset,
+            .lookup_count = lookup_count,
+        },
+        allocator,
+        options,
     );
-}
-
-fn selectedFeatureLookupsFromPlanOwned(
-    table: Table,
-    feature_tag: u32,
-    feature_indices: []const FeatureSelection,
-    feature_list_offset: usize,
-    feature_count: u16,
-    lookup_count: u16,
-    allocator: std.mem.Allocator,
-    options: LookupOptions,
-) (GsubError || std.mem.Allocator.Error)![]u16 {
-    var selected_lookups = std.ArrayList(u16).empty;
-    errdefer selected_lookups.deinit(allocator);
-    const feature_variation_index = try feature_domain.variations.matchingRecord(
-        table,
-        options.normalized_variation_coords,
-    );
-    for (feature_indices) |selection| {
-        if (selection.index >= feature_count) continue;
-        const feature_record = feature_list_offset + 2 + @as(usize, selection.index) * 6;
-        if (try readU32(table, feature_record) != feature_tag) continue;
-        const default_feature_offset = feature_list_offset + try readU16(table, feature_record + 4);
-        const feature_offset = if (feature_variation_index) |variation_index|
-            try feature_domain.variations.substitutedFeatureOffset(
-                table,
-                variation_index,
-                selection.index,
-            ) orelse default_feature_offset
-        else
-            default_feature_offset;
-        const lookup_index_count = try readU16(table, feature_offset + 2);
-        for (0..lookup_index_count) |lookup_i| {
-            const lookup_index = try readU16(table, feature_offset + 4 + lookup_i * 2);
-            if (lookup_index >= lookup_count) return error.BadGsub;
-            // Some production fonts repeat a feature record or the same lookup
-            // index within one feature. OpenType feature application is a set
-            // of lookups in lookup-list order; do not feed a replacement back
-            // through the same lookup merely because the activation graph has
-            // duplicate references.
-            try selected_lookups.append(allocator, lookup_index);
-        }
-    }
-    sortUniqueLookupIndices(&selected_lookups);
-    return try selected_lookups.toOwnedSlice(allocator);
+    defer allocator.free(selected_lookups);
+    try applyLookupIndices(table, lookup_list_offset, lookup_count, selected_lookups, glyphs, allocator, options, run_digest_cache);
 }
 
 fn applyLookupIndices(
@@ -1024,15 +883,6 @@ fn applyLookupIndices(
         const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
         try applyLookupWithIndex(table, lookup_offset, lookup_index, glyphs, allocator, options, run_digest_cache);
     }
-}
-
-fn lookupOffsetsForIndices(table: Table, lookup_list_offset: usize, selected_lookups: []const u16, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]usize {
-    const lookup_offsets = try allocator.alloc(usize, selected_lookups.len);
-    errdefer allocator.free(lookup_offsets);
-    for (selected_lookups, lookup_offsets) |lookup_index, *lookup_offset| {
-        lookup_offset.* = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
-    }
-    return lookup_offsets;
 }
 
 fn applyLookupPlanEntry(table: Table, lookup_count: u16, entry: FeatureLookupPlanEntry, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*runtime_prefilter.Cache) (GsubError || std.mem.Allocator.Error)!void {
@@ -1134,60 +984,6 @@ fn selectedLookupRecords(table: Table, allocator: std.mem.Allocator, options: Lo
         allocator,
         options,
     );
-}
-
-fn mergedFeatureLookupLessThan(_: void, lhs: MergedFeatureLookup, rhs: MergedFeatureLookup) bool {
-    return lhs.lookup < rhs.lookup;
-}
-
-fn sortUniqueLookupIndices(lookups: *std.ArrayList(u16)) void {
-    feature_domain.run_selection.sortUniqueIndices(lookups);
-}
-
-fn appendMergedFeatureLookups(
-    lookups: *std.ArrayList(MergedFeatureLookup),
-    allocator: std.mem.Allocator,
-    selected_lookups: []const u16,
-    application: FeatureApplication,
-) std.mem.Allocator.Error!void {
-    const source_mask = if (application.source_scoped)
-        sourceFeatureMaskForTag(application.tag) orelse 0
-    else
-        0;
-    for (selected_lookups) |lookup| {
-        try lookups.append(allocator, .{
-            .lookup = lookup,
-            .source_mask = source_mask,
-            .auto_zwnj = application.auto_zwnj,
-            .auto_zwj = application.auto_zwj,
-            .match_source_syllable = application.match_source_syllable,
-            .value = application.value,
-            .random = featureApplicationIsRandom(application),
-        });
-    }
-}
-
-fn sortMergeFeatureLookups(lookups: *std.ArrayList(MergedFeatureLookup)) void {
-    if (lookups.items.len < 2) return;
-
-    std.sort.heap(MergedFeatureLookup, lookups.items, {}, mergedFeatureLookupLessThan);
-    var write: usize = 1;
-    var previous = lookups.items[0];
-    for (lookups.items[1..]) |lookup| {
-        if (lookup.lookup == previous.lookup) {
-            lookups.items[write - 1].source_mask |= lookup.source_mask;
-            lookups.items[write - 1].auto_zwnj = lookups.items[write - 1].auto_zwnj and lookup.auto_zwnj;
-            lookups.items[write - 1].auto_zwj = lookups.items[write - 1].auto_zwj and lookup.auto_zwj;
-            lookups.items[write - 1].match_source_syllable = lookups.items[write - 1].match_source_syllable or lookup.match_source_syllable;
-            if (lookups.items[write - 1].value == 1) lookups.items[write - 1].value = lookup.value;
-            lookups.items[write - 1].random = lookups.items[write - 1].random or lookup.random;
-        } else {
-            lookups.items[write] = lookup;
-            write += 1;
-            previous = lookup;
-        }
-    }
-    lookups.shrinkRetainingCapacity(write);
 }
 
 fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {

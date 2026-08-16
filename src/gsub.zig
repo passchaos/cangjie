@@ -26,7 +26,6 @@ const contextual_records =
 const contextual_safety =
     @import("gsub/execution/contextual/safety.zig");
 const lookup_execution = @import("gsub/execution/lookup/root.zig");
-const lookup_profile = lookup_execution.profile;
 const GlyphId = @import("glyph.zig").GlyphId;
 const ligature_provenance = @import("ligature_provenance.zig");
 const class_context = @import("opentype/class_context.zig");
@@ -112,8 +111,6 @@ const MergedFeatureLookupPlan = feature.MergedLookupPlan;
 const FeatureLookupPlan = feature.LookupPlan;
 const sourceFeatureMaskForTag = feature.sourceMaskForTag;
 
-const SelectedLookup = feature_domain.run_selection.SelectedLookup;
-
 const NestedGlyphChange = contextual_model.Change;
 const markUnsafeContextMatch = contextual_safety.markInput;
 
@@ -130,96 +127,15 @@ pub fn apply(data: []const u8, offset: usize, length: usize, glyphs: *std.ArrayL
 }
 
 pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
-    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    try runtime.metadata.validate(options, glyphs.items.len);
-    var run_storage = runtime.state.Storage{};
-    const shaping_options = try runtime.state.prepare(
+    return runtime.run.apply(
+        ContextualRecordExecutor,
+        data,
+        offset,
+        length,
+        glyphs,
+        allocator,
         options,
-        glyphs.items.len,
-        &run_storage,
     );
-    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = shaping_options.assume_validated };
-    const major = try readU16(table, 0);
-    if (major != 1) return error.UnsupportedGsub;
-    if (try isEmptyGsubTopology(table)) return;
-    // Script/language/feature selection happens before the lookup list pass.
-    // When no explicit features are supplied, selectedLookupIndices returns the
-    // default-enabled lookups for the requested script/language.
-    const select_start = lookup_profile.now(
-        shaping_options.shape_profile,
-        shaping_options.profile_io,
-    );
-    var selected_lookup_records_owned = if (shaping_options.selected_lookups == null) blk: {
-        break :blk selectedLookupRecords(table, allocator, shaping_options) catch |err| {
-            if (err == error.BadGsub and try canFallbackFromBadGsubSelection(table)) {
-                break :blk std.ArrayList(SelectedLookup).empty;
-            }
-            return err;
-        };
-    } else std.ArrayList(SelectedLookup).empty;
-    if (shaping_options.shape_profile) |profile| {
-        profile.gsub_select_ns += lookup_profile.elapsed(
-            select_start,
-            shaping_options.profile_io,
-        );
-    }
-    defer selected_lookup_records_owned.deinit(allocator);
-    const selected_lookup_count = if (shaping_options.selected_lookups) |selected_lookups|
-        selected_lookups.len
-    else
-        selected_lookup_records_owned.items.len;
-    const script_list_offset = try readU16(table, 4);
-    const feature_list_offset = try readU16(table, 6);
-    const has_feature_topology = script_list_offset != 0 and
-        feature_list_offset != 0 and
-        try readU16(table, script_list_offset) != 0 and
-        try readU16(table, feature_list_offset) != 0;
-    // An empty selection means the active LangSys has no required/default
-    // feature to apply. Falling through used to execute every lookup in the
-    // font, enabling optional stylistic sets such as New Computer Modern's
-    // Devanagari digit substitutions for ordinary ASCII digits. Low-level
-    // callers can retain the historical all-lookup behavior; the text shaper
-    // explicitly disables it after Script/LangSys selection.
-    if (selected_lookup_count == 0 and
-        (shaping_options.features.len != 0 or (!shaping_options.apply_all_if_unselected and has_feature_topology))) return;
-
-    const apply_start = lookup_profile.now(
-        shaping_options.shape_profile,
-        shaping_options.profile_io,
-    );
-    defer {
-        if (shaping_options.shape_profile) |profile| {
-            profile.gsub_apply_ns += lookup_profile.elapsed(
-                apply_start,
-                shaping_options.profile_io,
-            );
-        }
-    }
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16(table, lookup_list_offset);
-    var run_digest_cache = runtime_prefilter.Cache.init();
-    if (shaping_options.selected_lookups) |selected_lookups| {
-        for (selected_lookups) |lookup_index| {
-            if (lookup_index >= lookup_count) continue;
-            const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
-            try applyLookupWithIndex(table, lookup_offset, lookup_index, glyphs, allocator, shaping_options, &run_digest_cache);
-        }
-    } else if (selected_lookup_records_owned.items.len != 0) {
-        for (selected_lookup_records_owned.items) |selected_lookup| {
-            const lookup_index = selected_lookup.index;
-            if (lookup_index >= lookup_count) continue;
-            const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
-            var selected_options = shaping_options;
-            selected_options.active_feature_value = selected_lookup.value;
-            selected_options.active_feature_random = selected_lookup.random;
-            try applyLookupWithIndex(table, lookup_offset, lookup_index, glyphs, allocator, selected_options, &run_digest_cache);
-        }
-    } else {
-        for (0..lookup_count) |i| {
-            const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + i * 2));
-            try applyLookupWithIndex(table, lookup_offset, @intCast(i), glyphs, allocator, shaping_options, &run_digest_cache);
-        }
-    }
 }
 
 /// Apply a non-empty cached lookup selection after the layout shaper proved the
@@ -242,53 +158,15 @@ pub noinline fn applyCachedLookupSelectionWithOptionsAfterMetadataProof(
     allocator: std.mem.Allocator,
     options: LookupOptions,
 ) linksection(shaping_sections.isolated_hotpaths) (GsubError || std.mem.Allocator.Error)!bool {
-    if (!options.assume_validated) return false;
-    // The layout shaper installs one shared HarfBuzz-compatible budget across
-    // all of its GSUB stages. Do not let another caller accidentally turn this
-    // trusted shortcut into an unbounded substitution executor.
-    if (options.operations_left == null or options.max_glyph_count == null) return false;
-    if (length < 10 or offset > data.len or length > data.len - offset) return false;
-    const selected_lookups = options.selected_lookups orelse return false;
-    if (selected_lookups.len == 0) return false;
-    const accelerators = options.lookup_accelerators orelse return false;
-    _ = accelerator_root.feature_index.exact(
+    return runtime.run.cached.apply(
+        ContextualRecordExecutor,
         data,
         offset,
         length,
-        accelerators,
-    ) orelse return false;
-
-    for (selected_lookups) |lookup_index| {
-        if (lookup_index >= accelerators.len) return false;
-        const accelerator = accelerators[lookup_index];
-        if (accelerator.lookup_offset == 0 or accelerator.lookup_type == 0) return false;
-    }
-
-    var mutation_generation: usize = 0;
-    const shaping_options = runtime.state.withDigestGeneration(
+        glyphs,
+        allocator,
         options,
-        &mutation_generation,
     );
-    const table = Table{
-        .data = data,
-        .offset = offset,
-        .length = length,
-        .assume_validated = true,
-    };
-    var run_digest_cache = runtime_prefilter.Cache.init();
-    for (selected_lookups) |lookup_index| {
-        const accelerator = accelerators[lookup_index];
-        try applyLookupWithIndex(
-            table,
-            accelerator.lookup_offset,
-            lookup_index,
-            glyphs,
-            allocator,
-            shaping_options,
-            &run_digest_cache,
-        );
-    }
-    return true;
 }
 
 pub fn selectedLookupIndicesForOptions(data: []const u8, offset: usize, length: usize, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)![]u16 {
@@ -439,14 +317,6 @@ test "GSUB ranged feature helper selects and applies only assigned sources" {
         },
     );
     try std.testing.expectEqualSlices(GlyphId, &.{ 11, 10, 11 }, glyphs.items);
-}
-
-fn canFallbackFromBadGsubSelection(table: Table) GsubError!bool {
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16(table, lookup_list_offset);
-    try ensureBytesWithin(table, lookup_list_offset + 2, @as(usize, lookup_count) * 2);
-    _ = try feature_domain.validation.lookupReferences(table, lookup_count);
-    return true;
 }
 
 pub fn hasFeature(data: []const u8, offset: usize, length: usize, feature_tag: u32) GsubError!bool {
@@ -823,14 +693,6 @@ pub fn validateGlyphBoundsForShaping(data: []const u8, offset: usize, length: us
 
 fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!std.ArrayList(u16) {
     return feature_domain.run_selection.lookupIndices(
-        table,
-        allocator,
-        options,
-    );
-}
-
-fn selectedLookupRecords(table: Table, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!std.ArrayList(SelectedLookup) {
-    return feature_domain.run_selection.lookupRecords(
         table,
         allocator,
         options,

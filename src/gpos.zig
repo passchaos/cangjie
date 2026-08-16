@@ -8,6 +8,7 @@ pub const runtime = @import("gpos/runtime/root.zig");
 const runtime_lookup = @import("gpos/runtime/lookup/root.zig");
 const runtime_output = @import("gpos/runtime/output/root.zig");
 const table_core = @import("gpos/table/root.zig");
+const validation = @import("gpos/validation/root.zig");
 const class_context = @import("opentype/class_context.zig");
 const ligature_provenance = @import("ligature_provenance.zig");
 const run_metadata = @import("shaping/run_metadata.zig");
@@ -154,7 +155,27 @@ const ChainingClassSubtableAccelerator =
     accelerator_core.model.ChainingClassSubtable;
 
 const ChainingSubtableGroup = accelerator_core.glyph_groups.Group;
-const max_context_preflight_depth = 16;
+const max_context_preflight_depth = validation.lookup.max_context_depth;
+const ensurePositionRecordsWithin = validation.lookup.records;
+const ensurePositionRecordMarkFilteringSetsValid =
+    validation.lookup.recordMarkFilteringSets;
+const ensurePositionLookupHeaderAndExtensionPayloadsWithin =
+    validation.lookup.headerAndExtensions;
+const ensurePositionLookupSubtablesWithin =
+    validation.lookup.lookupSubtables;
+const ensurePositionSubtableVariableDataWithin =
+    validation.lookup.subtableVariableData;
+const ensureContextPositionSubtableWithin =
+    validation.lookup.contextSubtable;
+const ensurePositionRuleSetWithin = validation.lookup.contextRuleSet;
+const ensureChainingContextPositionSubtableWithin =
+    validation.lookup.chainingSubtable;
+const ensureChainingPositionRuleSetWithin =
+    validation.lookup.chainingRuleSet;
+const ensureCoverageTableWithin = validation.lookup.coverage;
+const ensureClassDefTableWithin = validation.lookup.classDef;
+const ensureClassDefTableWithinLimit =
+    validation.lookup.classDefWithLimit;
 
 /// Validate GPOS glyph references that are meaningful at font-load time.
 ///
@@ -1656,315 +1677,6 @@ fn collectPositionRecordsMapped(table: Table, records_pos: usize, record_count: 
         const target_index = input_indices[sequence_index];
         try collectNestedAdjustment(table, glyphs, target_index, lookup_index, adjustments, allocator, options);
     }
-}
-
-fn ensurePositionRecordListWithin(table: Table, records_pos: usize, record_count: usize) GposError!void {
-    // PosLookupRecord arrays are an all-or-nothing part of a contextual match:
-    // detect truncation before appending any nested adjustment so a malformed
-    // table cannot expose a partly-applied positioning result to the caller.
-    if (records_pos > table.length) return error.BadGpos;
-    if (record_count > (table.length - records_pos) / 4) return error.BadGpos;
-}
-
-fn ensurePositionRecordsWithin(table: Table, records_pos: usize, record_count: usize, input_count: usize) GposError!void {
-    try ensurePositionRecordListWithin(table, records_pos, record_count);
-    try ensurePositionRecordReferencesWithinDepth(table, records_pos, record_count, input_count, 0);
-}
-
-fn ensurePositionRecordsWithinDepth(table: Table, records_pos: usize, record_count: usize, input_count: usize, depth: usize) GposError!void {
-    try ensurePositionRecordListWithin(table, records_pos, record_count);
-    try ensurePositionRecordReferencesWithinDepth(table, records_pos, record_count, input_count, depth);
-}
-
-fn ensurePositionRecordReferencesWithinDepth(table: Table, records_pos: usize, record_count: usize, input_count: usize, depth: usize) GposError!void {
-    // Contextual positioning appends adjustments as it walks PosLookupRecords.
-    // Preflight both record fields: the sequence index must target the matched
-    // input sequence, and the lookup index/header must resolve. Otherwise a
-    // malformed later record could be silently skipped or could leave earlier
-    // nested adjustments visible to the caller.
-    // Contextual lookups are allowed to reference other contextual lookups; cap
-    // validation recursion so cyclic lookup graphs are reported as unsupported
-    // instead of overflowing the validator stack.
-    if (depth > max_context_preflight_depth) return error.UnsupportedGpos;
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16BadGpos(table, lookup_list_offset);
-    for (0..record_count) |record_i| {
-        const record_offset = records_pos + record_i * 4;
-        const sequence_index = try readU16BadGpos(table, record_offset);
-        if (sequence_index >= input_count) return error.BadGpos;
-        const lookup_index = try readU16BadGpos(table, record_offset + 2);
-        if (lookup_index >= lookup_count) return error.BadGpos;
-        if (table.validating_full_lookup_list) continue;
-        const lookup_offset_pos = lookup_list_offset + 2 + @as(usize, lookup_index) * 2;
-        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGpos(table, lookup_offset_pos));
-        try ensurePositionLookupHeaderAndExtensionPayloadsWithin(table, lookup_offset);
-        const lookup_type = try readU16BadGpos(table, lookup_offset);
-        const subtable_count = try readU16BadGpos(table, lookup_offset + 4);
-        try ensurePositionLookupSubtablesWithinDepth(table, lookup_offset, lookup_type, subtable_count, depth + 1);
-    }
-}
-
-fn ensurePositionRecordMarkFilteringSetsValid(table: Table, records_pos: usize, record_count: usize, options: LookupOptions) GposError!void {
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    for (0..record_count) |record_i| {
-        const record_offset = records_pos + record_i * 4;
-        const lookup_index = try readU16BadGpos(table, record_offset + 2);
-        const lookup_offset_pos = lookup_list_offset + 2 + @as(usize, lookup_index) * 2;
-        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGpos(table, lookup_offset_pos));
-        const lookup_flag = try readU16BadGpos(table, lookup_offset + 2);
-        if ((lookup_flag & 0x0010) == 0) continue;
-        const subtable_count = try readU16BadGpos(table, lookup_offset + 4);
-        try runtime.matching.validateMarkFilteringSetIndex(.{
-            .mark_filtering_sets = options.mark_filtering_sets,
-            .active_mark_filtering_set = try readU16BadGpos(table, lookup_offset + 6 + @as(usize, subtable_count) * 2),
-        });
-    }
-}
-
-fn ensurePositionLookupHeaderAndExtensionPayloadsWithin(table: Table, lookup_offset: usize) GposError!void {
-    const header = try positioning.lookup.dispatch.header(table, lookup_offset);
-    if (header.lookup_type == 9) {
-        for (0..header.subtable_count) |subtable_index| {
-            const wrapper = try positioning.lookup.dispatch.extensionWrapperOffset(
-                table,
-                lookup_offset,
-                subtable_index,
-            );
-            const extension = try positioning.lookup.dispatch.extension(
-                table,
-                wrapper,
-            );
-            try positioning.lookup.dispatch.validateSubtableFixedHeader(
-                table,
-                extension.payload_offset,
-                extension.lookup_type,
-            );
-            try ensurePositionSubtableVariableDataWithin(
-                table,
-                extension.payload_offset,
-                extension.lookup_type,
-            );
-        }
-    }
-}
-
-fn ensurePositionLookupSubtablesWithin(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16) GposError!void {
-    return ensurePositionLookupSubtablesWithinDepth(table, lookup_offset, lookup_type, subtable_count, 0);
-}
-
-fn ensurePositionLookupSubtablesWithinDepth(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16, depth: usize) GposError!void {
-    switch (lookup_type) {
-        1, 2, 3, 4, 5, 6, 7, 8 => {},
-        else => return,
-    }
-    for (0..subtable_count) |subtable_i| {
-        // Lookup.SubTable offsets are required child pointers for supported
-        // positioning lookups. Offset zero would reinterpret the Lookup header
-        // as a subtable and can make malformed data appear valid or derive
-        // value sizes from lookup metadata.
-        const subtable_offset = try checkedRequiredPositionOffset(table, lookup_offset, try readU16BadGpos(table, lookup_offset + 6 + subtable_i * 2));
-        try positioning.lookup.dispatch.validateSubtableFixedHeader(table, subtable_offset, lookup_type);
-        try ensurePositionSubtableVariableDataWithinDepth(table, subtable_offset, lookup_type, depth);
-    }
-}
-
-fn ensurePositionSubtableVariableDataWithin(table: Table, subtable_offset: usize, lookup_type: u16) GposError!void {
-    return ensurePositionSubtableVariableDataWithinDepth(table, subtable_offset, lookup_type, 0);
-}
-
-fn ensurePositionSubtableVariableDataWithinDepth(table: Table, subtable_offset: usize, lookup_type: u16, depth: usize) GposError!void {
-    switch (lookup_type) {
-        1 => try positioning.lookup.single.validate(table, subtable_offset),
-        2 => try positioning.lookup.pair.validate(table, subtable_offset),
-        3 => try positioning.lookup.cursive.validate(table, subtable_offset),
-        4 => try positioning.lookup.marks.validateMarkToBase(table, subtable_offset),
-        5 => try positioning.lookup.marks.validateMarkToLigature(table, subtable_offset),
-        6 => try positioning.lookup.marks.validateMarkToMark(table, subtable_offset),
-        7 => try ensureContextPositionSubtableWithin(table, subtable_offset, depth),
-        8 => try ensureChainingContextPositionSubtableWithin(table, subtable_offset, depth),
-        else => {},
-    }
-}
-
-fn ensureContextPositionSubtableWithin(table: Table, subtable_offset: usize, depth: usize) GposError!void {
-    // ContextPos uses the same variable-length topology as ContextSubst, but
-    // each matched rule references PosLookupRecords. Validate every rule and
-    // referenced lookup before any earlier subtable in the same lookup can
-    // append adjustments, preserving lookup-level atomicity.
-    switch (try positioning.lookup.contextual.parseContextForValidation(table, subtable_offset)) {
-        .glyph => |subtable| {
-            for (0..subtable.sets.count) |set_i| {
-                const set_offset = try subtable.sets.resolve(table, set_i) orelse continue;
-                try ensurePositionRuleSetWithin(table, set_offset, depth);
-            }
-        },
-        .class => |subtable| {
-            for (0..subtable.sets.count) |set_i| {
-                const set_offset = try subtable.sets.resolve(table, set_i) orelse continue;
-                try ensurePositionRuleSetWithin(table, set_offset, depth);
-            }
-        },
-        .coverage => |subtable| {
-            try ensurePositionRecordsWithinDepth(
-                table,
-                subtable.records.records_pos,
-                subtable.records.count,
-                subtable.records.input_count,
-                depth,
-            );
-        },
-    }
-}
-
-fn ensurePositionRuleSetWithin(table: Table, rule_set_offset: usize, depth: usize) GposError!void {
-    const set = try positioning.lookup.contextual.parseRuleSetForValidation(
-        table,
-        rule_set_offset,
-    );
-    for (0..set.rule_count) |rule_i| {
-        // PosRule and PosClassRule offsets are mandatory child pointers once
-        // their parent RuleSet exists. A zero value aliases the RuleSet header
-        // as a rule, so record counts and nested lookup references would be
-        // derived from unrelated metadata instead of declared rule payload.
-        try ensurePositionRuleWithin(
-            table,
-            try set.ruleOffset(table, rule_i),
-            depth,
-        );
-    }
-}
-
-fn ensurePositionRuleWithin(table: Table, rule_offset: usize, depth: usize) GposError!void {
-    const rule = try positioning.lookup.contextual.parseContextRuleForValidation(
-        table,
-        rule_offset,
-    );
-    for (1..rule.input_count) |input_i| {
-        try ensureGlyphIdWithinMaxp(
-            table,
-            try readU16BadGpos(
-                table,
-                rule.input_values_pos + (input_i - 1) * 2,
-            ),
-        );
-    }
-    try ensurePositionRecordsWithinDepth(
-        table,
-        rule.records.records_pos,
-        rule.records.count,
-        rule.records.input_count,
-        depth,
-    );
-}
-
-fn ensureChainingContextPositionSubtableWithin(table: Table, subtable_offset: usize, depth: usize) GposError!void {
-    // ChainingContextPos contains backtrack, input, and lookahead regions
-    // before its PosLookupRecords. Preflighting all three regions avoids a
-    // malformed later subtable leaking adjustments from an earlier context
-    // subtable in the same lookup.
-    switch (try positioning.lookup.contextual.parseChainingForValidation(table, subtable_offset)) {
-        .glyph => |subtable| {
-            for (0..subtable.sets.count) |set_i| {
-                const set_offset = try subtable.sets.resolve(table, set_i) orelse continue;
-                try ensureChainingPositionRuleSetWithin(table, set_offset, depth);
-            }
-        },
-        .class => |subtable| {
-            for (0..subtable.sets.count) |set_i| {
-                const set_offset = try subtable.sets.resolve(table, set_i) orelse continue;
-                try ensureChainingPositionRuleSetWithin(table, set_offset, depth);
-            }
-        },
-        .coverage => |subtable| {
-            try ensurePositionRecordsWithinDepth(
-                table,
-                subtable.records.records_pos,
-                subtable.records.count,
-                subtable.records.input_count,
-                depth,
-            );
-        },
-    }
-}
-
-fn ensureChainingPositionRuleSetWithin(table: Table, rule_set_offset: usize, depth: usize) GposError!void {
-    const set = try positioning.lookup.contextual.parseRuleSetForValidation(
-        table,
-        rule_set_offset,
-    );
-    for (0..set.rule_count) |rule_i| {
-        // ChainPosRule and ChainPosClassRule offsets are required children of
-        // a non-null ChainPosRuleSet. Do not allow zero to reinterpret the
-        // set's ruleCount/offset array as backtrack/input/lookahead counts.
-        try ensureChainingPositionRuleWithin(
-            table,
-            try set.ruleOffset(table, rule_i),
-            depth,
-        );
-    }
-}
-
-fn ensureChainingPositionRuleWithin(table: Table, rule_offset: usize, depth: usize) GposError!void {
-    const rule = try positioning.lookup.contextual.parseChainingRuleForValidation(
-        table,
-        rule_offset,
-    );
-    for (0..rule.backtrack_count) |backtrack_i| {
-        try ensureGlyphIdWithinMaxp(
-            table,
-            try readU16BadGpos(
-                table,
-                rule.backtrack_values_pos + backtrack_i * 2,
-            ),
-        );
-    }
-    for (1..rule.input_count) |input_i| {
-        try ensureGlyphIdWithinMaxp(
-            table,
-            try readU16BadGpos(
-                table,
-                rule.input_values_pos + (input_i - 1) * 2,
-            ),
-        );
-    }
-    for (0..rule.lookahead_count) |lookahead_i| {
-        try ensureGlyphIdWithinMaxp(
-            table,
-            try readU16BadGpos(
-                table,
-                rule.lookahead_values_pos + lookahead_i * 2,
-            ),
-        );
-    }
-    try ensurePositionRecordsWithinDepth(
-        table,
-        rule.records.records_pos,
-        rule.records.count,
-        rule.records.input_count,
-        depth,
-    );
-}
-
-fn ensureGlyphIdWithinMaxp(table: Table, glyph_id: usize) GposError!void {
-    if (table.glyph_count) |glyph_count| {
-        if (glyph_id >= glyph_count) return error.BadGpos;
-    }
-}
-
-fn ensureCoverageTableWithin(table: Table, coverage_offset: usize) GposError!void {
-    return table_core.coverage.validate(table, coverage_offset, .indexed);
-}
-
-fn ensureClassDefTableWithin(table: Table, class_def_offset: usize) GposError!void {
-    return table_core.class_def.validate(table, class_def_offset);
-}
-
-fn ensureClassDefTableWithinLimit(table: Table, class_def_offset: usize, max_class_count: ?u16) GposError!void {
-    return table_core.class_def.validateWithLimit(
-        table,
-        class_def_offset,
-        max_class_count,
-    );
 }
 
 fn checkedRequiredPositionOffset(table: Table, base_offset: usize, relative_offset: u16) GposError!usize {
@@ -6705,6 +6417,7 @@ test {
     _ = @import("gpos/tests/positioning/root.zig");
     _ = @import("gpos/tests/runtime/root.zig");
     _ = @import("gpos/tests/table/root.zig");
+    _ = @import("gpos/tests/validation/root.zig");
 }
 
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {

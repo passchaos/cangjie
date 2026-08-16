@@ -51,6 +51,8 @@ const metadata_tables = @import("font/tables/metadata/root.zig");
 const os2_mod = metadata_tables.os2;
 const post_mod = metadata_tables.post;
 const metric_tables = @import("font/tables/metrics/root.zig");
+const variation_tables = @import("font/tables/variations/root.zig");
+const fvar_mod = variation_tables.fvar;
 const colr_v0_mod = color_tables.colr_v0;
 const colr_v1_mod = color_tables.colr_v1;
 const colr_paint = colr_v1_mod.paint;
@@ -264,45 +266,12 @@ pub const FontDecorationMetrics = presentation_metrics.Decoration;
 
 pub const VerticalMetrics = metric_tables.Vertical;
 
-pub const VariationAxis = struct {
-    tag: [4]u8,
-    min_value: f32,
-    default_value: f32,
-    max_value: f32,
-    flags: u16,
-    name_id: u16,
-
-    pub fn clamp(self: VariationAxis, value: f32) f32 {
-        return @min(self.max_value, @max(self.min_value, value));
-    }
-
-    pub fn normalize(self: VariationAxis, value: f32) f32 {
-        const clamped = self.clamp(value);
-        if (clamped == self.default_value) return 0;
-        if (clamped < self.default_value) {
-            const span = self.default_value - self.min_value;
-            if (span == 0) return 0;
-            return (clamped - self.default_value) / span;
-        }
-        const span = self.max_value - self.default_value;
-        if (span == 0) return 0;
-        return (clamped - self.default_value) / span;
-    }
-};
-
-pub const VariationCoordinate = struct {
-    tag: [4]u8,
-    value: f32,
-};
+pub const VariationAxis = fvar_mod.Axis;
+pub const VariationCoordinate = fvar_mod.Coordinate;
 
 pub const VariationSequenceKind = cmap_variation.SequenceKind;
 
-pub const VariationInstance = struct {
-    subfamily_name_id: u16,
-    flags: u16,
-    postscript_name_id: ?u16 = null,
-    coordinates: []VariationCoordinate,
-};
+pub const VariationInstance = fvar_mod.Instance;
 
 pub const StatDesignAxis = struct {
     tag: [4]u8,
@@ -935,8 +904,8 @@ pub const Font = struct {
             };
         }
         const fvar_axis_count: ?u16 = if (fvar) |fvar_table| blk: {
-            try validateFvarTable(data, fvar_table);
-            break :blk @intCast((try readFvarInfo(data, fvar_table)).axis_count);
+            try fvar_mod.validate(data, fvar_table);
+            break :blk @intCast((try fvar_mod.info(data, fvar_table)).axis_count);
         } else null;
         if (avar) |avar_table| try validateAvarTable(data, avar_table, fvar);
         const cvt_value_count = if (cvt) |cvt_table| try validateCvtTable(cvt_table) else null;
@@ -1130,7 +1099,7 @@ pub const Font = struct {
     pub fn gvarInfo(self: *const Font) FontError!?GvarInfo {
         const gvar = self.gvar orelse return null;
         const fvar = self.fvar orelse return error.BadSfnt;
-        const fvar_info = try readFvarInfo(self.data, fvar);
+        const fvar_info = try fvar_mod.info(self.data, fvar);
         try sfnt.checksum.validate(self.data, gvar);
         try gvar_mod.validate(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count);
         return try gvar_mod.info(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count);
@@ -1141,7 +1110,7 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const gvar = self.gvar orelse return null;
         const fvar = self.fvar orelse return error.BadSfnt;
-        const fvar_info = try readFvarInfo(self.data, fvar);
+        const fvar_info = try fvar_mod.info(self.data, fvar);
         try sfnt.checksum.validate(self.data, gvar);
         return try gvar_mod.glyphInfo(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count, glyph_id);
     }
@@ -1151,7 +1120,7 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const gvar = self.gvar orelse return null;
         const fvar = self.fvar orelse return error.BadSfnt;
-        const fvar_info = try readFvarInfo(self.data, fvar);
+        const fvar_info = try fvar_mod.info(self.data, fvar);
         try sfnt.checksum.validate(self.data, gvar);
         return try gvar_mod.tupleInfo(self.data, gvar.offset, gvar.length, self.glyph_count, fvar_info.axis_count, glyph_id, tuple_index);
     }
@@ -1234,7 +1203,7 @@ pub const Font = struct {
     fn fvarAxisCountForReadMode(self: *const Font, read_mode: OutlineReadMode) FontError!usize {
         const fvar = self.fvar orelse return error.BadSfnt;
         return switch (read_mode) {
-            .revalidate => (try readFvarInfo(self.data, fvar)).axis_count,
+            .revalidate => (try fvar_mod.info(self.data, fvar)).axis_count,
             .parsed => self.fvar_axis_count orelse error.BadSfnt,
         };
     }
@@ -1395,11 +1364,11 @@ pub const Font = struct {
         const fvar = self.fvar orelse return error.BadSfnt;
         const cvt = self.cvt orelse return error.BadSfnt;
         try sfnt.checksum.validate(self.data, fvar);
-        try validateFvarTable(self.data, fvar);
+        try fvar_mod.validate(self.data, fvar);
         try sfnt.checksum.validate(self.data, cvt);
         const cvt_value_count = try validateCvtTable(cvt);
         try sfnt.checksum.validate(self.data, cvar);
-        const fvar_info = try readFvarInfo(self.data, fvar);
+        const fvar_info = try fvar_mod.info(self.data, fvar);
         try validateCvarTable(self.data, cvar, fvar_info.axis_count, cvt_value_count);
         return try cvar_mod.info(allocator, self.data, cvar.offset, cvar.length, fvar_info.axis_count);
     }
@@ -1582,9 +1551,9 @@ pub const Font = struct {
         const mvar = self.mvar orelse return null;
         const fvar = self.fvar orelse return error.BadSfnt;
         try sfnt.checksum.validate(self.data, fvar);
-        try validateFvarTable(self.data, fvar);
+        try fvar_mod.validate(self.data, fvar);
         try sfnt.checksum.validate(self.data, mvar);
-        const fvar_info = try readFvarInfo(self.data, fvar);
+        const fvar_info = try fvar_mod.info(self.data, fvar);
         try validateMvarTable(self.data, mvar, fvar_info.axis_count);
         return try mvar_mod.info(allocator, self.data, mvar.offset, mvar.length);
     }
@@ -1669,9 +1638,9 @@ pub const Font = struct {
         };
         const fvar = self.fvar orelse return error.BadSfnt;
         try sfnt.checksum.validate(self.data, fvar);
-        try validateFvarTable(self.data, fvar);
+        try fvar_mod.validate(self.data, fvar);
         try sfnt.checksum.validate(self.data, table);
-        const fvar_info = try readFvarInfo(self.data, fvar);
+        const fvar_info = try fvar_mod.info(self.data, fvar);
         try validateMetricVariationTable(self.data, table, fvar_info.axis_count, minimum_length);
         return table;
     }
@@ -3204,31 +3173,16 @@ pub const Font = struct {
         // records whose reserved flags, duplicate tags, or instance payloads
         // would have been rejected during Font.parse.
         try sfnt.checksum.validate(self.data, fvar);
-        try validateFvarTable(self.data, fvar);
+        try fvar_mod.validate(self.data, fvar);
         if (self.name) |name| {
             // This API exposes only axes. A stale named-instance label must not
             // prevent design coordinates from reaching otherwise valid fvar,
             // avar, and glyph-variation data; variationInstances() separately
             // keeps the complete instance-name contract strict.
             const name_index = try readNameIdIndex(self.data, name);
-            try validateFvarAxisNameReferences(self.data, fvar, &name_index);
+            try fvar_mod.validateAxisNameReferences(self.data, fvar, &name_index);
         }
-        const info = try readFvarInfo(self.data, fvar);
-
-        const axes = try allocator.alloc(VariationAxis, info.axis_count);
-        errdefer allocator.free(axes);
-        for (axes, 0..) |*axis, index| {
-            const axis_offset = fvar.offset + info.axes_array_offset + index * info.axis_size;
-            axis.* = .{
-                .tag = try bin.readTagAt(self.data, axis_offset),
-                .min_value = fixed16_16ToF32(try bin.readI32At(self.data, axis_offset + 4)),
-                .default_value = fixed16_16ToF32(try bin.readI32At(self.data, axis_offset + 8)),
-                .max_value = fixed16_16ToF32(try bin.readI32At(self.data, axis_offset + 12)),
-                .flags = try bin.readU16At(self.data, axis_offset + 16),
-                .name_id = try bin.readU16At(self.data, axis_offset + 18),
-            };
-        }
-        return axes;
+        return try fvar_mod.readAxes(allocator, self.data, fvar);
     }
 
     pub fn mapVariationCoordinate(self: *const Font, axis_index: usize, normalized: f32) FontError!f32 {
@@ -3248,7 +3202,7 @@ pub const Font = struct {
         const axis_count = try bin.readU16At(table, 6);
         if (self.fvar) |fvar| {
             try sfnt.checksum.validate(self.data, fvar);
-            const fvar_info = try readFvarInfo(self.data, fvar);
+            const fvar_info = try fvar_mod.info(self.data, fvar);
             if (axis_count != fvar_info.axis_count) return error.BadSfnt;
         } else if (axis_count != 0) {
             return error.BadSfnt;
@@ -3283,19 +3237,19 @@ pub const Font = struct {
     pub fn normalizedVariationCoordinates(self: *const Font, allocator: std.mem.Allocator, coordinates: []const VariationCoordinate) FontError![]f32 {
         const axes = try self.variationAxes(allocator);
         defer allocator.free(axes);
-        try validateVariationCoordinates(axes, coordinates);
+        try fvar_mod.validateCoordinates(axes, coordinates);
 
         const normalized = try allocator.alloc(f32, axes.len);
         errdefer allocator.free(normalized);
         for (axes, 0..) |axis, index| {
-            const user_value = variationValueForAxis(axis, coordinates) orelse axis.default_value;
+            const user_value = fvar_mod.coordinateValueForAxis(axis, coordinates) orelse axis.default_value;
             const mapped = try self.mapVariationCoordinate(index, axis.normalize(user_value));
             // OpenType variation consumers operate at F2Dot14 locations.
             // HarfBuzz first rounds fvar/avar design coordinates into this
             // domain; retaining an unquantized f32 here can move a gvar phantom
             // metric across a half-unit boundary even though GDEF/HVAR later
             // quantize the same location independently.
-            normalized[index] = quantizeNormalizedF2Dot14(mapped);
+            normalized[index] = fvar_mod.quantizeNormalized(mapped);
         }
         return normalized;
     }
@@ -3303,48 +3257,16 @@ pub const Font = struct {
     pub fn variationInstances(self: *const Font, allocator: std.mem.Allocator) FontError![]VariationInstance {
         const fvar = self.fvar orelse return try allocator.alloc(VariationInstance, 0);
         try sfnt.checksum.validate(self.data, fvar);
-        try validateFvarTable(self.data, fvar);
+        try fvar_mod.validate(self.data, fvar);
         if (self.name) |name| {
             const name_index = try readNameIdIndex(self.data, name);
-            try validateFvarNameReferences(self.data, fvar, &name_index);
+            try fvar_mod.validateNameReferences(self.data, fvar, &name_index);
         }
-        const info = try readFvarInfo(self.data, fvar);
-
-        const instances = try allocator.alloc(VariationInstance, info.instance_count);
-        errdefer allocator.free(instances);
-        var initialized: usize = 0;
-        errdefer {
-            for (instances[0..initialized]) |instance| allocator.free(instance.coordinates);
-        }
-
-        for (instances, 0..) |*instance, instance_index| {
-            const instance_offset = fvarInstanceOffset(fvar, info, instance_index);
-            const coordinates = try allocator.alloc(VariationCoordinate, info.axis_count);
-            errdefer allocator.free(coordinates);
-            for (coordinates, 0..) |*coordinate, axis_index| {
-                const axis_offset = fvarAxisOffset(fvar, info, axis_index);
-                coordinate.* = .{
-                    .tag = try bin.readTagAt(self.data, axis_offset),
-                    .value = fixed16_16ToF32(try bin.readI32At(self.data, instance_offset + 4 + axis_index * 4)),
-                };
-            }
-            instance.* = .{
-                .subfamily_name_id = try bin.readU16At(self.data, instance_offset),
-                .flags = try bin.readU16At(self.data, instance_offset + 2),
-                .postscript_name_id = if (info.has_postscript_name_id) id: {
-                    const value = try bin.readU16At(self.data, instance_offset + info.postscript_name_id_offset);
-                    break :id if (value == 0xffff) null else value;
-                } else null,
-                .coordinates = coordinates,
-            };
-            initialized += 1;
-        }
-        return instances;
+        return try fvar_mod.readInstances(allocator, self.data, fvar);
     }
 
     pub fn freeVariationInstances(_: *const Font, allocator: std.mem.Allocator, instances: []VariationInstance) void {
-        for (instances) |instance| allocator.free(instance.coordinates);
-        allocator.free(instances);
+        fvar_mod.freeInstances(allocator, instances);
     }
 
     pub fn statElidedFallbackNameId(self: *const Font, allocator: std.mem.Allocator) FontError!?u16 {
@@ -6120,16 +6042,6 @@ fn f2dot14(value: i16) f32 {
     return @as(f32, @floatFromInt(value)) / 16384.0;
 }
 
-fn quantizeNormalizedF2Dot14(value: f32) f32 {
-    // HarfBuzz's public design-coordinate path first represents normalized
-    // fvar/avar output in 16.16, then rounds that fixed value to F2Dot14.
-    // Collapsing the two steps is not equivalent: 0.1 becomes 6554 in 16.16
-    // and then 1639 in F2Dot14, while direct 14-bit rounding produces 1638.
-    const fixed_16_16: i32 = @intFromFloat(@round(value * 65536.0));
-    const fixed_2_14: i16 = @intCast((fixed_16_16 + 2) >> 2);
-    return f2dot14(fixed_2_14);
-}
-
 fn fixed16_16ToF32(value: i32) f32 {
     return @as(f32, @floatFromInt(value)) / 65536.0;
 }
@@ -6151,17 +6063,6 @@ fn trackingValueForPointSize(values: []const TrackValueInfo, point_size: f32) f3
     }
     return @floatFromInt(values[values.len - 1].value);
 }
-
-const FvarInfo = struct {
-    axes_array_offset: usize,
-    axis_count: usize,
-    axis_size: usize,
-    instance_count: usize,
-    instance_size: usize,
-    instances_array_offset: usize,
-    postscript_name_id_offset: usize,
-    has_postscript_name_id: bool,
-};
 
 const StatInfo = struct {
     minor: u16,
@@ -6191,7 +6092,7 @@ fn validateVariationNameReferences(allocator: std.mem.Allocator, data: []const u
     // carry stale instance labels while their axes and variation data remain
     // usable. variationInstances() revalidates the complete name contract.
     if (fvar) |fvar_table| {
-        validateFvarAxisNameReferences(data, fvar_table, name_index) catch |err| switch (err) {
+        fvar_mod.validateAxisNameReferences(data, fvar_table, name_index) catch |err| switch (err) {
             error.InvalidName => if (!options.compat_ttc_face) return err,
             else => return err,
         };
@@ -6206,75 +6107,6 @@ fn validateVariationNameReferences(allocator: std.mem.Allocator, data: []const u
             error.BadSfnt => if (fvar != null) return err,
             else => return err,
         };
-    }
-}
-
-fn validateFvarNameReferences(data: []const u8, fvar: TableRecord, name_index: ?*const NameIdIndex) FontError!void {
-    try validateFvarAxisNameReferences(data, fvar, name_index);
-    try validateFvarInstanceNameReferences(data, fvar, name_index);
-}
-
-fn validateFvarAxisNameReferences(data: []const u8, fvar: TableRecord, name_index: ?*const NameIdIndex) FontError!void {
-    const info = try readFvarInfo(data, fvar);
-    for (0..info.axis_count) |index| {
-        const axis_offset = fvarAxisOffset(fvar, info, index);
-        try validateNameIdReference(name_index, try bin.readU16At(data, axis_offset + 18));
-    }
-}
-
-fn validateFvarInstanceNameReferences(data: []const u8, fvar: TableRecord, name_index: ?*const NameIdIndex) FontError!void {
-    const info = try readFvarInfo(data, fvar);
-    for (0..info.instance_count) |index| {
-        const instance_offset = fvarInstanceOffset(fvar, info, index);
-        try validateNameIdReference(name_index, try bin.readU16At(data, instance_offset));
-
-        // Instance PostScript names are optional in fvar 1.0 and use 0xffff as
-        // the explicit "not supplied" sentinel.  Any real ID is user-visible
-        // metadata and must resolve through a structurally valid name record.
-        if (info.has_postscript_name_id) {
-            try validateOptionalNameIdReference(name_index, try bin.readU16At(data, instance_offset + info.postscript_name_id_offset));
-        }
-    }
-}
-
-fn validateFvarTable(data: []const u8, fvar: TableRecord) FontError!void {
-    const info = try readFvarInfo(data, fvar);
-
-    for (0..info.axis_count) |axis_index| {
-        const axis_offset = fvarAxisOffset(fvar, info, axis_index);
-        const min_value = try bin.readI32At(data, axis_offset + 4);
-        const default_value = try bin.readI32At(data, axis_offset + 8);
-        const max_value = try bin.readI32At(data, axis_offset + 12);
-        if (min_value > default_value or default_value > max_value) return error.BadSfnt;
-
-        // OpenType 1.x reserves all fvar axis flag bits except HIDDEN_AXIS.
-        // Rejecting unknown bits prevents future/garbled axis semantics from
-        // being treated as ordinary exposed variation controls.
-        const flags = try bin.readU16At(data, axis_offset + 16);
-        if ((flags & ~@as(u16, 0x0001)) != 0) return error.BadSfnt;
-
-        const tag = try bin.readTagAt(data, axis_offset);
-        try sfnt.validateTag(tag);
-        for (0..axis_index) |previous_index| {
-            const previous_offset = fvarAxisOffset(fvar, info, previous_index);
-            const previous_tag = try bin.readTagAt(data, previous_offset);
-            const previous_flags = try bin.readU16At(data, previous_offset + 16);
-            if (std.mem.eql(u8, &previous_tag, &tag) and (flags & 0x0001) == 0 and (previous_flags & 0x0001) == 0) return error.BadSfnt;
-        }
-    }
-
-    for (0..info.instance_count) |instance_index| {
-        const instance_offset = fvarInstanceOffset(fvar, info, instance_index);
-        const flags = try bin.readU16At(data, instance_offset + 2);
-        if (flags != 0) return error.BadSfnt;
-
-        for (0..info.axis_count) |axis_index| {
-            const coordinate = try bin.readI32At(data, instance_offset + 4 + axis_index * 4);
-            const axis_offset = fvarAxisOffset(fvar, info, axis_index);
-            const min_value = try bin.readI32At(data, axis_offset + 4);
-            const max_value = try bin.readI32At(data, axis_offset + 12);
-            if (coordinate < min_value or coordinate > max_value) return error.BadSfnt;
-        }
     }
 }
 
@@ -6364,10 +6196,10 @@ fn validateStatDesignAxisOrder(data: []const u8, stat: TableRecord, fvar: ?Table
 
 fn statDuplicateAxisTagsAllowedByFvar(data: []const u8, fvar: ?TableRecord, previous_index: usize, axis_index: usize) FontError!bool {
     const fvar_table = fvar orelse return false;
-    const info = try readFvarInfo(data, fvar_table);
+    const info = try fvar_mod.info(data, fvar_table);
     if (previous_index >= info.axis_count or axis_index >= info.axis_count) return false;
-    const previous_offset = fvarAxisOffset(fvar_table, info, previous_index);
-    const axis_offset = fvarAxisOffset(fvar_table, info, axis_index);
+    const previous_offset = fvar_mod.axisOffset(fvar_table, info, previous_index);
+    const axis_offset = fvar_mod.axisOffset(fvar_table, info, axis_index);
     const previous_flags = try bin.readU16At(data, previous_offset + 16);
     const flags = try bin.readU16At(data, axis_offset + 16);
     return (previous_flags & 0x0001) != 0 or (flags & 0x0001) != 0;
@@ -6702,64 +6534,6 @@ fn validateStatAxisRangePair(a: StatAxisRange, b: StatAxisRange) FontError!void 
     if (lower.max == upper.min and lower.nominal == lower.max and upper.nominal == upper.min) return error.BadSfnt;
 }
 
-fn readFvarInfo(data: []const u8, fvar: TableRecord) FontError!FvarInfo {
-    if (fvar.length < 16) return error.BadSfnt;
-    const major = try bin.readU16At(data, fvar.offset);
-    const minor = try bin.readU16At(data, fvar.offset + 2);
-    if (major != 1 or minor != 0) return error.BadSfnt;
-    const axes_array_offset: usize = @intCast(try bin.readU16At(data, fvar.offset + 4));
-    const count_size_pairs = try bin.readU16At(data, fvar.offset + 6);
-    const axis_count: usize = @intCast(try bin.readU16At(data, fvar.offset + 8));
-    const axis_size: usize = @intCast(try bin.readU16At(data, fvar.offset + 10));
-    const instance_count: usize = @intCast(try bin.readU16At(data, fvar.offset + 12));
-    const instance_size: usize = @intCast(try bin.readU16At(data, fvar.offset + 14));
-    if (count_size_pairs != 2) return error.BadSfnt;
-    const minimum_axis_size: usize = 20;
-    const minimum_instance_size: usize = 4 + axis_count * 4;
-    // fvar defines fixed axis records and instance records that are either the
-    // coordinate payload alone or that payload plus a PostScript-name ID. Do not
-    // accept larger private record strides: extra bytes would be unreachable by
-    // this parser, and an instanceSize that is larger than the coordinates but
-    // not large enough for the optional name ID would make the same bytes look
-    // like padding to one consumer and metadata to another.
-    if (axis_size != minimum_axis_size) return error.BadSfnt;
-    if (instance_count == 0) {
-        if (instance_size != 0 and instance_size != minimum_instance_size and instance_size != minimum_instance_size + 2) return error.BadSfnt;
-    } else if (instance_size != minimum_instance_size and instance_size != minimum_instance_size + 2) {
-        return error.BadSfnt;
-    }
-
-    // countSizePairs is part of the fvar header layout contract: exactly two
-    // count/size pairs follow it, axisCount/axisSize and
-    // instanceCount/instanceSize. Validate that contract together with the
-    // table-local regions so malformed headers cannot reinterpret bytes from a
-    // hypothetical alternate layout as variation metadata.
-    if (axes_array_offset < 16 or axes_array_offset > fvar.length) return error.BadSfnt;
-    if (axis_count > (fvar.length - axes_array_offset) / axis_size) return error.BadSfnt;
-    const axes_bytes = axis_count * axis_size;
-    const instances_offset = axes_array_offset + axes_bytes;
-    if (instance_size != 0 and instance_count > (fvar.length - instances_offset) / instance_size) return error.BadSfnt;
-
-    return .{
-        .axes_array_offset = axes_array_offset,
-        .axis_count = axis_count,
-        .axis_size = axis_size,
-        .instance_count = instance_count,
-        .instance_size = instance_size,
-        .instances_array_offset = instances_offset,
-        .postscript_name_id_offset = minimum_instance_size,
-        .has_postscript_name_id = instance_size >= minimum_instance_size + 2,
-    };
-}
-
-fn fvarAxisOffset(fvar: TableRecord, info: FvarInfo, axis_index: usize) usize {
-    return fvar.offset + info.axes_array_offset + axis_index * info.axis_size;
-}
-
-fn fvarInstanceOffset(fvar: TableRecord, info: FvarInfo, instance_index: usize) usize {
-    return fvar.offset + info.instances_array_offset + instance_index * info.instance_size;
-}
-
 const GvarGlyphTargetContext = struct {
     loca: TableRecord,
     glyf: TableRecord,
@@ -6821,7 +6595,7 @@ fn validateVariationDataTablesWithCvar(
     gvar_target_context: ?GvarGlyphTargetContext,
 ) FontError!void {
     if (gvar == null and hvar == null and mvar == null and vvar == null and cvar == null) return;
-    const fvar_info = try readFvarInfo(data, fvar orelse return error.BadSfnt);
+    const fvar_info = try fvar_mod.info(data, fvar orelse return error.BadSfnt);
     if (gvar) |table| try validateGvarTable(data, table, glyph_count, fvar_info.axis_count, gvar_target_context);
     if (hvar) |table| try validateMetricVariationTable(data, table, fvar_info.axis_count, 20);
     if (vvar) |table| try validateMetricVariationTable(data, table, fvar_info.axis_count, 24);
@@ -6839,7 +6613,7 @@ fn validateAvarTable(data: []const u8, avar: TableRecord, fvar: ?TableRecord) Fo
 
     const axis_count: usize = @intCast(try bin.readU16At(data, avar.offset + 6));
     if (fvar) |fvar_table| {
-        const fvar_info = try readFvarInfo(data, fvar_table);
+        const fvar_info = try fvar_mod.info(data, fvar_table);
         if (axis_count != fvar_info.axis_count) return error.BadSfnt;
     } else if (axis_count != 0) {
         // avar segment maps are indexed only by the fvar axis order. Without
@@ -7443,7 +7217,7 @@ fn validateColrVariationData(
     const has_store = colr.length >= 34 and
         try bin.readU32At(data, colr.offset + 30) != 0;
     const axis_count = if (has_store)
-        (try readFvarInfo(data, fvar orelse return error.BadSfnt)).axis_count
+        (try fvar_mod.info(data, fvar orelse return error.BadSfnt)).axis_count
     else
         null;
     return try colr_variation.validate(
@@ -7468,20 +7242,6 @@ fn readColorPaint(font: *const Font, offset: usize, context: ColorPaintReadConte
     );
 }
 
-fn validateVariationCoordinates(axes: []const VariationAxis, coordinates: []const VariationCoordinate) FontError!void {
-    for (coordinates, 0..) |coordinate, coordinate_index| {
-        // Variation coordinate tags are a public caller contract rather than an
-        // OpenType table field. Reject duplicates and unknown tags up front so
-        // shaping callers cannot accidentally depend on first-match ordering or
-        // silently drop a misspelled axis such as `WGHT` instead of `wght`.
-        if (!std.math.isFinite(coordinate.value)) return error.BadSfnt;
-        if (variationAxisIndex(axes, coordinate.tag) == null) return error.BadSfnt;
-        for (coordinates[0..coordinate_index]) |previous| {
-            if (std.mem.eql(u8, &previous.tag, &coordinate.tag)) return error.BadSfnt;
-        }
-    }
-}
-
 fn validateNormalizedVariationCoordinate(value: f32) FontError!void {
     if (!std.math.isFinite(value)) return error.BadSfnt;
     if (value < -1.0 or value > 1.0) return error.BadSfnt;
@@ -7496,20 +7256,6 @@ fn normalizedVariationCoordinatesAreDefault(values: []const f32) bool {
         if (value != 0) return false;
     }
     return true;
-}
-
-fn variationAxisIndex(axes: []const VariationAxis, tag: [4]u8) ?usize {
-    for (axes, 0..) |axis, index| {
-        if (std.mem.eql(u8, &axis.tag, &tag)) return index;
-    }
-    return null;
-}
-
-fn variationValueForAxis(axis: VariationAxis, coordinates: []const VariationCoordinate) ?f32 {
-    for (coordinates) |coordinate| {
-        if (std.mem.eql(u8, &axis.tag, &coordinate.tag)) return coordinate.value;
-    }
-    return null;
 }
 
 fn readI16FromSlice(data: []const u8, offset: usize) FontError!i16 {
@@ -9501,278 +9247,6 @@ test "TTC v2 DSIG payload cannot alias faces or SFNT tables" {
     }
 }
 
-test "fvar axes and instance arrays stay inside declared table regions" {
-    const allocator = std.testing.allocator;
-
-    var overlapping_axes: [36]u8 = .{0} ** 36;
-    writeU32Test(&overlapping_axes, 0, 0x00010000);
-    writeU16Test(&overlapping_axes, 4, 12); // Points into the fvar header.
-    writeU16Test(&overlapping_axes, 6, 2);
-    writeU16Test(&overlapping_axes, 8, 1);
-    writeU16Test(&overlapping_axes, 10, 20);
-    writeTagTest(&overlapping_axes, 12, "wght"); // Would look like an axis tag to the old parser.
-
-    const overlapping_font = fvarOnlyFont(&overlapping_axes);
-    try std.testing.expectError(error.BadSfnt, overlapping_font.variationAxes(allocator));
-
-    var truncated_instances: [36]u8 = .{0} ** 36;
-    writeU32Test(&truncated_instances, 0, 0x00010000);
-    writeU16Test(&truncated_instances, 4, 16);
-    writeU16Test(&truncated_instances, 6, 2);
-    writeU16Test(&truncated_instances, 8, 1);
-    writeU16Test(&truncated_instances, 10, 20);
-    writeU16Test(&truncated_instances, 12, 1); // One declared instance follows the axes.
-    writeU16Test(&truncated_instances, 14, 8);
-    writeFvarAxisTest(&truncated_instances, 16, "wght", 100.0, 400.0, 900.0, 256);
-
-    const truncated_font = fvarOnlyFont(&truncated_instances);
-    try std.testing.expectError(error.BadSfnt, truncated_font.variationAxes(allocator));
-
-    var valid_with_instance: [44]u8 = .{0} ** 44;
-    writeU32Test(&valid_with_instance, 0, 0x00010000);
-    writeU16Test(&valid_with_instance, 4, 16);
-    writeU16Test(&valid_with_instance, 6, 2);
-    writeU16Test(&valid_with_instance, 8, 1);
-    writeU16Test(&valid_with_instance, 10, 20);
-    writeU16Test(&valid_with_instance, 12, 1);
-    writeU16Test(&valid_with_instance, 14, 8);
-    writeFvarAxisTest(&valid_with_instance, 16, "wght", 100.0, 400.0, 900.0, 256);
-    writeU16Test(&valid_with_instance, 36, 300); // subfamilyNameID
-    writeU16Test(&valid_with_instance, 38, 0); // flags
-    writeF16Dot16Test(&valid_with_instance, 40, 400.0); // one coordinate
-
-    const valid_font = fvarOnlyFont(&valid_with_instance);
-    const axes = try valid_font.variationAxes(allocator);
-    defer allocator.free(axes);
-    try std.testing.expectEqual(@as(usize, 1), axes.len);
-    try std.testing.expectEqualStrings("wght", &axes[0].tag);
-
-    var bad_count_size_pairs = valid_with_instance;
-    writeU16Test(&bad_count_size_pairs, 6, 3);
-    const bad_count_size_pairs_font = fvarOnlyFont(&bad_count_size_pairs);
-    try std.testing.expectError(error.BadSfnt, bad_count_size_pairs_font.variationAxes(allocator));
-
-    var padded_axis_record: [38]u8 = .{0} ** 38;
-    writeU32Test(&padded_axis_record, 0, 0x00010000);
-    writeU16Test(&padded_axis_record, 4, 16);
-    writeU16Test(&padded_axis_record, 6, 2);
-    writeU16Test(&padded_axis_record, 8, 1);
-    writeU16Test(&padded_axis_record, 10, 22); // fvar AxisRecord is fixed-width: padding is not meaningful.
-    writeFvarAxisTest(&padded_axis_record, 16, "wght", 100.0, 400.0, 900.0, 256);
-    try std.testing.expectError(error.BadSfnt, fvarOnlyFont(&padded_axis_record).variationAxes(allocator));
-
-    var ambiguous_instance_size: [45]u8 = .{0} ** 45;
-    writeU32Test(&ambiguous_instance_size, 0, 0x00010000);
-    writeU16Test(&ambiguous_instance_size, 4, 16);
-    writeU16Test(&ambiguous_instance_size, 6, 2);
-    writeU16Test(&ambiguous_instance_size, 8, 1);
-    writeU16Test(&ambiguous_instance_size, 10, 20);
-    writeU16Test(&ambiguous_instance_size, 12, 1);
-    writeU16Test(&ambiguous_instance_size, 14, 9); // Not coordinates-only and not coordinates plus PostScript name ID.
-    writeFvarAxisTest(&ambiguous_instance_size, 16, "wght", 100.0, 400.0, 900.0, 256);
-    try std.testing.expectError(error.BadSfnt, fvarOnlyFont(&ambiguous_instance_size).variationAxes(allocator));
-}
-
-test "fvar axis records require ordered ranges and unique tags" {
-    const allocator = std.testing.allocator;
-
-    var invalid_range: [36]u8 = .{0} ** 36;
-    writeU32Test(&invalid_range, 0, 0x00010000);
-    writeU16Test(&invalid_range, 4, 16);
-    writeU16Test(&invalid_range, 6, 2);
-    writeU16Test(&invalid_range, 8, 1);
-    writeU16Test(&invalid_range, 10, 20);
-    writeFvarAxisTest(&invalid_range, 16, "wght", 900.0, 400.0, 100.0, 256);
-
-    const invalid_range_font = fvarOnlyFont(&invalid_range);
-    try std.testing.expectError(error.BadSfnt, invalid_range_font.variationAxes(allocator));
-
-    var duplicate_tags: [56]u8 = .{0} ** 56;
-    writeU32Test(&duplicate_tags, 0, 0x00010000);
-    writeU16Test(&duplicate_tags, 4, 16);
-    writeU16Test(&duplicate_tags, 6, 2);
-    writeU16Test(&duplicate_tags, 8, 2);
-    writeU16Test(&duplicate_tags, 10, 20);
-    writeFvarAxisTest(&duplicate_tags, 16, "wght", 100.0, 400.0, 900.0, 256);
-    writeFvarAxisTest(&duplicate_tags, 36, "wght", 50.0, 100.0, 200.0, 257);
-
-    const duplicate_font = fvarOnlyFont(&duplicate_tags);
-    try std.testing.expectError(error.BadSfnt, duplicate_font.variationAxes(allocator));
-
-    var hidden_duplicate_tags = duplicate_tags;
-    writeU16Test(&hidden_duplicate_tags, 36 + 16, 0x0001);
-    const hidden_duplicate_font = fvarOnlyFont(&hidden_duplicate_tags);
-    const axes = try hidden_duplicate_font.variationAxes(allocator);
-    defer allocator.free(axes);
-    try std.testing.expectEqual(@as(usize, 2), axes.len);
-    try std.testing.expectEqualSlices(u8, "wght", &axes[0].tag);
-    try std.testing.expectEqualSlices(u8, "wght", &axes[1].tag);
-    try std.testing.expectEqual(@as(u16, 0), axes[0].flags);
-    try std.testing.expectEqual(@as(u16, 1), axes[1].flags);
-
-    const normalized = try hidden_duplicate_font.normalizedVariationCoordinates(allocator, &.{
-        .{ .tag = .{ 'w', 'g', 'h', 't' }, .value = 700.0 },
-    });
-    defer allocator.free(normalized);
-    try std.testing.expectEqual(@as(usize, 2), normalized.len);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.6), normalized[0], 0.0001);
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0), normalized[1], 0.0001);
-}
-
-test "normalized variation coordinates quantize final locations to F2Dot14" {
-    // A one-third negative location is not exactly representable in f32 or
-    // F2Dot14. Quantization belongs at the public design-to-location boundary
-    // so all downstream gvar and ItemVariationStore consumers see one value.
-    try std.testing.expectEqual(@as(f32, -0.33331298828125), quantizeNormalizedF2Dot14(-1.0 / 3.0));
-    try std.testing.expectEqual(@as(f32, 0.4000244140625), quantizeNormalizedF2Dot14(0.4));
-    try std.testing.expectEqual(@as(f32, 0.10003662109375), quantizeNormalizedF2Dot14(0.1));
-    try std.testing.expectEqual(@as(f32, -1.0), quantizeNormalizedF2Dot14(-1.0));
-    try std.testing.expectEqual(@as(f32, 1.0), quantizeNormalizedF2Dot14(1.0));
-}
-
-test "fvar axis metadata is validated at parse time" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        const bytes = try test_font.buildVariableTtf(allocator);
-        defer allocator.free(bytes);
-        var font = try Font.parse(allocator, bytes);
-        font.deinit();
-    }
-
-    {
-        const bytes = try test_font.buildVariableTtf(allocator);
-        defer allocator.free(bytes);
-        const fvar_offset: usize = @intCast(try sfntTableOffset(bytes, "fvar"));
-        writeU16Test(bytes, fvar_offset + 6, 3); // fvar has exactly two count/size pairs.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildVariableTtf(allocator);
-        defer allocator.free(bytes);
-        const fvar_offset: usize = @intCast(try sfntTableOffset(bytes, "fvar"));
-        writeTagTest(bytes, fvar_offset + 36, "wght"); // Duplicate the first axis tag.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildVariableTtf(allocator);
-        defer allocator.free(bytes);
-        const fvar_offset: usize = @intCast(try sfntTableOffset(bytes, "fvar"));
-        writeU16Test(bytes, fvar_offset + 32, 0x0002); // Only HIDDEN_AXIS is defined.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildVariableTtf(allocator);
-        defer allocator.free(bytes);
-        const fvar_offset: usize = @intCast(try sfntTableOffset(bytes, "fvar"));
-        writeF16Dot16Test(bytes, fvar_offset + 20, 950.0); // minValue > defaultValue.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-}
-
-test "fvar instance coordinates stay inside axis ranges" {
-    var bytes: [44]u8 = .{0} ** 44;
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 16);
-    writeU16Test(&bytes, 6, 2);
-    writeU16Test(&bytes, 8, 1);
-    writeU16Test(&bytes, 10, 20);
-    writeU16Test(&bytes, 12, 1);
-    writeU16Test(&bytes, 14, 8);
-    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
-    writeU16Test(&bytes, 36, 258); // subfamilyNameID.
-    writeU16Test(&bytes, 38, 0); // flags.
-    writeF16Dot16Test(&bytes, 40, 700.0);
-
-    const fvar = TableRecord{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    try validateFvarTable(&bytes, fvar);
-
-    var reserved_instance_flags = bytes;
-    writeU16Test(&reserved_instance_flags, 38, 1);
-    try std.testing.expectError(error.BadSfnt, validateFvarTable(&reserved_instance_flags, fvar));
-
-    var coordinate_past_axis_range = bytes;
-    writeF16Dot16Test(&coordinate_past_axis_range, 40, 950.0);
-    try std.testing.expectError(error.BadSfnt, validateFvarTable(&coordinate_past_axis_range, fvar));
-}
-
-test "fvar and STAT user-facing name IDs resolve through name table" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        const bytes = try test_font.buildVariableStatTtf(allocator);
-        defer allocator.free(bytes);
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-    }
-
-    {
-        const bytes = try test_font.buildVariableTtf(allocator);
-        defer allocator.free(bytes);
-        const fvar_offset: usize = @intCast(try sfntTableOffset(bytes, "fvar"));
-        writeU16Test(bytes, fvar_offset + 34, 400); // No name table record names the weight axis with this ID.
-        try std.testing.expectError(error.InvalidName, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildVariableStatTtf(allocator);
-        defer allocator.free(bytes);
-        const stat_offset: usize = @intCast(try sfntTableOffset(bytes, "STAT"));
-        writeU16Test(bytes, stat_offset + 44, 400); // AxisValue nameID.
-        try updateSfntTableChecksum(bytes, "STAT");
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-        try std.testing.expectError(error.InvalidName, font.statAxisValues(allocator));
-    }
-
-    {
-        const bytes = try test_font.buildVariableTtf(allocator);
-        defer allocator.free(bytes);
-        try setSfntTableTag(bytes, "name", "namx");
-        try std.testing.expectError(error.InvalidName, Font.parse(allocator, bytes));
-    }
-}
-
-test "fvar instance name IDs resolve through name table" {
-    var bytes: [46]u8 = .{0} ** 46;
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 16);
-    writeU16Test(&bytes, 6, 2);
-    writeU16Test(&bytes, 8, 1);
-    writeU16Test(&bytes, 10, 20);
-    writeU16Test(&bytes, 12, 1);
-    writeU16Test(&bytes, 14, 10);
-    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
-    writeU16Test(&bytes, 36, 300); // instance subfamilyNameID
-    writeU16Test(&bytes, 38, 0);
-    writeF16Dot16Test(&bytes, 40, 400.0);
-    writeU16Test(&bytes, 44, 301); // optional postScriptNameID
-
-    const fvar = TableRecord{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    const names = nameIndexForTest(&.{ 256, 300, 301 });
-    try validateFvarNameReferences(&bytes, fvar, &names);
-
-    var missing_subfamily = bytes;
-    writeU16Test(&missing_subfamily, 36, 400);
-    // Stale named-instance UI metadata does not invalidate the axis controls
-    // used by shaping, but the complete instance metadata API stays strict.
-    try validateFvarAxisNameReferences(&missing_subfamily, fvar, &names);
-    try std.testing.expectError(error.InvalidName, validateFvarNameReferences(&missing_subfamily, fvar, &names));
-
-    var missing_postscript = bytes;
-    writeU16Test(&missing_postscript, 44, 400);
-    try std.testing.expectError(error.InvalidName, validateFvarNameReferences(&missing_postscript, fvar, &names));
-
-    var omitted_postscript = bytes;
-    writeU16Test(&omitted_postscript, 44, 0xffff);
-    try validateFvarNameReferences(&omitted_postscript, fvar, &names);
-}
-
 test "avar validates every declared segment map before returning a coordinate" {
     var bytes: [20]u8 = .{0} ** 20;
     writeU16Test(&bytes, 0, 1); // major
@@ -10525,12 +9999,6 @@ fn os2OnlyFont(data: []const u8, declared_length: usize) Font {
     return font;
 }
 
-fn fvarOnlyFont(data: []const u8) Font {
-    var font = table_only_fixture.init(Font, data, 2, 2);
-    font.fvar = table_only_fixture.record(data, .{ 'f', 'v', 'a', 'r' }, 0, data.len);
-    return font;
-}
-
 fn avarOnlyFont(data: []const u8) Font {
     var font = table_only_fixture.init(Font, data, 2, 2);
     font.avar = table_only_fixture.record(data, .{ 'a', 'v', 'a', 'r' }, 0, data.len);
@@ -10538,7 +10006,7 @@ fn avarOnlyFont(data: []const u8) Font {
 }
 
 fn fvarAvarOnlyFont(data: []const u8, fvar_length: usize) Font {
-    var font = fvarOnlyFont(data);
+    var font = table_only_fixture.init(Font, data, 2, 2);
     font.fvar = table_only_fixture.record(data, .{ 'f', 'v', 'a', 'r' }, 0, fvar_length);
     font.avar = table_only_fixture.record(
         data,

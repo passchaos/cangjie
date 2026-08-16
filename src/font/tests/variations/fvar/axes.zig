@@ -2,10 +2,10 @@
 
 const std = @import("std");
 
-const font_mod = @import("../../../font.zig");
-const test_font = @import("../../../test_font.zig");
-const sfnt_fixture = @import("../fixtures/sfnt.zig");
-const support = @import("support.zig");
+const font_mod = @import("../../../../font.zig");
+const test_font = @import("../../../../test_font.zig");
+const sfnt_fixture = @import("../../fixtures/sfnt.zig");
+const support = @import("../support.zig");
 
 const Font = font_mod.Font;
 

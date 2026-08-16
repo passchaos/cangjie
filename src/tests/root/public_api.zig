@@ -63,6 +63,16 @@ test "public facade uses domain names without legacy aliases" {
     }) |View| {
         try std.testing.expect(@typeInfo(View) == .@"struct");
     }
+    inline for (.{
+        cangjie.font.metadata.variations.Axis,
+        cangjie.font.metadata.variations.Coordinate,
+        cangjie.font.metadata.variations.Instance,
+    }) |Value| {
+        // Variable-font values cross only the source-level Zig API. Keep them
+        // concrete and inspectable rather than regressing to ABI-style opaque
+        // handles when their implementation module changes.
+        try std.testing.expect(@typeInfo(Value) == .@"struct");
+    }
 
     const Rasterizer = cangjie.render.Rasterizer;
     try std.testing.expect(@typeInfo(Rasterizer) == .@"struct");

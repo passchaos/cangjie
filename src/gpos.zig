@@ -1,4 +1,5 @@
 const std = @import("std");
+const feature_core = @import("gpos/feature/root.zig");
 const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
 const table_core = @import("gpos/table/root.zig");
@@ -59,11 +60,6 @@ const PositionContextResult = struct {
 };
 
 const Table = table_core.View;
-
-const FeatureSelection = struct {
-    index: u16,
-    required: bool = false,
-};
 
 pub const LookupOptions = struct {
     pub const Direction = enum {
@@ -359,8 +355,9 @@ pub fn validateGlyphBounds(data: []const u8, offset: usize, length: usize, glyph
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16BadGpos(table, lookup_list_offset);
     try ensureBytesWithin(table, lookup_list_offset + 2, @as(usize, lookup_count) * 2);
-    const feature_count = try ensureFeatureLookupReferencesWithin(table, lookup_count);
-    try ensureScriptFeatureReferencesWithin(table, feature_count);
+    const feature_count =
+        try feature_core.validation.lookupReferences(table, lookup_count);
+    try feature_core.validation.scriptReferences(table, feature_count);
     for (0..lookup_count) |lookup_i| {
         const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGpos(table, lookup_list_offset + 2 + lookup_i * 2));
         try ensurePositionLookupHeaderAndExtensionPayloadsWithin(table, lookup_offset);
@@ -1143,42 +1140,26 @@ fn lookupSubtableCoverageOffset(table: Table, subtable_offset: usize, lookup_typ
 }
 
 fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!std.ArrayList(u16) {
-    var feature_indices = std.ArrayList(FeatureSelection).empty;
-    defer feature_indices.deinit(allocator);
-    var lookups = std.ArrayList(u16).empty;
+    var lookups = try feature_core.selection.lookupIndices(
+        table,
+        allocator,
+        .{
+            .script_tag = options.script_tag,
+            .language_tag = options.language_tag,
+            .overrides = options.features,
+        },
+    );
     errdefer lookups.deinit(allocator);
 
-    const script_list_offset = try checkedRequiredScriptListOffset(table);
-    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
-
-    const script_count = try readU16(table, script_list_offset);
-    try validateScriptRecordOrder(table, script_list_offset, script_count);
-    const script_offset = try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(options.script_tag)) orelse
-        try findScriptOffset(table, script_list_offset, script_count, @intFromEnum(unicode.OpenTypeScriptTag.dflt)) orelse
-        0;
-    if (script_offset != 0) {
-        try collectScriptFeatures(table, script_offset, options.language_tag, &feature_indices, allocator);
+    // Filter in place so separating activation-graph parsing from execution
+    // does not add another allocation to every uncached shaping selection.
+    var write: usize = 0;
+    for (lookups.items) |lookup_index| {
+        if (!try selectedLookupMayApply(table, lookup_index, options)) continue;
+        lookups.items[write] = lookup_index;
+        write += 1;
     }
-
-    const feature_count = try readU16(table, feature_list_offset);
-    try validateFeatureRecordOrder(table, feature_list_offset, feature_count);
-    for (feature_indices.items) |selection| {
-        const feature_index = selection.index;
-        if (feature_index >= feature_count) continue;
-        const feature_record = feature_list_offset + 2 + @as(usize, feature_index) * 6;
-        const feature_tag = try readU32(table, feature_record);
-        // LangSys.ReqFeatureIndex is mandatory for the active language system.
-        // Feature overrides model user-controllable optional/default features;
-        // they must not suppress required positioning lookups.
-        if (!selection.required and !featureEnabled(feature_tag, options.features)) continue;
-        const feature_offset = feature_list_offset + try readU16(table, feature_record + 4);
-        const lookup_index_count = try readU16(table, feature_offset + 2);
-        for (0..lookup_index_count) |i| {
-            const lookup_index = try readU16(table, feature_offset + 4 + i * 2);
-            if (!try selectedLookupMayApply(table, lookup_index, options)) continue;
-            try lookups.append(allocator, lookup_index);
-        }
-    }
+    lookups.shrinkRetainingCapacity(write);
 
     sortUniqueLookupIndices(&lookups);
     return lookups;
@@ -1210,84 +1191,6 @@ fn extensionLookupMayApplyWithoutGdefMarks(table: Table, lookup_offset: usize) G
         }
     }
     return false;
-}
-
-fn featureEnabled(feature_tag: u32, overrides: []const unicode.FeatureOverride) bool {
-    for (overrides) |override| {
-        if (override.tag == feature_tag) return override.enabled;
-    }
-    return defaultFeatureEnabled(feature_tag);
-}
-
-fn defaultFeatureEnabled(feature_tag: u32) bool {
-    return feature_tag == unicode.tag("abvm") or
-        feature_tag == unicode.tag("blwm") or
-        feature_tag == unicode.tag("ccmp") or
-        feature_tag == unicode.tag("locl") or
-        feature_tag == unicode.tag("mark") or
-        feature_tag == unicode.tag("mkmk") or
-        feature_tag == unicode.tag("rlig") or
-        feature_tag == unicode.tag("calt") or
-        feature_tag == unicode.tag("clig") or
-        feature_tag == unicode.tag("curs") or
-        feature_tag == unicode.tag("dist") or
-        feature_tag == unicode.tag("kern") or
-        feature_tag == unicode.tag("liga") or
-        feature_tag == unicode.tag("rclt");
-}
-
-fn findScriptOffset(table: Table, script_list_offset: usize, script_count: u16, script_tag: u32) GposError!?usize {
-    for (0..script_count) |script_i| {
-        const script_record = script_list_offset + 2 + script_i * 6;
-        if (try readU32(table, script_record) != script_tag) continue;
-        return script_list_offset + try readU16(table, script_record + 4);
-    }
-    return null;
-}
-
-fn collectScriptFeatures(table: Table, script_offset: usize, language_tag: unicode.OpenTypeLanguageTag, feature_indices: *std.ArrayList(FeatureSelection), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
-    const default_lang_sys_offset = try readU16(table, script_offset);
-    const lang_sys_count = try readU16(table, script_offset + 2);
-    try validateLangSysRecordOrder(table, script_offset, lang_sys_count);
-    if (language_tag != .dflt) {
-        if (try findLangSysOffset(table, script_offset, lang_sys_count, @intFromEnum(language_tag))) |lang_sys_offset| {
-            try collectLangSysFeatures(table, lang_sys_offset, feature_indices, allocator);
-            return;
-        }
-    }
-    if (default_lang_sys_offset != 0) {
-        try collectLangSysFeatures(table, script_offset + default_lang_sys_offset, feature_indices, allocator);
-    }
-}
-
-fn findLangSysOffset(table: Table, script_offset: usize, lang_sys_count: u16, language_tag: u32) GposError!?usize {
-    for (0..lang_sys_count) |lang_i| {
-        const lang_record = script_offset + 4 + lang_i * 6;
-        if (try readU32(table, lang_record) != language_tag) continue;
-        return script_offset + try readU16(table, lang_record + 4);
-    }
-    return null;
-}
-
-fn collectLangSysFeatures(table: Table, lang_sys_offset: usize, feature_indices: *std.ArrayList(FeatureSelection), allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!void {
-    const required_feature_index = try readU16(table, lang_sys_offset + 2);
-    if (required_feature_index != 0xffff) {
-        try appendFeatureSelection(feature_indices, allocator, required_feature_index, true);
-    }
-    const feature_count = try readU16(table, lang_sys_offset + 4);
-    for (0..feature_count) |i| {
-        const feature_index = try readU16(table, lang_sys_offset + 6 + i * 2);
-        try appendFeatureSelection(feature_indices, allocator, feature_index, false);
-    }
-}
-
-fn appendFeatureSelection(feature_indices: *std.ArrayList(FeatureSelection), allocator: std.mem.Allocator, index: u16, required: bool) std.mem.Allocator.Error!void {
-    for (feature_indices.items) |*selection| {
-        if (selection.index != index) continue;
-        selection.required = selection.required or required;
-        return;
-    }
-    try feature_indices.append(allocator, .{ .index = index, .required = required });
 }
 
 fn lookupIndexLessThan(_: void, lhs: u16, rhs: u16) bool {
@@ -4377,104 +4280,6 @@ fn ensureExtensionPositionLookupPayloadsWithin(table: Table, lookup_offset: usiz
     for (0..subtable_count) |subtable_i| {
         const subtable_offset = try checkedRequiredPositionOffset(table, lookup_offset, try readU16BadGpos(table, lookup_offset + 6 + subtable_i * 2));
         try ensureExtensionPositionPayloadWithin(table, subtable_offset);
-    }
-}
-
-fn ensureFeatureLookupReferencesWithin(table: Table, lookup_count: u16) GposError!u16 {
-    const feature_list_offset = try checkedRequiredFeatureListOffset(table);
-    const feature_count = try readU16BadGpos(table, feature_list_offset);
-    try ensureBytesWithin(table, feature_list_offset + 2, @as(usize, feature_count) * 6);
-
-    for (0..feature_count) |feature_i| {
-        const feature_record = feature_list_offset + 2 + feature_i * 6;
-        const feature_offset = try checkedPositionOffset(table, feature_list_offset, try readU16BadGpos(table, feature_record + 4));
-        const lookup_index_count = try readU16BadGpos(table, feature_offset + 2);
-        try ensureBytesWithin(table, feature_offset + 4, @as(usize, lookup_index_count) * 2);
-
-        for (0..lookup_index_count) |lookup_i| {
-            const lookup_index = try readU16BadGpos(table, feature_offset + 4 + lookup_i * 2);
-            // Feature selection is the public activation graph for GPOS. Reject
-            // dangling LookupList indexes at parse time instead of letting a
-            // requested positioning feature disappear later during shaping.
-            if (lookup_index >= lookup_count) return error.BadGpos;
-        }
-    }
-    return feature_count;
-}
-
-fn ensureScriptFeatureReferencesWithin(table: Table, feature_count: u16) GposError!void {
-    const script_list_offset = try checkedRequiredScriptListOffset(table);
-    const script_count = try readU16BadGpos(table, script_list_offset);
-    try ensureBytesWithin(table, script_list_offset + 2, @as(usize, script_count) * 6);
-    try validateScriptRecordOrder(table, script_list_offset, script_count);
-
-    for (0..script_count) |script_i| {
-        const script_record = script_list_offset + 2 + script_i * 6;
-        const script_offset = try checkedPositionOffset(table, script_list_offset, try readU16BadGpos(table, script_record + 4));
-        const default_lang_sys_relative = try readU16BadGpos(table, script_offset);
-        const lang_sys_count = try readU16BadGpos(table, script_offset + 2);
-        try ensureBytesWithin(table, script_offset + 4, @as(usize, lang_sys_count) * 6);
-        try validateLangSysRecordOrder(table, script_offset, lang_sys_count);
-
-        if (default_lang_sys_relative != 0) {
-            try ensureLangSysFeatureReferencesWithin(table, try checkedPositionOffset(table, script_offset, default_lang_sys_relative), feature_count);
-        }
-        for (0..lang_sys_count) |lang_i| {
-            const lang_record = script_offset + 4 + lang_i * 6;
-            const lang_sys_offset = try checkedPositionOffset(table, script_offset, try readU16BadGpos(table, lang_record + 4));
-            try ensureLangSysFeatureReferencesWithin(table, lang_sys_offset, feature_count);
-        }
-    }
-}
-
-fn ensureLangSysFeatureReferencesWithin(table: Table, lang_sys_offset: usize, feature_count: u16) GposError!void {
-    // ScriptList is the public activation graph for language-specific
-    // positioning. A dangling feature index would be silently ignored during
-    // selection, dropping required kerning/mark data rather than reporting a
-    // malformed font, so validate LangSys topology while loading the table.
-    try ensureBytesWithin(table, lang_sys_offset, 6);
-    const required_feature_index = try readU16BadGpos(table, lang_sys_offset + 2);
-    if (required_feature_index != 0xffff and required_feature_index >= feature_count) return error.BadGpos;
-
-    const lang_feature_count = try readU16BadGpos(table, lang_sys_offset + 4);
-    try ensureBytesWithin(table, lang_sys_offset + 6, @as(usize, lang_feature_count) * 2);
-    for (0..lang_feature_count) |feature_i| {
-        const feature_index = try readU16BadGpos(table, lang_sys_offset + 6 + feature_i * 2);
-        if (feature_index >= feature_count) return error.BadGpos;
-    }
-}
-
-fn validateScriptRecordOrder(table: Table, script_list_offset: usize, script_count: u16) GposError!void {
-    // Real text-rendering fixtures can carry adjacent duplicate ScriptRecords.
-    // Selection remains deterministic because findScriptOffset returns the
-    // first record, while the validation walk below still proves every child
-    // Script/LangSys graph before shaping.
-    return validateTagRecordOrder(table, script_list_offset + 2, script_count, 6, true);
-}
-
-fn validateFeatureRecordOrder(table: Table, feature_list_offset: usize, feature_count: u16) GposError!void {
-    _ = table;
-    _ = feature_list_offset;
-    _ = feature_count;
-}
-
-fn validateLangSysRecordOrder(table: Table, script_offset: usize, lang_sys_count: u16) GposError!void {
-    return validateTagRecordOrder(table, script_offset + 4, lang_sys_count, 6, false);
-}
-
-fn validateTagRecordOrder(table: Table, records_offset: usize, record_count: u16, record_stride: usize, allow_equal_tags: bool) GposError!void {
-    // OpenType Layout tag records are sorted by tag. FeatureList records in
-    // widely deployed fonts may repeat a feature or Script tag with different
-    // payloads. Those lists are nondecreasing and use their caller's stable
-    // first-match semantics; LangSys records remain strict because a duplicate
-    // language would make one branch of the selected Script unreachable.
-    var previous_tag: ?u32 = null;
-    for (0..record_count) |record_i| {
-        const tag_value = try readU32BadGpos(table, records_offset + record_i * record_stride);
-        if (previous_tag) |previous| {
-            if (if (allow_equal_tags) tag_value < previous else tag_value <= previous) return error.BadGpos;
-        }
-        previous_tag = tag_value;
     }
 }
 
@@ -10532,6 +10337,7 @@ test "GPOS public adjustment collection validates ligature component source orde
 }
 
 test {
+    _ = @import("gpos/tests/feature/root.zig");
     _ = @import("gpos/tests/table/root.zig");
 }
 

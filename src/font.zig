@@ -55,6 +55,7 @@ const variation_tables = @import("font/tables/variations/root.zig");
 const avar_mod = variation_tables.avar;
 const fvar_mod = variation_tables.fvar;
 const gvar_validation = variation_tables.gvar;
+const metric_variation_validation = variation_tables.metrics;
 const stat_mod = variation_tables.stat;
 const truetype_tables = @import("font/tables/truetype/root.zig");
 const loca_mod = truetype_tables.loca;
@@ -1548,7 +1549,11 @@ pub const Font = struct {
         try fvar_mod.validate(self.data, fvar);
         try sfnt.checksum.validate(self.data, mvar);
         const fvar_info = try fvar_mod.info(self.data, fvar);
-        try validateMvarTable(self.data, mvar, fvar_info.axis_count);
+        try metric_variation_validation.validateMvar(
+            self.data,
+            mvar,
+            fvar_info.axis_count,
+        );
         return try mvar_mod.info(allocator, self.data, mvar.offset, mvar.length);
     }
 
@@ -1626,16 +1631,27 @@ pub const Font = struct {
     const MetricVariationKind = enum { hvar, vvar };
 
     fn metricVariationTableForRead(self: *const Font, kind: MetricVariationKind) FontError!?TableRecord {
-        const table, const minimum_length = switch (kind) {
-            .hvar => .{ self.hvar orelse return null, @as(usize, 20) },
-            .vvar => .{ self.vvar orelse return null, @as(usize, 24) },
+        const table = switch (kind) {
+            .hvar => self.hvar orelse return null,
+            .vvar => self.vvar orelse return null,
         };
         const fvar = self.fvar orelse return error.BadSfnt;
         try sfnt.checksum.validate(self.data, fvar);
         try fvar_mod.validate(self.data, fvar);
         try sfnt.checksum.validate(self.data, table);
         const fvar_info = try fvar_mod.info(self.data, fvar);
-        try validateMetricVariationTable(self.data, table, fvar_info.axis_count, minimum_length);
+        switch (kind) {
+            .hvar => try metric_variation_validation.validateHvar(
+                self.data,
+                table,
+                fvar_info.axis_count,
+            ),
+            .vvar => try metric_variation_validation.validateVvar(
+                self.data,
+                table,
+                fvar_info.axis_count,
+            ),
+        }
         return table;
     }
 
@@ -5737,120 +5753,28 @@ fn validateVariationDataTablesWithCvar(
             gvar_target_context,
         );
     }
-    if (hvar) |table| try validateMetricVariationTable(data, table, fvar_info.axis_count, 20);
-    if (vvar) |table| try validateMetricVariationTable(data, table, fvar_info.axis_count, 24);
-    if (mvar) |table| try validateMvarTable(data, table, fvar_info.axis_count);
-    if (cvar) |table| try validateCvarTable(data, table, fvar_info.axis_count, cvt_value_count orelse return error.BadSfnt);
-}
-
-fn validateMetricVariationTable(data: []const u8, table: TableRecord, fvar_axis_count: usize, minimum_length: usize) FontError!void {
-    if (table.length < minimum_length) return error.BadSfnt;
-    const major = try bin.readU16At(data, table.offset);
-    const minor = try bin.readU16At(data, table.offset + 2);
-    if (major != 1 or minor != 0) return error.BadSfnt;
-    const store_offset: usize = @intCast(try bin.readU32At(data, table.offset + 4));
-    const store_info = try item_store.validate(
-        data,
-        variationTable(table),
-        store_offset,
-        fvar_axis_count,
-        minimum_length,
-    );
-    try validateMetricVariationTopLevelPayloads(data, table, store_offset, store_info, minimum_length);
-}
-
-fn validateMetricVariationTopLevelPayloads(data: []const u8, table: TableRecord, store_offset: usize, store_info: item_store.Info, minimum_length: usize) FontError!void {
-    // HVAR/VVAR carry several optional DeltaSetIndexMap subtables next to the
-    // ItemVariationStore. These offsets share one table-relative namespace, so
-    // validate them as independently-owned top-level payloads instead of
-    // allowing a map to borrow store bytes (or another map's header) that happen
-    // to decode as a plausible var-index map.
-    var ranges: [5]item_store.Range = undefined;
-    var range_count: usize = 0;
-    ranges[range_count] = .{ .start = store_offset, .end = store_info.end_offset };
-    range_count += 1;
-
-    const map_field_count: usize = if (minimum_length >= 24) 4 else 3;
-    for (0..map_field_count) |map_field_index| {
-        const map_offset: usize = @intCast(try bin.readU32At(data, table.offset + 8 + map_field_index * 4));
-        if (map_offset == 0) continue;
-        const map = try validateDeltaSetIndexMap(data, table, store_offset, store_info.item_data_count, map_offset, minimum_length);
-        const map_range = item_store.Range{
-            .start = map.offset,
-            .end = map.end_offset,
-        };
-        var already_owned = false;
-        for (ranges[0..range_count]) |owned| {
-            if (item_store.rangesEqual(map_range, owned)) {
-                already_owned = true;
-                break;
-            }
-            if (item_store.rangesOverlap(map_range, owned)) return error.BadSfnt;
-        }
-        if (already_owned) continue;
-        ranges[range_count] = map_range;
-        range_count += 1;
-    }
-}
-
-fn validateDeltaSetIndexMap(
-    data: []const u8,
-    table: TableRecord,
-    store_offset: usize,
-    item_data_count: usize,
-    map_offset: usize,
-    minimum_map_offset: usize,
-) FontError!delta_map.Map {
-    const map = try delta_map.read(
-        data,
-        variationTable(table),
-        map_offset,
-        minimum_map_offset,
-    );
-    for (0..map.map_count) |index| {
-        const mapped = try delta_map.entry(data, map, index);
-        if (mapped.outer == 0xffff and mapped.inner == 0xffff) continue;
-        if (mapped.outer >= item_data_count or
-            mapped.inner >= try item_store.itemCount(
-                data,
-                variationTable(table),
-                store_offset,
-                mapped.outer,
-            ))
-        {
-            return error.BadSfnt;
-        }
-    }
-    return map;
-}
-
-fn validateMvarTable(data: []const u8, mvar: TableRecord, fvar_axis_count: usize) FontError!void {
-    const mvar_header = try mvar_mod.header(data, mvar.offset, mvar.length);
-    try mvar_mod.validateValueRecords(data, mvar.offset, mvar_header);
-    const store_offset = mvar_header.item_variation_store_offset orelse return;
-
-    const store_info = try item_store.validate(
-        data,
-        variationTable(mvar),
-        store_offset,
-        fvar_axis_count,
-        mvar_header.records_end,
-    );
-    for (0..mvar_header.value_record_count) |index| {
-        const record = try mvar_mod.valueRecordAt(data, mvar.offset, mvar_header, index);
-        if (!record.hasVariationData()) continue;
-
-        const outer_index: usize = @intCast(record.delta_set_outer_index);
-        const inner_index: usize = @intCast(record.delta_set_inner_index);
-        if (outer_index >= store_info.item_data_count) return error.BadSfnt;
-        const item_count = try item_store.itemCount(
+    if (hvar) |table| {
+        try metric_variation_validation.validateHvar(
             data,
-            variationTable(mvar),
-            store_offset,
-            outer_index,
+            table,
+            fvar_info.axis_count,
         );
-        if (inner_index >= item_count) return error.BadSfnt;
     }
+    if (vvar) |table| {
+        try metric_variation_validation.validateVvar(
+            data,
+            table,
+            fvar_info.axis_count,
+        );
+    }
+    if (mvar) |table| {
+        try metric_variation_validation.validateMvar(
+            data,
+            table,
+            fvar_info.axis_count,
+        );
+    }
+    if (cvar) |table| try validateCvarTable(data, table, fvar_info.axis_count, cvt_value_count orelse return error.BadSfnt);
 }
 
 const max_svg_document_size = svg_mod.document.max_document_size;
@@ -6269,166 +6193,6 @@ test "CFF glyph outlines revalidate borrowed CharStrings count" {
     try std.testing.expectError(error.BadSfnt, font.glyphOutline(allocator, 0));
 }
 
-test "VariationStore data validates axis and region indexes" {
-    var bytes: [54]u8 = .{0} ** 54;
-    writeHvarTableWithOneItemVariationData(&bytes);
-    const hvar = TableRecord{ .tag = .{ 'H', 'V', 'A', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    try validateMetricVariationTable(&bytes, hvar, 1, 20);
-
-    var axis_mismatch = bytes;
-    writeU16Test(&axis_mismatch, 32, 2); // VariationRegionList axisCount.
-    try std.testing.expectError(error.BadSfnt, validateMetricVariationTable(&axis_mismatch, hvar, 1, 20));
-
-    var bad_region_index = bytes;
-    writeU16Test(&bad_region_index, 50, 1); // Only region index 0 is declared.
-    try std.testing.expectError(error.BadSfnt, validateMetricVariationTable(&bad_region_index, hvar, 1, 20));
-
-    var with_map: [59]u8 = .{0} ** 59;
-    @memcpy(with_map[0..bytes.len], &bytes);
-    writeU32Test(&with_map, 8, 54); // AdvanceWidthMappingOffset follows the store.
-    with_map[54] = 0; // DeltaSetIndexMap format 0.
-    with_map[55] = 0; // one-byte entries, one inner-index bit.
-    writeU16Test(&with_map, 56, 1); // mapCount.
-    with_map[58] = 0; // outerIndex 0, innerIndex 0.
-    const hvar_with_map = TableRecord{ .tag = .{ 'H', 'V', 'A', 'R' }, .checksum = 0, .offset = 0, .length = with_map.len };
-    try validateMetricVariationTable(&with_map, hvar_with_map, 1, 20);
-
-    var map_aliases_store = with_map;
-    writeU32Test(&map_aliases_store, 8, 20); // A map must not reinterpret ItemVariationStore bytes.
-    try std.testing.expectError(error.BadSfnt, validateMetricVariationTable(&map_aliases_store, hvar_with_map, 1, 20));
-
-    var maps_alias_each_other = with_map;
-    writeU32Test(&maps_alias_each_other, 12, 54); // Duplicate DeltaSetIndexMap payload.
-    try validateMetricVariationTable(&maps_alias_each_other, hvar_with_map, 1, 20);
-
-    var peak_outside_normalized_space = bytes;
-    writeI16Test(&peak_outside_normalized_space, 38, 0x4001);
-    try std.testing.expectError(error.BadSfnt, validateMetricVariationTable(&peak_outside_normalized_space, hvar, 1, 20));
-
-    var reversed_region = bytes;
-    writeF2Dot14Test(&reversed_region, 36, 0.5); // regionStartCoord > peakCoord.
-    try std.testing.expectError(error.BadSfnt, validateMetricVariationTable(&reversed_region, hvar, 1, 20));
-}
-
-test "VariationStore child payloads do not alias each other" {
-    var bytes: [64]u8 = .{0} ** 64;
-    writeU16Test(&bytes, 0, 1);
-    writeU16Test(&bytes, 2, 0);
-    writeU32Test(&bytes, 4, 20); // ItemVariationStore offset.
-
-    writeU16Test(&bytes, 20, 1); // ItemVariationStore format.
-    writeU32Test(&bytes, 22, 16); // VariationRegionList follows both ItemVariationData offsets.
-    writeU16Test(&bytes, 26, 2); // itemVariationDataCount.
-    writeU32Test(&bytes, 28, 28); // First ItemVariationData.
-    writeU32Test(&bytes, 32, 38); // Second ItemVariationData is adjacent to the first.
-
-    writeU16Test(&bytes, 36, 1); // axisCount.
-    writeU16Test(&bytes, 38, 1); // regionCount.
-    writeF2Dot14Test(&bytes, 40, -1.0);
-    writeF2Dot14Test(&bytes, 42, 0.0);
-    writeF2Dot14Test(&bytes, 44, 1.0);
-
-    writeU16Test(&bytes, 48, 1); // itemCount.
-    writeU16Test(&bytes, 50, 1); // wordDeltaCount.
-    writeU16Test(&bytes, 52, 1); // regionIndexCount.
-    writeU16Test(&bytes, 54, 0); // regionIndexes[0].
-    writeI16Test(&bytes, 56, 7); // delta row.
-
-    writeU16Test(&bytes, 58, 0); // Empty second ItemVariationData is adjacent and valid.
-    writeU16Test(&bytes, 60, 0);
-    writeU16Test(&bytes, 62, 0);
-
-    const hvar = TableRecord{ .tag = .{ 'H', 'V', 'A', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    try validateMetricVariationTable(&bytes, hvar, 1, 20);
-
-    var item_data_alias = bytes;
-    writeU32Test(&item_data_alias, 32, 28); // Duplicate ItemVariationData offset.
-    try std.testing.expectError(error.BadSfnt, validateMetricVariationTable(&item_data_alias, hvar, 1, 20));
-
-    var region_alias: [42]u8 = .{0} ** 42;
-    writeU16Test(&region_alias, 0, 1);
-    writeU16Test(&region_alias, 2, 0);
-    writeU32Test(&region_alias, 4, 20); // ItemVariationStore offset.
-    writeU16Test(&region_alias, 20, 1); // ItemVariationStore format.
-    writeU32Test(&region_alias, 22, 16); // Empty VariationRegionList.
-    writeU16Test(&region_alias, 26, 1); // itemVariationDataCount.
-    writeU32Test(&region_alias, 28, 16); // ItemVariationData aliases the region-list header.
-    const hvar_zero_axis = TableRecord{ .tag = .{ 'H', 'V', 'A', 'R' }, .checksum = 0, .offset = 0, .length = region_alias.len };
-    try std.testing.expectError(error.BadSfnt, validateMetricVariationTable(&region_alias, hvar_zero_axis, 0, 20));
-}
-
-test "VariationStore permits zero-region data with zero-width rows" {
-    var bytes: [42]u8 = .{0} ** 42;
-    writeU16Test(&bytes, 0, 1);
-    writeU16Test(&bytes, 2, 0);
-    writeU32Test(&bytes, 4, 20); // ItemVariationStore offset.
-
-    writeU16Test(&bytes, 20, 1); // ItemVariationStore format.
-    writeU32Test(&bytes, 22, 12); // Empty VariationRegionList.
-    writeU16Test(&bytes, 26, 1); // itemVariationDataCount.
-    writeU32Test(&bytes, 28, 16); // ItemVariationData follows region list.
-
-    writeU16Test(&bytes, 32, 0); // axisCount.
-    writeU16Test(&bytes, 34, 0); // regionCount.
-
-    writeU16Test(&bytes, 36, 3); // itemCount with zero-width delta rows.
-    writeU16Test(&bytes, 38, 0); // wordDeltaCount.
-    writeU16Test(&bytes, 40, 0); // regionIndexCount.
-
-    const hvar = TableRecord{ .tag = .{ 'H', 'V', 'A', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    try validateMetricVariationTable(&bytes, hvar, 0, 20);
-}
-
-test "Metric variation DeltaSetIndexMaps own disjoint top-level payloads" {
-    var hvar_bytes: [62]u8 = .{0} ** 62;
-    writeMetricVariationHeaderWithOneMap(&hvar_bytes, 20, 28);
-    writeItemVariationStoreWithOneItem(&hvar_bytes, 28);
-    const hvar = TableRecord{ .tag = .{ 'H', 'V', 'A', 'R' }, .checksum = 0, .offset = 0, .length = hvar_bytes.len };
-    try validateMetricVariationTable(&hvar_bytes, hvar, 1, 20);
-
-    var map_aliases_store = hvar_bytes;
-    writeU32Test(&map_aliases_store, 8, 28); // advanceWidthMappingOffset aliases ItemVariationStore.
-    try std.testing.expectError(error.BadSfnt, validateMetricVariationTable(&map_aliases_store, hvar, 1, 20));
-
-    var duplicate_maps = hvar_bytes;
-    writeU32Test(&duplicate_maps, 12, 20); // lsbMappingOffset reuses advanceWidthMappingOffset.
-    try validateMetricVariationTable(&duplicate_maps, hvar, 1, 20);
-
-    var vvar_bytes: [66]u8 = .{0} ** 66;
-    writeU16Test(&vvar_bytes, 0, 1);
-    writeU16Test(&vvar_bytes, 2, 0);
-    writeU32Test(&vvar_bytes, 4, 32); // ItemVariationStore offset.
-    writeU32Test(&vvar_bytes, 20, 24); // VVAR-only vorgMappingOffset.
-    writeDeltaSetIndexMapWithOneEntry(&vvar_bytes, 24);
-    writeItemVariationStoreWithOneItem(&vvar_bytes, 32);
-    const vvar = TableRecord{ .tag = .{ 'V', 'V', 'A', 'R' }, .checksum = 0, .offset = 0, .length = vvar_bytes.len };
-    try validateMetricVariationTable(&vvar_bytes, vvar, 1, 24);
-
-    var fourth_map_aliases_store = vvar_bytes;
-    writeU32Test(&fourth_map_aliases_store, 20, 32); // vorgMappingOffset aliases ItemVariationStore.
-    try std.testing.expectError(error.BadSfnt, validateMetricVariationTable(&fourth_map_aliases_store, vvar, 1, 24));
-}
-
-test "MVAR value records reference existing ItemVariationData items" {
-    var bytes: [54]u8 = .{0} ** 54;
-    writeU16Test(&bytes, 0, 1);
-    writeU16Test(&bytes, 2, 0);
-    writeU16Test(&bytes, 6, 8); // valueRecordSize.
-    writeU16Test(&bytes, 8, 1); // one value record.
-    writeU16Test(&bytes, 10, 20); // ItemVariationStore offset.
-    writeTagTest(&bytes, 12, "hasc");
-    writeU16Test(&bytes, 16, 0); // outerIndex.
-    writeU16Test(&bytes, 18, 0); // innerIndex.
-    writeItemVariationStoreWithOneItem(&bytes, 20);
-
-    const mvar = TableRecord{ .tag = .{ 'M', 'V', 'A', 'R' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    try validateMvarTable(&bytes, mvar, 1);
-
-    var bad_inner_index = bytes;
-    writeU16Test(&bad_inner_index, 18, 1);
-    try std.testing.expectError(error.BadSfnt, validateMvarTable(&bad_inner_index, mvar, 1));
-}
-
 test "macOS platform UI fonts parse for text metrics" {
     if (@import("builtin").target.os.tag != .macos) return error.SkipZigTest;
     const paths = [_][]const u8{
@@ -6615,79 +6379,12 @@ fn sfntTableLength(bytes: []const u8, comptime table_tag: []const u8) FontError!
     return error.MissingTable;
 }
 
-const name_record_start_for_test: usize = 6;
-const name_record_size_for_test: usize = 12;
-
-fn writeHvarTableWithOneItemVariationData(bytes: []u8) void {
-    writeU16Test(bytes, 0, 1);
-    writeU16Test(bytes, 2, 0);
-    writeU32Test(bytes, 4, 20); // ItemVariationStore offset.
-    writeItemVariationStoreWithOneItem(bytes, 20);
-}
-
-fn writeMetricVariationHeaderWithOneMap(bytes: []u8, map_offset: usize, store_offset: usize) void {
-    writeU16Test(bytes, 0, 1);
-    writeU16Test(bytes, 2, 0);
-    writeU32Test(bytes, 4, @intCast(store_offset)); // ItemVariationStore offset.
-    writeU32Test(bytes, 8, @intCast(map_offset)); // First DeltaSetIndexMap offset.
-    writeDeltaSetIndexMapWithOneEntry(bytes, map_offset);
-}
-
-fn writeDeltaSetIndexMapWithOneEntry(bytes: []u8, offset: usize) void {
-    bytes[offset + 0] = 0; // format 0.
-    bytes[offset + 1] = 0; // one-byte entry, one inner-index bit.
-    writeU16Test(bytes, offset + 2, 1); // mapCount.
-    bytes[offset + 4] = 0; // outerIndex 0, innerIndex 0.
-}
-
-fn writeItemVariationStoreWithOneItem(bytes: []u8, offset: usize) void {
-    writeItemVariationStoreWithItems(bytes, offset, 1);
-}
-
-fn writeItemVariationStoreWithItems(bytes: []u8, offset: usize, item_count: u16) void {
-    writeU16Test(bytes, offset + 0, 1); // format.
-    writeU32Test(bytes, offset + 2, 12); // VariationRegionList offset.
-    writeU16Test(bytes, offset + 6, 1); // itemVariationDataCount.
-    writeU32Test(bytes, offset + 8, 24); // ItemVariationData offset.
-
-    writeU16Test(bytes, offset + 12, 1); // axisCount.
-    writeU16Test(bytes, offset + 14, 1); // regionCount.
-    writeF2Dot14Test(bytes, offset + 16, -1.0);
-    writeF2Dot14Test(bytes, offset + 18, 0.0);
-    writeF2Dot14Test(bytes, offset + 20, 1.0);
-
-    writeU16Test(bytes, offset + 24, item_count);
-    writeU16Test(bytes, offset + 26, 1); // wordDeltaCount.
-    writeU16Test(bytes, offset + 28, 1); // regionIndexCount.
-    writeU16Test(bytes, offset + 30, 0); // regionIndexes[0].
-    for (0..item_count) |index| {
-        writeI16Test(bytes, offset + 32 + index * 2, 7); // delta rows.
-    }
-}
-
-fn writeTagTest(bytes: []u8, offset: usize, tag_text: []const u8) void {
-    std.debug.assert(tag_text.len == 4);
-    @memcpy(bytes[offset..][0..4], tag_text);
-}
-
-fn writeF16Dot16Test(bytes: []u8, offset: usize, value: f32) void {
-    writeI32Test(bytes, offset, @intFromFloat(value * 65536.0));
-}
-
-fn writeF2Dot14Test(bytes: []u8, offset: usize, value: f32) void {
-    writeI16Test(bytes, offset, @intFromFloat(value * 16384.0));
-}
-
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {
     std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
 }
 
 fn writeU32Test(bytes: []u8, offset: usize, value: u32) void {
     std.mem.writeInt(u32, bytes[offset..][0..4], value, .big);
-}
-
-fn writeI32Test(bytes: []u8, offset: usize, value: i32) void {
-    std.mem.writeInt(i32, bytes[offset..][0..4], value, .big);
 }
 
 fn writeI16Test(bytes: []u8, offset: usize, value: i16) void {

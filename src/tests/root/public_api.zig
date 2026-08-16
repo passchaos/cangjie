@@ -267,6 +267,40 @@ test "layout inspection covers cross-platform and AAT metadata" {
     try std.testing.expect((try aat.glyphMetamorphosis(allocator)) == null);
 }
 
+test "MATH inspection is consumable by formula layout libraries" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildMathTtf(allocator);
+    defer allocator.free(bytes);
+
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    const math = cangjie.font.metadata.math.inspect(&face);
+
+    const info = (try math.table(allocator)).?;
+    defer math.freeTable(allocator, info);
+    try std.testing.expectEqual(@as(u32, 0x00010000), info.version);
+    try std.testing.expectEqual(
+        @as(?i32, 80),
+        try math.constant(.script_percent_scale_down),
+    );
+    try std.testing.expectEqual(
+        @as(i16, -12),
+        (try math.italicsCorrection(1)).?.value,
+    );
+    try std.testing.expect(try math.isExtendedShape(1));
+
+    const variants = (try math.variants(allocator, 1, true)).?;
+    defer math.freeVariants(allocator, variants);
+    try std.testing.expectEqual(@as(usize, 1), variants.len);
+    const parts = (try math.assemblyParts(allocator, 1, true)).?;
+    defer math.freeAssemblyParts(allocator, parts);
+    try std.testing.expectEqual(@as(usize, 1), parts.len);
+    try std.testing.expectEqual(
+        @as(?i16, -20),
+        try math.kernValue(allocator, 1, .top_right, 0),
+    );
+}
+
 test "concrete engine remains valid after a value move" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalTtf(allocator);

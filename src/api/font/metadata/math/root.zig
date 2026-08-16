@@ -14,3 +14,7 @@ pub const Construction = font.MathConstructionInfo;
 pub const Kern = font.MathKernInfo;
 pub const KernRecord = font.MathKernRecordInfo;
 pub const KernTable = font.MathKernTableInfo;
+pub const KernCorner = font.MathKernCorner;
+
+pub const Inspection = @import("inspection.zig").View;
+pub const inspect = @import("inspection.zig").inspect;

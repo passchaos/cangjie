@@ -324,6 +324,49 @@ test "color inspection exposes table-level palette and asset metadata" {
     try std.testing.expect((try color.bestBitmapPpem(16)) == null);
 }
 
+test "incremental font transfer inspection and patch parsers are public" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildIftTtf(allocator);
+    defer allocator.free(bytes);
+
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    const incremental = cangjie.font.metadata.incremental;
+    const inspection = incremental.inspect(&face);
+    const patch_map = (try inspection.patchMap()).?;
+    try std.testing.expectEqual(@as(u8, 2), patch_map.format);
+    try std.testing.expect((try inspection.extensionPatchMap()) == null);
+
+    var table_patch: [34]u8 = .{0} ** 34;
+    @memcpy(table_patch[0..4], "IFTB");
+    for (0..16) |index| table_patch[8 + index] = @intCast(index);
+    std.mem.writeInt(u16, table_patch[24..26], 1, .big);
+    std.mem.writeInt(u32, table_patch[26..30], 0, .big);
+    std.mem.writeInt(u32, table_patch[30..34], 0, .big);
+    const parsed_table = try incremental.parseTablePatch(
+        allocator,
+        &table_patch,
+    );
+    defer incremental.freeTablePatch(allocator, parsed_table);
+    try std.testing.expectEqualSlices(
+        u32,
+        &.{ 0, 0 },
+        parsed_table.patch_offsets,
+    );
+
+    var glyph_patch: [31]u8 = .{0} ** 31;
+    @memcpy(glyph_patch[0..4], "IFTG");
+    std.mem.writeInt(u32, glyph_patch[25..29], 256, .big);
+    glyph_patch[29] = 0xaa;
+    glyph_patch[30] = 0xbb;
+    const parsed_glyph = try incremental.parseGlyphPatch(&glyph_patch);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 0xaa, 0xbb },
+        parsed_glyph.brotli_stream,
+    );
+}
+
 test "concrete engine remains valid after a value move" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalTtf(allocator);

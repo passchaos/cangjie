@@ -1781,85 +1781,6 @@ test "GSUB validates coverage indexes against substitution arrays" {
     }
 }
 
-test "GSUB lookup selection honors script and language tags" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 160;
-    writeScriptLanguageSelectionTable(&bytes);
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-
-    var latin = try selectedLookupIndices(table, allocator, .{ .script_tag = .latn });
-    defer latin.deinit(allocator);
-    try std.testing.expectEqualSlices(u16, &.{0}, latin.items);
-
-    var han_default = try selectedLookupIndices(table, allocator, .{ .script_tag = .hani });
-    defer han_default.deinit(allocator);
-    try std.testing.expectEqualSlices(u16, &.{1}, han_default.items);
-
-    var han_japanese = try selectedLookupIndices(table, allocator, .{ .script_tag = .hani, .language_tag = .jan });
-    defer han_japanese.deinit(allocator);
-    try std.testing.expectEqualSlices(u16, &.{2}, han_japanese.items);
-
-    var fallback = try selectedLookupIndices(table, allocator, .{ .script_tag = .arab });
-    defer fallback.deinit(allocator);
-    try std.testing.expectEqualSlices(u16, &.{3}, fallback.items);
-}
-
-test "vertical GSUB globally searches vert outside the active LangSys" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 84;
-    writeGlobalVerticalFeatureSelectionTable(&bytes);
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-
-    var horizontal = try selectedLookupIndices(table, allocator, .{ .script_tag = .dflt });
-    defer horizontal.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 0), horizontal.items.len);
-
-    var vertical = try selectedLookupIndices(table, allocator, .{
-        .script_tag = .dflt,
-        .vertical = true,
-    });
-    defer vertical.deinit(allocator);
-    try std.testing.expectEqualSlices(u16, &.{0}, vertical.items);
-
-    var disabled = try selectedLookupIndices(table, allocator, .{
-        .script_tag = .dflt,
-        .vertical = true,
-        .features = &.{.{ .tag = unicode.tag("vert"), .enabled = false }},
-    });
-    defer disabled.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 0), disabled.items.len);
-}
-
-test "GSUB validates layout tag record ordering" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 92;
-    writeLayoutTagOrderingTable(&bytes);
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-    var selected = try selectedLookupIndices(table, allocator, .{ .script_tag = .dflt });
-    defer selected.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 0), selected.items.len);
-
-    writeU32Test(&bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-    var duplicate = try selectedLookupIndices(table, allocator, .{ .script_tag = .dflt });
-    defer duplicate.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 0), duplicate.items.len);
-
-    writeU32Test(&bytes, 18, unicode.tag("AAAA"));
-    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-    try std.testing.expectError(error.BadGsub, selectedLookupIndices(table, allocator, .{ .script_tag = .dflt }));
-    writeU32Test(&bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.hani));
-
-    writeU32Test(&bytes, 34, @intFromEnum(unicode.OpenTypeLanguageTag.ara));
-    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-    writeU32Test(&bytes, 34, @intFromEnum(unicode.OpenTypeLanguageTag.kor));
-
-    writeU32Test(&bytes, 76, unicode.tag("aalt"));
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-}
-
 test "GSUB source-scoped feature gates substitution starts" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 68;
@@ -2058,38 +1979,6 @@ test "GSUB explicit feature sequence can chain Bengali half and pres ligatures" 
         .source_syllables = &staged_syllables,
     });
     try std.testing.expectEqualSlices(GlyphId, &.{6}, staged.items);
-}
-
-test "GSUB LangSys required feature bypasses optional feature filtering" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 72;
-    writeRequiredFeatureSelectionTable(&bytes, unicode.tag("ordn"), unicode.tag("liga"));
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-
-    var lookups = try selectedLookupIndices(table, allocator, .{
-        .script_tag = .dflt,
-        // Even an explicit off override must not disable ReqFeatureIndex. It
-        // only disables the ordinary feature listed after it in FeatureIndex[].
-        .features = &.{
-            .{ .tag = unicode.tag("ordn"), .enabled = false },
-            .{ .tag = unicode.tag("liga"), .enabled = false },
-        },
-    });
-    defer lookups.deinit(allocator);
-
-    try std.testing.expectEqualSlices(u16, &.{0}, lookups.items);
-}
-
-test "GSUB lookup selection sorts and deduplicates repeated feature lookups" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 78;
-    writeRepeatedLookupSelectionTable(&bytes, unicode.tag("liga"));
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-
-    var lookups = try selectedLookupIndices(table, allocator, .{ .script_tag = .dflt });
-    defer lookups.deinit(allocator);
-
-    try std.testing.expectEqualSlices(u16, &.{ 1, 2, 3 }, lookups.items);
 }
 
 test "GSUB cached lookup executor requires an exact nonempty plan" {
@@ -4404,106 +4293,6 @@ fn writeClassDef1(bytes: []u8, offset: usize, start: GlyphId, class: u16) void {
     writeU16Test(bytes, offset + 6, class);
 }
 
-fn writeScriptLanguageSelectionTable(bytes: []u8) void {
-    writeU32Test(bytes, 0, 0x00010000);
-    writeU16Test(bytes, 4, 10);
-    writeU16Test(bytes, 6, 90);
-    writeU16Test(bytes, 8, 142);
-
-    writeU16Test(bytes, 10, 3);
-    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
-    writeU16Test(bytes, 16, 20);
-    writeU32Test(bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.hani));
-    writeU16Test(bytes, 22, 44);
-    writeU32Test(bytes, 24, @intFromEnum(unicode.OpenTypeScriptTag.latn));
-    writeU16Test(bytes, 28, 32);
-
-    writeScriptTable(bytes, 30, 4, 0);
-    writeLangSys(bytes, 34, 2);
-    writeScriptTable(bytes, 42, 4, 0);
-    writeLangSys(bytes, 46, 1);
-    writeU16Test(bytes, 54, 10);
-    writeU16Test(bytes, 56, 1);
-    writeU32Test(bytes, 58, @intFromEnum(unicode.OpenTypeLanguageTag.jan));
-    writeU16Test(bytes, 62, 18);
-    writeLangSys(bytes, 64, 0);
-    writeLangSys(bytes, 72, 3);
-
-    writeU16Test(bytes, 90, 4);
-    writeFeatureRecord(bytes, 92, unicode.tag("ccmp"), 32);
-    writeFeatureRecord(bytes, 98, unicode.tag("liga"), 26);
-    writeFeatureRecord(bytes, 104, unicode.tag("rclt"), 44);
-    writeFeatureRecord(bytes, 110, unicode.tag("rlig"), 38);
-    writeFeature(bytes, 116, 0);
-    writeFeature(bytes, 122, 1);
-    writeFeature(bytes, 128, 2);
-    writeFeature(bytes, 134, 3);
-
-    writeU16Test(bytes, 142, 4);
-    writeU16Test(bytes, 144, 8);
-    writeU16Test(bytes, 146, 8);
-    writeU16Test(bytes, 148, 8);
-    writeU16Test(bytes, 150, 8);
-}
-
-fn writeGlobalVerticalFeatureSelectionTable(bytes: []u8) void {
-    writeU32Test(bytes, 0, 0x00010000);
-    writeU16Test(bytes, 4, 10); // ScriptList.
-    writeU16Test(bytes, 6, 46); // FeatureList.
-    writeU16Test(bytes, 8, 60); // LookupList.
-
-    writeU16Test(bytes, 10, 2);
-    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
-    writeU16Test(bytes, 16, 14);
-    writeU32Test(bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.kana));
-    writeU16Test(bytes, 22, 24);
-
-    // DFLT has a default LangSys but no features.
-    writeU16Test(bytes, 24, 4);
-    writeU16Test(bytes, 26, 0);
-    writeU16Test(bytes, 28, 0);
-    writeU16Test(bytes, 30, 0xffff);
-    writeU16Test(bytes, 32, 0);
-
-    // kana references the sole `vert` feature.
-    writeU16Test(bytes, 34, 4);
-    writeU16Test(bytes, 36, 0);
-    writeU16Test(bytes, 38, 0);
-    writeU16Test(bytes, 40, 0xffff);
-    writeU16Test(bytes, 42, 1);
-    writeU16Test(bytes, 44, 0);
-
-    writeU16Test(bytes, 46, 1);
-    writeU32Test(bytes, 48, unicode.tag("vert"));
-    writeU16Test(bytes, 52, 8);
-    writeU16Test(bytes, 54, 0);
-    writeU16Test(bytes, 56, 1);
-    writeU16Test(bytes, 58, 0);
-
-    writeU16Test(bytes, 60, 1);
-    writeU16Test(bytes, 62, 4);
-    writeU16Test(bytes, 64, 1); // SingleSubst lookup.
-    writeU16Test(bytes, 66, 0);
-    writeU16Test(bytes, 68, 1);
-    writeU16Test(bytes, 70, 8);
-    writeU16Test(bytes, 72, 1);
-    writeU16Test(bytes, 74, 6);
-    writeI16Test(bytes, 76, 1);
-    writeCoverage1(bytes, 78, 1);
-}
-
-fn writeScriptTable(bytes: []u8, offset: usize, default_lang_offset: u16, lang_count: u16) void {
-    writeU16Test(bytes, offset, default_lang_offset);
-    writeU16Test(bytes, offset + 2, lang_count);
-}
-
-fn writeLangSys(bytes: []u8, offset: usize, feature_index: u16) void {
-    writeU16Test(bytes, offset, 0);
-    writeU16Test(bytes, offset + 2, 0xffff);
-    writeU16Test(bytes, offset + 4, 1);
-    writeU16Test(bytes, offset + 6, feature_index);
-}
-
 fn writeFeatureRecord(bytes: []u8, offset: usize, tag_value: u32, feature_offset: u16) void {
     writeU32Test(bytes, offset, tag_value);
     writeU16Test(bytes, offset + 4, feature_offset);
@@ -4513,118 +4302,6 @@ fn writeFeature(bytes: []u8, offset: usize, lookup_index: u16) void {
     writeU16Test(bytes, offset, 0);
     writeU16Test(bytes, offset + 2, 1);
     writeU16Test(bytes, offset + 4, lookup_index);
-}
-
-fn writeFeatureList(bytes: []u8, offset: usize, lookups: []const u16) void {
-    writeU16Test(bytes, offset, 0);
-    writeU16Test(bytes, offset + 2, @intCast(lookups.len));
-    for (lookups, 0..) |lookup_index, index| {
-        writeU16Test(bytes, offset + 4 + index * 2, lookup_index);
-    }
-}
-
-fn writeLayoutTagOrderingTable(bytes: []u8) void {
-    writeU32Test(bytes, 0, 0x00010000);
-    writeU16Test(bytes, 4, 10);
-    writeU16Test(bytes, 6, 68);
-    writeU16Test(bytes, 8, 90);
-
-    writeU16Test(bytes, 10, 2);
-    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
-    writeU16Test(bytes, 16, 14);
-    writeU32Test(bytes, 18, @intFromEnum(unicode.OpenTypeScriptTag.hani));
-    writeU16Test(bytes, 22, 54);
-
-    writeU16Test(bytes, 24, 16);
-    writeU16Test(bytes, 26, 2);
-    writeU32Test(bytes, 28, @intFromEnum(unicode.OpenTypeLanguageTag.jan));
-    writeU16Test(bytes, 32, 24);
-    writeU32Test(bytes, 34, @intFromEnum(unicode.OpenTypeLanguageTag.kor));
-    writeU16Test(bytes, 38, 32);
-    writeLangSys(bytes, 40, 0);
-    writeLangSys(bytes, 48, 1);
-    writeLangSys(bytes, 56, 1);
-
-    writeU16Test(bytes, 64, 0);
-    writeU16Test(bytes, 66, 0);
-
-    writeU16Test(bytes, 68, 2);
-    writeFeatureRecord(bytes, 70, unicode.tag("ccmp"), 14);
-    writeFeatureRecord(bytes, 76, unicode.tag("liga"), 18);
-    writeU16Test(bytes, 82, 0);
-    writeU16Test(bytes, 84, 0);
-    writeU16Test(bytes, 86, 0);
-    writeU16Test(bytes, 88, 0);
-
-    writeU16Test(bytes, 90, 0);
-}
-
-fn writeRequiredFeatureSelectionTable(bytes: []u8, required_tag: u32, optional_tag: u32) void {
-    const required_first = required_tag < optional_tag;
-    const required_feature_index: u16 = if (required_first) 0 else 1;
-    const optional_feature_index: u16 = if (required_first) 1 else 0;
-
-    writeU32Test(bytes, 0, 0x00010000);
-    writeU16Test(bytes, 4, 10);
-    writeU16Test(bytes, 6, 34);
-    writeU16Test(bytes, 8, 60);
-
-    writeU16Test(bytes, 10, 1);
-    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
-    writeU16Test(bytes, 16, 8);
-
-    writeU16Test(bytes, 18, 4);
-    writeU16Test(bytes, 20, 0);
-    writeU16Test(bytes, 22, 0);
-    writeU16Test(bytes, 24, required_feature_index);
-    writeU16Test(bytes, 26, 1);
-    writeU16Test(bytes, 28, optional_feature_index);
-
-    writeU16Test(bytes, 34, 2);
-    if (required_first) {
-        writeFeatureRecord(bytes, 36, required_tag, 14);
-        writeFeatureRecord(bytes, 42, optional_tag, 20);
-    } else {
-        writeFeatureRecord(bytes, 36, optional_tag, 20);
-        writeFeatureRecord(bytes, 42, required_tag, 14);
-    }
-    writeFeature(bytes, 48, 0);
-    writeFeature(bytes, 54, 1);
-
-    writeU16Test(bytes, 60, 2);
-    writeU16Test(bytes, 62, 0);
-    writeU16Test(bytes, 64, 0);
-}
-
-fn writeRepeatedLookupSelectionTable(bytes: []u8, feature_tag: u32) void {
-    writeU32Test(bytes, 0, 0x00010000);
-    writeU16Test(bytes, 4, 10);
-    writeU16Test(bytes, 6, 34);
-    writeU16Test(bytes, 8, 66);
-
-    writeU16Test(bytes, 10, 1);
-    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
-    writeU16Test(bytes, 16, 8);
-
-    writeU16Test(bytes, 18, 4);
-    writeU16Test(bytes, 20, 0);
-    writeU16Test(bytes, 22, 0);
-    writeU16Test(bytes, 24, 0xffff);
-    writeU16Test(bytes, 26, 2);
-    writeU16Test(bytes, 28, 0);
-    writeU16Test(bytes, 30, 1);
-
-    writeU16Test(bytes, 34, 2);
-    writeFeatureRecord(bytes, 36, feature_tag, 14);
-    writeFeatureRecord(bytes, 42, feature_tag, 24);
-    writeFeatureList(bytes, 48, &.{ 3, 1, 3 });
-    writeFeatureList(bytes, 58, &.{ 2, 1 });
-
-    writeU16Test(bytes, 66, 4);
-    writeU16Test(bytes, 68, 0);
-    writeU16Test(bytes, 70, 0);
-    writeU16Test(bytes, 72, 0);
-    writeU16Test(bytes, 74, 0);
 }
 
 test "GSUB public apply validates source metadata cardinality" {
@@ -4668,6 +4345,11 @@ test "GSUB public apply validates ligature component source order" {
 /// without widening the production API or paying for runtime callbacks.
 const topologyTestHasFeature = hasFeature;
 
+const FeatureSelectionTestBindings = struct {
+    pub const selectedLookups = selectedLookupIndicesForOptions;
+    pub const validate = validateGlyphBounds;
+};
+
 const TopologyTestBindings = struct {
     pub const apply = applyWithOptions;
     pub const validate = validateGlyphBounds;
@@ -4684,6 +4366,8 @@ test {
     _ = @import("gsub/tests/accelerator/root.zig");
     _ = @import("gsub/tests/execution/root.zig");
     _ = @import("gsub/tests/feature/root.zig");
+    _ = @import("gsub/tests/feature/integration/root.zig")
+        .suite(FeatureSelectionTestBindings);
     _ = @import("gsub/tests/runtime/cache_integration.zig")
         .suite(ContextualRecordExecutor);
     _ = @import("gsub/tests/runtime/root.zig");

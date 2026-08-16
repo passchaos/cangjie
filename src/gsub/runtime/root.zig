@@ -4,6 +4,7 @@ pub const dispatch = @import("dispatch.zig");
 pub const limits = @import("limits.zig");
 pub const metadata = @import("metadata.zig");
 pub const options = @import("options.zig");
+pub const reverse_context = @import("reverse_context.zig");
 
 pub const Limits = limits.Limits;
 pub const Options = options.Options;

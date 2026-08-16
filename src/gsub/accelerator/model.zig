@@ -212,6 +212,22 @@ pub const ReverseChainingContextKey = struct {
     backtrack: GlyphId,
     lookahead_0: GlyphId,
     lookahead_1: GlyphId,
+
+    pub fn lessThan(lhs: ReverseChainingContextKey, rhs: ReverseChainingContextKey) bool {
+        if (lhs.target != rhs.target) return lhs.target < rhs.target;
+        if (lhs.backtrack != rhs.backtrack) return lhs.backtrack < rhs.backtrack;
+        if (lhs.lookahead_0 != rhs.lookahead_0) {
+            return lhs.lookahead_0 < rhs.lookahead_0;
+        }
+        return lhs.lookahead_1 < rhs.lookahead_1;
+    }
+
+    pub fn eql(lhs: ReverseChainingContextKey, rhs: ReverseChainingContextKey) bool {
+        return lhs.target == rhs.target and
+            lhs.backtrack == rhs.backtrack and
+            lhs.lookahead_0 == rhs.lookahead_0 and
+            lhs.lookahead_1 == rhs.lookahead_1;
+    }
 };
 
 pub const ReverseChainingContextEntry = struct {

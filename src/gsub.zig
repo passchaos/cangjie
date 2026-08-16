@@ -2078,76 +2078,10 @@ fn buildMultipleSubstAccelerator(table: Table, subtable_offset: usize, allocator
 const buildLigatureSubstAccelerator =
     accelerator_root.build.ligature.build;
 
-fn appendReverseChainingExactContext(table: Table, subtable: ReverseChainingSingleSubtable, subtable_index: u16, contexts: *std.ArrayList(ReverseChainingContextEntry), allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!void {
-    // Gulzar's large hamza-positioning reverse-chain lookup is made of
-    // singleton target/backtrack/lookahead coverages. Encode those subtables as
-    // exact context keys so shaping can jump directly to the one candidate for
-    // most positions. If any subtable in the lookup is not this restricted
-    // shape, the builder leaves the exact table empty and shaping falls back to
-    // the generic coverage-group path.
-    if (subtable.backtrack_count != 1 or subtable.lookahead_count != 2 or subtable.glyph_count != 1) return;
-    const target = try singletonCoverageGlyph(table, subtable.coverage_offset) orelse return;
-    const backtrack_coverage = try checkedRequiredCoverageOffset(table, subtable.subtable_offset, try readU16(table, subtable.backtrack_offsets_pos));
-    const backtrack = try singletonCoverageGlyph(table, backtrack_coverage) orelse return;
-    const lookahead_0_coverage = try checkedRequiredCoverageOffset(table, subtable.subtable_offset, try readU16(table, subtable.lookahead_offsets_pos));
-    const lookahead_0 = try singletonCoverageGlyph(table, lookahead_0_coverage) orelse return;
-    const lookahead_1_coverage = try checkedRequiredCoverageOffset(table, subtable.subtable_offset, try readU16(table, subtable.lookahead_offsets_pos + 2));
-    const lookahead_1 = try singletonCoverageGlyph(table, lookahead_1_coverage) orelse return;
-    try contexts.append(allocator, .{
-        .key = .{
-            .target = target,
-            .backtrack = backtrack,
-            .lookahead_0 = lookahead_0,
-            .lookahead_1 = lookahead_1,
-        },
-        .subtable_index = subtable_index,
-        .substitute = try readU16(table, subtable.substitutes_pos),
-    });
-}
-
-fn buildReverseChainingExactContexts(contexts: []ReverseChainingContextEntry, allocator: std.mem.Allocator) std.mem.Allocator.Error![]ReverseChainingContextEntry {
-    if (contexts.len == 0) return try allocator.alloc(ReverseChainingContextEntry, 0);
-    std.sort.heap(ReverseChainingContextEntry, contexts, {}, reverseChainingContextLessThan);
-    return try allocator.dupe(ReverseChainingContextEntry, contexts);
-}
-
-fn singletonCoverageGlyph(table: Table, coverage_offset: usize) GsubError!?GlyphId {
-    const format = try readU16(table, coverage_offset);
-    switch (format) {
-        1 => {
-            const glyph_count = try readU16(table, coverage_offset + 2);
-            if (glyph_count != 1) return null;
-            return try readU16(table, coverage_offset + 4);
-        },
-        2 => {
-            const range_count = try readU16(table, coverage_offset + 2);
-            if (range_count != 1) return null;
-            const start = try readU16(table, coverage_offset + 4);
-            const end = try readU16(table, coverage_offset + 6);
-            if (start != end) return null;
-            return start;
-        },
-        else => return error.UnsupportedGsub,
-    }
-}
-
-fn reverseChainingContextLessThan(_: void, lhs: ReverseChainingContextEntry, rhs: ReverseChainingContextEntry) bool {
-    return reverseChainingContextKeyLessThan(lhs.key, rhs.key) or (reverseChainingContextKeysEqual(lhs.key, rhs.key) and lhs.subtable_index < rhs.subtable_index);
-}
-
-fn reverseChainingContextKeyLessThan(lhs: ReverseChainingContextKey, rhs: ReverseChainingContextKey) bool {
-    if (lhs.target != rhs.target) return lhs.target < rhs.target;
-    if (lhs.backtrack != rhs.backtrack) return lhs.backtrack < rhs.backtrack;
-    if (lhs.lookahead_0 != rhs.lookahead_0) return lhs.lookahead_0 < rhs.lookahead_0;
-    return lhs.lookahead_1 < rhs.lookahead_1;
-}
-
-fn reverseChainingContextKeysEqual(lhs: ReverseChainingContextKey, rhs: ReverseChainingContextKey) bool {
-    return lhs.target == rhs.target and
-        lhs.backtrack == rhs.backtrack and
-        lhs.lookahead_0 == rhs.lookahead_0 and
-        lhs.lookahead_1 == rhs.lookahead_1;
-}
+const appendReverseChainingExactContext =
+    accelerator_root.build.reverse.appendExact;
+const buildReverseChainingExactContexts =
+    accelerator_root.build.reverse.finish;
 
 /// Validate GSUB glyph references that are meaningful at font-load time.
 ///
@@ -5336,7 +5270,10 @@ fn applyExtensionReverseChainingSingleSubstitutionLookup(table: Table, lookup_of
             if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
             if (accel.reverse_chaining_exact_contexts.len != 0) {
                 const key = reverseChainingContextKeyForPosition(glyphs.items, pos, glyph, lookup_flag, options) orelse continue;
-                const entry = reverseChainingExactContextForKey(accel.reverse_chaining_exact_contexts, key) orelse continue;
+                const entry = runtime.reverse_context.find(
+                    accel.reverse_chaining_exact_contexts,
+                    key,
+                ) orelse continue;
                 glyphs.items[pos] = entry.substitute;
                 markGlyphSubstituted(options, pos);
                 continue;
@@ -7319,22 +7256,6 @@ fn previousUnignoredGlyph(glyphs: []const GlyphId, pos: usize, lookup_flag: u16,
         if (!sourceSyllableAllowsGlyph(options, anchor_syllable, glyph_i)) return null;
         return glyphs[glyph_i];
     }
-    return null;
-}
-
-fn reverseChainingExactContextForKey(entries: []const ReverseChainingContextEntry, key: ReverseChainingContextKey) ?ReverseChainingContextEntry {
-    var lo: usize = 0;
-    var hi: usize = entries.len;
-    while (lo < hi) {
-        const mid = lo + (hi - lo) / 2;
-        const candidate = entries[mid].key;
-        if (!reverseChainingContextKeyLessThan(candidate, key)) {
-            hi = mid;
-        } else {
-            lo = mid + 1;
-        }
-    }
-    if (lo < entries.len and reverseChainingContextKeysEqual(entries[lo].key, key)) return entries[lo];
     return null;
 }
 

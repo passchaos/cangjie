@@ -215,7 +215,7 @@ pub fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, a
         // Cached dispatch bypasses runtime header reads. Re-prove the complete
         // fixed header here so malformed direct accelerator input cannot turn
         // that optimization into a trust-boundary change.
-        try ensurePositionLookupHeaderWithin(table, lookup_offset);
+        try positioning.lookup.dispatch.validateHeader(table, lookup_offset);
         accelerator.* = try buildLookupAccelerator(table, lookup_offset, allocator);
         built_count += 1;
     }
@@ -246,7 +246,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     const lookup_flag = try readU16(table, lookup_offset + 2);
     const subtable_count = try readU16(table, lookup_offset + 4);
     const extension_type = if (lookup_type == 9)
-        try extensionPositionLookupType(table, lookup_offset, subtable_count)
+        try positioning.lookup.dispatch.commonExtensionType(table, lookup_offset, subtable_count)
     else
         null;
     const accelerates_pair_pos = lookup_type == 2 or extension_type == 2;
@@ -314,7 +314,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
             }
             if (pair_pos_subtables.len != 0) {
                 const pair_subtable_offset = if (extension_type == 2)
-                    try extensionPositionSubtablePayload(table, subtable_offset, 2)
+                    try positioning.lookup.dispatch.extensionPayload(table, subtable_offset, 2)
                 else
                     subtable_offset;
                 pair_pos_subtables[subtable_i] = try accelerator_core.pair.append(
@@ -413,7 +413,7 @@ fn fillFastChainingSinglePosRecords(table: Table, subtable: *ChainingCoverageSub
 
 fn buildExtensionChainingClassSubtableAccelerators(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16, allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)![]ChainingClassSubtableAccelerator {
     if (lookup_type != 9) return try allocator.alloc(ChainingClassSubtableAccelerator, 0);
-    if ((try extensionPositionLookupType(table, lookup_offset, subtable_count)) != 8) return try allocator.alloc(ChainingClassSubtableAccelerator, 0);
+    if ((try positioning.lookup.dispatch.commonExtensionType(table, lookup_offset, subtable_count)) != 8) return try allocator.alloc(ChainingClassSubtableAccelerator, 0);
 
     const subtables = try allocator.alloc(ChainingClassSubtableAccelerator, subtable_count);
     @memset(subtables, .{});
@@ -425,7 +425,7 @@ fn buildExtensionChainingClassSubtableAccelerators(table: Table, lookup_offset: 
 
     for (0..subtable_count) |subtable_i| {
         const wrapper_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-        const payload_offset = try extensionPositionSubtablePayload(table, wrapper_offset, 8);
+        const payload_offset = try positioning.lookup.dispatch.extensionPayload(table, wrapper_offset, 8);
         const parsed = try buildChainingClassSubtableAccelerator(table, payload_offset, allocator) orelse {
             deinitChainingClassSubtableAcceleratorContents(allocator, subtables[0..built_count]);
             allocator.free(subtables);
@@ -707,7 +707,12 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
     // assume_validated. Keep this hot-path proof to fixed Lookup header fields;
     // full direct/ExtensionPos payload validation below is only needed for
     // untrusted tables and parse-time glyph-bound walks.
-    const dispatch = try lookupDispatch(lookup_offset, lookup_index, table, options);
+    const dispatch = try runtime.dispatch.header(
+        table,
+        lookup_offset,
+        lookup_index,
+        options,
+    );
     const lookup_type = dispatch.lookup_type;
     const lookup_flag = dispatch.lookup_flag;
     recordGposLookupProfile(options.shape_profile, lookup_type);
@@ -766,7 +771,7 @@ noinline fn collectLookupWithIndexPrepared(
     allocator: std.mem.Allocator,
     lookup_options: LookupOptions,
     run_digest_cache: ?*RunDigestCache,
-    dispatch: LookupDispatch,
+    dispatch: runtime.dispatch.Header,
 ) (GposError || std.mem.Allocator.Error)!void {
     const lookup_type = dispatch.lookup_type;
     const lookup_flag = dispatch.lookup_flag;
@@ -775,7 +780,7 @@ noinline fn collectLookupWithIndexPrepared(
     // atomic units. Preflight supported direct subtables before collecting any
     // adjustment so malformed later subtables cannot leave partial positioning.
     if (!table.assume_validated) try ensurePositionLookupSubtablesWithin(table, lookup_offset, lookup_type, subtable_count);
-    if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+    if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
         const run_digest = if (run_digest_cache) |cache|
             cache.get(glyphs, lookup_flag, lookup_options)
         else
@@ -798,7 +803,7 @@ noinline fn collectLookupWithIndexPrepared(
         return;
     }
     if (lookup_type == 2) {
-        if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+        if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
             if (accelerator.pair_pos_subtables.len == subtable_count and
                 pairPosSubtablesHaveNativeData(accelerator.pair_pos_subtables))
             {
@@ -824,8 +829,17 @@ noinline fn collectLookupWithIndexPrepared(
         // all-or-nothing unit. Preflight wrapped variable-length arrays before
         // collecting any adjustments so a later malformed wrapper cannot leave
         // earlier wrapper results visible to the caller.
-        if (!table.assume_validated) try ensureExtensionPositionLookupPayloadsWithin(table, lookup_offset, subtable_count);
-        const wrapped_type = try resolvedExtensionPositionLookupType(
+        if (!table.assume_validated) {
+            // ExtensionPos lookups must preflight every wrapped variable
+            // payload before applying the first subtable. Fixed wrapper checks
+            // alone would allow a later malformed value array to leave earlier
+            // positioning adjustments visible.
+            try ensurePositionLookupHeaderAndExtensionPayloadsWithin(
+                table,
+                lookup_offset,
+            );
+        }
+        const wrapped_type = try runtime.dispatch.resolvedExtensionType(
             table,
             lookup_offset,
             lookup_type,
@@ -840,7 +854,7 @@ noinline fn collectLookupWithIndexPrepared(
                     return;
                 },
                 2 => {
-                    if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+                    if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
                         if (accelerator.pair_pos_extension and
                             accelerator.pair_pos_subtables.len == subtable_count)
                         {
@@ -866,7 +880,7 @@ noinline fn collectLookupWithIndexPrepared(
                 // below. Let the generic ExtensionPos dispatcher preserve
                 // ordering while supporting glyph/class chaining formats too.
                 8 => {
-                    if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+                    if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
                         if (accelerator.chaining_class_subtables.len != 0) {
                             try collectExtensionChainingClassPositioningLookup(table, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options, accelerator);
                             return;
@@ -880,7 +894,7 @@ noinline fn collectLookupWithIndexPrepared(
         return;
     }
     if (lookup_type == 8) {
-        if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+        if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
             if (accelerator.chaining_coverage_only) {
                 try collectChainingCoveragePositioningLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options, accelerator);
                 return;
@@ -892,7 +906,7 @@ noinline fn collectLookupWithIndexPrepared(
         switch (lookup_type) {
             1 => {}, // SinglePos needs whole-lookup subtable ordering; handled above.
             2 => {}, // PairPos needs whole-lookup subtable ordering; handled above.
-            3 => if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+            3 => if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
                 if (i < accelerator.cursive_subtables.len) {
                     try collectCursiveAdjustmentParsed(table, accelerator.cursive_subtables[i], glyphs, adjustments, allocator, lookup_flag, lookup_options);
                     continue;
@@ -900,7 +914,7 @@ noinline fn collectLookupWithIndexPrepared(
                 try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options);
             } else try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             4 => if (runtime.matching.runMayHaveMarkAttachments(glyphs, lookup_options)) {
-                if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+                if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
                     if (i < accelerator.mark_to_base_subtables.len) {
                         try collectMarkToBaseAdjustmentParsed(table, accelerator.mark_to_base_subtables[i], glyphs, adjustments, allocator, lookup_flag, lookup_options);
                         continue;
@@ -918,59 +932,6 @@ noinline fn collectLookupWithIndexPrepared(
     }
 }
 
-const LookupDispatch = struct {
-    lookup_type: u16,
-    lookup_flag: u16,
-    subtable_count: u16,
-    mark_filtering_set: ?u16,
-};
-
-fn lookupDispatch(
-    lookup_offset: usize,
-    lookup_index: ?u16,
-    table: Table,
-    options: LookupOptions,
-) GposError!LookupDispatch {
-    if (table.assume_validated) {
-        if (lookupAcceleratorAny(lookup_index, options)) |accelerator| {
-            if (accelerator.lookup_offset == lookup_offset and accelerator.lookup_type != 0) {
-                return .{
-                    .lookup_type = accelerator.lookup_type,
-                    .lookup_flag = accelerator.lookup_flag,
-                    .subtable_count = accelerator.subtable_count,
-                    .mark_filtering_set = accelerator.mark_filtering_set,
-                };
-            }
-        }
-    }
-
-    try ensurePositionLookupHeaderWithin(table, lookup_offset);
-    const lookup_flag = try readU16(table, lookup_offset + 2);
-    const subtable_count = try readU16(table, lookup_offset + 4);
-    return .{
-        .lookup_type = try readU16(table, lookup_offset),
-        .lookup_flag = lookup_flag,
-        .subtable_count = subtable_count,
-        .mark_filtering_set = if ((lookup_flag & 0x0010) != 0)
-            try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2)
-        else
-            null,
-    };
-}
-
-fn lookupAccelerator(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
-    const accelerator = lookupAcceleratorAny(lookup_index, options) orelse return null;
-    if (accelerator.coverage_digest.isEmpty()) return null;
-    return accelerator;
-}
-
-fn lookupAcceleratorAny(lookup_index: ?u16, options: LookupOptions) ?*const LookupAccelerator {
-    const accelerators = options.lookup_accelerators orelse return null;
-    const index = lookup_index orelse return null;
-    if (index >= accelerators.len) return null;
-    return &accelerators[index];
-}
-
 fn lookupCoverageGroupsMayMatchRun(groups: []const ChainingSubtableGroup, slots: []const u16, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) bool {
     for (glyphs) |glyph| {
         if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
@@ -986,61 +947,6 @@ fn glyphRunDigest(glyphs: []const GlyphId, lookup_flag: u16, options: LookupOpti
         digest.add(glyph);
     }
     return digest;
-}
-
-fn extensionPositionLookupType(table: Table, lookup_offset: usize, subtable_count: u16) GposError!?u16 {
-    // ExtensionPos is an addressing wrapper. When one lookup contains only
-    // ExtensionPos subtables around the same order-sensitive type, we can keep
-    // direct lookup semantics instead of delegating each wrapper over the whole
-    // glyph run independently. Mixed wrapped types intentionally fall back to
-    // generic per-subtable collection because their interactions are not simple
-    // alternatives for one positioning kind.
-    var common_type: ?u16 = null;
-    for (0..subtable_count) |i| {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
-        if (try readU16(table, subtable_offset) != 1) return null;
-        const wrapped_type = try readU16(table, subtable_offset + 2);
-        if (wrapped_type == 9) return error.UnsupportedGpos;
-        if (common_type) |existing| {
-            if (existing != wrapped_type) return null;
-        } else {
-            common_type = wrapped_type;
-        }
-    }
-    return common_type;
-}
-
-fn resolvedExtensionPositionLookupType(
-    table: Table,
-    lookup_offset: usize,
-    lookup_type: u16,
-    subtable_count: u16,
-    lookup_index: ?u16,
-    options: LookupOptions,
-) GposError!?u16 {
-    if (table.assume_validated) {
-        if (lookupAcceleratorAny(lookup_index, options)) |accelerator| {
-            // A cache entry belongs to one exact Lookup header. Any mismatch
-            // can indicate a foreign/stale accelerator slice and must retain
-            // the authoritative wrapper parser instead of trusting its type.
-            if (accelerator.lookup_offset == lookup_offset and
-                accelerator.lookup_type == lookup_type and
-                accelerator.subtable_count == subtable_count)
-            {
-                return accelerator.extension_lookup_type;
-            }
-        }
-    }
-    return try extensionPositionLookupType(table, lookup_offset, subtable_count);
-}
-
-fn extensionPositionSubtablePayload(table: Table, subtable_offset: usize, expected_lookup_type: u16) GposError!usize {
-    const pos_format = try readU16(table, subtable_offset);
-    if (pos_format != 1) return error.UnsupportedGpos;
-    const extension_lookup_type = try readU16(table, subtable_offset + 2);
-    if (extension_lookup_type == 9) return error.UnsupportedGpos;
-    if (extension_lookup_type != expected_lookup_type) return error.UnsupportedGpos;
-    return checkedExtensionPositionPayloadOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
 }
 
 const stack_matched_capacity = 128;
@@ -1078,7 +984,7 @@ fn collectExtensionSingleAdjustmentLookup(table: Table, lookup_offset: usize, su
 
     for (0..subtable_count) |subtable_i| {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-        const extension_subtable = try extensionPositionSubtablePayload(table, subtable_offset, 1);
+        const extension_subtable = try positioning.lookup.dispatch.extensionPayload(table, subtable_offset, 1);
         try collectSingleAdjustmentSubtable(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options, matched);
     }
 }
@@ -1092,7 +998,7 @@ fn collectExtensionPairAdjustmentLookup(table: Table, lookup_offset: usize, subt
         var matched_value_2 = false;
         for (0..subtable_count) |subtable_i| {
             const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-            const extension_subtable = try extensionPositionSubtablePayload(table, subtable_offset, 2);
+            const extension_subtable = try positioning.lookup.dispatch.extensionPayload(table, subtable_offset, 2);
             const parsed = try positioning.lookup.pair.parse(table, extension_subtable);
             if (try collectPairAdjustmentAtParsed(table, parsed, glyphs, first_index, adjustments, allocator, lookup_flag, options)) {
                 matched_value_2 = parsed.value_format_2 != 0;
@@ -1358,7 +1264,7 @@ fn collectPairAdjustmentLookupAcceleratedImpl(
             }
             const lookup_subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
             const pair_subtable_offset = if (accelerator.pair_pos_extension)
-                try extensionPositionSubtablePayload(table, lookup_subtable_offset, 2)
+                try positioning.lookup.dispatch.extensionPayload(table, lookup_subtable_offset, 2)
             else
                 lookup_subtable_offset;
             const parsed = try positioning.lookup.pair.parse(table, pair_subtable_offset);
@@ -3102,7 +3008,7 @@ fn collectExtensionChainingCoveragePositioningLookup(table: Table, lookup_offset
         if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
         for (0..subtable_count) |subtable_i| {
             const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-            const extension_subtable = try extensionPositionSubtablePayload(table, subtable_offset, 8);
+            const extension_subtable = try positioning.lookup.dispatch.extensionPayload(table, subtable_offset, 8);
             const parsed = try parseChainingCoveragePositioningSubtable(table, extension_subtable) orelse return error.UnsupportedGpos;
             const result = try collectChainingCoveragePositioningAt(table, parsed, glyphs, pos, adjustments, allocator, lookup_flag, options);
             if (result.matched) {
@@ -3402,36 +3308,31 @@ fn ensurePositionRecordMarkFilteringSetsValid(table: Table, records_pos: usize, 
     }
 }
 
-fn ensurePositionLookupHeaderWithin(table: Table, lookup_offset: usize) GposError!void {
-    if (lookup_offset > table.length or table.length - lookup_offset < 6) return error.BadGpos;
-    const lookup_type = try readU16BadGpos(table, lookup_offset);
-    const lookup_flag = try readU16BadGpos(table, lookup_offset + 2);
-    const subtable_count = try readU16BadGpos(table, lookup_offset + 4);
-    try validateLookupFlag(lookup_flag);
-    const subtable_offsets_pos = lookup_offset + 6;
-    const subtable_offsets_len = @as(usize, subtable_count) * 2;
-    if (subtable_offsets_pos > table.length or subtable_offsets_len > table.length - subtable_offsets_pos) return error.BadGpos;
-    if ((lookup_flag & 0x0010) != 0) {
-        const mark_filtering_set_pos = subtable_offsets_pos + subtable_offsets_len;
-        if (mark_filtering_set_pos > table.length or table.length - mark_filtering_set_pos < 2) return error.BadGpos;
-    }
-    _ = lookup_type;
-}
-
 fn ensurePositionLookupHeaderAndExtensionPayloadsWithin(table: Table, lookup_offset: usize) GposError!void {
-    try ensurePositionLookupHeaderWithin(table, lookup_offset);
-    const lookup_type = try readU16BadGpos(table, lookup_offset);
-    if (lookup_type == 9) {
-        const subtable_count = try readU16BadGpos(table, lookup_offset + 4);
-        try ensureExtensionPositionLookupPayloadsWithin(table, lookup_offset, subtable_count);
+    const header = try positioning.lookup.dispatch.header(table, lookup_offset);
+    if (header.lookup_type == 9) {
+        for (0..header.subtable_count) |subtable_index| {
+            const wrapper = try positioning.lookup.dispatch.extensionWrapperOffset(
+                table,
+                lookup_offset,
+                subtable_index,
+            );
+            const extension = try positioning.lookup.dispatch.extension(
+                table,
+                wrapper,
+            );
+            try positioning.lookup.dispatch.validateSubtableFixedHeader(
+                table,
+                extension.payload_offset,
+                extension.lookup_type,
+            );
+            try ensurePositionSubtableVariableDataWithin(
+                table,
+                extension.payload_offset,
+                extension.lookup_type,
+            );
+        }
     }
-}
-
-fn validateLookupFlag(lookup_flag: u16) GposError!void {
-    // OpenType currently defines only low bits 0..4 and the high-byte
-    // MarkAttachmentType. Rejecting reserved middle bits at lookup preflight
-    // keeps positioning behavior deterministic if future/private flags appear.
-    if ((lookup_flag & 0x00e0) != 0) return error.BadGpos;
 }
 
 fn ensurePositionLookupSubtablesWithin(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16) GposError!void {
@@ -3449,54 +3350,9 @@ fn ensurePositionLookupSubtablesWithinDepth(table: Table, lookup_offset: usize, 
         // as a subtable and can make malformed data appear valid or derive
         // value sizes from lookup metadata.
         const subtable_offset = try checkedRequiredPositionOffset(table, lookup_offset, try readU16BadGpos(table, lookup_offset + 6 + subtable_i * 2));
-        try ensurePositionSubtableFixedHeaderWithin(table, subtable_offset, lookup_type);
+        try positioning.lookup.dispatch.validateSubtableFixedHeader(table, subtable_offset, lookup_type);
         try ensurePositionSubtableVariableDataWithinDepth(table, subtable_offset, lookup_type, depth);
     }
-}
-
-fn ensureExtensionPositionLookupPayloadsWithin(table: Table, lookup_offset: usize, subtable_count: u16) GposError!void {
-    for (0..subtable_count) |subtable_i| {
-        const subtable_offset = try checkedRequiredPositionOffset(table, lookup_offset, try readU16BadGpos(table, lookup_offset + 6 + subtable_i * 2));
-        try ensureExtensionPositionPayloadWithin(table, subtable_offset);
-    }
-}
-
-fn ensureExtensionPositionPayloadWithin(table: Table, subtable_offset: usize) GposError!void {
-    // PosLookupRecords are applied eagerly. If a later record references a
-    // malformed ExtensionPos wrapper, reject the entire contextual match before
-    // earlier records can append partial adjustments.
-    if (subtable_offset > table.length or table.length - subtable_offset < 8) return error.BadGpos;
-    const pos_format = try readU16BadGpos(table, subtable_offset);
-    if (pos_format != 1) return error.UnsupportedGpos;
-    const extension_lookup_type = try readU16BadGpos(table, subtable_offset + 2);
-    if (extension_lookup_type == 9) return error.UnsupportedGpos;
-    const extension_subtable = try checkedExtensionPositionPayloadOffset(table, subtable_offset, try readU32BadGpos(table, subtable_offset + 4));
-    try ensurePositionSubtableFixedHeaderWithin(table, extension_subtable, extension_lookup_type);
-    try ensurePositionSubtableVariableDataWithin(table, extension_subtable, extension_lookup_type);
-}
-
-fn ensurePositionSubtableFixedHeaderWithin(table: Table, subtable_offset: usize, lookup_type: u16) GposError!void {
-    if (subtable_offset > table.length or table.length - subtable_offset < 2) return error.BadGpos;
-    const pos_format = try readU16BadGpos(table, subtable_offset);
-    const min_len: usize = switch (lookup_type) {
-        1 => 6,
-        2 => 8,
-        3 => 6,
-        4, 5, 6 => 12,
-        7 => switch (pos_format) {
-            1, 3 => 6,
-            2 => 8,
-            else => return error.UnsupportedGpos,
-        },
-        8 => switch (pos_format) {
-            1 => 6,
-            2 => 12,
-            3 => 4,
-            else => return error.UnsupportedGpos,
-        },
-        else => return,
-    };
-    if (table.length - subtable_offset < min_len) return error.BadGpos;
 }
 
 fn ensurePositionSubtableVariableDataWithin(table: Table, subtable_offset: usize, lookup_type: u16) GposError!void {
@@ -3833,7 +3689,7 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
     }
     lookup_options.context_depth = options.context_depth + 1;
     if (lookup_type == 1) {
-        if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+        if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
             if (accelerator.single_pos_subtables.len != 0) {
                 if (try collectSingleAdjustmentAtAccelerated(table, accelerator.single_pos_subtables, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, lookup_options)) return;
                 return;
@@ -3841,7 +3697,7 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
         }
     }
     if (lookup_type == 8) {
-        if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+        if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
             if (accelerator.chaining_coverage_only) {
                 _ = try collectNestedChainingCoveragePositioningAt(table, lookup_offset, subtable_count, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, accelerator);
                 return;
@@ -3849,7 +3705,7 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
         }
     }
     if (lookup_type == 9) {
-        if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
+        if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
             if (accelerator.chaining_class_subtables.len != 0) {
                 _ = try collectNestedExtensionChainingClassPositioningAt(table, subtable_count, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, accelerator);
                 return;
@@ -4464,7 +4320,7 @@ test "GPOS rejects ExtensionPos payload offsets outside the table during shaping
     // This calls the shaping collectors directly, bypassing load-time preflight,
     // so malformed ExtensionPos addresses must be checked at the point where
     // the wrapper is followed rather than leaking as EndOfStream/traps.
-    try std.testing.expectError(error.BadGpos, extensionPositionSubtablePayload(table, 0, 1));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.dispatch.extensionPayload(table, 0, 1));
     try std.testing.expectError(error.BadGpos, collectExtensionAdjustment(table, 0, &.{5}, &adjustments, std.testing.allocator, 0, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
@@ -4481,8 +4337,8 @@ test "GPOS rejects ExtensionPos payload offsets that alias the wrapper header" {
 
     // In-range ExtensionOffset values still have to name child subtable data,
     // not the wrapper's own format/type/offset words.
-    try std.testing.expectError(error.BadGpos, extensionPositionSubtablePayload(table, 0, 1));
-    try std.testing.expectError(error.BadGpos, ensureExtensionPositionPayloadWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.dispatch.extensionPayload(table, 0, 1));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.dispatch.validateExtensionWrapper(table, 0));
     try std.testing.expectError(error.BadGpos, collectExtensionAdjustment(table, 0, &.{5}, &adjustments, std.testing.allocator, 0, .{}));
     try std.testing.expectError(error.BadGpos, collectNestedExtensionAdjustment(table, 0, &.{5}, 0, &adjustments, std.testing.allocator, 0, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
@@ -4697,33 +4553,33 @@ test "GPOS cached lookup dispatch requires validated matching metadata" {
         .subtable_count = 4,
         .mark_filtering_set = 7,
     }};
-    const cached = try lookupDispatch(0, 0, .{
+    const cached = try runtime.dispatch.header(.{
         .data = &bytes,
         .offset = 0,
         .length = bytes.len,
         .assume_validated = true,
-    }, .{ .lookup_accelerators = &accelerators });
+    }, 0, 0, .{ .lookup_accelerators = &accelerators });
     try std.testing.expectEqual(@as(u16, 8), cached.lookup_type);
     try std.testing.expectEqual(@as(u16, 4), cached.subtable_count);
     try std.testing.expectEqual(@as(?u16, 7), cached.mark_filtering_set);
 
-    const parsed = try lookupDispatch(0, 0, .{
+    const parsed = try runtime.dispatch.header(.{
         .data = &bytes,
         .offset = 0,
         .length = bytes.len,
-    }, .{ .lookup_accelerators = &accelerators });
+    }, 0, 0, .{ .lookup_accelerators = &accelerators });
     try std.testing.expectEqual(@as(u16, 1), parsed.lookup_type);
     try std.testing.expectEqual(@as(u16, 0x0010), parsed.lookup_flag);
     try std.testing.expectEqual(@as(?u16, 0xffff), parsed.mark_filtering_set);
 
     var stale = accelerators;
     stale[0].lookup_offset = 2;
-    const stale_fallback = try lookupDispatch(0, 0, .{
+    const stale_fallback = try runtime.dispatch.header(.{
         .data = &bytes,
         .offset = 0,
         .length = bytes.len,
         .assume_validated = true,
-    }, .{ .lookup_accelerators = &stale });
+    }, 0, 0, .{ .lookup_accelerators = &stale });
     try std.testing.expectEqual(@as(u16, 1), stale_fallback.lookup_type);
 }
 
@@ -4752,7 +4608,7 @@ test "GPOS cached ExtensionPos type requires validated matching metadata" {
     };
     try std.testing.expectEqual(
         @as(?u16, 2),
-        try resolvedExtensionPositionLookupType(validated, 0, 9, 1, 0, .{
+        try runtime.dispatch.resolvedExtensionType(validated, 0, 9, 1, 0, .{
             .lookup_accelerators = &accelerators,
         }),
     );
@@ -4764,7 +4620,7 @@ test "GPOS cached ExtensionPos type requires validated matching metadata" {
     const unvalidated = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
     try std.testing.expectEqual(
         @as(?u16, 1),
-        try resolvedExtensionPositionLookupType(unvalidated, 0, 9, 1, 0, .{
+        try runtime.dispatch.resolvedExtensionType(unvalidated, 0, 9, 1, 0, .{
             .lookup_accelerators = &accelerators,
         }),
     );
@@ -4772,7 +4628,7 @@ test "GPOS cached ExtensionPos type requires validated matching metadata" {
     stale[0].lookup_offset = 2;
     try std.testing.expectEqual(
         @as(?u16, 1),
-        try resolvedExtensionPositionLookupType(validated, 0, 9, 1, 0, .{
+        try runtime.dispatch.resolvedExtensionType(validated, 0, 9, 1, 0, .{
             .lookup_accelerators = &stale,
         }),
     );
@@ -4802,12 +4658,12 @@ test "GPOS rejects reserved LookupFlag bits" {
     writeU16Test(&bytes, 40, 0); // FeatureCount.
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, ensurePositionLookupHeaderWithin(table, 14));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.dispatch.validateHeader(table, 14));
     try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
 
     writeU16Test(&bytes, 16, 0xff10); // MarkAttachmentType plus UseMarkFilteringSet are valid.
     writeU16Test(&bytes, 22, 0); // MarkFilteringSet index follows the subtable-offset array.
-    try ensurePositionLookupHeaderWithin(table, 14);
+    try positioning.lookup.dispatch.validateHeader(table, 14);
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
 }
 

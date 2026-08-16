@@ -39,6 +39,7 @@ const presentation_metrics = font_metrics.presentation;
 const table_only_fixture = @import("font/tests/fixtures/table_only.zig");
 const bitmap_mod = @import("font/tables/bitmap/root.zig");
 const color_tables = @import("font/tables/color/root.zig");
+const os2_mod = @import("font/tables/os2.zig");
 const colr_v0_mod = color_tables.colr_v0;
 const colr_v1_mod = color_tables.colr_v1;
 const colr_paint = colr_v1_mod.paint;
@@ -338,50 +339,8 @@ pub const NameEncoding = name_mod.Encoding;
 pub const NameLanguageTagInfo = name_mod.LanguageTagInfo;
 pub const NameRecordInfo = name_mod.RecordInfo;
 
-pub const StyleAttributes = struct {
-    weight: u16 = 400,
-    width: u16 = 5,
-    italic: bool = false,
-    bold: bool = false,
-};
-
-pub const Os2Info = struct {
-    version: u16,
-    x_avg_char_width: i16,
-    weight_class: u16,
-    width_class: u16,
-    fs_type: u16,
-    subscript_x_size: i16,
-    subscript_y_size: i16,
-    subscript_x_offset: i16,
-    subscript_y_offset: i16,
-    superscript_x_size: i16,
-    superscript_y_size: i16,
-    superscript_x_offset: i16,
-    superscript_y_offset: i16,
-    strikeout_size: i16,
-    strikeout_position: i16,
-    family_class: i16,
-    panose: [10]u8,
-    unicode_ranges: [4]u32,
-    vendor_id: [4]u8,
-    selection: u16,
-    first_char_index: u16,
-    last_char_index: u16,
-    typo_ascender: i16,
-    typo_descender: i16,
-    typo_line_gap: i16,
-    win_ascent: u16,
-    win_descent: u16,
-    code_page_ranges: ?[2]u32 = null,
-    x_height: ?i16 = null,
-    cap_height: ?i16 = null,
-    default_char: ?u16 = null,
-    break_char: ?u16 = null,
-    max_context: ?u16 = null,
-    lower_optical_point_size: ?u16 = null,
-    upper_optical_point_size: ?u16 = null,
-};
+pub const StyleAttributes = os2_mod.Style;
+pub const Os2Info = os2_mod.Info;
 
 pub const FontDecorationMetricSource = presentation_metrics.Source;
 pub const ScaledFontDecorationMetrics = presentation_metrics.ScaledDecoration;
@@ -1049,7 +1008,7 @@ pub const Font = struct {
             error.InvalidMetrics => {},
             else => return err,
         };
-        if (os2) |os2_table| try validateOs2Table(data, os2_table);
+        if (os2) |os2_table| try os2_mod.validate(data, os2_table);
         if (pclt) |pclt_table| try validatePcltTable(data, pclt_table);
         if (ankr) |ankr_table| try validateAnkrTable(data, ankr_table, glyph_count);
         if (mort) |mort_table| try aat_mort.validate(data, mort_table.offset, mort_table.length, glyph_count);
@@ -3148,7 +3107,7 @@ pub const Font = struct {
         }
         if (self.os2) |os2| {
             try sfnt.checksum.validate(self.data, os2);
-            _ = try readOs2StyleAttributes(self.data, os2);
+            _ = try os2_mod.style(self.data, os2);
         }
         return try presentation_metrics.decoration(
             self.data,
@@ -3167,7 +3126,7 @@ pub const Font = struct {
     pub fn scriptMetrics(self: *const Font) FontError!?FontScriptMetrics {
         const os2 = self.os2 orelse return null;
         try sfnt.checksum.validate(self.data, os2);
-        _ = try readOs2StyleAttributes(self.data, os2);
+        _ = try os2_mod.style(self.data, os2);
         return try presentation_metrics.script(self.data, os2);
     }
 
@@ -3237,15 +3196,14 @@ pub const Font = struct {
     pub fn styleAttributes(self: *const Font) FontError!StyleAttributes {
         const os2 = self.os2 orelse return .{};
         try sfnt.checksum.validate(self.data, os2);
-        return try readOs2StyleAttributes(self.data, os2);
+        return try os2_mod.style(self.data, os2);
     }
 
     /// Read validated metadata from the optional SFNT `OS/2` table.
     pub fn os2Info(self: *const Font) FontError!?Os2Info {
         const os2 = self.os2 orelse return null;
         try sfnt.checksum.validate(self.data, os2);
-        _ = try readOs2StyleAttributes(self.data, os2);
-        return try readOs2Info(self.data, os2);
+        return try os2_mod.info(self.data, os2);
     }
 
     pub fn variationAxes(self: *const Font, allocator: std.mem.Allocator) FontError![]VariationAxis {
@@ -5478,114 +5436,6 @@ fn vorgOriginY(data: []const u8, vorg: TableRecord, glyph_id: glyph_mod.GlyphId)
 
 fn validateGaspTable(data: []const u8, gasp: TableRecord) FontError!void {
     return try gasp_mod.validate(data, gasp.offset, gasp.length);
-}
-
-fn minimumOs2TableLength(version: u16) FontError!usize {
-    // usWeightClass/usWidthClass/fsSelection all live in the original OS/2
-    // payload, but the SFNT directory length is still the table's versioned
-    // contract. Enforcing the full minimum keeps a truncated v4/v5 OS/2 table
-    // from being accepted just because the early style fields happen to fit.
-    return switch (version) {
-        0 => 78,
-        1 => 86,
-        2...4 => 96,
-        5 => 100,
-        else => error.BadSfnt,
-    };
-}
-
-fn validateOs2Table(data: []const u8, os2: TableRecord) FontError!void {
-    _ = try readOs2StyleAttributes(data, os2);
-}
-
-fn readOs2Info(data: []const u8, os2: TableRecord) FontError!Os2Info {
-    try sfnt.requireLength(os2, 2);
-    const version = try bin.readU16At(data, os2.offset);
-    try sfnt.requireLength(os2, try minimumOs2TableLength(version));
-
-    var info = Os2Info{
-        .version = version,
-        .x_avg_char_width = try bin.readI16At(data, os2.offset + 2),
-        .weight_class = try bin.readU16At(data, os2.offset + 4),
-        .width_class = try bin.readU16At(data, os2.offset + 6),
-        .fs_type = try bin.readU16At(data, os2.offset + 8),
-        .subscript_x_size = try bin.readI16At(data, os2.offset + 10),
-        .subscript_y_size = try bin.readI16At(data, os2.offset + 12),
-        .subscript_x_offset = try bin.readI16At(data, os2.offset + 14),
-        .subscript_y_offset = try bin.readI16At(data, os2.offset + 16),
-        .superscript_x_size = try bin.readI16At(data, os2.offset + 18),
-        .superscript_y_size = try bin.readI16At(data, os2.offset + 20),
-        .superscript_x_offset = try bin.readI16At(data, os2.offset + 22),
-        .superscript_y_offset = try bin.readI16At(data, os2.offset + 24),
-        .strikeout_size = try bin.readI16At(data, os2.offset + 26),
-        .strikeout_position = try bin.readI16At(data, os2.offset + 28),
-        .family_class = try bin.readI16At(data, os2.offset + 30),
-        .panose = try readArray10At(data, os2.offset + 32),
-        .unicode_ranges = .{
-            try bin.readU32At(data, os2.offset + 42),
-            try bin.readU32At(data, os2.offset + 46),
-            try bin.readU32At(data, os2.offset + 50),
-            try bin.readU32At(data, os2.offset + 54),
-        },
-        .vendor_id = try bin.readTagAt(data, os2.offset + 58),
-        .selection = try bin.readU16At(data, os2.offset + 62),
-        .first_char_index = try bin.readU16At(data, os2.offset + 64),
-        .last_char_index = try bin.readU16At(data, os2.offset + 66),
-        .typo_ascender = try bin.readI16At(data, os2.offset + 68),
-        .typo_descender = try bin.readI16At(data, os2.offset + 70),
-        .typo_line_gap = try bin.readI16At(data, os2.offset + 72),
-        .win_ascent = try bin.readU16At(data, os2.offset + 74),
-        .win_descent = try bin.readU16At(data, os2.offset + 76),
-    };
-    if (version >= 1) {
-        info.code_page_ranges = .{
-            try bin.readU32At(data, os2.offset + 78),
-            try bin.readU32At(data, os2.offset + 82),
-        };
-    }
-    if (version >= 2) {
-        info.x_height = try bin.readI16At(data, os2.offset + 86);
-        info.cap_height = try bin.readI16At(data, os2.offset + 88);
-        info.default_char = try bin.readU16At(data, os2.offset + 90);
-        info.break_char = try bin.readU16At(data, os2.offset + 92);
-        info.max_context = try bin.readU16At(data, os2.offset + 94);
-    }
-    if (version >= 5) {
-        info.lower_optical_point_size = try bin.readU16At(data, os2.offset + 96);
-        info.upper_optical_point_size = try bin.readU16At(data, os2.offset + 98);
-    }
-    return info;
-}
-
-fn readArray10At(data: []const u8, offset: usize) FontError![10]u8 {
-    if (offset > data.len or data.len - offset < 10) return error.BadSfnt;
-    var value: [10]u8 = undefined;
-    @memcpy(&value, data[offset .. offset + 10]);
-    return value;
-}
-
-fn readOs2StyleAttributes(data: []const u8, os2: TableRecord) FontError!StyleAttributes {
-    try sfnt.requireLength(os2, 2);
-    const version = try bin.readU16At(data, os2.offset);
-    try sfnt.requireLength(os2, try minimumOs2TableLength(version));
-
-    const weight = try bin.readU16At(data, os2.offset + 4);
-    const width = try bin.readU16At(data, os2.offset + 6);
-    const fs_selection = try bin.readU16At(data, os2.offset + 62);
-
-    // These fields are used by font databases and style matching, so validate
-    // their OS/2-defined ranges both at parse time and at lazy public API read
-    // time. Font objects borrow caller-owned bytes, so this shared helper keeps
-    // post-parse byte changes from surfacing impossible style metadata.
-    if (weight < 1 or weight > 1000) return error.BadSfnt;
-    if (width < 1 or width > 9) return error.BadSfnt;
-
-    return .{
-        .weight = weight,
-        .width = width,
-        .italic = (fs_selection & 0x0001) != 0,
-        .bold = (fs_selection & 0x0020) != 0,
-    };
 }
 
 fn validateBaseTable(data: []const u8, base: TableRecord) FontError!void {

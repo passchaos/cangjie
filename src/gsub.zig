@@ -7,7 +7,6 @@ const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
 const ligature_provenance = @import("ligature_provenance.zig");
 const class_context = @import("opentype/class_context.zig");
-const ot_layout = @import("opentype/layout.zig");
 pub const runtime = @import("gsub/runtime/root.zig");
 const table_core = @import("gsub/table/root.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
@@ -202,7 +201,7 @@ fn chainingClassRuleBacktrackCount(rule: class_context.Rule) u16 {
     return @intCast(rule.records_offset);
 }
 
-const empty_class_def_offset = std.math.maxInt(usize);
+const empty_class_def_offset = table_core.class_def.empty_offset;
 
 const max_run_digest_cache_entries = 16;
 
@@ -1740,7 +1739,7 @@ fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, su
             needs_second_input = true;
             const second_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.input_offsets_pos + 2));
             chaining_subtables[subtable_i].second_input_coverage_offset = second_coverage_offset;
-            chaining_subtables[subtable_i].second_input_digest = try coverageDigest(table, second_coverage_offset);
+            chaining_subtables[subtable_i].second_input_digest = try table_core.coverage.digest(table, second_coverage_offset);
             if (pair_index_complete) {
                 pair_index_complete = try appendChainingPairSubtablePairs(table, coverage_offset, second_coverage_offset, @intCast(subtable_i), &pair_group_pairs, allocator);
             }
@@ -1750,19 +1749,19 @@ fn buildChainingCoverageLookupAccelerator(table: Table, lookup_offset: usize, su
         if (parsed_subtable.input_count > 2) {
             const third_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.input_offsets_pos + 4));
             chaining_subtables[subtable_i].third_input_coverage_offset = third_coverage_offset;
-            chaining_subtables[subtable_i].third_input_digest = try coverageDigest(table, third_coverage_offset);
+            chaining_subtables[subtable_i].third_input_digest = try table_core.coverage.digest(table, third_coverage_offset);
         }
         if (parsed_subtable.backtrack_count != 0) {
             needs_backtrack = true;
             const first_backtrack_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.backtrack_offsets_pos));
-            chaining_subtables[subtable_i].first_backtrack_digest = try coverageDigest(table, first_backtrack_coverage_offset);
+            chaining_subtables[subtable_i].first_backtrack_digest = try table_core.coverage.digest(table, first_backtrack_coverage_offset);
         }
         if (parsed_subtable.input_count == 1 and parsed_subtable.lookahead_count != 0) {
             needs_single_input_lookahead = true;
             const first_lookahead_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, parsed_subtable.lookahead_offsets_pos));
-            chaining_subtables[subtable_i].first_lookahead_digest = try coverageDigest(table, first_lookahead_coverage_offset);
+            chaining_subtables[subtable_i].first_lookahead_digest = try table_core.coverage.digest(table, first_lookahead_coverage_offset);
         }
-        const subtable_digest = try coverageDigest(table, coverage_offset);
+        const subtable_digest = try table_core.coverage.digest(table, coverage_offset);
         subtable_digests[subtable_i] = subtable_digest;
         digest.unionWith(subtable_digest);
         saw_input_coverage = true;
@@ -2249,13 +2248,13 @@ fn appendClassFirstIndex(
     classes: *std.ArrayList(u16),
     allocator: std.mem.Allocator,
 ) (GsubError || std.mem.Allocator.Error)!usize {
-    const coverage_count = try coverageGlyphCount(table, coverage_offset);
+    const coverage_count = try table_core.coverage.glyphCount(table, coverage_offset);
     var entries = try std.ArrayList(ClassFirstEntry).initCapacity(allocator, coverage_count);
     defer entries.deinit(allocator);
 
     for (0..coverage_count) |coverage_i| {
-        const glyph = (try coverageGlyphAt(table, coverage_offset, coverage_i)) orelse return error.BadGsub;
-        const class_set = try classValue(table, input_class_def, glyph);
+        const glyph = (try table_core.coverage.glyphAt(table, coverage_offset, coverage_i)) orelse return error.BadGsub;
+        const class_set = try table_core.class_def.value(table, input_class_def, glyph);
         const group_index = classGroupIndexForClass(groups, class_set) orelse continue;
         try entries.append(allocator, .{
             .glyph = glyph,
@@ -2285,13 +2284,13 @@ fn appendGlyphFirstIndex(
     classes: *std.ArrayList(u16),
     allocator: std.mem.Allocator,
 ) (GsubError || std.mem.Allocator.Error)!usize {
-    const coverage_count = try coverageGlyphCount(table, coverage_offset);
+    const coverage_count = try table_core.coverage.glyphCount(table, coverage_offset);
     var entries = try std.ArrayList(ClassFirstEntry).initCapacity(allocator, coverage_count);
     defer entries.deinit(allocator);
     for (0..coverage_count) |coverage_i| {
         const group_index = classGroupIndexForClass(groups, @intCast(coverage_i)) orelse continue;
         try entries.append(allocator, .{
-            .glyph = (try coverageGlyphAt(table, coverage_offset, coverage_i)) orelse return error.BadGsub,
+            .glyph = (try table_core.coverage.glyphAt(table, coverage_offset, coverage_i)) orelse return error.BadGsub,
             .group_index = @intCast(group_index),
         });
     }
@@ -2431,7 +2430,7 @@ fn buildSingleSubstAccelerator(table: Table, subtable_offset: usize) GsubError!S
 fn buildSingleSubstEntries(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]SingleSubstEntry {
     const subst_format = try readU16(table, subtable_offset);
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const entry_count = try coverageGlyphCount(table, coverage_offset);
+    const entry_count = try table_core.coverage.glyphCount(table, coverage_offset);
     const entries = try allocator.alloc(SingleSubstEntry, entry_count);
     errdefer allocator.free(entries);
 
@@ -2439,7 +2438,7 @@ fn buildSingleSubstEntries(table: Table, subtable_offset: usize, allocator: std.
         1 => {
             const delta = try readI16(table, subtable_offset + 4);
             for (entries, 0..) |*entry, i| {
-                const from = (try coverageGlyphAt(table, coverage_offset, i)) orelse return error.BadGsub;
+                const from = (try table_core.coverage.glyphAt(table, coverage_offset, i)) orelse return error.BadGsub;
                 entry.* = .{
                     .from = from,
                     .to = @bitCast(@as(i16, @bitCast(from)) +% delta),
@@ -2451,7 +2450,7 @@ fn buildSingleSubstEntries(table: Table, subtable_offset: usize, allocator: std.
             if (glyph_count != entry_count) return error.BadGsub;
             for (entries, 0..) |*entry, i| {
                 entry.* = .{
-                    .from = (try coverageGlyphAt(table, coverage_offset, i)) orelse return error.BadGsub,
+                    .from = (try table_core.coverage.glyphAt(table, coverage_offset, i)) orelse return error.BadGsub,
                     .to = try readU16(table, subtable_offset + 6 + i * 2),
                 };
             }
@@ -2464,37 +2463,19 @@ fn buildSingleSubstEntries(table: Table, subtable_offset: usize, allocator: std.
     return entries;
 }
 
-fn coverageGlyphCount(table: Table, coverage_offset: usize) GsubError!usize {
-    return switch (try readU16(table, coverage_offset)) {
-        1 => try readU16(table, coverage_offset + 2),
-        2 => count: {
-            const range_count = try readU16(table, coverage_offset + 2);
-            var count: usize = 0;
-            for (0..range_count) |range_i| {
-                const range_offset = coverage_offset + 4 + range_i * 6;
-                const start = try readU16(table, range_offset);
-                const end = try readU16(table, range_offset + 2);
-                count += @as(usize, end) - @as(usize, start) + 1;
-            }
-            break :count count;
-        },
-        else => error.UnsupportedGsub,
-    };
-}
-
 fn fillSingleMapping(table: Table, coverage_offset: usize, delta: i16, substitutes_pos: ?usize, accelerator: *SingleSubstAccelerator) GsubError!void {
     const format = try readU16(table, coverage_offset);
     const glyph = switch (format) {
         1 => glyph: {
             const glyph_count = try readU16(table, coverage_offset + 2);
             if (glyph_count != 1) return;
-            try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
+            try table_core.coverage.validateFormat1Order(table, coverage_offset, glyph_count);
             break :glyph try readU16(table, coverage_offset + 4);
         },
         2 => glyph: {
             const range_count = try readU16(table, coverage_offset + 2);
             if (range_count != 1) return;
-            try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
+            try table_core.coverage.validateFormat2Ranges(table, coverage_offset, range_count);
             const start = try readU16(table, coverage_offset + 4);
             const end = try readU16(table, coverage_offset + 6);
             if (start != end) return;
@@ -2519,7 +2500,7 @@ fn buildMultipleSubstAccelerator(table: Table, subtable_offset: usize, allocator
 
     var sequence_i: usize = 0;
     while (sequence_i < sequence_count) : (sequence_i += 1) {
-        const glyph = (try coverageGlyphAt(table, coverage_offset, sequence_i)) orelse {
+        const glyph = (try table_core.coverage.glyphAt(table, coverage_offset, sequence_i)) orelse {
             allocator.free(entries);
             return .{};
         };
@@ -2558,7 +2539,7 @@ fn buildLigatureSubstAccelerator(table: Table, subtable_offset: usize, allocator
 
     var set_i: usize = 0;
     while (set_i < lig_set_count) : (set_i += 1) {
-        const glyph = (try coverageGlyphAt(table, coverage_offset, set_i)) orelse return error.BadGsub;
+        const glyph = (try table_core.coverage.glyphAt(table, coverage_offset, set_i)) orelse return error.BadGsub;
         first_component_digest.add(glyph);
         const set_offset = checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + set_i * 2)) catch {
             sets[set_i] = .{
@@ -2667,31 +2648,6 @@ fn deduplicateSortedGlyphs(glyphs: *std.ArrayList(GlyphId)) void {
         write += 1;
     }
     glyphs.shrinkRetainingCapacity(write);
-}
-
-fn coverageGlyphAt(table: Table, coverage_offset: usize, index: usize) GsubError!?GlyphId {
-    const format = try readU16(table, coverage_offset);
-    return switch (format) {
-        1 => glyph: {
-            const glyph_count = try readU16(table, coverage_offset + 2);
-            if (index >= glyph_count) break :glyph null;
-            break :glyph try readU16(table, coverage_offset + 4 + index * 2);
-        },
-        2 => glyph: {
-            const range_count = try readU16(table, coverage_offset + 2);
-            for (0..range_count) |range_i| {
-                const range_offset = coverage_offset + 4 + range_i * 6;
-                const start = try readU16(table, range_offset);
-                const end = try readU16(table, range_offset + 2);
-                const start_index = try readU16(table, range_offset + 4);
-                const len = @as(usize, end) - @as(usize, start) + 1;
-                if (index < start_index or index >= @as(usize, start_index) + len) continue;
-                break :glyph @intCast(@as(usize, start) + (index - @as(usize, start_index)));
-            }
-            break :glyph null;
-        },
-        else => error.UnsupportedGsub,
-    };
 }
 
 fn ligatureSetEntryLessThan(_: void, lhs: LigatureSetEntry, rhs: LigatureSetEntry) bool {
@@ -4122,7 +4078,7 @@ fn applySingleSubstitutionSubtable(table: Table, subtable_offset: usize, glyphs:
                 if (matched[glyph_index]) continue;
                 if (!sourceFeatureAllowsGlyph(options, glyph_index)) continue;
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph.*)) continue;
-                if (try coverageIndex(table, coverage_offset, glyph.*) != null) {
+                if (try table_core.coverage.index(table, coverage_offset, glyph.*) != null) {
                     glyph.* = @bitCast(@as(i16, @bitCast(glyph.*)) +% delta);
                     markGlyphSubstituted(options, glyph_index);
                     matched[glyph_index] = true;
@@ -4135,7 +4091,7 @@ fn applySingleSubstitutionSubtable(table: Table, subtable_offset: usize, glyphs:
                 if (matched[glyph_index]) continue;
                 if (!sourceFeatureAllowsGlyph(options, glyph_index)) continue;
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph.*)) continue;
-                if (try coverageIndex(table, coverage_offset, glyph.*)) |index| {
+                if (try table_core.coverage.index(table, coverage_offset, glyph.*)) |index| {
                     if (index < glyph_count) {
                         glyph.* = try readU16(table, subtable_offset + 6 + index * 2);
                         markGlyphSubstituted(options, glyph_index);
@@ -4157,7 +4113,7 @@ fn applySingleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.Ar
             for (glyphs.items, 0..) |*glyph, glyph_index| {
                 if (!sourceFeatureAllowsGlyph(options, glyph_index)) continue;
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph.*)) continue;
-                if (try coverageIndex(table, coverage_offset, glyph.*) != null) {
+                if (try table_core.coverage.index(table, coverage_offset, glyph.*) != null) {
                     glyph.* = @bitCast(@as(i16, @bitCast(glyph.*)) +% delta);
                     markGlyphSubstituted(options, glyph_index);
                 }
@@ -4168,7 +4124,7 @@ fn applySingleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.Ar
             for (glyphs.items, 0..) |*glyph, glyph_index| {
                 if (!sourceFeatureAllowsGlyph(options, glyph_index)) continue;
                 if (lookupIgnoresGlyph(lookup_flag, options, glyph.*)) continue;
-                if (try coverageIndex(table, coverage_offset, glyph.*)) |index| {
+                if (try table_core.coverage.index(table, coverage_offset, glyph.*)) |index| {
                     if (index < glyph_count) {
                         glyph.* = try readU16(table, subtable_offset + 6 + index * 2);
                         markGlyphSubstituted(options, glyph_index);
@@ -4188,14 +4144,14 @@ fn applySingleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.
     switch (subst_format) {
         1 => {
             const delta = try readI16(table, subtable_offset + 4);
-            if (try coverageIndex(table, coverage_offset, glyphs.items[glyph_index]) == null) return false;
+            if (try table_core.coverage.index(table, coverage_offset, glyphs.items[glyph_index]) == null) return false;
             glyphs.items[glyph_index] = @bitCast(@as(i16, @bitCast(glyphs.items[glyph_index])) +% delta);
             markGlyphSubstituted(options, glyph_index);
             return true;
         },
         2 => {
             const glyph_count = try readU16(table, subtable_offset + 4);
-            const coverage = try coverageIndex(table, coverage_offset, glyphs.items[glyph_index]) orelse return false;
+            const coverage = try table_core.coverage.index(table, coverage_offset, glyphs.items[glyph_index]) orelse return false;
             if (coverage >= glyph_count) return false;
             glyphs.items[glyph_index] = try readU16(table, subtable_offset + 6 + coverage * 2);
             markGlyphSubstituted(options, glyph_index);
@@ -4217,13 +4173,13 @@ fn applySingleSubstitutionAccelerated(table: Table, accelerator: SingleSubstAcce
     }
     switch (accelerator.subst_format) {
         1 => {
-            if (try coverageIndex(table, accelerator.coverage_offset, glyphs.items[glyph_index]) == null) return false;
+            if (try table_core.coverage.index(table, accelerator.coverage_offset, glyphs.items[glyph_index]) == null) return false;
             glyphs.items[glyph_index] = @bitCast(@as(i16, @bitCast(glyphs.items[glyph_index])) +% accelerator.delta);
             markGlyphSubstituted(options, glyph_index);
             return true;
         },
         2 => {
-            const coverage = try coverageIndex(table, accelerator.coverage_offset, glyphs.items[glyph_index]) orelse return false;
+            const coverage = try table_core.coverage.index(table, accelerator.coverage_offset, glyphs.items[glyph_index]) orelse return false;
             if (coverage >= accelerator.glyph_count) return false;
             glyphs.items[glyph_index] = try readU16(table, accelerator.substitutes_pos + coverage * 2);
             markGlyphSubstituted(options, glyph_index);
@@ -4963,7 +4919,7 @@ fn applyMultipleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
     while (i < glyphs.items.len) : (i += 1) {
         if (!sourceFeatureAllowsGlyph(options, i)) continue;
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[i])) continue;
-        const coverage = try coverageIndex(table, coverage_offset, glyphs.items[i]) orelse continue;
+        const coverage = try table_core.coverage.index(table, coverage_offset, glyphs.items[i]) orelse continue;
         if (coverage >= sequence_count) continue;
         const sequence_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + coverage * 2));
         const glyph_count = try readU16(table, sequence_offset);
@@ -5067,7 +5023,7 @@ fn applyAlternateSubstitutionSubtable(table: Table, subtable_offset: usize, glyp
         }
         if (!sourceFeatureAllowsGlyph(options, glyph_index)) continue;
         if (lookupIgnoresGlyph(lookup_flag, options, glyph.*)) continue;
-        const coverage = try coverageIndex(table, coverage_offset, glyph.*) orelse continue;
+        const coverage = try table_core.coverage.index(table, coverage_offset, glyph.*) orelse continue;
         if (coverage >= alternate_set_count) continue;
         const alternate_set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + coverage * 2));
         const glyph_count = try readU16(table, alternate_set_offset);
@@ -5207,7 +5163,7 @@ fn applyLigatureSubstitution(table: Table, subtable_offset: usize, glyphs: *std.
         if (!sourceFeatureAllowsGlyph(options, i)) continue;
         const first = glyphs.items[i];
         if (lookupIgnoresGlyph(lookup_flag, options, first)) continue;
-        const covered = try coverageIndex(table, coverage_offset, first) orelse continue;
+        const covered = try table_core.coverage.index(table, coverage_offset, first) orelse continue;
         if (covered >= lig_set_count) continue;
         const set_offset = checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + covered * 2)) catch continue;
         if (try ligatureAt(table, set_offset, glyphs.items[i..], i, lookup_flag, options, &component_offsets)) |match| {
@@ -5445,7 +5401,7 @@ fn applyMultipleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *st
 
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const sequence_count = try readU16(table, subtable_offset + 4);
-    const coverage = try coverageIndex(table, coverage_offset, glyphs.items[glyph_index]) orelse return null;
+    const coverage = try table_core.coverage.index(table, coverage_offset, glyphs.items[glyph_index]) orelse return null;
     if (coverage >= sequence_count) return null;
     const sequence_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + coverage * 2));
     const glyph_count = try readU16(table, sequence_offset);
@@ -5481,7 +5437,7 @@ fn applyLigatureSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *st
     if (lookupIgnoresGlyph(lookup_flag, options, first)) return null;
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const lig_set_count = try readU16(table, subtable_offset + 4);
-    const covered = try coverageIndex(table, coverage_offset, first) orelse return null;
+    const covered = try table_core.coverage.index(table, coverage_offset, first) orelse return null;
     if (covered >= lig_set_count) return null;
     const set_offset = checkedRequiredSubtableOffset(table, subtable_offset, try readU16(table, subtable_offset + 6 + covered * 2)) catch return null;
     var component_offsets: [max_ligature_components]usize = undefined;
@@ -5517,7 +5473,7 @@ fn applyContextSubstitution(table: Table, subtable_offset: usize, glyphs: *std.A
             while (pos < glyphs.items.len) : (pos += 1) {
                 if (!sourceFeatureAllowsGlyph(options, pos)) continue;
                 if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) continue;
-                const coverage = try coverageIndex(table, coverage_offset, glyphs.items[pos]) orelse continue;
+                const coverage = try table_core.coverage.index(table, coverage_offset, glyphs.items[pos]) orelse continue;
                 if (coverage >= rule_set_count) continue;
                 const rule_set_relative = try readU16(table, subtable_offset + 6 + coverage * 2);
                 if (rule_set_relative == 0) continue;
@@ -5539,7 +5495,7 @@ fn applyContextSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std
             if (!sourceFeatureAllowsGlyph(options, glyph_index)) return .{};
             if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[glyph_index])) return .{};
             const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-            const coverage = try coverageIndex(table, coverage_offset, glyphs.items[glyph_index]) orelse return .{};
+            const coverage = try table_core.coverage.index(table, coverage_offset, glyphs.items[glyph_index]) orelse return .{};
             const rule_set_count = try readU16(table, subtable_offset + 4);
             if (coverage >= rule_set_count) return .{};
             const rule_set_relative = try readU16(table, subtable_offset + 6 + coverage * 2);
@@ -5597,8 +5553,8 @@ fn applyContextClassSubstitution(table: Table, subtable_offset: usize, glyphs: *
     while (pos < glyphs.items.len) : (pos += 1) {
         if (!sourceFeatureAllowsGlyph(options, pos)) continue;
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) continue;
-        if (try coverageIndex(table, coverage_offset, glyphs.items[pos]) == null) continue;
-        const class = try classValue(table, class_def_offset, glyphs.items[pos]);
+        if (try table_core.coverage.index(table, coverage_offset, glyphs.items[pos]) == null) continue;
+        const class = try table_core.class_def.value(table, class_def_offset, glyphs.items[pos]);
         if (class >= class_set_count) continue;
         const set_relative = try readU16(table, subtable_offset + 8 + @as(usize, class) * 2);
         if (set_relative == 0) continue;
@@ -5611,9 +5567,9 @@ fn applyContextClassSubstitutionAt(table: Table, subtable_offset: usize, glyphs:
     if (pos >= glyphs.items.len) return .{};
     if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) return .{};
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    if (try coverageIndex(table, coverage_offset, glyphs.items[pos]) == null) return .{};
+    if (try table_core.coverage.index(table, coverage_offset, glyphs.items[pos]) == null) return .{};
     const class_def_offset = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
-    const class = try classValue(table, class_def_offset, glyphs.items[pos]);
+    const class = try table_core.class_def.value(table, class_def_offset, glyphs.items[pos]);
     const class_set_count = try readU16(table, subtable_offset + 6);
     if (class >= class_set_count) return .{};
     const set_relative = try readU16(table, subtable_offset + 8 + @as(usize, class) * 2);
@@ -5689,7 +5645,7 @@ fn applyAcceleratedContextClassSubstitutionAt(table: Table, subtable: ContextCla
         input_classes[input_i - 1] = if (subtable.class_def == empty_class_def_offset)
             glyphs.items[input_indices[input_i]]
         else
-            try classValue(table, subtable.class_def, glyphs.items[input_indices[input_i]]);
+            try table_core.class_def.value(table, subtable.class_def, glyphs.items[input_indices[input_i]]);
     }
 
     const rules = subtable.rules[group.start .. group.start + group.len];
@@ -5729,7 +5685,7 @@ fn applyClassRuleSet(table: Table, rule_set_offset: usize, class_def_offset: usi
         var matched = true;
         for (1..glyph_count) |i| {
             const expected_class = try readU16(table, rule_offset + 4 + (i - 1) * 2);
-            const actual_class = try classValue(table, class_def_offset, glyphs.items[input_indices_buf[i]]);
+            const actual_class = try table_core.class_def.value(table, class_def_offset, glyphs.items[input_indices_buf[i]]);
             if (actual_class != expected_class) {
                 matched = false;
                 break;
@@ -5762,7 +5718,7 @@ fn applyContextCoverageSubstitution(table: Table, subtable_offset: usize, glyphs
         var matched = true;
         for (0..glyph_count) |i| {
             const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, coverage_offsets_pos + i * 2));
-            if (try coverageIndex(table, coverage_offset, glyphs.items[input_indices_buf[i]]) == null) {
+            if (try table_core.coverage.index(table, coverage_offset, glyphs.items[input_indices_buf[i]]) == null) {
                 matched = false;
                 break;
             }
@@ -5787,7 +5743,7 @@ fn applyContextCoverageSubstitutionAt(table: Table, subtable_offset: usize, glyp
     const coverage_offsets_pos = subtable_offset + 6;
     for (0..glyph_count) |i| {
         const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, coverage_offsets_pos + i * 2));
-        if (try coverageIndex(table, coverage_offset, glyphs.items[input_indices_buf[i]]) == null) return .{};
+        if (try table_core.coverage.index(table, coverage_offset, glyphs.items[input_indices_buf[i]]) == null) return .{};
     }
     const subst_count = try readU16(table, subtable_offset + 4);
     const subst_records_pos = coverage_offsets_pos + @as(usize, glyph_count) * 2;
@@ -5856,7 +5812,7 @@ fn applyContextCoverageLookupAccelerated(
             const coverage_offsets = accelerator.context_coverage_offsets[subtable.coverage_start .. subtable.coverage_start + subtable.glyph_count];
             // First coverage was resolved exactly by `context_groups`.
             for (coverage_offsets[1..], 1..) |coverage_offset, input_i| {
-                if (try coverageIndex(table, coverage_offset, glyphs.items[input_indices_buf[input_i]]) == null) {
+                if (try table_core.coverage.index(table, coverage_offset, glyphs.items[input_indices_buf[input_i]]) == null) {
                     matched = false;
                     break;
                 }
@@ -5928,7 +5884,7 @@ fn applyChainingContextSubstitution(table: Table, subtable_offset: usize, glyphs
                 defer pos = next_pos;
                 if (!sourceFeatureAllowsGlyph(options, pos)) continue;
                 if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) continue;
-                const coverage = try coverageIndex(table, coverage_offset, glyphs.items[pos]) orelse continue;
+                const coverage = try table_core.coverage.index(table, coverage_offset, glyphs.items[pos]) orelse continue;
                 if (coverage >= chain_set_count) continue;
                 const set_relative = try readU16(table, subtable_offset + 6 + coverage * 2);
                 if (set_relative == 0) continue;
@@ -5961,7 +5917,7 @@ fn chainingCoverageLookupMayMatch(table: Table, lookup_offset: usize, subtable_c
     for (0..subtable_count) |subtable_i| {
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
         const coverage_offset = try firstChainingInputCoverageOffset(table, subtable_offset) orelse continue;
-        const coverage_digest = try coverageDigest(table, coverage_offset);
+        const coverage_digest = try table_core.coverage.digest(table, coverage_offset);
         if (coverage_digest.mayIntersect(run_digest)) return true;
     }
     return false;
@@ -5974,7 +5930,7 @@ fn chainingCoverageLookupMayMatchByScan(table: Table, lookup_offset: usize, subt
         for (glyphs, 0..) |glyph, glyph_index| {
             if (!sourceFeatureAllowsGlyph(options, glyph_index)) continue;
             if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
-            if (try coverageIndex(table, coverage_offset, glyph) != null) return true;
+            if (try table_core.coverage.index(table, coverage_offset, glyph) != null) return true;
         }
     }
     return false;
@@ -6579,7 +6535,7 @@ fn applyChainingGlyphSubstitutionAt(table: Table, subtable_offset: usize, glyphs
 
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const chain_set_count = try readU16(table, subtable_offset + 4);
-    const coverage = try coverageIndex(table, coverage_offset, glyphs.items[pos]) orelse return .{};
+    const coverage = try table_core.coverage.index(table, coverage_offset, glyphs.items[pos]) orelse return .{};
     if (coverage >= chain_set_count) return .{};
     const set_relative = try readU16(table, subtable_offset + 6 + coverage * 2);
     if (set_relative == 0) return .{};
@@ -6598,8 +6554,8 @@ fn applyChainingClassSubstitution(table: Table, subtable_offset: usize, glyphs: 
         defer pos = next_pos;
         if (!sourceFeatureAllowsGlyph(options, pos)) continue;
         if (lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) continue;
-        if (try coverageIndex(table, coverage_offset, glyphs.items[pos]) == null) continue;
-        const input_class = try classValue(table, input_class_def, glyphs.items[pos]);
+        if (try table_core.coverage.index(table, coverage_offset, glyphs.items[pos]) == null) continue;
+        const input_class = try table_core.class_def.value(table, input_class_def, glyphs.items[pos]);
         if (input_class >= set_count) continue;
         const set_relative = try readU16(table, subtable_offset + 12 + @as(usize, input_class) * 2);
         if (set_relative == 0) continue;
@@ -6618,8 +6574,8 @@ fn applyChainingClassSubstitutionAt(table: Table, subtable_offset: usize, glyphs
     const input_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 6));
     const lookahead_class_def = try checkedOptionalClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
     const set_count = try readU16(table, subtable_offset + 10);
-    if (try coverageIndex(table, coverage_offset, glyphs.items[pos]) == null) return .{};
-    const input_class = try classValue(table, input_class_def, glyphs.items[pos]);
+    if (try table_core.coverage.index(table, coverage_offset, glyphs.items[pos]) == null) return .{};
+    const input_class = try table_core.class_def.value(table, input_class_def, glyphs.items[pos]);
     if (input_class >= set_count) return .{};
     const set_relative = try readU16(table, subtable_offset + 12 + @as(usize, input_class) * 2);
     if (set_relative == 0) return .{};
@@ -6685,7 +6641,7 @@ const ChainingClassRuleMatchWindow = struct {
         if (index >= max_chaining_class_region_glyphs) return error.UnsupportedGsub;
         if (!try self.ensureInputCount(index + 1)) return null;
         if (!self.input_class_valid[index]) {
-            self.input_classes[index] = try classValue(self.table, self.input_class_def, self.glyphs[self.input_indices[index]]);
+            self.input_classes[index] = try table_core.class_def.value(self.table, self.input_class_def, self.glyphs[self.input_indices[index]]);
             self.input_class_valid[index] = true;
         }
         return self.input_classes[index];
@@ -6695,7 +6651,7 @@ const ChainingClassRuleMatchWindow = struct {
         if (index >= max_chaining_class_region_glyphs) return error.UnsupportedGsub;
         if (!try self.ensureBacktrackCount(index + 1)) return null;
         if (!self.backtrack_class_valid[index]) {
-            self.backtrack_classes[index] = try classValue(self.table, self.backtrack_class_def, self.glyphs[self.backtrack_indices[index]]);
+            self.backtrack_classes[index] = try table_core.class_def.value(self.table, self.backtrack_class_def, self.glyphs[self.backtrack_indices[index]]);
             self.backtrack_class_valid[index] = true;
         }
         return self.backtrack_classes[index];
@@ -6705,7 +6661,7 @@ const ChainingClassRuleMatchWindow = struct {
         if (index >= max_chaining_class_region_glyphs) return error.UnsupportedGsub;
         if (!try self.ensureLookaheadCount(input_count, index + 1)) return null;
         if (!self.lookahead_class_valid[index]) {
-            self.lookahead_classes[index] = try classValue(self.table, self.lookahead_class_def, self.glyphs[self.lookahead_indices[index]]);
+            self.lookahead_classes[index] = try table_core.class_def.value(self.table, self.lookahead_class_def, self.glyphs[self.lookahead_indices[index]]);
             self.lookahead_class_valid[index] = true;
         }
         return self.lookahead_classes[index];
@@ -6978,14 +6934,14 @@ fn applyAcceleratedChainingCoverageNoContextAt(table: Table, subtable_info: Chai
             subtable_info.second_input_coverage_offset
         else
             try checkedRequiredCoverageOffset(table, subtable_info.subtable_offset, try readU16(table, subtable_info.input_offsets_pos + 2));
-        if (try coverageIndex(table, coverage_offset, glyphs.items[input_indices[1]]) == null) return .{};
+        if (try table_core.coverage.index(table, coverage_offset, glyphs.items[input_indices[1]]) == null) return .{};
     }
     if (subtable_info.input_count > 2) {
         const coverage_offset = if (subtable_info.third_input_coverage_offset != 0)
             subtable_info.third_input_coverage_offset
         else
             try checkedRequiredCoverageOffset(table, subtable_info.subtable_offset, try readU16(table, subtable_info.input_offsets_pos + 4));
-        if (try coverageIndex(table, coverage_offset, glyphs.items[input_indices[2]]) == null) return .{};
+        if (try table_core.coverage.index(table, coverage_offset, glyphs.items[input_indices[2]]) == null) return .{};
     }
     try markUnsafeContextMatch(allocator, options, input_indices);
     if (try applyFastChainingSingleRecords(table, subtable_info, glyphs, input_indices, options)) {
@@ -7080,7 +7036,7 @@ fn coverageIndicesMatchFrom(table: Table, base_offset: usize, glyphs: []const Gl
     while (i < indices.len) : (i += 1) {
         const glyph_index = indices[i];
         const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16(table, offsets_pos + i * 2));
-        if (try coverageIndex(table, coverage_offset, glyphs[glyph_index]) == null) return false;
+        if (try table_core.coverage.index(table, coverage_offset, glyphs[glyph_index]) == null) return false;
     }
     return true;
 }
@@ -7096,7 +7052,7 @@ fn coverageSequenceMatches(table: Table, base_offset: usize, glyphs: []const Gly
             .backtrack => pos - 1 - i,
             .input, .lookahead => pos + i,
         };
-        if (try coverageIndex(table, coverage_offset, glyphs[glyph_index]) == null) return false;
+        if (try table_core.coverage.index(table, coverage_offset, glyphs[glyph_index]) == null) return false;
     }
     return true;
 }
@@ -8180,136 +8136,24 @@ fn ensureCoverageOffsetArrayWithinForShaping(table: Table, base_offset: usize, o
 }
 
 fn ensureCoverageIndicesWithin(table: Table, coverage_offset: usize, target_count: usize) GsubError!void {
-    const format = try readU16BadGsub(table, coverage_offset);
-    switch (format) {
-        1 => {
-            const glyph_count = try readU16BadGsub(table, coverage_offset + 2);
-            if (@as(usize, glyph_count) > target_count) return error.BadGsub;
-        },
-        2 => {
-            const range_count = try readU16BadGsub(table, coverage_offset + 2);
-            for (0..range_count) |range_i| {
-                const range = coverage_offset + 4 + range_i * 6;
-                const start = try readU16BadGsub(table, range);
-                const end = try readU16BadGsub(table, range + 2);
-                const start_index = try readU16BadGsub(table, range + 4);
-                const span = @as(usize, end) - @as(usize, start) + 1;
-                if (@as(usize, start_index) > target_count or span > target_count - @as(usize, start_index)) return error.BadGsub;
-            }
-        },
-        else => return error.UnsupportedGsub,
-    }
-}
-
-fn classValueForValidation(table: Table, class_def_offset: usize, glyph: GlyphId) GsubError!u16 {
-    return classValueTrusted(table, class_def_offset, glyph) catch |err| {
-        return switch (err) {
-            error.EndOfStream => error.BadGsub,
-            else => err,
-        };
-    };
-}
-
-fn classValueTrusted(table: Table, class_def_offset: usize, glyph: GlyphId) GsubError!u16 {
-    // Callers use this only after `ensureClassDefTableWithin` has validated the
-    // ClassDef shape. Avoid re-validating format-2 range order for every
-    // covered glyph in large contextual subtables; complex fonts such as
-    // NotoNastaliqUrdu can otherwise spend most parse time repeatedly proving
-    // the same ClassDef invariant.
-    const format = try readU16(table, class_def_offset);
-    switch (format) {
-        1 => {
-            const start = try readU16(table, class_def_offset + 2);
-            const count = try readU16(table, class_def_offset + 4);
-            const glyph_index = @as(usize, glyph);
-            const start_index = @as(usize, start);
-            const end_exclusive = start_index + @as(usize, count);
-            if (glyph_index < start_index or glyph_index >= end_exclusive) return 0;
-            return try readU16(table, class_def_offset + 6 + (glyph_index - start_index) * 2);
-        },
-        2 => {
-            const range_count = try readU16(table, class_def_offset + 2);
-            return if (try findSortedGlyphRangeRecord(table, class_def_offset + 4, range_count, glyph)) |record| record.value else 0;
-        },
-        else => return error.UnsupportedGsub,
-    }
+    return table_core.coverage.validateIndices(table, coverage_offset, target_count);
 }
 
 fn ensureClassDefTableWithin(table: Table, class_def_offset: usize) GsubError!void {
-    const format = try readU16BadGsub(table, class_def_offset);
-    switch (format) {
-        1 => {
-            const start_glyph = try readU16BadGsub(table, class_def_offset + 2);
-            const glyph_count = try readU16BadGsub(table, class_def_offset + 4);
-            try ensureBytesWithin(table, class_def_offset + 6, @as(usize, glyph_count) * 2);
-            if (glyph_count != 0) {
-                const end_glyph = @as(usize, start_glyph) + @as(usize, glyph_count) - 1;
-                try ensureGlyphIdWithinMaxp(table, end_glyph);
-            }
-        },
-        2 => {
-            const range_count = try readU16BadGsub(table, class_def_offset + 2);
-            try ensureBytesWithin(table, class_def_offset + 4, @as(usize, range_count) * 6);
-            try validateClassDefFormat2Ranges(table, class_def_offset, range_count);
-            for (0..range_count) |range_i| {
-                const range_offset = class_def_offset + 4 + range_i * 6;
-                try ensureGlyphRangeWithinMaxp(
-                    table,
-                    try readU16BadGsub(table, range_offset),
-                    try readU16BadGsub(table, range_offset + 2),
-                );
-            }
-        },
-        else => return error.UnsupportedGsub,
-    }
+    return table_core.class_def.validate(table, class_def_offset);
 }
 
 fn ensureOptionalClassDefTableWithin(table: Table, class_def_offset: usize) GsubError!void {
     if (class_def_offset == empty_class_def_offset) return;
-    try ensureClassDefTableWithin(table, class_def_offset);
+    return table_core.class_def.validate(table, class_def_offset);
 }
 
 fn ensureCoverageTableWithin(table: Table, coverage_offset: usize) GsubError!void {
-    const format = try readU16BadGsub(table, coverage_offset);
-    switch (format) {
-        1 => {
-            const glyph_count = try readU16BadGsub(table, coverage_offset + 2);
-            try ensureBytesWithin(table, coverage_offset + 4, @as(usize, glyph_count) * 2);
-            try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
-            for (0..glyph_count) |glyph_i| {
-                try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, coverage_offset + 4 + glyph_i * 2));
-            }
-        },
-        2 => {
-            const range_count = try readU16BadGsub(table, coverage_offset + 2);
-            try ensureBytesWithin(table, coverage_offset + 4, @as(usize, range_count) * 6);
-            try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
-            for (0..range_count) |range_i| {
-                const range_offset = coverage_offset + 4 + range_i * 6;
-                try ensureGlyphRangeWithinMaxp(
-                    table,
-                    try readU16BadGsub(table, range_offset),
-                    try readU16BadGsub(table, range_offset + 2),
-                );
-            }
-        },
-        else => return error.UnsupportedGsub,
-    }
+    return table_core.coverage.validate(table, coverage_offset, .indexed);
 }
 
 fn ensureCoverageTableWithinForMembership(table: Table, coverage_offset: usize) GsubError!void {
-    const format = try readU16BadGsub(table, coverage_offset);
-    switch (format) {
-        1 => {
-            const glyph_count = try readU16BadGsub(table, coverage_offset + 2);
-            try ensureBytesWithin(table, coverage_offset + 4, @as(usize, glyph_count) * 2);
-            for (0..glyph_count) |glyph_i| {
-                try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, coverage_offset + 4 + glyph_i * 2));
-            }
-        },
-        2 => try ensureCoverageTableWithin(table, coverage_offset),
-        else => return error.UnsupportedGsub,
-    }
+    return table_core.coverage.validate(table, coverage_offset, .membership);
 }
 
 fn ensureSingleDeltaSubstitutionWithinMaxp(table: Table, coverage_offset: usize, delta: i16) GsubError!void {
@@ -8788,7 +8632,7 @@ fn applyParsedReverseChainingSingleSubstitutionAt(table: Table, subtable: Revers
     const glyph = glyphs.items[pos];
     if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
 
-    const coverage = try coverageIndex(table, subtable.coverage_offset, glyph) orelse return false;
+    const coverage = try table_core.coverage.index(table, subtable.coverage_offset, glyph) orelse return false;
     if (coverage >= subtable.glyph_count) return false;
     if (!try reverseCoverageMatches(table, subtable.subtable_offset, glyphs.items, pos, subtable.backtrack_offsets_pos, subtable.backtrack_count, true, lookup_flag, options)) return false;
     if (!try reverseCoverageMatches(table, subtable.subtable_offset, glyphs.items, pos, subtable.lookahead_offsets_pos, subtable.lookahead_count, false, lookup_flag, options)) return false;
@@ -8853,84 +8697,12 @@ fn ligatureAt(table: Table, set_offset: usize, glyphs: []const GlyphId, glyph_ba
     return null;
 }
 
-fn coverageIndex(table: Table, coverage_offset: usize, glyph: GlyphId) GsubError!?usize {
-    // Coverage tables are the common membership/index primitive used by nearly
-    // every GSUB subtable. Format 1 is sorted glyph ids; format 2 is sorted
-    // and non-overlapping. Unvalidated public callers keep checking those
-    // invariants before relying on binary search or range scans; shaping hot
-    // paths that already proved the table can reuse that proof.
-    const format = try readU16(table, coverage_offset);
-    switch (format) {
-        1 => {
-            const glyph_count = try readU16(table, coverage_offset + 2);
-            if (!table.assume_validated) try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
-            var lo: usize = 0;
-            var hi: usize = glyph_count;
-            while (lo < hi) {
-                const mid = lo + (hi - lo) / 2;
-                const candidate = try readU16(table, coverage_offset + 4 + mid * 2);
-                if (glyph < candidate) {
-                    hi = mid;
-                } else if (glyph > candidate) {
-                    lo = mid + 1;
-                } else {
-                    return mid;
-                }
-            }
-            return null;
-        },
-        2 => {
-            const range_count = try readU16(table, coverage_offset + 2);
-            if (!table.assume_validated) try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
-            for (0..range_count) |i| {
-                const range_offset = coverage_offset + 4 + i * 6;
-                const start = try readU16(table, range_offset);
-                const end = try readU16(table, range_offset + 2);
-                const start_index = try readU16(table, range_offset + 4);
-                if (glyph >= start and glyph <= end) {
-                    // Keep coverage-index arithmetic in usize. Malformed or
-                    // edge-of-glyph-space ranges can otherwise overflow u16 in
-                    // safety builds before callers get a chance to bounds-check
-                    // the resulting index against their subtable-specific counts.
-                    return @as(usize, start_index) + (@as(usize, glyph) - @as(usize, start));
-                }
-            }
-            return null;
-        },
-        else => return error.UnsupportedGsub,
-    }
-}
-
-fn coverageDigest(table: Table, coverage_offset: usize) GsubError!GlyphDigest {
-    const format = try readU16(table, coverage_offset);
-    var digest = GlyphDigest.empty();
-    switch (format) {
-        1 => {
-            const glyph_count = try readU16(table, coverage_offset + 2);
-            if (!table.assume_validated) try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
-            for (0..glyph_count) |glyph_i| {
-                digest.add(try readU16(table, coverage_offset + 4 + glyph_i * 2));
-            }
-        },
-        2 => {
-            const range_count = try readU16(table, coverage_offset + 2);
-            if (!table.assume_validated) try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
-            for (0..range_count) |range_i| {
-                const range_offset = coverage_offset + 4 + range_i * 6;
-                digest.addRange(try readU16(table, range_offset), try readU16(table, range_offset + 2));
-            }
-        },
-        else => return error.UnsupportedGsub,
-    }
-    return digest;
-}
-
 fn appendChainingSubtablePairs(table: Table, coverage_offset: usize, subtable_index: u16, pairs: *std.ArrayList(ChainingSubtablePair), allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!void {
     const format = try readU16(table, coverage_offset);
     switch (format) {
         1 => {
             const glyph_count = try readU16(table, coverage_offset + 2);
-            if (!table.assume_validated) try validateCoverageFormat1Order(table, coverage_offset, glyph_count);
+            if (!table.assume_validated) try table_core.coverage.validateFormat1Order(table, coverage_offset, glyph_count);
             try pairs.ensureUnusedCapacity(allocator, glyph_count);
             for (0..glyph_count) |glyph_i| {
                 pairs.appendAssumeCapacity(.{
@@ -8941,7 +8713,7 @@ fn appendChainingSubtablePairs(table: Table, coverage_offset: usize, subtable_in
         },
         2 => {
             const range_count = try readU16(table, coverage_offset + 2);
-            if (!table.assume_validated) try validateCoverageFormat2Ranges(table, coverage_offset, range_count);
+            if (!table.assume_validated) try table_core.coverage.validateFormat2Ranges(table, coverage_offset, range_count);
             for (0..range_count) |range_i| {
                 const range_offset = coverage_offset + 4 + range_i * 6;
                 const start = try readU16(table, range_offset);
@@ -8969,8 +8741,8 @@ fn appendChainingPairSubtablePairs(
     pairs: *std.ArrayList(ChainingPairSubtablePair),
     allocator: std.mem.Allocator,
 ) (GsubError || std.mem.Allocator.Error)!bool {
-    const first_count = try coverageGlyphCount(table, first_coverage_offset);
-    const second_count = try coverageGlyphCount(table, second_coverage_offset);
+    const first_count = try table_core.coverage.glyphCount(table, first_coverage_offset);
+    const second_count = try table_core.coverage.glyphCount(table, second_coverage_offset);
     if (first_count == 0 or second_count == 0) return true;
     if (first_count > max_chaining_pair_index_pairs / second_count) return false;
     const total = first_count * second_count;
@@ -8978,9 +8750,9 @@ fn appendChainingPairSubtablePairs(
 
     try pairs.ensureUnusedCapacity(allocator, total);
     for (0..first_count) |first_i| {
-        const first = (try coverageGlyphAt(table, first_coverage_offset, first_i)) orelse continue;
+        const first = (try table_core.coverage.glyphAt(table, first_coverage_offset, first_i)) orelse continue;
         for (0..second_count) |second_i| {
-            const second = (try coverageGlyphAt(table, second_coverage_offset, second_i)) orelse continue;
+            const second = (try table_core.coverage.glyphAt(table, second_coverage_offset, second_i)) orelse continue;
             pairs.appendAssumeCapacity(.{
                 .first = first,
                 .second = second,
@@ -9230,87 +9002,6 @@ test "GSUB chaining pair group slots preserve hits and misses" {
     try std.testing.expect(chainingPairSubtableGroupForGlyphs(groups, slots, 10, 9) == null);
 }
 
-fn validateCoverageFormat1Order(table: Table, coverage_offset: usize, glyph_count: u16) GsubError!void {
-    var previous: ?GlyphId = null;
-    for (0..glyph_count) |index| {
-        const glyph = try readU16BadGsub(table, coverage_offset + 4 + index * 2);
-        if (previous) |last| {
-            if (glyph <= last) return error.BadGsub;
-        }
-        previous = glyph;
-    }
-}
-
-fn validateCoverageFormat2Ranges(table: Table, coverage_offset: usize, range_count: u16) GsubError!void {
-    var expected_start_index: usize = 0;
-    for (0..range_count) |index| {
-        const range_offset = coverage_offset + 4 + index * 6;
-        const start = try readU16BadGsub(table, range_offset);
-        const end = try readU16BadGsub(table, range_offset + 2);
-        const start_index = try readU16BadGsub(table, range_offset + 4);
-        if (end < start) return error.BadGsub;
-        // StartCoverageIndex is not advisory: it is the dense coverage index of
-        // StartGlyphID after all previous ranges. Real fonts can contain
-        // overlapping Coverage format 2 ranges, and HarfBuzz/fontations accept
-        // them; keep validation focused on index safety and let coverage lookup
-        // order decide which matching range wins at runtime.
-        if (expected_start_index > std.math.maxInt(u16) or start_index != expected_start_index) return error.BadGsub;
-        expected_start_index += @as(usize, end) - @as(usize, start) + 1;
-    }
-}
-
-fn classValue(table: Table, class_def_offset: usize, glyph: GlyphId) GsubError!u16 {
-    if (class_def_offset == empty_class_def_offset) return 0;
-    const format = try readU16(table, class_def_offset);
-    switch (format) {
-        1 => {
-            const start = try readU16(table, class_def_offset + 2);
-            const count = try readU16(table, class_def_offset + 4);
-            // ClassDef format 1 describes a half-open range, but `start +
-            // count` is not guaranteed to fit in GlyphId's u16 type near the
-            // upper glyph boundary. Widen before comparing so edge-range class
-            // definitions behave deterministically instead of trapping.
-            const glyph_index = @as(usize, glyph);
-            const start_index = @as(usize, start);
-            const end_exclusive = start_index + @as(usize, count);
-            if (glyph_index < start_index or glyph_index >= end_exclusive) return 0;
-            return try readU16(table, class_def_offset + 6 + (glyph_index - start_index) * 2);
-        },
-        2 => {
-            const range_count = try readU16(table, class_def_offset + 2);
-            if (!table.assume_validated) try validateClassDefFormat2Ranges(table, class_def_offset, range_count);
-            return if (try findSortedGlyphRangeRecord(table, class_def_offset + 4, range_count, glyph)) |record| record.value else 0;
-        },
-        else => return error.UnsupportedGsub,
-    }
-}
-
-fn findSortedGlyphRangeRecord(table: Table, records_offset: usize, range_count: u16, glyph: GlyphId) GsubError!?ot_layout.GlyphRangeRecord {
-    if (table.offset > table.data.len or table.length > table.data.len - table.offset) return error.EndOfStream;
-    const data = table.data[table.offset .. table.offset + table.length];
-    return ot_layout.findSortedGlyphRangeRecord(data, records_offset, range_count, glyph) catch |err| switch (err) {
-        error.EndOfStream => error.EndOfStream,
-    };
-}
-
-fn validateClassDefFormat2Ranges(table: Table, class_def_offset: usize, range_count: u16) GsubError!void {
-    // ClassDef format 2 uses the same sorted, non-overlapping range-record
-    // contract as Coverage format 2. Contextual class matching depends on the
-    // first class answer being authoritative; reject malformed order instead of
-    // letting an overlapping earlier range shadow a later, more specific one.
-    var previous_end: ?GlyphId = null;
-    for (0..range_count) |index| {
-        const range_offset = class_def_offset + 4 + index * 6;
-        const start = try readU16BadGsub(table, range_offset);
-        const end = try readU16BadGsub(table, range_offset + 2);
-        if (end < start) return error.BadGsub;
-        if (previous_end) |last_end| {
-            if (start <= last_end) return error.BadGsub;
-        }
-        previous_end = end;
-    }
-}
-
 fn readU16(table: Table, relative: usize) GsubError!u16 {
     return table.readU16(relative);
 }
@@ -9453,8 +9144,8 @@ test "GSUB coverage format 2 handles full glyph-space index boundary" {
     writeU16Test(&bytes, 8, 0);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectEqual(@as(?usize, 0xfffe), try coverageIndex(table, 0, 0xfffe));
-    try std.testing.expectEqual(@as(?usize, 0xffff), try coverageIndex(table, 0, 0xffff));
+    try std.testing.expectEqual(@as(?usize, 0xfffe), try table_core.coverage.index(table, 0, 0xfffe));
+    try std.testing.expectEqual(@as(?usize, 0xffff), try table_core.coverage.index(table, 0, 0xffff));
 }
 
 test "GSUB coverage format 2 rejects inconsistent start coverage indexes" {
@@ -9470,7 +9161,7 @@ test "GSUB coverage format 2 rejects inconsistent start coverage indexes" {
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
     try std.testing.expectError(error.BadGsub, ensureCoverageTableWithin(table, 0));
-    try std.testing.expectError(error.BadGsub, coverageIndex(table, 0, 3));
+    try std.testing.expectError(error.BadGsub, table_core.coverage.index(table, 0, 3));
 }
 
 test "GSUB coverage format 2 tolerates overlapping real-font ranges" {
@@ -9489,8 +9180,8 @@ test "GSUB coverage format 2 tolerates overlapping real-font ranges" {
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
     try ensureCoverageTableWithin(table, 0);
-    try std.testing.expectEqual(@as(?usize, 2), try coverageIndex(table, 0, 12));
-    try std.testing.expectEqual(@as(?usize, 4), try coverageIndex(table, 0, 13));
+    try std.testing.expectEqual(@as(?usize, 2), try table_core.coverage.index(table, 0, 12));
+    try std.testing.expectEqual(@as(?usize, 4), try table_core.coverage.index(table, 0, 13));
 }
 
 test "GSUB rejects malformed coverage ordering before substitution" {
@@ -9555,9 +9246,9 @@ test "GSUB class format 1 handles upper glyph boundary" {
     writeU16Test(&bytes, 8, 9);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectEqual(@as(u16, 7), try classValue(table, 0, 0xfffe));
-    try std.testing.expectEqual(@as(u16, 9), try classValue(table, 0, 0xffff));
-    try std.testing.expectEqual(@as(u16, 0), try classValue(table, 0, 0xfffd));
+    try std.testing.expectEqual(@as(u16, 7), try table_core.class_def.value(table, 0, 0xfffe));
+    try std.testing.expectEqual(@as(u16, 9), try table_core.class_def.value(table, 0, 0xffff));
+    try std.testing.expectEqual(@as(u16, 0), try table_core.class_def.value(table, 0, 0xfffd));
 }
 
 test "GSUB cached lookup dispatch requires validated matching metadata" {
@@ -9967,10 +9658,10 @@ test "GSUB rejects malformed ClassDef format 2 ranges" {
     writeU16Test(&bytes, 20, 3);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGsub, classValue(table, 0, 12));
+    try std.testing.expectError(error.BadGsub, table_core.class_def.value(table, 0, 12));
 
     writeU16Test(&bytes, 10, 13); // Repair overlap so the reversed range is checked.
-    try std.testing.expectError(error.BadGsub, classValue(table, 0, 18));
+    try std.testing.expectError(error.BadGsub, table_core.class_def.value(table, 0, 18));
 }
 
 test "GSUB contextual class subtables allow covered class indexes outside set arrays" {

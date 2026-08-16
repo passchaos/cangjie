@@ -4,4 +4,5 @@ test {
     _ = @import("borrowed.zig");
     _ = @import("contracts.zig");
     _ = @import("lookup.zig");
+    _ = @import("validation/root.zig");
 }

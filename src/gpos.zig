@@ -317,7 +317,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
                     try extensionPositionSubtablePayload(table, subtable_offset, 2)
                 else
                     subtable_offset;
-                pair_pos_subtables[subtable_i] = try appendSimplePairPosRecords(
+                pair_pos_subtables[subtable_i] = try accelerator_core.pair.append(
                     table,
                     pair_subtable_offset,
                     &pair_pos_records,
@@ -381,286 +381,6 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     group_pairs.deinit(allocator);
     accelerator.chaining_class_subtables = try buildExtensionChainingClassSubtableAccelerators(table, lookup_offset, lookup_type, subtable_count, allocator);
     return accelerator;
-}
-
-const max_predecoded_pair_class_glyphs = 16_384;
-const max_predecoded_pair_class_matrix = 16_384;
-const max_dense_pair_class_entries = 8_192;
-
-fn appendSimplePairPosRecords(
-    table: Table,
-    subtable_offset: usize,
-    records: *std.ArrayList(PairPosRecord),
-    coverage_classes: *std.ArrayList(PairClassEntry),
-    class_entries: *std.ArrayList(PairClassEntry),
-    class_matrix: *std.ArrayList(i16),
-    allocator: std.mem.Allocator,
-) (GposError || std.mem.Allocator.Error)!PairPosSubtableAccelerator {
-    const pos_format = try readU16(table, subtable_offset);
-    const value_format_1 = try readU16(table, subtable_offset + 4);
-    const value_format_2 = try readU16(table, subtable_offset + 6);
-    // Device/VariationIndex fields are currently validated but ignored by
-    // readValueRecord. They follow the scalar fields, so an xAdvance-only
-    // record remains safe to predecode as long as no other scalar is present.
-    if ((value_format_1 & 0x000f) != 0x0004 or
-        (value_format_1 & 0xff00) != 0 or
-        value_format_2 != 0)
-    {
-        return .{};
-    }
-    const value_size_1 = try positioning.value_record.size(value_format_1);
-    return switch (pos_format) {
-        1 => try appendSimplePairPosFormat1Records(table, subtable_offset, value_size_1, records, allocator),
-        2 => try appendSimplePairPosFormat2Records(
-            table,
-            subtable_offset,
-            value_size_1,
-            coverage_classes,
-            class_entries,
-            class_matrix,
-            allocator,
-        ),
-        else => .{},
-    };
-}
-
-fn appendSimplePairPosFormat1Records(
-    table: Table,
-    subtable_offset: usize,
-    value_size_1: usize,
-    records: *std.ArrayList(PairPosRecord),
-    allocator: std.mem.Allocator,
-) (GposError || std.mem.Allocator.Error)!PairPosSubtableAccelerator {
-    const coverage_offset = try checkedRequiredCoverageOffset(
-        table,
-        subtable_offset,
-        try readU16(table, subtable_offset + 2),
-    );
-    const pair_set_count = try readU16(table, subtable_offset + 8);
-    const record_start = records.items.len;
-    for (0..pair_set_count) |set_index| {
-        // PairSetCount may exceed the first-glyph Coverage count. OpenType
-        // indexes PairSet only through Coverage, so those trailing sets are
-        // unreachable; HarfBuzz ignores them and TestGPOSTwo.otf relies on
-        // that behavior. The defensive validator still rejects the opposite
-        // shape (a Coverage index with no PairSet).
-        const first = (try table_core.coverage.glyphAt(table, coverage_offset, set_index)) orelse break;
-        const pair_set_offset = try checkedRequiredPositionOffset(
-            table,
-            subtable_offset,
-            try readU16(table, subtable_offset + 10 + set_index * 2),
-        );
-        const pair_value_count = try readU16(table, pair_set_offset);
-        for (0..pair_value_count) |pair_index| {
-            const pair_record = pair_set_offset + 2 + pair_index * (2 + value_size_1);
-            try records.append(allocator, .{
-                .first = first,
-                .second = try readU16(table, pair_record),
-                .x_advance = try readI16(table, pair_record + 2),
-            });
-        }
-    }
-    return .{
-        .kind = .format_1_x_advance,
-        .record_start = record_start,
-        .record_len = records.items.len - record_start,
-    };
-}
-
-fn appendSimplePairPosFormat2Records(
-    table: Table,
-    subtable_offset: usize,
-    value_size_1: usize,
-    coverage_classes: *std.ArrayList(PairClassEntry),
-    class_entries: *std.ArrayList(PairClassEntry),
-    class_matrix: *std.ArrayList(i16),
-    allocator: std.mem.Allocator,
-) (GposError || std.mem.Allocator.Error)!PairPosSubtableAccelerator {
-    const coverage_offset = try checkedRequiredCoverageOffset(
-        table,
-        subtable_offset,
-        try readU16(table, subtable_offset + 2),
-    );
-    const class_def_1 = try checkedRequiredClassDefOffset(
-        table,
-        subtable_offset,
-        try readU16(table, subtable_offset + 8),
-    );
-    const class_def_2 = try checkedRequiredClassDefOffset(
-        table,
-        subtable_offset,
-        try readU16(table, subtable_offset + 10),
-    );
-    const class_1_count = try readU16(table, subtable_offset + 12);
-    const class_2_count = try readU16(table, subtable_offset + 14);
-    const matrix_len = @as(usize, class_1_count) * @as(usize, class_2_count);
-    if (matrix_len > max_predecoded_pair_class_matrix) return .{};
-
-    const coverage_start = coverage_classes.items.len;
-    const coverage_count = try table_core.coverage.glyphCount(table, coverage_offset);
-    if (coverage_count > max_predecoded_pair_class_glyphs) return .{};
-    for (0..coverage_count) |coverage_index| {
-        const glyph = (try table_core.coverage.glyphAt(table, coverage_offset, coverage_index)) orelse return error.BadGpos;
-        const class = try table_core.class_def.value(table, class_def_1, glyph);
-        if (class >= class_1_count) return error.BadGpos;
-        try coverage_classes.append(allocator, .{ .glyph = glyph, .class = class });
-    }
-    const class_2_start = class_entries.items.len;
-    if (!(try appendClassDefEntries(table, class_def_2, class_entries, allocator))) {
-        coverage_classes.shrinkRetainingCapacity(coverage_start);
-        return .{};
-    }
-    const coverage_entries = coverage_classes.items[coverage_start..];
-    const class_2_entries = class_entries.items[class_2_start..];
-    const dense_ranges = pairClassDenseRanges(coverage_entries, class_2_entries);
-    var dense = false;
-    if (dense_ranges) |ranges| {
-        if (shouldBuildDensePairClasses(ranges) and
-            pairClassEntriesFitDenseRanges(coverage_entries, class_2_entries, ranges))
-        {
-            const dense_coverage = try allocator.alloc(PairClassEntry, ranges.coverage_len);
-            defer allocator.free(dense_coverage);
-            for (dense_coverage, 0..) |*entry, index| {
-                entry.* = .{
-                    .glyph = @intCast(@as(usize, ranges.coverage_base) + index),
-                    // Class zero is a valid covered class. Reserve the one
-                    // value Class1Count cannot admit as an uncovered sentinel.
-                    .class = std.math.maxInt(u16),
-                };
-            }
-            for (coverage_entries) |entry| {
-                dense_coverage[entry.glyph - ranges.coverage_base] = entry;
-            }
-            coverage_classes.shrinkRetainingCapacity(coverage_start);
-            try coverage_classes.appendSlice(allocator, dense_coverage);
-
-            const dense_class_2 = try allocator.alloc(PairClassEntry, ranges.class_2_len);
-            defer allocator.free(dense_class_2);
-            for (dense_class_2, 0..) |*entry, index| {
-                entry.* = .{ .glyph = @intCast(@as(usize, ranges.class_2_base) + index), .class = 0 };
-            }
-            for (class_2_entries) |entry| {
-                dense_class_2[entry.glyph - ranges.class_2_base] = entry;
-            }
-            class_entries.shrinkRetainingCapacity(class_2_start);
-            try class_entries.appendSlice(allocator, dense_class_2);
-            dense = true;
-        }
-    }
-
-    const matrix_start = class_matrix.items.len;
-    for (0..matrix_len) |record_index| {
-        try class_matrix.append(
-            allocator,
-            try readI16(table, subtable_offset + 16 + record_index * value_size_1),
-        );
-    }
-    return .{
-        .kind = if (dense) .format_2_dense_x_advance else .format_2_x_advance,
-        .record_start = if (dense) dense_ranges.?.coverage_base else 0,
-        .record_len = if (dense) dense_ranges.?.class_2_base else 0,
-        .coverage_start = coverage_start,
-        .coverage_len = coverage_classes.items.len - coverage_start,
-        .class_2_start = class_2_start,
-        .class_2_len = class_entries.items.len - class_2_start,
-        .class_1_count = class_1_count,
-        .class_2_count = class_2_count,
-        .matrix_start = matrix_start,
-    };
-}
-
-const PairClassDenseRanges = struct {
-    coverage_base: GlyphId,
-    coverage_len: usize,
-    class_2_base: GlyphId,
-    class_2_len: usize,
-};
-
-fn pairClassDenseRanges(coverage: []const PairClassEntry, class_2: []const PairClassEntry) ?PairClassDenseRanges {
-    if (coverage.len == 0) return null;
-    const coverage_base = coverage[0].glyph;
-    const coverage_end = coverage[coverage.len - 1].glyph;
-    if (coverage_end < coverage_base) return null;
-    const class_2_base = if (class_2.len != 0) class_2[0].glyph else 0;
-    const class_2_end = if (class_2.len != 0) class_2[class_2.len - 1].glyph else 0;
-    if (class_2_end < class_2_base) return null;
-    return .{
-        .coverage_base = coverage_base,
-        .coverage_len = @as(usize, coverage_end) - coverage_base + 1,
-        .class_2_base = class_2_base,
-        .class_2_len = if (class_2.len != 0)
-            @as(usize, class_2_end) - class_2_base + 1
-        else
-            0,
-    };
-}
-
-fn pairClassEntriesFitDenseRanges(
-    coverage: []const PairClassEntry,
-    class_2: []const PairClassEntry,
-    ranges: PairClassDenseRanges,
-) bool {
-    const coverage_end = @as(usize, ranges.coverage_base) + ranges.coverage_len;
-    for (coverage) |entry| {
-        if (entry.glyph < ranges.coverage_base or entry.glyph >= coverage_end) return false;
-    }
-    const class_2_end = @as(usize, ranges.class_2_base) + ranges.class_2_len;
-    for (class_2) |entry| {
-        if (entry.glyph < ranges.class_2_base or entry.glyph >= class_2_end) return false;
-    }
-    return true;
-}
-
-fn shouldBuildDensePairClasses(ranges: PairClassDenseRanges) bool {
-    return ranges.coverage_len <= max_dense_pair_class_entries and
-        ranges.class_2_len <= max_dense_pair_class_entries - ranges.coverage_len;
-}
-
-fn appendClassDefEntries(
-    table: Table,
-    class_def_offset: usize,
-    entries: *std.ArrayList(PairClassEntry),
-    allocator: std.mem.Allocator,
-) (GposError || std.mem.Allocator.Error)!bool {
-    const start_len = entries.items.len;
-    switch (try readU16(table, class_def_offset)) {
-        1 => {
-            const start = try readU16(table, class_def_offset + 2);
-            const count = try readU16(table, class_def_offset + 4);
-            if (count > max_predecoded_pair_class_glyphs) return false;
-            for (0..count) |index| {
-                const class = try readU16(table, class_def_offset + 6 + index * 2);
-                if (class == 0) continue;
-                try entries.append(allocator, .{
-                    .glyph = @intCast(@as(usize, start) + index),
-                    .class = class,
-                });
-            }
-        },
-        2 => {
-            const range_count = try readU16(table, class_def_offset + 2);
-            for (0..range_count) |range_i| {
-                const range_offset = class_def_offset + 4 + range_i * 6;
-                const start = try readU16(table, range_offset);
-                const end = try readU16(table, range_offset + 2);
-                const class = try readU16(table, range_offset + 4);
-                if (class == 0) continue;
-                const len = @as(usize, end) - @as(usize, start) + 1;
-                if (entries.items.len - start_len + len > max_predecoded_pair_class_glyphs) {
-                    entries.shrinkRetainingCapacity(start_len);
-                    return false;
-                }
-                for (0..len) |index| {
-                    try entries.append(allocator, .{
-                        .glyph = @intCast(@as(usize, start) + index),
-                        .class = class,
-                    });
-                }
-            }
-        },
-        else => return error.UnsupportedGpos,
-    }
-    return true;
 }
 
 fn fillFastChainingSinglePosRecords(table: Table, subtable: *ChainingCoverageSubtable) GposError!void {
@@ -5569,7 +5289,7 @@ test "GPOS PairPos accelerator ignores unreachable trailing pair sets" {
 
     var records = std.ArrayList(PairPosRecord).empty;
     defer records.deinit(allocator);
-    const accelerator = try appendSimplePairPosFormat1Records(
+    const accelerator = try accelerator_core.pair.appendFormat1(
         .{ .data = &bytes, .offset = 0, .length = bytes.len },
         0,
         2,
@@ -5943,7 +5663,7 @@ test "GPOS class PairPos accelerator honors coverage and implicit class zero" {
     defer classes.deinit(allocator);
     var matrix = std.ArrayList(i16).empty;
     defer matrix.deinit(allocator);
-    const accelerator = try appendSimplePairPosRecords(
+    const accelerator = try accelerator_core.pair.append(
         table,
         pair,
         &records,
@@ -6072,28 +5792,28 @@ test "GPOS dense class PairPos distinguishes coverage holes from class zero" {
 }
 
 test "GPOS dense class PairPos respects its total entry cap" {
-    try std.testing.expect(shouldBuildDensePairClasses(.{
+    try std.testing.expect(accelerator_core.pair.shouldBuildDense(.{
         .coverage_base = 0,
-        .coverage_len = max_dense_pair_class_entries - 1,
+        .coverage_len = accelerator_core.pair.max_dense_class_entries - 1,
         .class_2_base = 0,
         .class_2_len = 1,
     }));
-    try std.testing.expect(!shouldBuildDensePairClasses(.{
+    try std.testing.expect(!accelerator_core.pair.shouldBuildDense(.{
         .coverage_base = 0,
-        .coverage_len = max_dense_pair_class_entries,
+        .coverage_len = accelerator_core.pair.max_dense_class_entries,
         .class_2_base = 0,
         .class_2_len = 1,
     }));
-    try std.testing.expect(!shouldBuildDensePairClasses(.{
+    try std.testing.expect(!accelerator_core.pair.shouldBuildDense(.{
         .coverage_base = 0,
-        .coverage_len = max_dense_pair_class_entries + 1,
+        .coverage_len = accelerator_core.pair.max_dense_class_entries + 1,
         .class_2_base = 0,
         .class_2_len = 0,
     }));
 }
 
 test "GPOS dense class PairPos rejects entries outside endpoint ranges" {
-    try std.testing.expect(pairClassDenseRanges(
+    try std.testing.expect(accelerator_core.pair.denseRanges(
         &.{
             .{ .glyph = 20, .class = 1 },
             .{ .glyph = 5, .class = 0 },
@@ -6105,13 +5825,13 @@ test "GPOS dense class PairPos rejects entries outside endpoint ranges" {
         },
     ) == null);
 
-    const ranges = PairClassDenseRanges{
+    const ranges = accelerator_core.pair.DenseRanges{
         .coverage_base = 5,
         .coverage_len = 16,
         .class_2_base = 7,
         .class_2_len = 94,
     };
-    try std.testing.expect(!pairClassEntriesFitDenseRanges(
+    try std.testing.expect(!accelerator_core.pair.entriesFitDenseRanges(
         &.{
             .{ .glyph = 5, .class = 0 },
             .{ .glyph = 30, .class = 1 },

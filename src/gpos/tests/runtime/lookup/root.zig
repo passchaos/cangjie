@@ -3,6 +3,7 @@
 test {
     _ = @import("contextual/root.zig");
     _ = @import("cursive.zig");
+    _ = @import("dispatcher/root.zig");
     _ = @import("extension/root.zig");
     _ = @import("marks/root.zig");
     _ = @import("nested.zig");

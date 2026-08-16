@@ -39,13 +39,6 @@ const appendAdjustmentEx = runtime_output.adjustments.appendWithFlags;
 const findAdjustment = runtime_output.adjustments.find;
 const markUnsafePositioningPair = runtime_output.safety.markPair;
 const markUnsafePairApplication = runtime_output.safety.markPairApplication;
-const chaining_runtime = runtime_lookup.contextual.chaining;
-const extension_runtime = runtime_lookup.extension;
-const collectCursiveAdjustment = runtime_lookup.cursive.collect;
-const collectCursiveAdjustmentParsed = runtime_lookup.cursive.collectParsed;
-const collectMarkToBaseAdjustment = runtime_lookup.marks.base.collect;
-const collectMarkToBaseAdjustmentParsed =
-    runtime_lookup.marks.base.collectParsed;
 const MarkToBaseSubtable = runtime_lookup.marks.base.Parsed;
 const appendMarkAttachmentAdjustment = runtime_lookup.marks.output.append;
 const previousUnignoredCoveredGlyph =
@@ -55,17 +48,9 @@ const markAttachmentSearchSkipsNonCoveredGlyph =
     runtime_lookup.marks.search.skipsNonCoveredGlyph;
 const isMultipleSubstContinuationForMarkSearch =
     runtime_lookup.marks.search.isMultipleSubstContinuation;
-const collectMarkToLigatureAdjustment =
-    runtime_lookup.marks.ligature.collect;
-const collectMarkToMarkAdjustment = runtime_lookup.marks.mark.collect;
-const collectSingleAdjustmentLookup = runtime_lookup.single.collectLookup;
 const collectSingleAdjustmentSubtable = runtime_lookup.single.collectSubtable;
 const collectSingleAdjustment = runtime_lookup.single.collect;
 const SinglePosSubtable = runtime_lookup.single.Parsed;
-const collectPairAdjustmentLookup =
-    runtime_lookup.pair.generic.collectLookup;
-const collectExtensionPairAdjustmentLookup =
-    runtime_lookup.pair.generic.collectExtensionLookup;
 const collectPairAdjustment = runtime_lookup.pair.generic.collect;
 const collectPairAdjustmentAtParsed =
     runtime_lookup.pair.generic.collectAtParsed;
@@ -73,14 +58,12 @@ const advanceAfterPairPosition =
     runtime_lookup.pair.generic.advanceAfterPair;
 const pairPosSubtablesHaveNativeData =
     runtime_lookup.pair.accelerated.hasNativeData;
-const collectPairAdjustmentLookupAccelerated =
-    runtime_lookup.pair.accelerated.collectLookup;
 const PairPositionSubtable = runtime_lookup.pair.generic.Parsed;
 const buildLookupAccelerator = accelerator_core.build.lookup.one;
 const deinitLookupAcceleratorContents =
     accelerator_core.build.lookup.deinitContents;
 
-const RunDigestCache = runtime_lookup.prefilter.DigestCache;
+const RunDigestCache = runtime_lookup.dispatcher.DigestCache;
 const ensurePositionLookupHeaderAndExtensionPayloadsWithin =
     validation.lookup.headerAndExtensions;
 const ensurePositionLookupSubtablesWithin =
@@ -216,306 +199,8 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
     );
 }
 
-fn recordGposLookupProfile(profile: ?*shape_profile_mod.ShapeStageProfile, lookup_type: u16) void {
-    const p = profile orelse return;
-    p.gpos_lookup_count += 1;
-    switch (lookup_type) {
-        1 => p.gpos_single_lookup_count += 1,
-        2 => p.gpos_pair_lookup_count += 1,
-        4, 5, 6 => p.gpos_mark_lookup_count += 1,
-        7, 8 => p.gpos_context_lookup_count += 1,
-        9 => p.gpos_extension_lookup_count += 1,
-        else => {},
-    }
-}
-
-fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    try collectLookupWithIndex(table, lookup_offset, null, glyphs, adjustments, allocator, options, null);
-}
-
-fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*RunDigestCache) (GposError || std.mem.Allocator.Error)!void {
-    const lookup_start = shapeProfileNow(options.shape_profile, options.profile_io);
-    defer {
-        if (options.shape_profile) |profile| {
-            profile.recordGposLookupTime(lookup_index, shapeProfileElapsed(lookup_start, options.profile_io));
-        }
-    }
-    // The public Font path validates and checksums GPOS before setting
-    // assume_validated. Keep this hot-path proof to fixed Lookup header fields;
-    // full direct/ExtensionPos payload validation below is only needed for
-    // untrusted tables and parse-time glyph-bound walks.
-    const dispatch = try runtime.dispatch.header(
-        table,
-        lookup_offset,
-        lookup_index,
-        options,
-    );
-    const lookup_type = dispatch.lookup_type;
-    const lookup_flag = dispatch.lookup_flag;
-    recordGposLookupProfile(options.shape_profile, lookup_type);
-    if (lookupNeedsCustomizedOptions(lookup_flag)) {
-        // UseMarkFilteringSet stores its set index after the variable-length
-        // SubTable offset array. The high byte remains reserved for the older
-        // MarkAttachmentType mechanism when bit 4 is clear.
-        // LookupOptions includes all post-GSUB source metadata. Copy it only
-        // for this lookup-local override; ordinary positioning lookups pass
-        // the caller's immutable value directly to the prepared worker.
-        var customized_options = options;
-        customized_options.active_mark_filtering_set = dispatch.mark_filtering_set;
-        try runtime.matching.validateMarkFilteringSetIndex(customized_options);
-        return collectLookupWithIndexPrepared(
-            table,
-            lookup_offset,
-            lookup_index,
-            glyphs,
-            adjustments,
-            allocator,
-            customized_options,
-            run_digest_cache,
-            dispatch,
-        );
-    }
-    return collectLookupWithIndexPrepared(
-        table,
-        lookup_offset,
-        lookup_index,
-        glyphs,
-        adjustments,
-        allocator,
-        options,
-        run_digest_cache,
-        dispatch,
-    );
-}
-
-fn lookupNeedsCustomizedOptions(lookup_flag: u16) bool {
-    return (lookup_flag & 0x0010) != 0;
-}
-
-test "GPOS lookup customization is limited to mark filtering sets" {
-    try std.testing.expect(!lookupNeedsCustomizedOptions(0));
-    try std.testing.expect(!lookupNeedsCustomizedOptions(0xff00));
-    try std.testing.expect(lookupNeedsCustomizedOptions(0x0010));
-    try std.testing.expect(lookupNeedsCustomizedOptions(0xff10));
-}
-
-noinline fn collectLookupWithIndexPrepared(
-    table: Table,
-    lookup_offset: usize,
-    lookup_index: ?u16,
-    glyphs: []const GlyphId,
-    adjustments: *std.ArrayList(Adjustment),
-    allocator: std.mem.Allocator,
-    lookup_options: LookupOptions,
-    run_digest_cache: ?*RunDigestCache,
-    dispatch: runtime.dispatch.Header,
-) (GposError || std.mem.Allocator.Error)!void {
-    const lookup_type = dispatch.lookup_type;
-    const lookup_flag = dispatch.lookup_flag;
-    const subtable_count = dispatch.subtable_count;
-    // Positioning results are appended incrementally, but OpenType lookups are
-    // atomic units. Preflight supported direct subtables before collecting any
-    // adjustment so malformed later subtables cannot leave partial positioning.
-    if (!table.assume_validated) try ensurePositionLookupSubtablesWithin(table, lookup_offset, lookup_type, subtable_count);
-    if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
-        const run_digest = if (run_digest_cache) |cache|
-            cache.get(glyphs, lookup_flag, lookup_options)
-        else
-            runtime_lookup.prefilter.runDigest(
-                glyphs,
-                lookup_flag,
-                lookup_options,
-            );
-        if (run_digest.isEmpty() or !accelerator.coverage_digest.mayIntersect(run_digest)) return;
-        // The coverage-only chaining collector performs this same exact group
-        // lookup as its first action for every glyph. Running a whole-run exact
-        // preflight here only duplicates the scan: a miss costs the same work,
-        // while a hit scans the prefix twice. Other lookup kinds do not own an
-        // equivalent grouped dispatcher and retain the preflight.
-        if (!accelerator.chaining_coverage_only and
-            accelerator.coverage_groups.len != 0 and
-            !runtime_lookup.prefilter.groupsMayMatchRun(
-                accelerator.coverage_groups,
-                accelerator.coverage_group_slots,
-                glyphs,
-                lookup_flag,
-                lookup_options,
-            ))
-        {
-            return;
-        }
-    }
-    if (lookup_type == 1) {
-        try collectSingleAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
-        return;
-    }
-    if (lookup_type == 2) {
-        if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
-            if (accelerator.pair_pos_subtables.len == subtable_count and
-                pairPosSubtablesHaveNativeData(accelerator.pair_pos_subtables))
-            {
-                try collectPairAdjustmentLookupAccelerated(
-                    table,
-                    lookup_offset,
-                    subtable_count,
-                    accelerator,
-                    glyphs,
-                    adjustments,
-                    allocator,
-                    lookup_flag,
-                    lookup_options,
-                );
-                return;
-            }
-        }
-        try collectPairAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
-        return;
-    }
-    if (lookup_type == 9) {
-        // ExtensionPos only widens offsets, but a lookup still applies as an
-        // all-or-nothing unit. Preflight wrapped variable-length arrays before
-        // collecting any adjustments so a later malformed wrapper cannot leave
-        // earlier wrapper results visible to the caller.
-        if (!table.assume_validated) {
-            // ExtensionPos lookups must preflight every wrapped variable
-            // payload before applying the first subtable. Fixed wrapper checks
-            // alone would allow a later malformed value array to leave earlier
-            // positioning adjustments visible.
-            try ensurePositionLookupHeaderAndExtensionPayloadsWithin(
-                table,
-                lookup_offset,
-            );
-        }
-        const wrapped_type = try runtime.dispatch.resolvedExtensionType(
-            table,
-            lookup_offset,
-            lookup_type,
-            subtable_count,
-            lookup_index,
-            lookup_options,
-        );
-        if (wrapped_type) |resolved_type| {
-            switch (resolved_type) {
-                1 => {
-                    try extension_runtime.lookup.collectSingle(
-                        table,
-                        lookup_offset,
-                        subtable_count,
-                        glyphs,
-                        adjustments,
-                        allocator,
-                        lookup_flag,
-                        lookup_options,
-                    );
-                    return;
-                },
-                2 => {
-                    if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
-                        if (accelerator.pair_pos_extension and
-                            accelerator.pair_pos_subtables.len == subtable_count)
-                        {
-                            try collectPairAdjustmentLookupAccelerated(
-                                table,
-                                lookup_offset,
-                                subtable_count,
-                                accelerator,
-                                glyphs,
-                                adjustments,
-                                allocator,
-                                lookup_flag,
-                                lookup_options,
-                            );
-                            return;
-                        }
-                    }
-                    try collectExtensionPairAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
-                    return;
-                },
-                // Wrapped ChainContextPos subtables are not always the format-3
-                // coverage-only shape handled by the homogeneous fast path
-                // below. Let the generic ExtensionPos dispatcher preserve
-                // ordering while supporting glyph/class chaining formats too.
-                8 => {
-                    if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
-                        if (accelerator.chaining_class_subtables.len != 0) {
-                            try chaining_runtime.class_accelerated.lookup.collect(table, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options, accelerator, runtime_lookup.nested.apply);
-                            return;
-                        }
-                    }
-                },
-                else => {},
-            }
-        }
-        try extension_runtime.lookup.collectMixed(
-            table,
-            lookup_offset,
-            subtable_count,
-            glyphs,
-            adjustments,
-            allocator,
-            lookup_flag,
-            lookup_options,
-            runtime_lookup.nested.contextCollect,
-            runtime_lookup.nested.chainingCollect,
-        );
-        return;
-    }
-    if (lookup_type == 8) {
-        if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
-            if (accelerator.chaining_coverage_only) {
-                try chaining_runtime.coverage.lookup.collect(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options, accelerator, runtime_lookup.nested.records, runtime_lookup.nested.apply);
-                return;
-            }
-        }
-    }
-    for (0..subtable_count) |i| {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
-        switch (lookup_type) {
-            1 => {}, // SinglePos needs whole-lookup subtable ordering; handled above.
-            2 => {}, // PairPos needs whole-lookup subtable ordering; handled above.
-            3 => if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
-                if (i < accelerator.cursive_subtables.len) {
-                    try collectCursiveAdjustmentParsed(table, accelerator.cursive_subtables[i], glyphs, adjustments, allocator, lookup_flag, lookup_options);
-                    continue;
-                }
-                try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options);
-            } else try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
-            4 => if (runtime.matching.runMayHaveMarkAttachments(glyphs, lookup_options)) {
-                if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
-                    if (i < accelerator.mark_to_base_subtables.len) {
-                        try collectMarkToBaseAdjustmentParsed(table, accelerator.mark_to_base_subtables[i], glyphs, adjustments, allocator, lookup_flag, lookup_options);
-                        continue;
-                    }
-                }
-                try collectMarkToBaseAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options);
-            },
-            5 => if (runtime.matching.runMayHaveMarkAttachments(glyphs, lookup_options)) try collectMarkToLigatureAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
-            6 => if (runtime.matching.runMayHaveMarkAttachments(glyphs, lookup_options)) try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
-            7 => try runtime_lookup.nested.contextCollect(
-                table,
-                subtable_offset,
-                glyphs,
-                adjustments,
-                allocator,
-                lookup_flag,
-                lookup_options,
-            ),
-            8 => try runtime_lookup.nested.chainingCollect(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
-            9 => try extension_runtime.wrapper.collect(
-                table,
-                subtable_offset,
-                glyphs,
-                adjustments,
-                allocator,
-                lookup_flag,
-                lookup_options,
-                runtime_lookup.nested.contextCollect,
-                runtime_lookup.nested.chainingCollect,
-            ),
-            else => {},
-        }
-    }
-}
+const collectLookup = runtime_lookup.dispatcher.collect;
+const collectLookupWithIndex = runtime_lookup.dispatcher.collectWithIndex;
 
 fn shapeProfileNow(profile: ?*shape_profile_mod.ShapeStageProfile, io: ?std.Io) i128 {
     return if (profile != null) std.Io.Clock.now(.awake, io.?).nanoseconds else 0;

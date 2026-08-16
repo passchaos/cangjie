@@ -7,4 +7,5 @@ test {
     _ = @import("mark.zig");
     _ = @import("output.zig");
     _ = @import("search.zig");
+    _ = @import("selection.zig");
 }

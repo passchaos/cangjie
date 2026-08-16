@@ -36,6 +36,11 @@ const tt_program_mod = @import("opentype/tt_program.zig");
 const sfnt = @import("font/sfnt/root.zig");
 const font_metrics = @import("font/metrics/root.zig");
 const presentation_metrics = font_metrics.presentation;
+const outline_modules = @import("font/outline/root.zig");
+const cff_outline = outline_modules.cff;
+const outline_geometry = outline_modules.geometry;
+const outline_numeric = outline_modules.numeric;
+const truetype_outline = outline_modules.truetype;
 const bitmap_mod = @import("font/tables/bitmap/root.zig");
 const cmap_mod = @import("font/tables/cmap/root.zig");
 const color_tables = @import("font/tables/color/root.zig");
@@ -73,6 +78,14 @@ const svg_mod = @import("font/tables/svg/root.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const unicode_mod = @import("unicode.zig");
 const varc_mod = @import("opentype/varc.zig");
+
+const Transform = outline_geometry.Transform;
+const clampF32ToI16 = outline_numeric.clampF32ToI16;
+const clampF32ToU16 = outline_numeric.clampF32ToU16;
+const clampI32ToI16 = outline_numeric.clampI32ToI16;
+const clampI32ToU16 = outline_numeric.clampI32ToU16;
+const roundOpenTypeF32 = outline_numeric.roundOpenType;
+const roundedGlyphPosition = outline_numeric.roundedGlyphPosition;
 
 /// Errors intentionally preserve the table family that failed. Callers such as
 /// render bridges can distinguish malformed SFNT data from unsupported outline
@@ -1296,7 +1309,7 @@ pub const Font = struct {
     /// Return integer CFF2 glyph bounds using caller-supplied normalized variation coordinates.
     pub fn cff2GlyphBoundsAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?glyph_mod.Bounds {
         const bounds = (try self.cff2CharStringBoundsInfoAtCoords(glyph_id, normalized_coords)) orelse return null;
-        return cff2BoundsInfoToGlyphBounds(bounds);
+        return cff_outline.boundsFromCff2(bounds);
     }
 
     /// Build a CFF2 glyph outline using caller-supplied normalized variation coordinates.
@@ -1316,7 +1329,7 @@ pub const Font = struct {
         var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 }, metrics.advance_width, metrics.left_side_bearing);
         errdefer outline.deinit();
         if (try cff2_mod.appendGlyphOutlineAtCoords(allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, normalized_coords, &outline)) |bounds_info| {
-            outline.bounds = cff2BoundsInfoToGlyphBounds(bounds_info);
+            outline.bounds = cff_outline.boundsFromCff2(bounds_info);
             return outline;
         }
         outline.deinit();
@@ -4069,7 +4082,7 @@ pub const Font = struct {
             try sfnt.checksum.validate(self.data, cff2);
             try validateCff2Table(self.data, cff2);
             const bounds = (try cff2_mod.charStringBoundsInfo(self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count)) orelse return error.InvalidGlyph;
-            return cff2BoundsInfoToGlyphBounds(bounds);
+            return cff_outline.boundsFromCff2(bounds);
         }
         if (self.cff) |cff| {
             try sfnt.checksum.validate(self.data, cff);
@@ -4209,13 +4222,13 @@ pub const Font = struct {
         var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, default_bounds, metrics.advance_width, metrics.left_side_bearing);
         errdefer outline.deinit();
         const variation = try self.simpleGlyphVariationContext(glyph_id, normalized_coords, read_mode);
-        if (try appendSimpleGlyph(&outline, null, data, @intCast(contour_count), Transform.identity(), variation)) |phantom| {
-            applyGvarGlyphMetricDeltas(&outline, default_bounds, metrics, phantom);
+        if (try truetype_outline.simple.append(&outline, null, data, @intCast(contour_count), Transform.identity(), variation)) |phantom| {
+            truetype_outline.variation.applyMetricDeltas(&outline, default_bounds, metrics, phantom);
         }
         return outline;
     }
 
-    fn simpleGlyphVariationContext(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!?SimpleGlyphVariation {
+    fn simpleGlyphVariationContext(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!?truetype_outline.simple.Variation {
         const gvar = self.gvar orelse return null;
         if (read_mode.shouldRevalidate()) try sfnt.checksum.validate(self.data, gvar);
         return .{
@@ -4243,7 +4256,7 @@ pub const Font = struct {
         try self.appendCompoundGlyphAtCoords(&outline, &points, data, Transform.identity(), 1, glyph_id, normalized_coords, read_mode);
         outline.bounds = glyph_mod.boundsForCommands(outline.commands.items);
         if (try self.gvarPhantomPointDeltasAtCoordsPrepared(allocator, glyph_id, normalized_coords, read_mode)) |phantom| {
-            applyGvarGlyphMetricDeltas(&outline, default_bounds, metrics, phantom);
+            truetype_outline.variation.applyMetricDeltas(&outline, default_bounds, metrics, phantom);
         }
         return outline;
     }
@@ -4343,7 +4356,7 @@ pub const Font = struct {
                 try validateCff2Table(self.data, cff2);
             }
             if (try cff2_mod.appendGlyphOutline(allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, &outline)) |bounds_info| {
-                outline.bounds = cff2BoundsInfoToGlyphBounds(bounds_info);
+                outline.bounds = cff_outline.boundsFromCff2(bounds_info);
             }
         } else {
             const cff = self.cff orelse return error.MissingTable;
@@ -4461,7 +4474,7 @@ pub const Font = struct {
                 normalized_coords,
                 scalar_cache,
             );
-            const child_transform = parent_transform.mul(transformFromVarc(component_transform));
+            const child_transform = parent_transform.mul(outline_geometry.fromVarc(component_transform));
             const coordinates_unchanged = (component.flags &
                 (varc_mod.ComponentFlags.have_axes | varc_mod.ComponentFlags.reset_unspecified_axes)) == 0;
             // Missing trailing normalized coordinates are semantically zero, so
@@ -4556,7 +4569,7 @@ pub const Font = struct {
                 try cff_mod.appendGlyphOutlinePrepared(outline.allocator, cff_data, self.cff_parsed orelse try cff_mod.parse(cff_data), outline, glyph_id);
             }
         }
-        transformPathCommands(outline.commands.items[command_start..], transform);
+        outline_geometry.transformPathCommands(outline.commands.items[command_start..], transform);
     }
 
     fn gvarTargetCount(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!usize {
@@ -4599,41 +4612,6 @@ pub const Font = struct {
         };
     }
 
-    fn cff2BoundsInfoToGlyphBounds(bounds: Cff2CharStringBoundsInfo) glyph_mod.Bounds {
-        if (!bounds.has_bounds) return .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 };
-        // HarfBuzz/FreeType report CFF2 glyph extents by rounding each design
-        // coordinate to the nearest FUnit with OpenType's +infinity tie rule.
-        // Expanding minima with floor and maxima with ceil makes every
-        // fractional outline one unit too wide or tall.
-        return .{
-            .x_min = clampF32ToI16(roundOpenTypeF32(bounds.x_min)),
-            .y_min = clampF32ToI16(roundOpenTypeF32(bounds.y_min)),
-            .x_max = clampF32ToI16(roundOpenTypeF32(bounds.x_max)),
-            .y_max = clampF32ToI16(roundOpenTypeF32(bounds.y_max)),
-        };
-    }
-
-    fn clampF32ToI16(value: f32) i16 {
-        if (value <= @as(f32, @floatFromInt(std.math.minInt(i16)))) return std.math.minInt(i16);
-        if (value >= @as(f32, @floatFromInt(std.math.maxInt(i16)))) return std.math.maxInt(i16);
-        return @intFromFloat(value);
-    }
-
-    test "CFF2 fractional bounds use OpenType nearest rounding" {
-        try std.testing.expectEqual(glyph_mod.Bounds{
-            .x_min = 52,
-            .y_min = -115,
-            .x_max = 437,
-            .y_max = 759,
-        }, cff2BoundsInfoToGlyphBounds(.{
-            .has_bounds = true,
-            .x_min = 52.456,
-            .y_min = -115.0,
-            .x_max = 437.174,
-            .y_max = 758.739,
-        }));
-    }
-
     fn glyphData(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError![]const u8 {
         const glyf = self.glyf orelse return error.MissingTable;
         const start = try self.locaOffset(glyph_id);
@@ -4661,7 +4639,7 @@ pub const Font = struct {
         if (contour_count >= 0) {
             // Simple glyf outlines store contour end points plus compressed
             // point deltas. Compound outlines recurse into component glyphs.
-            _ = try appendSimpleGlyph(outline, points, data, @intCast(contour_count), transform, null);
+            _ = try truetype_outline.simple.append(outline, points, data, @intCast(contour_count), transform, null);
         } else if (points) |compound_points| {
             try self.appendCompoundGlyph(outline, compound_points, data, transform, depth + 1);
         } else {
@@ -4682,7 +4660,7 @@ pub const Font = struct {
         const contour_count = try bin.readI16At(data, 0);
         if (contour_count >= 0) {
             const variation = try self.simpleGlyphVariationContext(glyph_id, normalized_coords, read_mode);
-            _ = try appendSimpleGlyph(outline, points, data, @intCast(contour_count), transform, variation);
+            _ = try truetype_outline.simple.append(outline, points, data, @intCast(contour_count), transform, variation);
         } else {
             try self.appendCompoundGlyphAtCoords(outline, points, data, transform, depth + 1, glyph_id, normalized_coords, read_mode);
         }
@@ -4694,7 +4672,7 @@ pub const Font = struct {
         try r.skip(8);
         const parent_point_start = points.items.len;
         while (true) {
-            const component = try readCompoundGlyphComponent(&r);
+            const component = try truetype_outline.compound.readComponent(&r);
             switch (component.placement) {
                 .offset => |offset| {
                     var child = component.linear_transform;
@@ -4714,7 +4692,7 @@ pub const Font = struct {
                     );
                 },
             }
-            if ((component.flags & 0x0020) == 0) break;
+            if (!component.hasMore()) break;
         }
     }
 
@@ -4731,7 +4709,7 @@ pub const Font = struct {
         const child_point_start = points.items.len;
         const child_command_start = outline.commands.items.len;
         try self.appendGlyphOutline(outline, points, component_glyph, transform, depth);
-        try placePointMatchedComponent(outline, points, parent_point_start, child_point_start, child_command_start, point_match);
+        try truetype_outline.compound.placePointMatched(outline, points, parent_point_start, child_point_start, child_command_start, point_match);
     }
 
     fn appendCompoundGlyphAtCoords(self: *const Font, outline: *glyph_mod.GlyphOutline, points: *std.ArrayList(glyph_mod.Point), data: []const u8, parent_transform: Transform, depth: u8, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32, read_mode: OutlineReadMode) FontError!void {
@@ -4745,10 +4723,10 @@ pub const Font = struct {
         const parent_point_start = points.items.len;
         var component_index: usize = 0;
         while (true) : (component_index += 1) {
-            const component = try readCompoundGlyphComponent(&r);
+            const component = try truetype_outline.compound.readComponent(&r);
             switch (component.placement) {
                 .offset => |offset| {
-                    const component_delta = if (maybe_deltas) |deltas| gvarDeltaForPoint(deltas, component_index) else gvar_mod.Point{ .x = 0, .y = 0 };
+                    const component_delta = if (maybe_deltas) |deltas| truetype_outline.variation.deltaForPoint(deltas, component_index) else gvar_mod.Point{ .x = 0, .y = 0 };
                     var child = component.linear_transform;
                     child.dx = @as(f32, @floatFromInt(offset.x)) + roundOpenTypeF32(component_delta.x);
                     child.dy = @as(f32, @floatFromInt(offset.y)) + roundOpenTypeF32(component_delta.y);
@@ -4771,173 +4749,13 @@ pub const Font = struct {
                     // argument to vary, so FreeType and fontations deliberately
                     // ignore that component delta and derive placement solely
                     // from the two varied, linearly transformed anchor points.
-                    try placePointMatchedComponent(outline, points, parent_point_start, child_point_start, child_command_start, point_match);
+                    try truetype_outline.compound.placePointMatched(outline, points, parent_point_start, child_point_start, child_command_start, point_match);
                 },
             }
-            if ((component.flags & 0x0020) == 0) break;
+            if (!component.hasMore()) break;
         }
     }
 };
-
-const Transform = struct {
-    xx: f32,
-    yx: f32,
-    xy: f32,
-    yy: f32,
-    dx: f32,
-    dy: f32,
-
-    fn identity() Transform {
-        return .{ .xx = 1, .yx = 0, .xy = 0, .yy = 1, .dx = 0, .dy = 0 };
-    }
-
-    fn apply(self: Transform, point: glyph_mod.Point) glyph_mod.Point {
-        return .{
-            .x = point.x * self.xx + point.y * self.xy + self.dx,
-            .y = point.x * self.yx + point.y * self.yy + self.dy,
-        };
-    }
-
-    fn mul(a: Transform, b: Transform) Transform {
-        return .{
-            .xx = a.xx * b.xx + a.xy * b.yx,
-            .yx = a.yx * b.xx + a.yy * b.yx,
-            .xy = a.xx * b.xy + a.xy * b.yy,
-            .yy = a.yx * b.xy + a.yy * b.yy,
-            .dx = a.xx * b.dx + a.xy * b.dy + a.dx,
-            .dy = a.yx * b.dx + a.yy * b.dy + a.dy,
-        };
-    }
-};
-
-fn transformFromVarc(value: varc_mod.StaticTransform) Transform {
-    return .{
-        .xx = value.xx,
-        .yx = value.yx,
-        .xy = value.xy,
-        .yy = value.yy,
-        .dx = value.dx,
-        .dy = value.dy,
-    };
-}
-
-fn transformPathCommands(commands: []glyph_mod.PathCommand, transform: Transform) void {
-    for (commands) |*command| {
-        switch (command.*) {
-            .move_to => |*point| point.* = transform.apply(point.*),
-            .line_to => |*point| point.* = transform.apply(point.*),
-            .quad_to => |*curve| {
-                curve.control = transform.apply(curve.control);
-                curve.end = transform.apply(curve.end);
-            },
-            .cubic_to => |*curve| {
-                curve.c0 = transform.apply(curve.c0);
-                curve.c1 = transform.apply(curve.c1);
-                curve.end = transform.apply(curve.end);
-            },
-            .close => {},
-        }
-    }
-}
-
-const CompoundGlyphPlacement = union(enum) {
-    offset: struct { x: i16, y: i16 },
-    points: glyf_mod.PointMatch,
-};
-
-const CompoundGlyphRuntimeComponent = struct {
-    flags: u16,
-    glyph_id: glyph_mod.GlyphId,
-    placement: CompoundGlyphPlacement,
-    linear_transform: Transform,
-};
-
-fn readCompoundGlyphComponent(r: *bin.Reader) FontError!CompoundGlyphRuntimeComponent {
-    const flags = try r.readU16();
-    try glyf_mod.validateCompoundFlags(flags);
-    const glyph_id = try r.readU16();
-    const placement: CompoundGlyphPlacement = if ((flags & 0x0002) != 0)
-        .{ .offset = if ((flags & 0x0001) != 0)
-            .{ .x = try r.readI16(), .y = try r.readI16() }
-        else
-            .{ .x = try r.readI8(), .y = try r.readI8() } }
-    else
-        .{ .points = if ((flags & 0x0001) != 0)
-            .{ .parent_point = try r.readU16(), .child_point = try r.readU16() }
-        else
-            .{ .parent_point = try r.readU8(), .child_point = try r.readU8() } };
-
-    var transform = Transform.identity();
-    if ((flags & 0x0008) != 0) {
-        const scale = f2dot14(try r.readI16());
-        transform.xx = scale;
-        transform.yy = scale;
-    } else if ((flags & 0x0040) != 0) {
-        transform.xx = f2dot14(try r.readI16());
-        transform.yy = f2dot14(try r.readI16());
-    } else if ((flags & 0x0080) != 0) {
-        transform.xx = f2dot14(try r.readI16());
-        transform.yx = f2dot14(try r.readI16());
-        transform.xy = f2dot14(try r.readI16());
-        transform.yy = f2dot14(try r.readI16());
-    }
-    return .{
-        .flags = flags,
-        .glyph_id = glyph_id,
-        .placement = placement,
-        .linear_transform = transform,
-    };
-}
-
-fn placePointMatchedComponent(
-    outline: *glyph_mod.GlyphOutline,
-    points: *std.ArrayList(glyph_mod.Point),
-    parent_point_start: usize,
-    child_point_start: usize,
-    child_command_start: usize,
-    point_match: glyf_mod.PointMatch,
-) FontError!void {
-    const parent_index = parent_point_start + @as(usize, point_match.parent_point);
-    const child_index = child_point_start + @as(usize, point_match.child_point);
-    // Parse-time graph validation normally proves both accesses. Keep the
-    // materializer defensive as well: glyphOutlineForRaster() intentionally
-    // trusts parsed bytes, and no malformed or post-parse-mutated point number
-    // should turn that trust boundary into an out-of-bounds access.
-    if (parent_index >= child_point_start or child_index >= points.items.len) return error.InvalidGlyph;
-
-    const parent_point = points.items[parent_index];
-    const child_point = points.items[child_index];
-    const offset = glyph_mod.Point{
-        .x = parent_point.x - child_point.x,
-        .y = parent_point.y - child_point.y,
-    };
-    if (offset.x == 0 and offset.y == 0) return;
-
-    for (points.items[child_point_start..]) |*point| translateGlyphPoint(point, offset);
-    for (outline.commands.items[child_command_start..]) |*command| translatePathCommand(command, offset);
-}
-
-fn translateGlyphPoint(point: *glyph_mod.Point, offset: glyph_mod.Point) void {
-    point.x += offset.x;
-    point.y += offset.y;
-}
-
-fn translatePathCommand(command: *glyph_mod.PathCommand, offset: glyph_mod.Point) void {
-    switch (command.*) {
-        .move_to => |*point| translateGlyphPoint(point, offset),
-        .line_to => |*point| translateGlyphPoint(point, offset),
-        .quad_to => |*curve| {
-            translateGlyphPoint(&curve.control, offset);
-            translateGlyphPoint(&curve.end, offset);
-        },
-        .cubic_to => |*curve| {
-            translateGlyphPoint(&curve.c0, offset);
-            translateGlyphPoint(&curve.c1, offset);
-            translateGlyphPoint(&curve.end, offset);
-        },
-        .close => {},
-    }
-}
 
 fn validateSbixTable(
     allocator: std.mem.Allocator,
@@ -5294,329 +5112,6 @@ fn validateKerxTable(data: []const u8, kerx: TableRecord, glyph_count: u16) Font
 
 fn validateMorxTable(data: []const u8, morx: TableRecord, glyph_count: u16) FontError!void {
     return try morx_mod.validate(data, morx.offset, morx.length, glyph_count);
-}
-
-const SimpleGlyphVariation = struct {
-    data: []const u8,
-    table_offset: usize,
-    table_length: usize,
-    glyph_count: usize,
-    axis_count: usize,
-    glyph_id: glyph_mod.GlyphId,
-    normalized_coords: []const f32,
-    validate_inactive_payloads: bool,
-};
-
-fn appendSimpleGlyph(
-    outline: *glyph_mod.GlyphOutline,
-    transformed_points: ?*std.ArrayList(glyph_mod.Point),
-    data: []const u8,
-    contour_count: u16,
-    transform: Transform,
-    variation: ?SimpleGlyphVariation,
-) FontError!?GvarPhantomPointDeltas {
-    if (contour_count == 0) {
-        // A contourless simple glyph can still vary its four metric phantom
-        // points. Do not require real contours merely to preserve its advance
-        // and side-bearing deltas.
-        const gvar = variation orelse return null;
-        const deltas = try gvar_mod.accumulateSimpleGlyphPointDeltas(
-            outline.allocator,
-            gvar.data,
-            gvar.table_offset,
-            gvar.table_length,
-            gvar.glyph_count,
-            gvar.axis_count,
-            gvar.glyph_id,
-            gvar.normalized_coords,
-            &.{},
-            &.{},
-            gvar.validate_inactive_payloads,
-        );
-        defer if (deltas) |owned| outline.allocator.free(owned);
-        return if (deltas) |all_deltas|
-            try gvar_mod.phantomPointDeltasFromDense(0, all_deltas)
-        else
-            null;
-    }
-    var r = bin.Reader.init(data);
-    _ = try r.readI16();
-    try r.skip(8);
-    var inline_end_pts: [8]u16 = undefined;
-    const end_pts = if (contour_count <= inline_end_pts.len)
-        inline_end_pts[0..contour_count]
-    else
-        try outline.allocator.alloc(u16, contour_count);
-    defer if (contour_count > inline_end_pts.len) outline.allocator.free(end_pts);
-    var total_points: usize = 0;
-    var previous_end: ?u16 = null;
-    for (end_pts) |*end| {
-        end.* = try r.readU16();
-        if (previous_end) |prev| {
-            // endPtsOfContours must be strictly increasing. Accepting a
-            // repeated/decreasing end point lets malformed glyf data define an
-            // empty or overlapping contour, which later underflows when the
-            // contour slice is built from `start .. end + 1`.
-            if (end.* <= prev) return error.InvalidGlyph;
-        }
-        previous_end = end.*;
-        total_points = @as(usize, end.*) + 1;
-    }
-    const instruction_len = try r.readU16();
-    try r.skip(instruction_len);
-    try outline.commands.ensureUnusedCapacity(outline.allocator, total_points + @as(usize, contour_count));
-
-    // X and Y values are stored as deltas in two separate streams. Expand the
-    // run-length encoded flags into the point records themselves so the hot
-    // outline path does not carry a second per-point allocation.
-    var inline_points: [64]FlaggedPoint = undefined;
-    const points = if (total_points <= inline_points.len)
-        inline_points[0..total_points]
-    else
-        try outline.allocator.alloc(FlaggedPoint, total_points);
-    defer if (total_points > inline_points.len) outline.allocator.free(points);
-    var i: usize = 0;
-    while (i < total_points) : (i += 1) {
-        const flag = try r.readU8();
-        try glyf_mod.validateSimpleFlag(flag, i);
-        points[i].flags = flag;
-        if ((flag & 0x08) != 0) {
-            const repeat = try r.readU8();
-            for (0..repeat) |_| {
-                i += 1;
-                if (i >= total_points) return error.InvalidGlyph;
-                try glyf_mod.validateSimpleFlag(flag, i);
-                points[i].flags = flag;
-            }
-        }
-    }
-
-    // Rebuild absolute point coordinates before contour reconstruction.
-    var x: i16 = 0;
-    for (points) |*point| {
-        const flag = point.flags;
-        const dx: i16 = if ((flag & 0x02) != 0)
-            if ((flag & 0x10) != 0) try r.readU8() else -@as(i16, try r.readU8())
-        else if ((flag & 0x10) != 0)
-            0
-        else
-            try r.readI16();
-        x += dx;
-        point.x = x;
-    }
-    var y: i16 = 0;
-    for (points) |*point| {
-        const flag = point.flags;
-        const dy: i16 = if ((flag & 0x04) != 0)
-            if ((flag & 0x20) != 0) try r.readU8() else -@as(i16, try r.readU8())
-        else if ((flag & 0x20) != 0)
-            0
-        else
-            try r.readI16();
-        y += dy;
-        point.y = y;
-    }
-    var phantom_deltas: ?GvarPhantomPointDeltas = null;
-    if (variation) |gvar| {
-        const deltas = try gvar_mod.accumulateSimpleGlyphPointDeltasWithReader(
-            outline.allocator,
-            gvar.data,
-            gvar.table_offset,
-            gvar.table_length,
-            gvar.glyph_count,
-            gvar.axis_count,
-            gvar.glyph_id,
-            gvar.normalized_coords,
-            []const FlaggedPoint,
-            points,
-            points.len,
-            flaggedPointForGvarIup,
-            end_pts,
-            gvar.validate_inactive_payloads,
-        );
-        defer if (deltas) |owned| outline.allocator.free(owned);
-        if (deltas) |all_deltas| {
-            const real_deltas = all_deltas[0..points.len];
-            std.debug.assert(gvarDensePointIdsMatch(real_deltas));
-            for (points, real_deltas) |*point, delta| {
-                point.x = clampGlyphPointF32ToI16(roundOpenTypeF32(@as(f32, @floatFromInt(point.x)) + delta.x));
-                point.y = clampGlyphPointF32ToI16(roundOpenTypeF32(@as(f32, @floatFromInt(point.y)) + delta.y));
-            }
-            // glyf headers remain authoritative when this glyph has no active
-            // tuple. Recompute bounds only after gvar actually changed the
-            // decoded point set.
-            outline.bounds = boundsForFlaggedPoints(points);
-            // The same tuple walk already decoded the four phantom points.
-            // Return them to the top-level simple-glyph caller instead of
-            // reparsing gvar solely to update advance and side-bearing fields.
-            phantom_deltas = try gvar_mod.phantomPointDeltasFromDense(points.len, all_deltas);
-        }
-    }
-
-    if (transformed_points) |raw_points| {
-        // Compound point anchors address the original glyf points, including
-        // off-curve controls that may disappear into implied path endpoints.
-        // Preserve those points only for the lifetime of this recursive load;
-        // GlyphOutline remains a compact command stream after expansion.
-        try raw_points.ensureUnusedCapacity(outline.allocator, points.len);
-        for (points) |point| raw_points.appendAssumeCapacity(transform.apply(point.point()));
-    }
-
-    var start: usize = 0;
-    var builder = glyph_mod.OutlineBuilder{ .outline = outline };
-    for (end_pts) |end_pt| {
-        const end: usize = end_pt;
-        try appendContour(&builder, points[start .. end + 1], transform);
-        start = end + 1;
-    }
-    return phantom_deltas;
-}
-
-fn gvarDensePointIdsMatch(deltas: []const GvarScaledPointDelta) bool {
-    for (deltas, 0..) |delta, index| {
-        if (delta.point != index) return false;
-    }
-    return true;
-}
-
-fn flaggedPointForGvarIup(points: []const FlaggedPoint, index: usize) gvar_mod.Point {
-    return .{ .x = @floatFromInt(points[index].x), .y = @floatFromInt(points[index].y) };
-}
-
-fn boundsForFlaggedPoints(points: []const FlaggedPoint) glyph_mod.Bounds {
-    if (points.len == 0) return .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 };
-    var result = glyph_mod.Bounds{
-        .x_min = points[0].x,
-        .y_min = points[0].y,
-        .x_max = points[0].x,
-        .y_max = points[0].y,
-    };
-    for (points[1..]) |point| {
-        result.x_min = @min(result.x_min, point.x);
-        result.y_min = @min(result.y_min, point.y);
-        result.x_max = @max(result.x_max, point.x);
-        result.y_max = @max(result.y_max, point.y);
-    }
-    return result;
-}
-
-fn gvarDeltaForPoint(deltas: []const GvarScaledPointDelta, point: usize) gvar_mod.Point {
-    if (point > std.math.maxInt(u16)) return .{ .x = 0, .y = 0 };
-    const point_id: u16 = @intCast(point);
-    if (point < deltas.len and deltas[point].point == point_id) {
-        return .{ .x = deltas[point].x, .y = deltas[point].y };
-    }
-    var result = gvar_mod.Point{ .x = 0, .y = 0 };
-    for (deltas) |delta| {
-        if (delta.point != point_id) continue;
-        result.x += delta.x;
-        result.y += delta.y;
-    }
-    return result;
-}
-
-fn applyGvarGlyphMetricDeltas(outline: *glyph_mod.GlyphOutline, default_bounds: glyph_mod.Bounds, default_metrics: HorizontalMetricInfo, phantom: GvarPhantomPointDeltas) void {
-    const default_left_phantom = @as(f32, @floatFromInt(@as(i32, default_bounds.x_min) - @as(i32, default_metrics.left_side_bearing)));
-    const varied_left_phantom = default_left_phantom + phantom.left.x;
-    outline.left_side_bearing = clampGlyphPointF32ToI16(roundOpenTypeF32(@as(f32, @floatFromInt(outline.bounds.x_min)) - varied_left_phantom));
-    outline.advance_width = clampF32ToU16(roundOpenTypeF32(@as(f32, @floatFromInt(default_metrics.advance_width)) + phantom.horizontalAdvanceDelta()));
-}
-
-fn clampF32ToU16(value: f32) u16 {
-    if (value <= 0) return 0;
-    if (value >= @as(f32, @floatFromInt(std.math.maxInt(u16)))) return std.math.maxInt(u16);
-    return @intFromFloat(value);
-}
-
-fn clampI32ToU16(value: i32) u16 {
-    if (value <= 0) return 0;
-    if (value >= std.math.maxInt(u16)) return std.math.maxInt(u16);
-    return @intCast(value);
-}
-
-fn clampI32ToI16(value: i32) i16 {
-    if (value <= std.math.minInt(i16)) return std.math.minInt(i16);
-    if (value >= std.math.maxInt(i16)) return std.math.maxInt(i16);
-    return @intCast(value);
-}
-
-fn clampGlyphPointF32ToI16(value: f32) i16 {
-    if (value <= @as(f32, @floatFromInt(std.math.minInt(i16)))) return std.math.minInt(i16);
-    if (value >= @as(f32, @floatFromInt(std.math.maxInt(i16)))) return std.math.maxInt(i16);
-    return @intFromFloat(value);
-}
-
-fn roundOpenTypeF32(value: f32) f32 {
-    // OpenType variation arithmetic rounds a .5 tie toward +infinity, not
-    // away from zero like Zig's @round. This distinction is observable for a
-    // negative half-unit gvar delta: -101.5 becomes -101, matching FreeType's
-    // FT_fixedToInt and fontTools' otRound.
-    return @floor(value + 0.5);
-}
-
-fn roundedGlyphPosition(value: f32) i32 {
-    if (value <= @as(f32, @floatFromInt(std.math.minInt(i32)))) return std.math.minInt(i32);
-    if (value >= @as(f32, @floatFromInt(std.math.maxInt(i32)))) return std.math.maxInt(i32);
-    return @intFromFloat(@round(value));
-}
-
-const FlaggedPoint = struct {
-    x: i16 = 0,
-    y: i16 = 0,
-    flags: u8 = 0,
-
-    fn onCurve(self: FlaggedPoint) bool {
-        return (self.flags & 0x01) != 0;
-    }
-
-    fn point(self: FlaggedPoint) glyph_mod.Point {
-        return .{ .x = @floatFromInt(self.x), .y = @floatFromInt(self.y) };
-    }
-};
-
-fn appendContour(builder: *glyph_mod.OutlineBuilder, contour: []const FlaggedPoint, transform: Transform) FontError!void {
-    if (contour.len == 0) return;
-    const first = contour[0];
-    const last = contour[contour.len - 1];
-    var current: glyph_mod.Point = undefined;
-    var index: usize = 0;
-    // TrueType permits contours to start with an off-curve control point. In
-    // that case the visible start point is either the final on-curve point or
-    // the implied midpoint between the first and last controls.
-    if (first.onCurve()) {
-        current = first.point();
-        index = 1;
-    } else if (last.onCurve()) {
-        current = last.point();
-    } else {
-        current = glyph_mod.midpoint(last.point(), first.point());
-    }
-    try builder.moveTo(transform.apply(current));
-
-    while (index < contour.len) {
-        const p = contour[index];
-        if (p.onCurve()) {
-            current = p.point();
-            try builder.lineTo(transform.apply(current));
-            index += 1;
-        } else {
-            // Consecutive off-curve points imply an on-curve point at their
-            // midpoint, preserving quadratic continuity without storing an
-            // explicit endpoint in the font.
-            const control = p.point();
-            const next_index = if (index + 1 < contour.len) index + 1 else 0;
-            const next = contour[next_index];
-            const end = if (next.onCurve()) next.point() else glyph_mod.midpoint(control, next.point());
-            try builder.quadTo(transform.apply(control), transform.apply(end));
-            current = end;
-            index += if (next.onCurve() and next_index != 0) 2 else 1;
-        }
-    }
-    try builder.close();
-}
-
-fn f2dot14(value: i16) f32 {
-    return @as(f32, @floatFromInt(value)) / 16384.0;
 }
 
 fn fixed16_16ToF32(value: i32) f32 {

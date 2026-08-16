@@ -3,11 +3,28 @@
 const std = @import("std");
 const font_mod = @import("../../font.zig");
 const cff = @import("../../cff.zig");
+const glyph = @import("../../glyph.zig");
 const test_font = @import("../../test_font.zig");
+const cff_outline = @import("../outline/root.zig").cff;
 const fixture = @import("fixtures/sfnt.zig");
 
 const Font = font_mod.Font;
 const FontFormat = font_mod.FontFormat;
+
+test "CFF2 fractional bounds use OpenType nearest rounding" {
+    try std.testing.expectEqual(glyph.Bounds{
+        .x_min = 52,
+        .y_min = -115,
+        .x_max = 437,
+        .y_max = 759,
+    }, cff_outline.boundsFromCff2(.{
+        .has_bounds = true,
+        .x_min = 52.456,
+        .y_min = -115.0,
+        .x_max = 437.174,
+        .y_max = 758.739,
+    }));
+}
 
 test "CFF CharStrings INDEX count must match maxp glyph count" {
     const allocator = std.testing.allocator;

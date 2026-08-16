@@ -2,12 +2,12 @@
 
 test {
     _ = @import("contextual/root.zig");
-    _ = @import("cursive.zig");
+    _ = @import("cursive/root.zig");
     _ = @import("dispatcher/root.zig");
     _ = @import("extension/root.zig");
     _ = @import("marks/root.zig");
     _ = @import("nested.zig");
     _ = @import("pair/root.zig");
     _ = @import("prefilter.zig");
-    _ = @import("single.zig");
+    _ = @import("single/root.zig");
 }

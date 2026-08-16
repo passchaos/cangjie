@@ -5,5 +5,6 @@ test {
     _ = @import("fvar/root.zig");
     _ = @import("gvar/root.zig");
     _ = @import("metrics/root.zig");
+    _ = @import("rounding.zig");
     _ = @import("stat/root.zig");
 }

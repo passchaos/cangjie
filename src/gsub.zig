@@ -30,7 +30,6 @@ const GlyphId = @import("glyph.zig").GlyphId;
 const ligature_provenance = @import("ligature_provenance.zig");
 const class_context = @import("opentype/class_context.zig");
 pub const runtime = @import("gsub/runtime/root.zig");
-const runtime_filtering = @import("gsub/runtime/filtering.zig");
 const runtime_prefilter = @import("gsub/runtime/prefilter/root.zig");
 const table_core = @import("gsub/table/root.zig");
 const validation = @import("gsub/validation/root.zig");
@@ -104,20 +103,12 @@ const deinitLookupAccelerators = accelerator_root.ownership.deinit;
 const deinitLookupAcceleratorContents =
     accelerator_root.ownership.deinitContents;
 
-const FeatureApplication = feature.Application;
 const FeatureLookupPlanEntry = feature.LookupPlanEntry;
 const MergedFeatureLookup = feature.MergedLookup;
 const MergedFeatureLookupPlan = feature.MergedLookupPlan;
 const FeatureLookupPlan = feature.LookupPlan;
-const sourceFeatureMaskForTag = feature.sourceMaskForTag;
-
 const NestedGlyphChange = contextual_model.Change;
 const markUnsafeContextMatch = contextual_safety.markInput;
-
-/// HarfBuzz enables `rand` globally with HB_OT_MAP_MAX_VALUE. Keep the sentinel
-/// public so explicit script shapers can place the common feature in the same
-/// staged lookup plan as their script-specific features.
-const random_feature_value = feature.random_value;
 
 /// Apply default or explicitly enabled substitution features to the glyph
 /// stream in place. The input and output are glyph ids; source text metadata is
@@ -271,52 +262,6 @@ fn applySelectedSourceFeatureWithOptions(
         shaping_options,
         &run_digest_cache,
     );
-}
-
-test "GSUB ranged feature helper selects and applies only assigned sources" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 80;
-    writeCachedSingleFeatureGsubTest(&bytes);
-
-    const lookups = try selectedFeatureLookupIndicesForOptions(
-        &bytes,
-        0,
-        bytes.len,
-        unicode.tag("liga"),
-        allocator,
-        .{ .script_tag = .dflt },
-    );
-    defer allocator.free(lookups);
-    try std.testing.expectEqualSlices(u16, &.{0}, lookups);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 10, 10, 10 });
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(allocator);
-    try sources.appendSlice(allocator, &.{ 0, 1, 2 });
-    var clusters = std.ArrayList(usize).empty;
-    defer clusters.deinit(allocator);
-    try clusters.appendSlice(allocator, &.{ 0, 1, 2 });
-    const source_features = [_]u32{ unicode.tag("liga"), 0, unicode.tag("liga") };
-
-    try applySelectedSourceFeatureWithOptions(
-        &bytes,
-        0,
-        bytes.len,
-        lookups,
-        unicode.tag("liga"),
-        1,
-        &glyphs,
-        allocator,
-        .{
-            .script_tag = .dflt,
-            .glyph_source_indices = &sources,
-            .glyph_cluster_indices = &clusters,
-            .source_features = &source_features,
-        },
-    );
-    try std.testing.expectEqualSlices(GlyphId, &.{ 11, 10, 11 }, glyphs.items);
 }
 
 pub fn hasFeature(data: []const u8, offset: usize, length: usize, feature_tag: u32) GsubError!bool {
@@ -698,85 +643,6 @@ fn extensionSubtablePayload(table: Table, subtable_offset: usize, expected_looku
     );
 }
 
-test "GSUB staged plans retain random AlternateSubst semantics" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 80;
-    writeRandomFeatureGsubTest(&bytes);
-    const application = [_]FeatureApplication{.{
-        .tag = unicode.tag("rand"),
-        .value = random_feature_value,
-    }};
-    const expected = [_]GlyphId{ 30, 20, 20, 30 };
-
-    // Exercise the uncached staged executor as well as both immutable plan
-    // representations used by script shapers. A numeric value of 255 without
-    // the semantic random bit would make every AlternateSubst a no-op here.
-    var direct = std.ArrayList(GlyphId).empty;
-    defer direct.deinit(allocator);
-    try direct.appendSlice(allocator, &.{ 10, 10, 10, 10 });
-    var direct_state: u32 = 1;
-    try applyFeatureSequenceWithOptions(
-        &bytes,
-        0,
-        bytes.len,
-        &application,
-        &direct,
-        allocator,
-        .{ .script_tag = .dflt, .random_state = &direct_state },
-    );
-    try std.testing.expectEqualSlices(GlyphId, &expected, direct.items);
-
-    var feature_plan = try buildFeatureLookupPlan(
-        &bytes,
-        0,
-        bytes.len,
-        &application,
-        allocator,
-        .{ .script_tag = .dflt },
-    );
-    defer feature_plan.deinit(allocator);
-    var planned = std.ArrayList(GlyphId).empty;
-    defer planned.deinit(allocator);
-    try planned.appendSlice(allocator, &.{ 10, 10, 10, 10 });
-    var planned_state: u32 = 1;
-    try applyFeatureLookupPlanWithOptions(
-        &bytes,
-        0,
-        bytes.len,
-        feature_plan,
-        &planned,
-        allocator,
-        .{ .script_tag = .dflt, .random_state = &planned_state },
-    );
-    try std.testing.expectEqualSlices(GlyphId, &expected, planned.items);
-
-    var merged_plan = try buildMergedFeatureLookupPlan(
-        &bytes,
-        0,
-        bytes.len,
-        &application,
-        allocator,
-        .{ .script_tag = .dflt },
-    );
-    defer merged_plan.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 1), merged_plan.lookups.len);
-    try std.testing.expect(merged_plan.lookups[0].random);
-    var merged = std.ArrayList(GlyphId).empty;
-    defer merged.deinit(allocator);
-    try merged.appendSlice(allocator, &.{ 10, 10, 10, 10 });
-    var merged_state: u32 = 1;
-    try applyMergedFeatureLookupPlanWithOptions(
-        &bytes,
-        0,
-        bytes.len,
-        merged_plan,
-        &merged,
-        allocator,
-        .{ .script_tag = .dflt, .random_state = &merged_state },
-    );
-    try std.testing.expectEqualSlices(GlyphId, &expected, merged.items);
-}
-
 fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
     const subst_format = try readU16(table, subtable_offset);
     if (subst_format != 1) return error.UnsupportedGsub;
@@ -1021,81 +887,6 @@ test "GSUB rejects ExtensionSubst payload offsets that alias the wrapper header"
     try std.testing.expectError(error.BadGsub, applyExtensionSubstitution(table, 0, &glyphs, std.testing.allocator, 0, .{}));
     try std.testing.expectError(error.BadGsub, contextual_nested.extension.applyAt(ContextualRecordExecutor, table, 0, &glyphs, 0, std.testing.allocator, 0, .{}));
     try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
-}
-
-test "GSUB FeatureVariations substitute active feature lookups by normalized coordinates" {
-    var bytes = [_]u8{0} ** 120;
-    writeU32Test(&bytes, 0, 0x00010001);
-    writeU16Test(&bytes, 4, 14); // ScriptList.
-    writeU16Test(&bytes, 6, 34); // FeatureList.
-    writeU16Test(&bytes, 8, 46); // LookupList.
-    writeU32Test(&bytes, 10, 72); // FeatureVariations.
-
-    writeU16Test(&bytes, 14, 1);
-    writeU32Test(&bytes, 16, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
-    writeU16Test(&bytes, 20, 8);
-    writeU16Test(&bytes, 22, 4);
-    writeU16Test(&bytes, 24, 0);
-    writeU16Test(&bytes, 26, 0);
-    writeU16Test(&bytes, 28, 0xffff);
-    writeU16Test(&bytes, 30, 1);
-    writeU16Test(&bytes, 32, 0);
-
-    writeU16Test(&bytes, 34, 1);
-    writeU32Test(&bytes, 36, unicode.tag("rvrn"));
-    writeU16Test(&bytes, 40, 8);
-    writeU16Test(&bytes, 42, 0);
-    writeU16Test(&bytes, 44, 0);
-
-    writeU16Test(&bytes, 46, 1);
-    writeU16Test(&bytes, 48, 4);
-    writeU16Test(&bytes, 50, 1);
-    writeU16Test(&bytes, 52, 0);
-    writeU16Test(&bytes, 54, 1);
-    writeU16Test(&bytes, 56, 8);
-    writeU16Test(&bytes, 58, 2);
-    writeU16Test(&bytes, 60, 8);
-    writeU16Test(&bytes, 62, 1);
-    writeU16Test(&bytes, 64, 2);
-    writeU16Test(&bytes, 66, 1);
-    writeU16Test(&bytes, 68, 1);
-    writeU16Test(&bytes, 70, 1);
-
-    writeU32Test(&bytes, 72, 0x00010000);
-    writeU32Test(&bytes, 76, 1);
-    writeU32Test(&bytes, 80, 16);
-    writeU32Test(&bytes, 84, 30);
-    writeU16Test(&bytes, 88, 1);
-    writeU32Test(&bytes, 90, 6);
-    writeU16Test(&bytes, 94, 1);
-    writeU16Test(&bytes, 96, 1);
-    writeI16Test(&bytes, 98, 8192);
-    writeI16Test(&bytes, 100, 16384);
-    writeU32Test(&bytes, 102, 0x00010000);
-    writeU16Test(&bytes, 106, 1);
-    writeU16Test(&bytes, 108, 0);
-    writeU32Test(&bytes, 110, 12);
-    writeU16Test(&bytes, 114, 0);
-    writeU16Test(&bytes, 116, 1);
-    writeU16Test(&bytes, 118, 0);
-
-    var low = std.ArrayList(GlyphId).empty;
-    defer low.deinit(std.testing.allocator);
-    try low.append(std.testing.allocator, 1);
-    try applyWithOptions(&bytes, 0, bytes.len, &low, std.testing.allocator, .{
-        .normalized_variation_coords = &.{ 0.0, 0.25 },
-        .apply_all_if_unselected = false,
-    });
-    try std.testing.expectEqualSlices(GlyphId, &.{1}, low.items);
-
-    var high = std.ArrayList(GlyphId).empty;
-    defer high.deinit(std.testing.allocator);
-    try high.append(std.testing.allocator, 1);
-    try applyWithOptions(&bytes, 0, bytes.len, &high, std.testing.allocator, .{
-        .normalized_variation_coords = &.{ 0.0, 0.75 },
-        .apply_all_if_unselected = false,
-    });
-    try std.testing.expectEqualSlices(GlyphId, &.{2}, high.items);
 }
 
 test "GSUB rejects malformed coverage ordering before substitution" {
@@ -1779,206 +1570,6 @@ test "GSUB validates coverage indexes against substitution arrays" {
 
         try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
     }
-}
-
-test "GSUB source-scoped feature gates substitution starts" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 68;
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 10); // ScriptList.
-    writeU16Test(&bytes, 6, 30); // FeatureList.
-    writeU16Test(&bytes, 8, 44); // LookupList.
-
-    writeU16Test(&bytes, 10, 1); // ScriptCount.
-    writeU32Test(&bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.arab));
-    writeU16Test(&bytes, 16, 8); // Script table at 18.
-    writeU16Test(&bytes, 18, 4); // DefaultLangSys at 22.
-    writeU16Test(&bytes, 20, 0); // LangSysCount.
-    writeU16Test(&bytes, 22, 0); // LookupOrder.
-    writeU16Test(&bytes, 24, 0xffff); // No required feature.
-    writeU16Test(&bytes, 26, 1);
-    writeU16Test(&bytes, 28, 0); // Feature index 0.
-
-    writeU16Test(&bytes, 30, 1); // FeatureCount.
-    writeU32Test(&bytes, 32, unicode.tag("init"));
-    writeU16Test(&bytes, 36, 8); // Feature table at 38.
-    writeU16Test(&bytes, 38, 0); // FeatureParams.
-    writeU16Test(&bytes, 40, 1);
-    writeU16Test(&bytes, 42, 0); // Lookup index 0.
-
-    writeU16Test(&bytes, 44, 1); // LookupCount.
-    writeU16Test(&bytes, 46, 4); // Lookup at 48.
-    writeU16Test(&bytes, 48, 1); // SingleSubst.
-    writeU16Test(&bytes, 50, 0);
-    writeU16Test(&bytes, 52, 1);
-    writeU16Test(&bytes, 54, 8); // Subtable at 56.
-    writeU16Test(&bytes, 56, 1); // SingleSubst format 1.
-    writeU16Test(&bytes, 58, 6); // Coverage at 62.
-    writeI16Test(&bytes, 60, 1); // 1 -> 2.
-    writeCoverage1(&bytes, 62, 1);
-
-    var scoped = std.ArrayList(GlyphId).empty;
-    defer scoped.deinit(allocator);
-    try scoped.appendSlice(allocator, &.{ 1, 1, 1 });
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(allocator);
-    try sources.appendSlice(allocator, &.{ 0, 1, 2 });
-    const source_features = [_]u32{ 0, unicode.tag("init"), 0 };
-    try applySourceFeatureWithOptions(&bytes, 0, bytes.len, unicode.tag("init"), &scoped, allocator, .{
-        .script_tag = .arab,
-        .glyph_source_indices = &sources,
-        .source_features = &source_features,
-    });
-    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2, 1 }, scoped.items);
-
-    var global = std.ArrayList(GlyphId).empty;
-    defer global.deinit(allocator);
-    try global.appendSlice(allocator, &.{ 1, 1, 1 });
-    try applyFeatureWithOptions(&bytes, 0, bytes.len, unicode.tag("init"), &global, allocator, .{
-        .script_tag = .arab,
-    });
-    try std.testing.expectEqualSlices(GlyphId, &.{ 2, 2, 2 }, global.items);
-}
-
-test "GSUB source feature masks ignore the shared marker bit" {
-    const features = [_]u32{sourceFeatureMaskForTag(unicode.tag("blwf")).?};
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(std.testing.allocator);
-    try sources.append(std.testing.allocator, 0);
-
-    try std.testing.expect(runtime_filtering.sourceFeatureAllowsGlyph(.{
-        .glyph_source_indices = &sources,
-        .source_features = &features,
-        .active_source_feature = unicode.tag("blwf"),
-    }, 0));
-    try std.testing.expect(!runtime_filtering.sourceFeatureAllowsGlyph(.{
-        .glyph_source_indices = &sources,
-        .source_features = &features,
-        .active_source_feature = unicode.tag("rphf"),
-    }, 0));
-}
-
-test "GSUB source-scoped feature gates multiple substitutions" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 78;
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 10); // ScriptList.
-    writeU16Test(&bytes, 6, 30); // FeatureList.
-    writeU16Test(&bytes, 8, 44); // LookupList.
-
-    writeU16Test(&bytes, 10, 1);
-    writeU32Test(&bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.arab));
-    writeU16Test(&bytes, 16, 8);
-    writeU16Test(&bytes, 18, 4);
-    writeU16Test(&bytes, 20, 0);
-    writeU16Test(&bytes, 22, 0);
-    writeU16Test(&bytes, 24, 0xffff);
-    writeU16Test(&bytes, 26, 1);
-    writeU16Test(&bytes, 28, 0);
-
-    writeU16Test(&bytes, 30, 1);
-    writeU32Test(&bytes, 32, unicode.tag("fina"));
-    writeU16Test(&bytes, 36, 8);
-    writeU16Test(&bytes, 38, 0);
-    writeU16Test(&bytes, 40, 1);
-    writeU16Test(&bytes, 42, 0);
-
-    writeU16Test(&bytes, 44, 1);
-    writeU16Test(&bytes, 46, 4);
-    writeU16Test(&bytes, 48, 2); // MultipleSubst.
-    writeU16Test(&bytes, 50, 0);
-    writeU16Test(&bytes, 52, 1);
-    writeU16Test(&bytes, 54, 8);
-    const subtable = 56;
-    writeU16Test(&bytes, subtable + 0, 1);
-    writeU16Test(&bytes, subtable + 2, 8); // Coverage at 64.
-    writeU16Test(&bytes, subtable + 4, 1);
-    writeU16Test(&bytes, subtable + 6, 14); // Sequence at 70.
-    writeCoverage1(&bytes, 64, 1);
-    writeU16Test(&bytes, 70, 2);
-    writeU16Test(&bytes, 72, 2);
-    writeU16Test(&bytes, 74, 3);
-
-    var scoped = std.ArrayList(GlyphId).empty;
-    defer scoped.deinit(allocator);
-    try scoped.appendSlice(allocator, &.{ 1, 1, 1 });
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(allocator);
-    try sources.appendSlice(allocator, &.{ 0, 1, 2 });
-    const source_features = [_]u32{ 0, unicode.tag("fina"), 0 };
-    try applySourceFeatureWithOptions(&bytes, 0, bytes.len, unicode.tag("fina"), &scoped, allocator, .{
-        .script_tag = .arab,
-        .glyph_source_indices = &sources,
-        .source_features = &source_features,
-    });
-    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2, 3, 1 }, scoped.items);
-}
-
-test "GSUB explicit feature sequence can chain Bengali half and pres ligatures" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 160;
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 10); // ScriptList.
-    writeU16Test(&bytes, 6, 34); // FeatureList.
-    writeU16Test(&bytes, 8, 62); // LookupList.
-
-    writeU16Test(&bytes, 10, 1);
-    writeU32Test(&bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.beng));
-    writeU16Test(&bytes, 16, 8);
-    writeU16Test(&bytes, 18, 4);
-    writeU16Test(&bytes, 20, 0);
-    writeU16Test(&bytes, 22, 0);
-    writeU16Test(&bytes, 24, 0xffff);
-    writeU16Test(&bytes, 26, 2);
-    writeU16Test(&bytes, 28, 0);
-    writeU16Test(&bytes, 30, 1);
-
-    writeU16Test(&bytes, 34, 2);
-    writeFeatureRecord(&bytes, 36, unicode.tag("half"), 14);
-    writeFeatureRecord(&bytes, 42, unicode.tag("pres"), 20);
-    writeFeature(&bytes, 48, 0);
-    writeFeature(&bytes, 54, 1);
-
-    writeU16Test(&bytes, 62, 2);
-    writeU16Test(&bytes, 64, 6);
-    writeU16Test(&bytes, 66, 58);
-    writeLigatureLookupTest(&bytes, 68, 1, 2, 4);
-    writeLigatureLookupTest(&bytes, 120, 4, 1, 6);
-
-    var full = std.ArrayList(GlyphId).empty;
-    defer full.deinit(allocator);
-    try full.appendSlice(allocator, &.{ 1, 2, 1 });
-    try applyWithOptions(&bytes, 0, bytes.len, &full, allocator, .{
-        .script_tag = .beng,
-        .features = &.{
-            .{ .tag = unicode.tag("half"), .enabled = true },
-            .{ .tag = unicode.tag("pres"), .enabled = true },
-        },
-    });
-    try std.testing.expectEqualSlices(GlyphId, &.{6}, full.items);
-
-    var staged = std.ArrayList(GlyphId).empty;
-    defer staged.deinit(allocator);
-    try staged.appendSlice(allocator, &.{ 1, 2, 1 });
-    var staged_sources = std.ArrayList(usize).empty;
-    defer staged_sources.deinit(allocator);
-    try staged_sources.appendSlice(allocator, &.{ 0, 1, 2 });
-    var staged_clusters = std.ArrayList(usize).empty;
-    defer staged_clusters.deinit(allocator);
-    try staged_clusters.appendSlice(allocator, &.{ 0, 0, 0 });
-    const staged_syllables = [_]u8{ 1, 1, 1 };
-    const staged_features = [_]u32{ sourceFeatureMaskForTag(unicode.tag("half")).?, 0, 0 };
-    try applyFeatureSequenceWithOptions(&bytes, 0, bytes.len, &.{
-        .{ .tag = unicode.tag("half"), .source_scoped = true, .match_source_syllable = true, .auto_zwj = false },
-        .{ .tag = unicode.tag("pres"), .auto_zwj = false },
-    }, &staged, allocator, .{
-        .script_tag = .beng,
-        .glyph_source_indices = &staged_sources,
-        .glyph_cluster_indices = &staged_clusters,
-        .source_features = &staged_features,
-        .source_syllables = &staged_syllables,
-    });
-    try std.testing.expectEqualSlices(GlyphId, &.{6}, staged.items);
 }
 
 test "GSUB cached lookup executor requires an exact nonempty plan" {
@@ -4163,27 +3754,6 @@ fn writeSingleDeltaLookup(bytes: []u8, lookup_offset: usize, glyph: GlyphId, del
     writeCoverage1(bytes, subtable + 6, glyph);
 }
 
-fn writeLigatureLookupTest(bytes: []u8, lookup_offset: usize, first: GlyphId, second: GlyphId, ligature: GlyphId) void {
-    writeU16Test(bytes, lookup_offset + 0, 4); // LigatureSubst.
-    writeU16Test(bytes, lookup_offset + 2, 0); // LookupFlag.
-    writeU16Test(bytes, lookup_offset + 4, 1); // SubTableCount.
-    writeU16Test(bytes, lookup_offset + 6, 8);
-
-    const subtable = lookup_offset + 8;
-    writeU16Test(bytes, subtable + 0, 1); // LigatureSubst format 1.
-    writeU16Test(bytes, subtable + 2, 18); // Coverage.
-    writeU16Test(bytes, subtable + 4, 1); // LigatureSetCount.
-    writeU16Test(bytes, subtable + 6, 8);
-
-    const set = subtable + 8;
-    writeU16Test(bytes, set + 0, 1); // LigatureCount.
-    writeU16Test(bytes, set + 2, 4);
-    writeU16Test(bytes, set + 4, ligature);
-    writeU16Test(bytes, set + 6, 2); // First glyph plus one component.
-    writeU16Test(bytes, set + 8, second);
-    writeCoverage1(bytes, subtable + 18, first);
-}
-
 fn writeSingleLookupGsubTest(bytes: []u8, lookup_type: u16) usize {
     writeU32Test(bytes, 0, 0x00010000);
     writeU16Test(bytes, 4, 10);
@@ -4232,44 +3802,6 @@ fn writeCachedSingleFeatureGsubTest(bytes: []u8) void {
     writeU16Test(bytes, single + 2, 6);
     writeI16Test(bytes, single + 4, 1);
     writeCoverage1(bytes, single + 6, 10);
-}
-
-fn writeRandomFeatureGsubTest(bytes: []u8) void {
-    writeU32Test(bytes, 0, 0x00010000);
-    writeU16Test(bytes, 4, 10); // ScriptList.
-    writeU16Test(bytes, 6, 30); // FeatureList.
-    writeU16Test(bytes, 8, 44); // LookupList.
-
-    writeU16Test(bytes, 10, 1);
-    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
-    writeU16Test(bytes, 16, 8);
-    writeU16Test(bytes, 18, 4);
-    writeU16Test(bytes, 20, 0);
-    writeU16Test(bytes, 22, 0);
-    writeU16Test(bytes, 24, 0xffff);
-    writeU16Test(bytes, 26, 1);
-    writeU16Test(bytes, 28, 0);
-
-    writeU16Test(bytes, 30, 1);
-    writeFeatureRecord(bytes, 32, unicode.tag("rand"), 8);
-    writeFeature(bytes, 38, 0);
-
-    writeU16Test(bytes, 44, 1);
-    writeU16Test(bytes, 46, 4);
-    writeU16Test(bytes, 48, 3); // AlternateSubst.
-    writeU16Test(bytes, 50, 0);
-    writeU16Test(bytes, 52, 1);
-    writeU16Test(bytes, 54, 8);
-
-    const alternate = 56;
-    writeU16Test(bytes, alternate + 0, 1);
-    writeU16Test(bytes, alternate + 2, 12);
-    writeU16Test(bytes, alternate + 4, 1);
-    writeU16Test(bytes, alternate + 6, 18);
-    writeCoverage1(bytes, alternate + 12, 10);
-    writeU16Test(bytes, alternate + 18, 2);
-    writeU16Test(bytes, alternate + 20, 20);
-    writeU16Test(bytes, alternate + 22, 30);
 }
 
 fn writeCoverage1(bytes: []u8, offset: usize, glyph: GlyphId) void {
@@ -4341,12 +3873,24 @@ test "GSUB public apply validates ligature component source order" {
     }));
 }
 
-/// Static test bindings let the topology suite exercise root orchestration
+/// Static test bindings let integration suites exercise root orchestration
 /// without widening the production API or paying for runtime callbacks.
 const topologyTestHasFeature = hasFeature;
 
-const FeatureSelectionTestBindings = struct {
+const FeatureIntegrationTestBindings = struct {
+    pub const apply = applyWithOptions;
     pub const selectedLookups = selectedLookupIndicesForOptions;
+    pub const selectedFeatureLookups =
+        selectedFeatureLookupIndicesForOptions;
+    pub const applySelectedSource =
+        applySelectedSourceFeatureWithOptions;
+    pub const applySource = applySourceFeatureWithOptions;
+    pub const applyFeature = applyFeatureWithOptions;
+    pub const applySequence = applyFeatureSequenceWithOptions;
+    pub const buildPlan = buildFeatureLookupPlan;
+    pub const applyPlan = applyFeatureLookupPlanWithOptions;
+    pub const buildMergedPlan = buildMergedFeatureLookupPlan;
+    pub const applyMergedPlan = applyMergedFeatureLookupPlanWithOptions;
     pub const validate = validateGlyphBounds;
 };
 
@@ -4367,7 +3911,9 @@ test {
     _ = @import("gsub/tests/execution/root.zig");
     _ = @import("gsub/tests/feature/root.zig");
     _ = @import("gsub/tests/feature/integration/root.zig")
-        .suite(FeatureSelectionTestBindings);
+        .applicationSuite(FeatureIntegrationTestBindings);
+    _ = @import("gsub/tests/feature/integration/root.zig")
+        .selectionSuite(FeatureIntegrationTestBindings);
     _ = @import("gsub/tests/runtime/cache_integration.zig")
         .suite(ContextualRecordExecutor);
     _ = @import("gsub/tests/runtime/root.zig");

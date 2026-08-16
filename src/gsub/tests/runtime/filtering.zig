@@ -67,6 +67,11 @@ test "source filtering handles raw tags compact masks and syllables" {
         .source_features = &masks,
         .active_source_feature = 0x68616c66,
     }, 1));
+    try std.testing.expect(!filtering.sourceFeatureAllowsGlyph(.{
+        .glyph_source_indices = &sources,
+        .source_features = &masks,
+        .active_source_feature = 0x72706866,
+    }, 1));
 
     const syllables = [_]u8{ 3, 4 };
     const syllable_run = filtering.Options{

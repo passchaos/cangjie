@@ -23,6 +23,10 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(!@hasDecl(cangjie.shaping, "FontCascade"));
     try std.testing.expect(!@hasDecl(cangjie.shaping, "GlyphPosition"));
     try std.testing.expect(!@hasDecl(cangjie.text, "OpenTypeScript"));
+    try std.testing.expect(!@hasDecl(cangjie.text.bidi, "ExactClass"));
+    try std.testing.expect(!@hasDecl(cangjie.text.bidi, "exactClass"));
+    try std.testing.expect(!@hasDecl(cangjie.text.bidi, "Map"));
+    try std.testing.expect(!@hasDecl(cangjie.text.segmentation, "WordBoundary"));
     try std.testing.expect(
         !@hasDecl(cangjie.font.metadata, "VariationCoordinate"),
     );
@@ -163,10 +167,13 @@ test "text domains are usable without font or shaping state" {
 
     var words = try segmentation.words(text);
     var saw_word = false;
+    var saw_non_word = false;
     while (words.next()) |segment| {
         saw_word = saw_word or segment.is_word;
+        saw_non_word = saw_non_word or !segment.is_word;
     }
     try std.testing.expect(saw_word);
+    try std.testing.expect(saw_non_word);
 
     var sentences = try segmentation.sentences(text);
     try std.testing.expect(sentences.next() != null);
@@ -180,6 +187,10 @@ test "text domains are usable without font or shaping state" {
     );
     defer bidi.deinit();
     try std.testing.expect(bidi.scalars.len != 0);
+    try std.testing.expectEqual(
+        cangjie.text.bidi.Class.lri,
+        cangjie.text.bidi.class(0x2066),
+    );
 
     const runs = try cangjie.text.script.collectRuns(allocator, text);
     defer allocator.free(runs);
@@ -192,6 +203,28 @@ test "text domains are usable without font or shaping state" {
         cangjie.text.vertical.Orientation.upright,
         cangjie.text.vertical.orientation(0x4e00),
     );
+}
+
+test "allocating segmentation preserves streaming semantics" {
+    const allocator = std.testing.allocator;
+    const segmentation = cangjie.text.segmentation;
+    const text = "hello, world";
+
+    const words = try segmentation.collect.words(allocator, text);
+    defer allocator.free(words);
+    try std.testing.expect(words.len >= 3);
+    var saw_punctuation = false;
+    for (words) |segment| {
+        saw_punctuation = saw_punctuation or !segment.is_word;
+    }
+    try std.testing.expect(saw_punctuation);
+
+    const sentences = try segmentation.collect.sentences(
+        allocator,
+        " \t\r\n",
+    );
+    defer allocator.free(sentences);
+    try std.testing.expect(sentences.len != 0);
 }
 
 test "dictionary line segmentation is independently consumable" {

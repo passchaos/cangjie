@@ -50,7 +50,7 @@ pub fn serializeManifest(allocator: std.mem.Allocator, entries: []const FontMani
     return try writer.toOwnedSlice();
 }
 
-pub fn writeManifest(writer: *std.Io.Writer, entries: []const FontManifestEntry) !void {
+fn writeManifest(writer: *std.Io.Writer, entries: []const FontManifestEntry) !void {
     try writer.writeAll("cangjie-font-manifest-v3\n");
     try writer.writeAll("family\tsubfamily\tfull_name\tpostscript_name\tcontent_hash\tcontent_size\tweight\tstretch\tstyle\n");
     for (entries) |entry| {

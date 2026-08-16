@@ -2,28 +2,21 @@
 
 const unicode = @import("../../../unicode.zig");
 
-pub const Class = unicode.BidiClass;
-pub const ExactClass = unicode.ExactBidiClass;
+pub const Class = unicode.ExactBidiClass;
 pub const BaseDirection = unicode.BidiBaseDirection;
 pub const Paragraph = unicode.BidiParagraph;
-pub const Map = unicode.BidiMap;
-pub const MapItem = unicode.BidiMapItem;
-pub const Run = unicode.BidiRun;
+pub const Scalar = @import("../../../unicode/bidi/paragraph.zig").Scalar;
 
 pub const unicode_version = unicode.bidi_unicode_version;
 
-pub const class = unicode.bidiClassForCodepoint;
-pub const exactClass = unicode.exactBidiClassForCodepoint;
-pub const paragraphDirection = unicode.paragraphDirection;
+pub const class = unicode.exactBidiClassForCodepoint;
 pub const resolve = unicode.resolveBidiParagraph;
-pub const buildMap = unicode.buildBidiMap;
 pub const mirroredCodepoint = unicode.mirroredCodepoint;
 
-/// Allocating operations are explicit so streaming analysis remains the
-/// obvious default at call sites.
-pub const collect = struct {
-    pub const runs = unicode.itemizeBidiRuns;
-    pub const visualRunOrder = unicode.visualOrderBidiRuns;
-    pub const visualCodepoints = unicode.visualOrderCodepoints;
-    pub const visualUtf8 = unicode.visualOrderUtf8;
-};
+/// Resolve the first-strong paragraph direction as a full UAX #9 direction.
+pub fn direction(text: []const u8) !BaseDirection {
+    return switch (try unicode.paragraphDirection(text)) {
+        .rtl => .rtl,
+        else => .ltr,
+    };
+}

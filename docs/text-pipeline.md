@@ -95,8 +95,9 @@ breaking never performs OpenType substitution or positioning.
   needed by contextual rules, `$EastAsian`, and `Extended_Pictographic`.
 - All 19,338 official Unicode 17 `LineBreakTest.txt` cases run in the normal
   test suite; no tailorable or fallback rows are excluded.
-- `itemizeLineBreaks` remains as an allocating compatibility collector, but new
-  internal consumers should prefer the iterator.
+- `cangjie.text.segmentation.collect.lineBreaks` is the allocating public
+  counterpart. It preserves the iterator's complete opportunity stream and can
+  optionally merge dictionary-tailored soft boundaries.
 
 Paragraph wrapping consumes this iterator through a one-item lookahead. It no
 longer allocates a full line-break array.
@@ -271,10 +272,9 @@ word boundaries:
 - The state machine covers WB3 through WB16, including ignored Format/Extend
   replacement, Hebrew quotes, decimal punctuation, Katakana, connectors,
   emoji ZWJ sequences, and regional-indicator pairing.
-- `itemizeWordSegments` remains an explicitly documented compatibility
-  tailoring for existing editor movement. It emits only selectable words and
-  preserves established script-specific number/symbol grouping; standards
-  consumers use the streaming API instead.
+- `cangjie.text.segmentation.collect.words` collects the same complete segment
+  stream as the iterator; punctuation and whitespace remain present with
+  `is_word = false`. Editor-only word-stop tailoring stays internal.
 - All 1,944 cases from Unicode 17 `WordBreakTest.txt` run in the normal test
   suite.
 
@@ -287,9 +287,9 @@ segmentation layer:
   paragraph separators, Format/Extend replacement, decimal periods,
   uppercase abbreviation contexts, lowercase continuations, Unicode sentence
   terminators, closing punctuation, and trailing spaces.
-- `itemizeSentenceSegments` remains the compatibility collector used by
-  existing editor/debug APIs; it filters pure ASCII whitespace segments but
-  otherwise preserves the standard boundaries.
+- `cangjie.text.segmentation.collect.sentences` collects the same complete
+  segment stream as the iterator, including separator-only spans. Internal
+  diagnostic helpers may apply their own presentation filtering.
 - All 512 cases from Unicode 17 `SentenceBreakTest.txt` run in the normal test
   suite. Language-specific abbreviation dictionaries remain an explicit
   future tailoring rather than being guessed by the default iterator.
@@ -306,9 +306,9 @@ segmentation layer:
 - Paragraph reflow resolves levels once for the complete logical paragraph,
   then applies line-local resets and visual order after wrapping. Explicit
   controls and isolates therefore keep paragraph context across line breaks.
-- The former four-value `BidiClass` remains as a compatibility view for old
-  callers. New analysis uses `ExactBidiClass`, `BidiBaseDirection`, and
-  `BidiParagraph`.
+- `cangjie.text.bidi.Class`, `BaseDirection`, and `Paragraph` expose the full
+  UAX #9 model. The former coarse four-value classifier is no longer part of
+  the public facade.
 - All 770,241 paragraph-level variants compiled from Unicode 17 `BidiTest.txt`
   and all 91,707 `BidiCharacterTest.txt` rows run in the normal test suite.
 
@@ -601,8 +601,8 @@ the 861,948-case fixture SHA-256 is
 `40d4b9145779f8aad815e1f5ea5201ccd9cc5daeb73c8bf73b06c6f1c76d9a26`.
 
 On a fixed-core mixed Latin/Arabic/Hebrew paragraph microbenchmark, the
-compatibility `BidiMap` measured about `3.43 µs` versus `2.64 µs` for the
-former coarse model. The additional work provides exact explicit controls,
+earlier retained `BidiMap` adapter measured about `3.43 µs` versus `2.64 µs`
+for the former coarse model. The exact paragraph model provides explicit controls,
 isolates, weak/neutral resolution, bracket pairing, and levels rather than the
 old run-direction approximation. Ordinary Persian shaping keeps its pure-RTL
 non-allocating path; an unprofiled Amiri long-text run remained about

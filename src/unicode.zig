@@ -580,24 +580,7 @@ test "default-ignorable shaping fast path preserves the lowest boundary" {
     try std.testing.expect(isDefaultIgnorableForShaping(0xe0100));
 }
 
-pub fn arabicModifiedCombiningClassForShaping(codepoint: u21) u8 {
-    // Preserve the focused helper's historical contract for direct callers;
-    // the general shaping pipeline uses modifiedCombiningClassForShaping().
-    return switch (codepoint) {
-        0x064b => 28, // fathatan
-        0x064c => 29, // dammatan
-        0x064d => 30, // kasratan
-        0x064e => 31, // fatha
-        0x064f => 32, // damma
-        0x0650 => 33, // kasra
-        0x0651 => 27, // shadda, reordered before other Arabic marks.
-        0x0652 => 34, // sukun
-        0x0670 => 35, // superscript alef
-        else => 0,
-    };
-}
-
-pub fn canonicalCombiningClass(codepoint: u21) u8 {
+fn canonicalCombiningClass(codepoint: u21) u8 {
     return canonical_combining_class.forCodepoint(codepoint);
 }
 
@@ -731,10 +714,6 @@ pub fn wordSegments(text: []const u8) word_boundary.Error!WordBoundaryIterator {
     return word_boundary.segments(text);
 }
 
-pub fn wordSegmentsAssumeValid(text: []const u8) WordBoundaryIterator {
-    return word_boundary.assumeValid(text);
-}
-
 pub const SentenceSegment = sentence_boundary.Segment;
 pub const SentenceBoundaryIterator = sentence_boundary.Iterator;
 pub const sentence_unicode_version = sentence_boundary.unicode_version;
@@ -743,10 +722,6 @@ pub fn sentenceSegments(
     text: []const u8,
 ) sentence_boundary.Error!SentenceBoundaryIterator {
     return sentence_boundary.segments(text);
-}
-
-pub fn sentenceSegmentsAssumeValid(text: []const u8) SentenceBoundaryIterator {
-    return sentence_boundary.assumeValid(text);
 }
 
 pub const LineBreakKind = line_break.BreakKind;

@@ -6,12 +6,10 @@ const positioning = @import("gpos/positioning/root.zig");
 pub const runtime = @import("gpos/runtime/root.zig");
 const runtime_lookup = @import("gpos/runtime/lookup/root.zig");
 const runtime_output = @import("gpos/runtime/output/root.zig");
+const runtime_run = @import("gpos/runtime/run.zig");
 const table_core = @import("gpos/table/root.zig");
 const validation = @import("gpos/validation/root.zig");
-const ligature_provenance = @import("ligature_provenance.zig");
-const run_metadata = @import("shaping/run_metadata.zig");
 const unicode = @import("unicode.zig");
-const shape_profile_mod = @import("shape_profile.zig");
 
 /// GPOS produces additive adjustments instead of mutating glyph ids. The caller
 /// applies these deltas while constructing final glyph positions.
@@ -63,7 +61,6 @@ const buildLookupAccelerator = accelerator_core.build.lookup.one;
 const deinitLookupAcceleratorContents =
     accelerator_core.build.lookup.deinitContents;
 
-const RunDigestCache = runtime_lookup.dispatcher.DigestCache;
 const ensurePositionLookupHeaderAndExtensionPayloadsWithin =
     validation.lookup.headerAndExtensions;
 const ensurePositionLookupSubtablesWithin =
@@ -119,63 +116,25 @@ pub fn collectAdjustments(data: []const u8, offset: usize, length: usize, glyphs
 }
 
 pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGpos;
-    try runtime.matching.validate(options, glyphs.len);
-    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
-    const major = try readU16(table, 0);
-    if (major != 1) return error.UnsupportedGpos;
-    // GPOS uses the same ScriptList/FeatureList/LookupList topology as GSUB,
-    // but feature defaults differ: positioning lookups are generally active
-    // unless an explicit feature override disables them.
-    const select_start = shapeProfileNow(options.shape_profile, options.profile_io);
-    var selected_lookups_owned = if (options.selected_lookups == null)
-        try selectedLookupIndices(table, allocator, options)
-    else
-        std.ArrayList(u16).empty;
-    if (options.shape_profile) |profile| profile.gpos_select_ns += shapeProfileElapsed(select_start, options.profile_io);
-    defer selected_lookups_owned.deinit(allocator);
-    const selected_lookups = options.selected_lookups orelse selected_lookups_owned.items;
-    const script_list_offset = try readU16(table, 4);
-    const feature_list_offset = try readU16(table, 6);
-    const has_feature_topology = script_list_offset != 0 and
-        feature_list_offset != 0 and
-        try readU16(table, script_list_offset) != 0 and
-        try readU16(table, feature_list_offset) != 0;
-    // As with GSUB, an empty active-feature selection means no lookup applies
-    // for this Script/LangSys. Executing the full lookup list would leak
-    // optional or unrelated-script positioning into the run. Low-level callers
-    // can opt into the historical all-lookup fallback.
-    if (selected_lookups.len == 0 and
-        (options.features.len != 0 or (!options.apply_all_if_unselected and has_feature_topology))) return;
-
-    const apply_start = shapeProfileNow(options.shape_profile, options.profile_io);
-    defer {
-        if (options.shape_profile) |profile| profile.gpos_apply_ns += shapeProfileElapsed(apply_start, options.profile_io);
-    }
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16(table, lookup_list_offset);
-    var run_digest_cache = RunDigestCache.init();
-    if (selected_lookups.len != 0) {
-        for (selected_lookups) |lookup_index| {
-            if (lookup_index >= lookup_count) continue;
-            const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
-            try collectLookupWithIndex(table, lookup_offset, lookup_index, glyphs, adjustments, allocator, options, &run_digest_cache);
-        }
-    } else {
-        for (0..lookup_count) |i| {
-            const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + i * 2));
-            try collectLookupWithIndex(table, lookup_offset, @intCast(i), glyphs, adjustments, allocator, options, &run_digest_cache);
-        }
-    }
+    return runtime_run.collect(
+        data,
+        offset,
+        length,
+        glyphs,
+        adjustments,
+        allocator,
+        options,
+    );
 }
 
 pub fn selectedLookupIndicesForOptions(data: []const u8, offset: usize, length: usize, allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)![]u16 {
-    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGpos;
-    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
-    const major = try readU16(table, 0);
-    if (major != 1) return error.UnsupportedGpos;
-    var lookups = try selectedLookupIndices(table, allocator, options);
-    return try lookups.toOwnedSlice(allocator);
+    return runtime_run.lookupIndicesForOptions(
+        data,
+        offset,
+        length,
+        allocator,
+        options,
+    );
 }
 
 pub fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)![]LookupAccelerator {
@@ -192,23 +151,11 @@ pub fn deinitLookupAccelerators(allocator: std.mem.Allocator, accelerators: []Lo
 }
 
 fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!std.ArrayList(u16) {
-    return feature_core.run_selection.lookupIndices(
-        table,
-        allocator,
-        options,
-    );
+    return runtime_run.selectedLookupIndices(table, allocator, options);
 }
 
 const collectLookup = runtime_lookup.dispatcher.collect;
 const collectLookupWithIndex = runtime_lookup.dispatcher.collectWithIndex;
-
-fn shapeProfileNow(profile: ?*shape_profile_mod.ShapeStageProfile, io: ?std.Io) i128 {
-    return if (profile != null) std.Io.Clock.now(.awake, io.?).nanoseconds else 0;
-}
-
-fn shapeProfileElapsed(start: i128, io: ?std.Io) i128 {
-    return std.Io.Clock.now(.awake, io.?).nanoseconds - start;
-}
 
 fn checkedRequiredPositionOffset(table: Table, base_offset: usize, relative_offset: u16) GposError!usize {
     return table_core.offset.required16(table, base_offset, relative_offset);
@@ -3022,54 +2969,6 @@ fn writeFeatureListTest(bytes: []u8, offset: usize, lookups: []const u16) void {
     for (lookups, 0..) |lookup_index, index| {
         writeU16Test(bytes, offset + 4 + index * 2, lookup_index);
     }
-}
-
-test "GPOS public adjustment collection validates source metadata cardinality" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 10;
-    writeU16Test(&bytes, 0, 1);
-
-    const glyphs = [_]GlyphId{ 1, 2 };
-    const sources = [_]usize{0};
-    var adjustments = std.ArrayList(Adjustment).empty;
-    defer adjustments.deinit(allocator);
-
-    try std.testing.expectError(error.InvalidShapingInput, collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &glyphs, &adjustments, allocator, .{
-        .run_metadata = &.{ .glyph_source_indices = &sources },
-    }));
-}
-
-test "GPOS public adjustment collection validates variation coordinates" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 10;
-    writeU32Test(&bytes, 0, 0x00010000);
-    var adjustments = std.ArrayList(Adjustment).empty;
-    defer adjustments.deinit(allocator);
-
-    try std.testing.expectError(error.InvalidShapingInput, collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &.{1}, &adjustments, allocator, .{
-        .normalized_variation_coords = &.{std.math.nan(f32)},
-    }));
-    try std.testing.expectError(error.InvalidShapingInput, collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &.{1}, &adjustments, allocator, .{
-        .normalized_variation_coords = &.{1.01},
-    }));
-}
-
-test "GPOS public adjustment collection validates ligature component source order" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 10;
-    writeU16Test(&bytes, 0, 1);
-
-    const glyphs = [_]GlyphId{10};
-    var ligature_components = ligature_provenance.Store{};
-    defer ligature_components.deinit(allocator);
-    try ligature_components.sources.appendSlice(allocator, &.{ 3, 2 });
-    try ligature_components.infos.append(allocator, .{ .component_count = 2 });
-    var adjustments = std.ArrayList(Adjustment).empty;
-    defer adjustments.deinit(allocator);
-
-    try std.testing.expectError(error.InvalidShapingInput, collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &glyphs, &adjustments, allocator, .{
-        .run_metadata = &.{ .ligature_components = &ligature_components },
-    }));
 }
 
 test {

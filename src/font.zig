@@ -45,6 +45,7 @@ const maxp_mod = core_tables.maxp;
 const metadata_tables = @import("font/tables/metadata/root.zig");
 const os2_mod = metadata_tables.os2;
 const post_mod = metadata_tables.post;
+const metric_tables = @import("font/tables/metrics/root.zig");
 const colr_v0_mod = color_tables.colr_v0;
 const colr_v1_mod = color_tables.colr_v1;
 const colr_paint = colr_v1_mod.paint;
@@ -122,26 +123,8 @@ pub const FontTableInfo = struct {
 pub const FontHeaderInfo = core_tables.HeaderInfo;
 pub const MaxProfileInfo = core_tables.MaxProfileInfo;
 
-pub const MetricHeaderInfo = struct {
-    version: u32,
-    ascender: i16,
-    descender: i16,
-    line_gap: i16,
-    advance_max: u16,
-    min_side_bearing: i16,
-    min_opposite_side_bearing: i16,
-    max_extent: i16,
-    caret_slope_rise: i16,
-    caret_slope_run: i16,
-    caret_offset: i16,
-    metric_data_format: i16,
-    long_metric_count: u16,
-};
-
-pub const HorizontalMetricInfo = struct {
-    advance_width: u16,
-    left_side_bearing: i16,
-};
+pub const MetricHeaderInfo = metric_tables.Header;
+pub const HorizontalMetricInfo = metric_tables.Horizontal;
 
 pub const IftPatchMapInfo = ift_mod.Info;
 pub const IftTableKeyedPatchInfo = ift_mod.TableKeyedPatchInfo;
@@ -164,10 +147,7 @@ pub const LtshInfo = struct {
     thresholds: []u8,
 };
 
-pub const VerticalMetricInfo = struct {
-    advance_height: u16,
-    top_side_bearing: i16,
-};
+pub const VerticalMetricInfo = metric_tables.Vertical;
 
 pub const VerticalOriginMetric = struct {
     glyph_id: glyph_mod.GlyphId,
@@ -309,10 +289,7 @@ pub const ScaledFontScriptMetrics = presentation_metrics.ScaledScript;
 pub const FontScriptMetrics = presentation_metrics.Script;
 pub const FontDecorationMetrics = presentation_metrics.Decoration;
 
-pub const VerticalMetrics = struct {
-    advance_height: u16,
-    top_side_bearing: i16,
-};
+pub const VerticalMetrics = metric_tables.Vertical;
 
 pub const VariationAxis = struct {
     tag: [4]u8,
@@ -957,11 +934,21 @@ pub const Font = struct {
             // validation before exposing a borrowed custom name.
             .custom_name_validation = .structural_only,
         });
-        const number_of_h_metrics = if (has_horizontal_metrics)
-            try validateHorizontalMetricsTables(data, hhea.?, hmtx.?, glyph_count)
+        const horizontal_header = if (has_horizontal_metrics)
+            try metric_tables.validateHorizontal(
+                data,
+                hhea.?,
+                hmtx.?,
+                glyph_count,
+            )
         else
-            0;
-        _ = validateVerticalMetricsTables(data, glyph_count, vhea, vmtx) catch |err| switch (err) {
+            null;
+        _ = metric_tables.validateVertical(
+            data,
+            glyph_count,
+            vhea,
+            vmtx,
+        ) catch |err| switch (err) {
             // Vertical metrics are optional for horizontal UI text. Some widely
             // deployed fallback CJK fonts ship a present-but-unusable vhea/vmtx
             // pair (for example, zero vertical line metrics) while their cmap,
@@ -1003,9 +990,16 @@ pub const Font = struct {
 
         const units_per_em = head_info.units_per_em;
         const index_to_loc_format = head_info.index_to_loc_format;
-        const ascender = if (hhea) |table| try bin.readI16At(data, table.offset + 4) else @as(i16, @intCast(units_per_em));
-        const descender = if (hhea) |table| try bin.readI16At(data, table.offset + 6) else 0;
-        const line_gap = if (hhea) |table| try bin.readI16At(data, table.offset + 8) else 0;
+        const number_of_h_metrics =
+            if (horizontal_header) |header| header.long_metric_count else 0;
+        const ascender = if (horizontal_header) |header|
+            header.ascender
+        else
+            @as(i16, @intCast(units_per_em));
+        const descender =
+            if (horizontal_header) |header| header.descender else 0;
+        const line_gap =
+            if (horizontal_header) |header| header.line_gap else 0;
         const cff_parsed: ?CffParsedInfo = if (format == .opentype_cff and cff != null) blk: {
             const cff_table = cff.?;
             const parsed = try cff_mod.parse(data[cff_table.offset .. cff_table.offset + cff_table.length]);
@@ -1930,8 +1924,12 @@ pub const Font = struct {
         const hhea = self.hhea orelse return error.MissingTable;
         const hmtx = self.hmtx orelse return error.MissingTable;
         try sfnt.checksum.validate(self.data, hhea);
-        _ = try validateHorizontalMetricsTables(self.data, hhea, hmtx, self.glyph_count);
-        return try readMetricHeaderInfo(self.data, hhea);
+        return try metric_tables.validateHorizontal(
+            self.data,
+            hhea,
+            hmtx,
+            self.glyph_count,
+        );
     }
 
     /// Read validated metadata from the optional SFNT `vhea` table.
@@ -1947,8 +1945,12 @@ pub const Font = struct {
         const vmtx = sfnt.find(self.owned_tables, "vmtx") orelse return error.InvalidMetrics;
         try sfnt.checksum.validate(self.data, vhea);
         try sfnt.checksum.validate(self.data, vmtx);
-        _ = try validateVerticalMetricsTables(self.data, self.glyph_count, vhea, vmtx);
-        return try readMetricHeaderInfo(self.data, vhea);
+        return (try metric_tables.validateVertical(
+            self.data,
+            self.glyph_count,
+            vhea,
+            vmtx,
+        )).?;
     }
 
     /// Enumerate parsed cmap encoding records, similar to FreeType charmaps.
@@ -2168,7 +2170,12 @@ pub const Font = struct {
         const metrics = try allocator.alloc(HorizontalMetricInfo, self.glyph_count);
         errdefer allocator.free(metrics);
         for (metrics, 0..) |*metric, glyph_index| {
-            metric.* = try readHorizontalMetricAt(self.data, hmtx, metric_count, @intCast(glyph_index));
+            metric.* = try metric_tables.horizontal(
+                self.data,
+                hmtx,
+                metric_count,
+                @intCast(glyph_index),
+            );
         }
         return metrics;
     }
@@ -2176,7 +2183,13 @@ pub const Font = struct {
     fn validateHorizontalMetricsForRead(self: *const Font) FontError!u16 {
         const hhea = self.hhea orelse return error.MissingTable;
         const hmtx = self.hmtx orelse return error.MissingTable;
-        const current_metric_count = try validateHorizontalMetricsTables(self.data, hhea, hmtx, self.glyph_count);
+        const header = try metric_tables.validateHorizontal(
+            self.data,
+            hhea,
+            hmtx,
+            self.glyph_count,
+        );
+        const current_metric_count = header.long_metric_count;
         if (current_metric_count != self.number_of_h_metrics) return error.InvalidMetrics;
         try sfnt.checksum.validate(self.data, hhea);
         try sfnt.checksum.validate(self.data, hmtx);
@@ -2204,7 +2217,12 @@ pub const Font = struct {
             .revalidate => try self.validateHorizontalMetricsForRead(),
             .parsed => self.number_of_h_metrics,
         };
-        return try readHorizontalMetricAt(self.data, hmtx, metric_count, glyph_id);
+        return try metric_tables.horizontal(
+            self.data,
+            hmtx,
+            metric_count,
+            glyph_id,
+        );
     }
 
     pub fn hasVerticalMetrics(self: *const Font) bool {
@@ -2218,7 +2236,12 @@ pub const Font = struct {
         const metrics = try allocator.alloc(VerticalMetricInfo, self.glyph_count);
         errdefer allocator.free(metrics);
         for (metrics, 0..) |*metric, glyph_index| {
-            metric.* = try readVerticalMetricAt(self.data, context.vmtx.?, metric_count, @intCast(glyph_index));
+            metric.* = try metric_tables.vertical(
+                self.data,
+                context.vmtx.?,
+                metric_count,
+                @intCast(glyph_index),
+            );
         }
         return metrics;
     }
@@ -2235,10 +2258,23 @@ pub const Font = struct {
             return .{ .vhea = null, .vmtx = null, .metric_count = null };
         };
         const vmtx = sfnt.find(self.owned_tables, "vmtx") orelse return error.InvalidMetrics;
-        const metric_count = (try validateVerticalMetricsTables(self.data, self.glyph_count, vhea, vmtx)) orelse return .{ .vhea = null, .vmtx = null, .metric_count = null };
+        const header = (try metric_tables.validateVertical(
+            self.data,
+            self.glyph_count,
+            vhea,
+            vmtx,
+        )) orelse return .{
+            .vhea = null,
+            .vmtx = null,
+            .metric_count = null,
+        };
         try sfnt.checksum.validate(self.data, vhea);
         try sfnt.checksum.validate(self.data, vmtx);
-        return .{ .vhea = vhea, .vmtx = vmtx, .metric_count = metric_count };
+        return .{
+            .vhea = vhea,
+            .vmtx = vmtx,
+            .metric_count = header.long_metric_count,
+        };
     }
 
     /// Return vertical metrics following the vmtx compression rule. Fonts
@@ -2249,8 +2285,12 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const context = try self.verticalMetricTablesForRead();
         const metric_count = context.metric_count orelse return null;
-        const metric = try readVerticalMetricAt(self.data, context.vmtx.?, metric_count, glyph_id);
-        return .{ .advance_height = metric.advance_height, .top_side_bearing = metric.top_side_bearing };
+        return try metric_tables.vertical(
+            self.data,
+            context.vmtx.?,
+            metric_count,
+            glyph_id,
+        );
     }
 
     /// Map a Unicode variation sequence to a glyph id. If the font does not
@@ -5338,125 +5378,6 @@ fn readHdmxWidth(data: []const u8, hdmx: TableRecord, glyph_count: u16, ppem: u8
     return null;
 }
 
-fn readMetricHeaderInfo(data: []const u8, header: TableRecord) FontError!MetricHeaderInfo {
-    try sfnt.requireLength(header, 36);
-    return .{
-        .version = try bin.readU32At(data, header.offset),
-        .ascender = try bin.readI16At(data, header.offset + 4),
-        .descender = try bin.readI16At(data, header.offset + 6),
-        .line_gap = try bin.readI16At(data, header.offset + 8),
-        .advance_max = try bin.readU16At(data, header.offset + 10),
-        .min_side_bearing = try bin.readI16At(data, header.offset + 12),
-        .min_opposite_side_bearing = try bin.readI16At(data, header.offset + 14),
-        .max_extent = try bin.readI16At(data, header.offset + 16),
-        .caret_slope_rise = try bin.readI16At(data, header.offset + 18),
-        .caret_slope_run = try bin.readI16At(data, header.offset + 20),
-        .caret_offset = try bin.readI16At(data, header.offset + 22),
-        .metric_data_format = try bin.readI16At(data, header.offset + 32),
-        .long_metric_count = try bin.readU16At(data, header.offset + 34),
-    };
-}
-
-fn readHorizontalMetricAt(data: []const u8, hmtx: TableRecord, metric_count: u16, glyph_id: glyph_mod.GlyphId) FontError!HorizontalMetricInfo {
-    if (glyph_id < metric_count) {
-        const offset = hmtx.offset + @as(usize, glyph_id) * 4;
-        return .{
-            .advance_width = try bin.readU16At(data, offset),
-            .left_side_bearing = try bin.readI16At(data, offset + 2),
-        };
-    }
-    const last_offset = hmtx.offset + (@as(usize, metric_count) - 1) * 4;
-    const lsb_offset = hmtx.offset + @as(usize, metric_count) * 4 + (@as(usize, glyph_id) - metric_count) * 2;
-    return .{
-        .advance_width = try bin.readU16At(data, last_offset),
-        .left_side_bearing = try bin.readI16At(data, lsb_offset),
-    };
-}
-
-fn readVerticalMetricAt(data: []const u8, vmtx: TableRecord, metric_count: u16, glyph_id: glyph_mod.GlyphId) FontError!VerticalMetricInfo {
-    if (glyph_id < metric_count) {
-        const offset = vmtx.offset + @as(usize, glyph_id) * 4;
-        return .{
-            .advance_height = try bin.readU16At(data, offset),
-            .top_side_bearing = try bin.readI16At(data, offset + 2),
-        };
-    }
-    const last_offset = vmtx.offset + (@as(usize, metric_count) - 1) * 4;
-    const tsb_offset = vmtx.offset + @as(usize, metric_count) * 4 + (@as(usize, glyph_id) - metric_count) * 2;
-    return .{
-        .advance_height = try bin.readU16At(data, last_offset),
-        .top_side_bearing = try bin.readI16At(data, tsb_offset),
-    };
-}
-
-fn validateHorizontalMetricsTables(data: []const u8, hhea: TableRecord, hmtx: TableRecord, glyph_count: u16) FontError!u16 {
-    try validateMetricHeader(data, hhea, 0x00010000);
-    const metric_count = try bin.readU16At(data, hhea.offset + 34);
-    const required_hmtx_length = try metricTableRequiredLength(glyph_count, metric_count);
-    if (hmtx.length < required_hmtx_length) return error.InvalidMetrics;
-    return metric_count;
-}
-
-fn validateVerticalMetricsTables(data: []const u8, glyph_count: u16, maybe_vhea: ?TableRecord, maybe_vmtx: ?TableRecord) FontError!?u16 {
-    if (maybe_vhea == null and maybe_vmtx == null) return null;
-    const vhea = maybe_vhea orelse return error.InvalidMetrics;
-    const vmtx = maybe_vmtx orelse return error.InvalidMetrics;
-
-    // vhea/vmtx mirror the hhea/hmtx compression contract for vertical layout:
-    // the header declares how many full advance/bearing records exist, and the
-    // remaining glyphs borrow the final advance while supplying only a top side
-    // bearing. Use one helper for parse-time acceptance and lazy public reads
-    // so malformed production fonts cannot hide latent vmtx bounds issues.
-    try validateVerticalMetricHeader(data, vhea);
-    const metric_count = try bin.readU16At(data, vhea.offset + 34);
-    const required_vmtx_length = try metricTableRequiredLength(glyph_count, metric_count);
-    if (vmtx.length < required_vmtx_length) return error.InvalidMetrics;
-    return metric_count;
-}
-
-fn validateVerticalMetricHeader(data: []const u8, vhea: TableRecord) FontError!void {
-    // vhea mirrors hhea's fixed-size header contract, with only the version
-    // value differing across accepted OpenType revisions.
-    if (vhea.length != 36) return error.BadSfnt;
-    const version = try bin.readU32At(data, vhea.offset);
-    if (version != 0x00010000 and version != 0x00011000) return error.InvalidMetrics;
-    try validateMetricHeaderLineMetrics(data, vhea);
-    try validateMetricHeaderReservedFields(data, vhea);
-}
-
-fn validateMetricHeader(data: []const u8, header: TableRecord, expected_version: u32) FontError!void {
-    // hhea and vhea are fixed-size 36-byte metric headers. They do not define
-    // extension payloads, so accept neither truncation nor tail bytes before
-    // trusting the metric count at byte 34.
-    if (header.length != 36) return error.BadSfnt;
-    const version = try bin.readU32At(data, header.offset);
-    if (version != expected_version) return error.InvalidMetrics;
-    try validateMetricHeaderLineMetrics(data, header);
-    try validateMetricHeaderReservedFields(data, header);
-}
-
-fn validateMetricHeaderLineMetrics(data: []const u8, header: TableRecord) FontError!void {
-    const ascender = try bin.readI16At(data, header.offset + 4);
-    const descender = try bin.readI16At(data, header.offset + 6);
-    const line_gap = try bin.readI16At(data, header.offset + 8);
-    // hhea/vhea line metrics form the public line advance used by layout:
-    // ascender - descender + lineGap. A negative value is nonsensical and an
-    // exactly zero value leaves text engines without a usable default advance.
-    // Validate the widened sum before exposing or caching table metrics so
-    // malformed headers cannot produce collapsed line boxes.
-    if (@as(i32, ascender) - @as(i32, descender) + @as(i32, line_gap) <= 0) return error.InvalidMetrics;
-}
-
-fn validateMetricHeaderReservedFields(data: []const u8, header: TableRecord) FontError!void {
-    // The four reserved int16 fields and metricDataFormat are required to be
-    // zero by both hhea and vhea. Enforcing those constants makes the metric
-    // count at byte 34 unambiguous and keeps malformed table variants from
-    // passing validation merely because their final two bytes look plausible.
-    for (0..5) |index| {
-        if (try bin.readU16At(data, header.offset + 24 + index * 2) != 0) return error.InvalidMetrics;
-    }
-}
-
 fn validatePcltTable(data: []const u8, pclt: TableRecord) FontError!void {
     try sfnt.requireLength(pclt, 54);
     if (pclt.length != 54) return error.BadSfnt;
@@ -5732,15 +5653,6 @@ test "kern format 0 accepts the canonical empty pair array" {
     defer font.deinit();
 
     try std.testing.expectEqual(@as(?i16, 0), try font.kerning(1, 1));
-}
-
-fn hmtxRequiredLength(glyph_count: u16, number_of_h_metrics: u16) FontError!usize {
-    return metricTableRequiredLength(glyph_count, number_of_h_metrics);
-}
-
-fn metricTableRequiredLength(glyph_count: u16, metric_count: u16) FontError!usize {
-    if (metric_count == 0 or metric_count > glyph_count) return error.InvalidMetrics;
-    return @as(usize, metric_count) * 4 + @as(usize, glyph_count - metric_count) * 2;
 }
 
 fn locaEntryRequiredLength(glyph_id: u32, index_to_loc_format: i16) FontError!usize {
@@ -11713,168 +11625,14 @@ test "simple glyf programs and coordinate streams validate at parse time" {
     }
 }
 
-test "core metrics and loca stay inside declared table lengths" {
+test "loca stays inside its declared table length" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
 
-    inline for (.{ "head", "hhea", "maxp" }, .{ 52, 34, 4 }) |tag, length| {
-        const bytes = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(bytes);
-        try setSfntTableLength(bytes, tag, length);
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(bytes);
-        try setSfntTableLength(bytes, "hmtx", 6);
-        try std.testing.expectError(error.InvalidMetrics, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(bytes);
-        try setSfntTableLength(bytes, "loca", 4);
-        try std.testing.expectError(error.InvalidLoca, Font.parse(allocator, bytes));
-    }
-}
-
-test "metric headers require positive line advance" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        const bytes = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(bytes);
-        const hhea_offset: usize = @intCast(try sfntTableOffset(bytes, "hhea"));
-        writeI16Test(bytes, hhea_offset + 4, 100);
-        writeI16Test(bytes, hhea_offset + 6, 200);
-        writeI16Test(bytes, hhea_offset + 8, 100); // ascender - descender + lineGap == 0.
-
-        try std.testing.expectError(error.InvalidMetrics, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildVerticalMetricsTtf(allocator);
-        defer allocator.free(bytes);
-        const vhea_offset: usize = @intCast(try sfntTableOffset(bytes, "vhea"));
-        writeI16Test(bytes, vhea_offset + 4, -50);
-        writeI16Test(bytes, vhea_offset + 6, 50);
-        writeI16Test(bytes, vhea_offset + 8, 0);
-        try updateSfntTableChecksum(bytes, "vhea");
-
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-        try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(0));
-    }
-}
-
-test "metric headers reject trailing bytes" {
-    var hhea: [37]u8 = .{0} ** 37;
-    writeU32Test(&hhea, 0, 0x00010000);
-    writeI16Test(&hhea, 4, 800);
-    writeI16Test(&hhea, 6, -200);
-    writeU16Test(&hhea, 34, 1);
-
-    try validateMetricHeader(&hhea, .{
-        .tag = .{ 'h', 'h', 'e', 'a' },
-        .checksum = 0,
-        .offset = 0,
-        .length = 36,
-    }, 0x00010000);
-    try std.testing.expectError(error.BadSfnt, validateMetricHeader(&hhea, .{
-        .tag = .{ 'h', 'h', 'e', 'a' },
-        .checksum = 0,
-        .offset = 0,
-        .length = hhea.len,
-    }, 0x00010000));
-
-    var vhea: [37]u8 = .{0} ** 37;
-    writeU32Test(&vhea, 0, 0x00011000);
-    writeI16Test(&vhea, 4, 800);
-    writeI16Test(&vhea, 6, -200);
-    writeU16Test(&vhea, 34, 1);
-
-    try validateVerticalMetricHeader(&vhea, .{
-        .tag = .{ 'v', 'h', 'e', 'a' },
-        .checksum = 0,
-        .offset = 0,
-        .length = 36,
-    });
-    try std.testing.expectError(error.BadSfnt, validateVerticalMetricHeader(&vhea, .{
-        .tag = .{ 'v', 'h', 'e', 'a' },
-        .checksum = 0,
-        .offset = 0,
-        .length = vhea.len,
-    }));
-}
-
-test "vertical metric tables validate paired count and vmtx length at parse time" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        const bytes = try test_font.buildVerticalMetricsTtf(allocator);
-        defer allocator.free(bytes);
-        var font = try Font.parse(allocator, bytes);
-        font.deinit();
-    }
-
-    {
-        const bytes = try test_font.buildVerticalMetricsTtf(allocator);
-        defer allocator.free(bytes);
-        try setSfntTableLength(bytes, "vmtx", 4); // Missing the compressed top side bearing for glyph 1.
-        try updateSfntTableChecksum(bytes, "vmtx");
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-        try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(1));
-    }
-
-    {
-        const bytes = try test_font.buildVerticalMetricsTtf(allocator);
-        defer allocator.free(bytes);
-        const vhea_offset = try sfntTableOffset(bytes, "vhea");
-        writeU16Test(bytes, vhea_offset + 34, 0);
-        try updateSfntTableChecksum(bytes, "vhea");
-        var zero_count = try Font.parse(allocator, bytes);
-        defer zero_count.deinit();
-        try std.testing.expectError(error.InvalidMetrics, zero_count.verticalMetrics(0));
-
-        writeU16Test(bytes, vhea_offset + 34, 3); // More full vertical metrics than maxp.numGlyphs.
-        try updateSfntTableChecksum(bytes, "vhea");
-        var too_many = try Font.parse(allocator, bytes);
-        defer too_many.deinit();
-        try std.testing.expectError(error.InvalidMetrics, too_many.verticalMetrics(0));
-    }
-
-    {
-        const bytes = try test_font.buildVerticalMetricsTtf(allocator);
-        defer allocator.free(bytes);
-        try setSfntTableTag(bytes, "vmtx", "zzzz");
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-        try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(0));
-    }
-
-    {
-        const bytes = try test_font.buildVerticalMetricsTtf(allocator);
-        defer allocator.free(bytes);
-        try setSfntTableTag(bytes, "vhea", "vhdz");
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-        try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(0));
-    }
-
-    {
-        const bytes = try test_font.buildVerticalMetricsTtf(allocator);
-        defer allocator.free(bytes);
-        const vhea_offset = try sfntTableOffset(bytes, "vhea");
-        writeU16Test(bytes, vhea_offset + 24, 1); // Reserved fields must be zero.
-        try updateSfntTableChecksum(bytes, "vhea");
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-        try std.testing.expectError(error.InvalidMetrics, font.verticalMetrics(0));
-    }
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    try setSfntTableLength(bytes, "loca", 4);
+    try std.testing.expectError(error.InvalidLoca, Font.parse(allocator, bytes));
 }
 
 test "loca offsets are validated against glyf at parse time" {

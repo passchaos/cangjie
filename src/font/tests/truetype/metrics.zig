@@ -9,6 +9,12 @@ const sfnt_fixture = @import("../fixtures/sfnt.zig");
 const Font = font_mod.Font;
 const VerticalMetrics = font_mod.VerticalMetrics;
 
+test "vertical table and adjusted metrics share one concrete value type" {
+    try std.testing.expect(
+        font_mod.VerticalMetricInfo == font_mod.VerticalMetrics,
+    );
+}
+
 test "horizontal metrics revalidate borrowed hhea bytes" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalTtf(allocator);
@@ -61,6 +67,35 @@ test "horizontal metrics revalidate borrowed hmtx checksum" {
         error.BadSfnt,
         font.horizontalMetrics(1),
     );
+}
+
+test "metric headers expose decoded horizontal and vertical metadata" {
+    const allocator = std.testing.allocator;
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        const header = try font.horizontalHeaderInfo();
+        try std.testing.expectEqual(@as(u32, 0x00010000), header.version);
+        try std.testing.expectEqual(@as(i16, 800), header.ascender);
+        try std.testing.expectEqual(@as(i16, -200), header.descender);
+        try std.testing.expectEqual(@as(u16, 2), header.long_metric_count);
+        try std.testing.expect((try font.verticalHeaderInfo()) == null);
+    }
+
+    {
+        const bytes = try test_font.buildVerticalMetricsTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        const header = (try font.verticalHeaderInfo()).?;
+        try std.testing.expectEqual(@as(u32, 0x00011000), header.version);
+        try std.testing.expectEqual(@as(u16, 1), header.long_metric_count);
+    }
 }
 
 test "vertical metrics revalidate borrowed vmtx checksum" {
@@ -128,6 +163,145 @@ test "vertical metrics API reports absence without requiring vertical tables" {
         @as(?VerticalMetrics, null),
         try font.verticalMetrics(0),
     );
+}
+
+test "metric table contracts reject malformed headers and payload lengths" {
+    const allocator = std.testing.allocator;
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        try sfnt_fixture.setTableLength(bytes, "hhea", 34);
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        try sfnt_fixture.setTableLength(bytes, "hmtx", 6);
+        try std.testing.expectError(
+            error.InvalidMetrics,
+            Font.parse(allocator, bytes),
+        );
+    }
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        const hhea_offset = try sfnt_fixture.tableOffset(bytes, "hhea");
+        writeInvalidLineAdvance(bytes, hhea_offset);
+        try sfnt_fixture.updateTableChecksum(bytes, "hhea");
+        try std.testing.expectError(
+            error.InvalidMetrics,
+            Font.parse(allocator, bytes),
+        );
+    }
+
+    {
+        const original = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(original);
+        const bytes = try allocator.alloc(u8, original.len + 4);
+        defer allocator.free(bytes);
+        @memcpy(bytes[0..original.len], original);
+        @memset(bytes[original.len..], 0);
+        try sfnt_fixture.setTableLength(bytes, "hhea", 37);
+        try sfnt_fixture.updateTableChecksum(bytes, "hhea");
+        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+    }
+
+    {
+        const bytes = try test_font.buildVerticalMetricsTtf(allocator);
+        defer allocator.free(bytes);
+        try sfnt_fixture.setTableLength(bytes, "vmtx", 4);
+        try sfnt_fixture.updateTableChecksum(bytes, "vmtx");
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        try std.testing.expectError(
+            error.InvalidMetrics,
+            font.verticalMetrics(1),
+        );
+    }
+
+    {
+        const bytes = try test_font.buildVerticalMetricsTtf(allocator);
+        defer allocator.free(bytes);
+        const vhea_offset = try sfnt_fixture.tableOffset(bytes, "vhea");
+        sfnt_fixture.writeU16(bytes, vhea_offset + 34, 0);
+        try sfnt_fixture.updateTableChecksum(bytes, "vhea");
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        try std.testing.expectError(
+            error.InvalidMetrics,
+            font.verticalMetrics(0),
+        );
+    }
+
+    {
+        const bytes = try test_font.buildVerticalMetricsTtf(allocator);
+        defer allocator.free(bytes);
+        const vhea_offset = try sfnt_fixture.tableOffset(bytes, "vhea");
+        sfnt_fixture.writeU16(bytes, vhea_offset + 34, 3);
+        try sfnt_fixture.updateTableChecksum(bytes, "vhea");
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        try std.testing.expectError(
+            error.InvalidMetrics,
+            font.verticalMetrics(0),
+        );
+    }
+
+    inline for (.{
+        .{ .old_tag = "vmtx", .new_tag = "zzzz" },
+        .{ .old_tag = "vhea", .new_tag = "vhdz" },
+    }) |case| {
+        const bytes = try test_font.buildVerticalMetricsTtf(allocator);
+        defer allocator.free(bytes);
+        try sfnt_fixture.setTableTag(
+            bytes,
+            case.old_tag,
+            case.new_tag,
+        );
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        try std.testing.expectError(
+            error.InvalidMetrics,
+            font.verticalMetrics(0),
+        );
+    }
+}
+
+test "metric header APIs revalidate borrowed checksums" {
+    const allocator = std.testing.allocator;
+
+    {
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        const hhea_offset = try sfnt_fixture.tableOffset(bytes, "hhea");
+        bytes[hhea_offset] +%= 1;
+        try std.testing.expectError(error.BadSfnt, font.horizontalHeaderInfo());
+        try std.testing.expectError(
+            error.InvalidMetrics,
+            font.horizontalMetricsTable(allocator),
+        );
+    }
+
+    {
+        const bytes = try test_font.buildVerticalMetricsTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+
+        const vhea_offset = try sfnt_fixture.tableOffset(bytes, "vhea");
+        bytes[vhea_offset] +%= 1;
+        try std.testing.expectError(error.BadSfnt, font.verticalHeaderInfo());
+        try std.testing.expectError(
+            error.InvalidMetrics,
+            font.verticalMetricsTable(allocator),
+        );
+    }
 }
 
 fn expectHorizontalAdvance(font: *const Font, expected: u16) !void {

@@ -2,6 +2,7 @@
 
 test {
     _ = @import("attachments.zig");
+    _ = @import("contextual.zig");
     _ = @import("dispatch.zig");
     _ = @import("lookups.zig");
     _ = @import("model.zig");

@@ -83,7 +83,7 @@ test "reads COLR v1 PaintSolid metadata" {
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
 
-    const paint = (try font.colorPaint(1)).?;
+    const paint = (try font.colorPaintAtCoords(1, &.{})).?;
     switch (paint) {
         .solid => |solid| {
             try std.testing.expectEqual(@as(u16, 0), solid.palette_index);
@@ -91,7 +91,7 @@ test "reads COLR v1 PaintSolid metadata" {
         },
         else => return error.TestUnexpectedResult,
     }
-    try std.testing.expect(try font.colorPaint(0) == null);
+    try std.testing.expect(try font.colorPaintAtCoords(0, &.{}) == null);
 }
 
 test "renders COLR v1 PaintSolid glyph into an RGBA target" {
@@ -131,7 +131,7 @@ test "reads and renders COLR v1 PaintGlyph with nested PaintSolid" {
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
 
-    const paint = (try font.colorPaint(1)).?;
+    const paint = (try font.colorPaintAtCoords(1, &.{})).?;
     switch (paint) {
         .glyph => |glyph_paint| {
             try std.testing.expectEqual(@as(GlyphId, 1), glyph_paint.glyph_id);
@@ -169,7 +169,7 @@ test "reads and renders COLR v1 PaintColrLayers" {
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
 
-    const paint = (try font.colorPaint(1)).?;
+    const paint = (try font.colorPaintAtCoords(1, &.{})).?;
     switch (paint) {
         .layers => |layers| {
             try std.testing.expectEqual(@as(u8, 2), layers.layer_count);
@@ -177,7 +177,7 @@ test "reads and renders COLR v1 PaintColrLayers" {
         },
         else => return error.TestUnexpectedResult,
     }
-    const first_layer = (try font.colorPaintLayer(0)).?;
+    const first_layer = (try font.colorPaintLayerAtCoords(0, &.{})).?;
     switch (first_layer) {
         .glyph => |glyph_paint| {
             try std.testing.expectEqual(@as(GlyphId, 1), glyph_paint.glyph_id);
@@ -214,8 +214,8 @@ test "reads and renders COLR v1 PaintLinearGradient" {
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
 
-    const paint = (try font.colorPaint(1)).?;
-    const clip = (try font.colorClipBox(1)).?;
+    const paint = (try font.colorPaintAtCoords(1, &.{})).?;
+    const clip = (try font.colorClipBoxAtCoords(1, &.{})).?;
     try std.testing.expectEqual(@as(f32, 0), clip.x_min);
     try std.testing.expectEqual(@as(f32, 0), clip.y_min);
     try std.testing.expectEqual(@as(f32, 700), clip.x_max);
@@ -268,7 +268,7 @@ test "COLR v1 variable ClipBox resolves and clips at normalized coordinates" {
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
 
-    const default_clip = (try font.colorClipBox(1)).?;
+    const default_clip = (try font.colorClipBoxAtCoords(1, &.{})).?;
     try std.testing.expectEqual(@as(f32, 100), default_clip.x_min);
     try std.testing.expectEqual(@as(f32, 100), default_clip.y_min);
     try std.testing.expectEqual(@as(f32, 900), default_clip.x_max);
@@ -312,7 +312,7 @@ test "COLR v1 variable paints resolve and render at normalized coordinates" {
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
 
-    const default_paint = (try font.colorPaint(1)).?;
+    const default_paint = (try font.colorPaintAtCoords(1, &.{})).?;
     const varied_paint = (try font.colorPaintAtCoords(1, &.{0.5})).?;
     const default_alpha = switch (default_paint) {
         .glyph => |glyph_paint| switch (glyph_paint.brush) {
@@ -407,7 +407,7 @@ test "COLR v1 variable transforms affect geometry and brush space" {
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
 
-    const default_transform = (try font.colorPaint(1)).?.transform.affine;
+    const default_transform = (try font.colorPaintAtCoords(1, &.{})).?.transform.affine;
     const varied_transform = (try font.colorPaintAtCoords(1, &.{0.5})).?.transform.affine;
     try std.testing.expectEqual(ColorAffine.identity, default_transform);
     try std.testing.expectEqual(@as(f32, 100), varied_transform.dx);
@@ -436,7 +436,7 @@ test "COLR v1 nested PaintGlyph transforms match live Skrifa matrices" {
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
 
-    const first = (try font.colorPaint(207)).?.clip_glyph;
+    const first = (try font.colorPaintAtCoords(207, &.{})).?.clip_glyph;
     try std.testing.expectEqual(@as(GlyphId, 7), first.glyph_id);
     const outer = (try font.colorPaintChildAtCoords(first.child, &.{})).transform;
     try std.testing.expectEqual(ColorAffine.identity, outer.affine);
@@ -491,7 +491,7 @@ test "reads and renders COLR v1 PaintRadialGradient" {
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
 
-    const paint = (try font.colorPaint(1)).?;
+    const paint = (try font.colorPaintAtCoords(1, &.{})).?;
     switch (paint) {
         .glyph => |glyph_paint| switch (glyph_paint.brush) {
             .radial_gradient => |gradient| {
@@ -525,7 +525,7 @@ test "reads and renders COLR v1 PaintSweepGradient" {
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
 
-    const paint = (try font.colorPaint(1)).?;
+    const paint = (try font.colorPaintAtCoords(1, &.{})).?;
     switch (paint) {
         .glyph => |glyph_paint| switch (glyph_paint.brush) {
             .sweep_gradient => |gradient| {
@@ -581,7 +581,7 @@ test "accepts fonts containing isolated COLR v1 PaintColrGlyph cycles" {
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
 
-    const paint = (try font.colorPaint(1)).?;
+    const paint = (try font.colorPaintAtCoords(1, &.{})).?;
     try std.testing.expectEqual(@as(GlyphId, 2), paint.colr_glyph.glyph_id);
 
     var target = try ColorRenderTarget.init(allocator, 32, 32);
@@ -599,7 +599,7 @@ test "COLR v1 PaintColrGlyph traverses referenced paints and clips" {
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
 
-    const paint = (try font.colorPaint(0)).?;
+    const paint = (try font.colorPaintAtCoords(0, &.{})).?;
     try std.testing.expectEqual(@as(GlyphId, 1), paint.colr_glyph.glyph_id);
 
     var referenced = try ColorRenderTarget.init(allocator, 48, 48);
@@ -627,9 +627,9 @@ test "COLR v1 PaintColrGlyph matches live Skrifa referenced clip traversal" {
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
 
-    const paint = (try font.colorPaint(166)).?;
+    const paint = (try font.colorPaintAtCoords(166, &.{})).?;
     try std.testing.expectEqual(@as(GlyphId, 95), paint.colr_glyph.glyph_id);
-    const referenced_clip = (try font.colorClipBox(95)).?;
+    const referenced_clip = (try font.colorClipBoxAtCoords(95, &.{})).?;
     try std.testing.expectEqual(@as(f32, 0), referenced_clip.x_min);
     try std.testing.expectEqual(@as(f32, 0), referenced_clip.y_min);
     try std.testing.expectEqual(@as(f32, 1000), referenced_clip.x_max);

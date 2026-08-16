@@ -3399,10 +3399,6 @@ pub const Font = struct {
         );
     }
 
-    pub fn colorPaint(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?ColorPaint {
-        return try self.colorPaintAtCoords(glyph_id, &.{});
-    }
-
     /// Resolve a COLR v1 base paint at normalized variation coordinates.
     pub fn colorPaintAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!?ColorPaint {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
@@ -3449,10 +3445,6 @@ pub const Font = struct {
             paint_start,
         );
         return try readColorPaint(self, paint_start, read_context);
-    }
-
-    pub fn colorClipBox(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?ColorClipBox {
-        return try self.colorClipBoxAtCoords(glyph_id, &.{});
     }
 
     /// Resolve the COLR v1 clip box for a glyph at normalized coordinates.
@@ -3618,10 +3610,6 @@ pub const Font = struct {
             };
         }
         return locations;
-    }
-
-    pub fn colorPaintLayer(self: *const Font, layer_index: u32) FontError!?ColorPaint {
-        return try self.colorPaintLayerAtCoords(layer_index, &.{});
     }
 
     /// Resolve a LayerList paint at normalized variation coordinates.

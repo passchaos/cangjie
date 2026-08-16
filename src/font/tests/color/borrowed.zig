@@ -167,14 +167,14 @@ test "COLR public APIs revalidate borrowed glyph references" {
     support.writeSingleEntryCpal(&colr_v1_with_cpal, 74);
 
     const colr_v1_font = colorFixture(&colr_v1_with_cpal, 74);
-    const paint = try colr_v1_font.colorPaint(1);
+    const paint = try colr_v1_font.colorPaintAtCoords(1, &.{});
     try std.testing.expect(paint != null);
-    try std.testing.expect((try colr_v1_font.colorPaintLayer(0)) != null);
+    try std.testing.expect((try colr_v1_font.colorPaintLayerAtCoords(0, &.{})) != null);
 
     // PaintGlyph carries a glyph ID independently of the selected base glyph.
     // Mutating it past maxp.numGlyphs must be caught by colorPaint().
     support.writeU16(&colr_v1_with_cpal, 48, 16);
-    try std.testing.expectError(error.BadSfnt, colr_v1_font.colorPaint(1));
+    try std.testing.expectError(error.BadSfnt, colr_v1_font.colorPaintAtCoords(1, &.{}));
     support.writeU16(&colr_v1_with_cpal, 48, 1);
 
     // LayerList is a separate lazy public entry point into the COLR v1 graph.
@@ -186,7 +186,7 @@ test "COLR public APIs revalidate borrowed glyph references" {
     colr_v1_with_cpal[69] = 2;
     support.writeU16(&colr_v1_with_cpal, 70, 0);
     support.writeF2Dot14(&colr_v1_with_cpal, 72, 1.0);
-    try std.testing.expectError(error.BadSfnt, colr_v1_font.colorPaintLayer(0));
+    try std.testing.expectError(error.BadSfnt, colr_v1_font.colorPaintLayerAtCoords(0, &.{}));
 }
 
 test "COLR public APIs revalidate borrowed palette references" {
@@ -238,12 +238,12 @@ test "COLR public APIs revalidate borrowed palette references" {
     support.writeSingleEntryCpal(&colr_v1_base_with_cpal, 60);
 
     const colr_v1_base_font = colorFixture(&colr_v1_base_with_cpal, 60);
-    try std.testing.expect((try colr_v1_base_font.colorPaint(1)) != null);
+    try std.testing.expect((try colr_v1_base_font.colorPaintAtCoords(1, &.{})) != null);
 
     // `colorPaint(1)` reads only the first base glyph, but the borrowed COLR v1
     // base paint list must remain globally consistent with CPAL.
     support.writeU16(&colr_v1_base_with_cpal, 56, 1);
-    try std.testing.expectError(error.BadSfnt, colr_v1_base_font.colorPaint(1));
+    try std.testing.expectError(error.BadSfnt, colr_v1_base_font.colorPaintAtCoords(1, &.{}));
 
     var colr_v1_layers_with_cpal: [74]u8 = .{0} ** 74;
     support.writeU16(&colr_v1_layers_with_cpal, 0, 1); // COLR version 1.
@@ -260,10 +260,10 @@ test "COLR public APIs revalidate borrowed palette references" {
     support.writeSingleEntryCpal(&colr_v1_layers_with_cpal, 56);
 
     const colr_v1_layers_font = colorFixture(&colr_v1_layers_with_cpal, 56);
-    try std.testing.expect((try colr_v1_layers_font.colorPaintLayer(0)) != null);
+    try std.testing.expect((try colr_v1_layers_font.colorPaintLayerAtCoords(0, &.{})) != null);
 
     // LayerList is a global paint array; a malformed sibling layer should not
     // be hidden merely because the requested layer still names a valid color.
     support.writeU16(&colr_v1_layers_with_cpal, 52, 1);
-    try std.testing.expectError(error.BadSfnt, colr_v1_layers_font.colorPaintLayer(0));
+    try std.testing.expectError(error.BadSfnt, colr_v1_layers_font.colorPaintLayerAtCoords(0, &.{}));
 }

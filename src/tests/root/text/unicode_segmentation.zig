@@ -140,13 +140,13 @@ test "builds bidi logical visual maps" {
     defer ltr_map.deinit();
 
     try std.testing.expectEqual(@as(usize, 6), ltr_map.items.len);
-    try std.testing.expectEqual(@as(usize, 0), ltr_map.logicalToVisual(0).?);
-    try std.testing.expectEqual(@as(usize, 1), ltr_map.logicalToVisual(1).?);
-    try std.testing.expectEqual(@as(usize, 3), ltr_map.logicalToVisual(2).?);
-    try std.testing.expectEqual(@as(usize, 2), ltr_map.logicalToVisual(3).?);
-    try std.testing.expectEqual(@as(usize, 4), ltr_map.logicalToVisual(4).?);
-    try std.testing.expectEqual(@as(usize, 5), ltr_map.logicalToVisual(5).?);
-    try std.testing.expectEqual(@as(usize, 3), ltr_map.visualToLogical(2).?);
+    try std.testing.expectEqual(@as(usize, 0), ltr_map.logical_to_visual[0]);
+    try std.testing.expectEqual(@as(usize, 1), ltr_map.logical_to_visual[1]);
+    try std.testing.expectEqual(@as(usize, 3), ltr_map.logical_to_visual[2]);
+    try std.testing.expectEqual(@as(usize, 2), ltr_map.logical_to_visual[3]);
+    try std.testing.expectEqual(@as(usize, 4), ltr_map.logical_to_visual[4]);
+    try std.testing.expectEqual(@as(usize, 5), ltr_map.logical_to_visual[5]);
+    try std.testing.expectEqual(@as(usize, 3), ltr_map.items[2].logical_index);
     try std.testing.expectEqual(@as(u21, 0x05d2), ltr_map.items[2].visual_codepoint);
     try std.testing.expectEqual(@as(u21, 0x05d1), ltr_map.items[3].visual_codepoint);
     try std.testing.expectEqual(BidiClass.rtl, ltr_map.items[2].direction);
@@ -157,22 +157,22 @@ test "builds bidi logical visual maps" {
     try std.testing.expectEqual(@as(u21, 0x05d1), variation_map.items[0].codepoint);
     try std.testing.expectEqual(@as(u21, 0x05d0), variation_map.items[1].codepoint);
     try std.testing.expectEqual(@as(u21, 0xfe0f), variation_map.items[2].codepoint);
-    try std.testing.expectEqual(@as(usize, 1), variation_map.logicalToVisual(0).?);
-    try std.testing.expectEqual(@as(usize, 2), variation_map.logicalToVisual(1).?);
-    try std.testing.expectEqual(@as(usize, 0), variation_map.logicalToVisual(2).?);
+    try std.testing.expectEqual(@as(usize, 1), variation_map.logical_to_visual[0]);
+    try std.testing.expectEqual(@as(usize, 2), variation_map.logical_to_visual[1]);
+    try std.testing.expectEqual(@as(usize, 0), variation_map.logical_to_visual[2]);
 
     var rtl_map = try buildBidiMap(allocator, "abבגcd", .rtl);
     defer rtl_map.deinit();
 
-    try std.testing.expectEqual(@as(usize, 4), rtl_map.visualToLogical(0).?);
-    try std.testing.expectEqual(@as(usize, 5), rtl_map.visualToLogical(1).?);
-    try std.testing.expectEqual(@as(usize, 3), rtl_map.visualToLogical(2).?);
-    try std.testing.expectEqual(@as(usize, 2), rtl_map.visualToLogical(3).?);
-    try std.testing.expectEqual(@as(usize, 0), rtl_map.visualToLogical(4).?);
-    try std.testing.expectEqual(@as(usize, 1), rtl_map.visualToLogical(5).?);
-    try std.testing.expectEqual(@as(usize, 4), rtl_map.logicalToVisual(0).?);
-    try std.testing.expectEqual(@as(usize, 3), rtl_map.logicalToVisual(2).?);
-    try std.testing.expectEqual(@as(usize, 0), rtl_map.logicalToVisual(4).?);
+    try std.testing.expectEqual(@as(usize, 4), rtl_map.items[0].logical_index);
+    try std.testing.expectEqual(@as(usize, 5), rtl_map.items[1].logical_index);
+    try std.testing.expectEqual(@as(usize, 3), rtl_map.items[2].logical_index);
+    try std.testing.expectEqual(@as(usize, 2), rtl_map.items[3].logical_index);
+    try std.testing.expectEqual(@as(usize, 0), rtl_map.items[4].logical_index);
+    try std.testing.expectEqual(@as(usize, 1), rtl_map.items[5].logical_index);
+    try std.testing.expectEqual(@as(usize, 4), rtl_map.logical_to_visual[0]);
+    try std.testing.expectEqual(@as(usize, 3), rtl_map.logical_to_visual[2]);
+    try std.testing.expectEqual(@as(usize, 0), rtl_map.logical_to_visual[4]);
 
     var mirrored = try buildBidiMap(allocator, "(אב)", .rtl);
     defer mirrored.deinit();
@@ -181,21 +181,21 @@ test "builds bidi logical visual maps" {
 
     var number_map = try buildBidiMap(allocator, "א12ב", .rtl);
     defer number_map.deinit();
-    try std.testing.expectEqual(@as(usize, 3), number_map.visualToLogical(0).?);
-    try std.testing.expectEqual(@as(usize, 1), number_map.visualToLogical(1).?);
-    try std.testing.expectEqual(@as(usize, 2), number_map.visualToLogical(2).?);
-    try std.testing.expectEqual(@as(usize, 0), number_map.visualToLogical(3).?);
+    try std.testing.expectEqual(@as(usize, 3), number_map.items[0].logical_index);
+    try std.testing.expectEqual(@as(usize, 1), number_map.items[1].logical_index);
+    try std.testing.expectEqual(@as(usize, 2), number_map.items[2].logical_index);
+    try std.testing.expectEqual(@as(usize, 0), number_map.items[3].logical_index);
     // The compatibility direction is derived from the final embedding level;
     // numeric identity remains available through the exact input class API.
     try std.testing.expectEqual(BidiClass.ltr, number_map.items[1].direction);
 
     var neutral_number_map = try buildBidiMap(allocator, "א 12ב", .rtl);
     defer neutral_number_map.deinit();
-    try std.testing.expectEqual(@as(usize, 4), neutral_number_map.visualToLogical(0).?);
-    try std.testing.expectEqual(@as(usize, 2), neutral_number_map.visualToLogical(1).?);
-    try std.testing.expectEqual(@as(usize, 3), neutral_number_map.visualToLogical(2).?);
-    try std.testing.expectEqual(@as(usize, 1), neutral_number_map.visualToLogical(3).?);
-    try std.testing.expectEqual(@as(usize, 0), neutral_number_map.visualToLogical(4).?);
+    try std.testing.expectEqual(@as(usize, 4), neutral_number_map.items[0].logical_index);
+    try std.testing.expectEqual(@as(usize, 2), neutral_number_map.items[1].logical_index);
+    try std.testing.expectEqual(@as(usize, 3), neutral_number_map.items[2].logical_index);
+    try std.testing.expectEqual(@as(usize, 1), neutral_number_map.items[3].logical_index);
+    try std.testing.expectEqual(@as(usize, 0), neutral_number_map.items[4].logical_index);
 
     try std.testing.expectError(error.InvalidUtf8, buildBidiMap(allocator, "ab\xffב", .ltr));
 }

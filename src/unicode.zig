@@ -531,16 +531,6 @@ pub const BidiMap = struct {
         self.allocator.free(self.items);
         self.* = undefined;
     }
-
-    pub fn visualToLogical(self: BidiMap, visual_index: usize) ?usize {
-        if (visual_index >= self.items.len) return null;
-        return self.items[visual_index].logical_index;
-    }
-
-    pub fn logicalToVisual(self: BidiMap, logical_index: usize) ?usize {
-        if (logical_index >= self.logical_to_visual.len) return null;
-        return self.logical_to_visual[logical_index];
-    }
 };
 
 const BidiCluster = struct {
@@ -2454,10 +2444,22 @@ test "RTL bidi map walks long grapheme runs without losing item boundaries" {
         const visual_base = visual_cluster * 2;
         // UAX #9 reverses grapheme groups through their resolved level while
         // preserving the logical base-before-mark order inside each group.
-        try std.testing.expectEqual(logical_base, map.visualToLogical(visual_base).?);
-        try std.testing.expectEqual(logical_base + 1, map.visualToLogical(visual_base + 1).?);
-        try std.testing.expectEqual(visual_base, map.logicalToVisual(logical_base).?);
-        try std.testing.expectEqual(visual_base + 1, map.logicalToVisual(logical_base + 1).?);
+        try std.testing.expectEqual(
+            logical_base,
+            map.items[visual_base].logical_index,
+        );
+        try std.testing.expectEqual(
+            logical_base + 1,
+            map.items[visual_base + 1].logical_index,
+        );
+        try std.testing.expectEqual(
+            visual_base,
+            map.logical_to_visual[logical_base],
+        );
+        try std.testing.expectEqual(
+            visual_base + 1,
+            map.logical_to_visual[logical_base + 1],
+        );
     }
 }
 

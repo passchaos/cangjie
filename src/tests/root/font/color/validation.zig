@@ -48,7 +48,7 @@ test "color APIs reject glyph IDs outside maxp with and without COLR" {
         defer font.deinit();
         try std.testing.expectError(
             error.InvalidGlyph,
-            font.colorPaint(font.glyph_count),
+            font.colorPaintAtCoords(font.glyph_count, &.{}),
         );
     }
 
@@ -63,7 +63,7 @@ test "color APIs reject glyph IDs outside maxp with and without COLR" {
         );
         try std.testing.expectError(
             error.InvalidGlyph,
-            font.colorPaint(font.glyph_count),
+            font.colorPaintAtCoords(font.glyph_count, &.{}),
         );
     }
 }
@@ -95,7 +95,7 @@ test "COLR APIs revalidate borrowed table bytes" {
         defer allocator.free(bytes);
         var font = try Font.parse(allocator, bytes);
         defer font.deinit();
-        try std.testing.expect((try font.colorPaint(1)) != null);
+        try std.testing.expect((try font.colorPaintAtCoords(1, &.{})) != null);
 
         const colr = try tableOffset(bytes, "COLR");
         // 0x2000 -> 0x2100 remains a legal alpha, isolating checksum
@@ -103,7 +103,7 @@ test "COLR APIs revalidate borrowed table bytes" {
         bytes[colr + 47] +%= 1;
         try std.testing.expectError(
             error.BadSfnt,
-            font.colorPaint(1),
+            font.colorPaintAtCoords(1, &.{}),
         );
     }
 }

@@ -1,11 +1,9 @@
 const std = @import("std");
 const accelerator_core = @import("gpos/accelerator/root.zig");
-const feature_core = @import("gpos/feature/root.zig");
 const GlyphId = @import("glyph.zig").GlyphId;
 const positioning = @import("gpos/positioning/root.zig");
 pub const runtime = @import("gpos/runtime/root.zig");
 const runtime_lookup = @import("gpos/runtime/lookup/root.zig");
-const runtime_output = @import("gpos/runtime/output/root.zig");
 const runtime_run = @import("gpos/runtime/run.zig");
 const table_core = @import("gpos/table/root.zig");
 const validation = @import("gpos/validation/root.zig");
@@ -23,8 +21,6 @@ pub const GposError = error{
 pub const Adjustment = positioning.Adjustment;
 pub const AttachmentType = positioning.AttachmentType;
 
-const PositionContextResult = runtime_lookup.contextual.context.Result;
-
 const Table = table_core.View;
 
 pub const VariationStore = positioning.VariationStore;
@@ -32,41 +28,15 @@ pub const VariationStore = positioning.VariationStore;
 pub const LookupAccelerator = accelerator_core.model.Lookup;
 pub const LookupOptions = runtime.Options;
 const PairPosAcceleratorKind = accelerator_core.model.PairPositionKind;
-const appendAdjustment = runtime_output.adjustments.append;
-const appendAdjustmentEx = runtime_output.adjustments.appendWithFlags;
-const findAdjustment = runtime_output.adjustments.find;
-const markUnsafePositioningPair = runtime_output.safety.markPair;
-const markUnsafePairApplication = runtime_output.safety.markPairApplication;
-const MarkToBaseSubtable = runtime_lookup.marks.base.Parsed;
-const appendMarkAttachmentAdjustment = runtime_lookup.marks.output.append;
 const previousUnignoredCoveredGlyph =
     runtime_lookup.marks.search.previousUnignoredCoveredGlyph;
-const markGlyphForAttachmentSearch = runtime_lookup.marks.search.markGlyph;
-const markAttachmentSearchSkipsNonCoveredGlyph =
-    runtime_lookup.marks.search.skipsNonCoveredGlyph;
-const isMultipleSubstContinuationForMarkSearch =
-    runtime_lookup.marks.search.isMultipleSubstContinuation;
-const collectSingleAdjustmentSubtable = runtime_lookup.single.collectSubtable;
-const collectSingleAdjustment = runtime_lookup.single.collect;
-const SinglePosSubtable = runtime_lookup.single.Parsed;
 const collectPairAdjustment = runtime_lookup.pair.generic.collect;
-const collectPairAdjustmentAtParsed =
-    runtime_lookup.pair.generic.collectAtParsed;
-const advanceAfterPairPosition =
-    runtime_lookup.pair.generic.advanceAfterPair;
 const pairPosSubtablesHaveNativeData =
     runtime_lookup.pair.accelerated.hasNativeData;
-const PairPositionSubtable = runtime_lookup.pair.generic.Parsed;
 const buildLookupAccelerator = accelerator_core.build.lookup.one;
 const deinitLookupAcceleratorContents =
     accelerator_core.build.lookup.deinitContents;
 
-const ensurePositionLookupHeaderAndExtensionPayloadsWithin =
-    validation.lookup.headerAndExtensions;
-const ensurePositionLookupSubtablesWithin =
-    validation.lookup.lookupSubtables;
-const ensurePositionSubtableVariableDataWithin =
-    validation.lookup.subtableVariableData;
 const ensureContextPositionSubtableWithin =
     validation.lookup.contextSubtable;
 const ensurePositionRuleSetWithin = validation.lookup.contextRuleSet;
@@ -84,30 +54,12 @@ const ensureChainingPositionRuleSetWithin =
 /// remain ignorable, matching the shaping path, while malformed supported
 /// lookups and glyph ids outside maxp are rejected.
 pub fn validateGlyphBounds(data: []const u8, offset: usize, length: usize, glyph_count: u16) GposError!void {
-    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGpos;
-    const table = Table{
-        .data = data,
-        .offset = offset,
-        .length = length,
-        .validating_full_lookup_list = true,
-        .glyph_count = glyph_count,
-    };
-    const major = try readU16BadGpos(table, 0);
-    if (major != 1) return error.UnsupportedGpos;
-
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16BadGpos(table, lookup_list_offset);
-    try ensureBytesWithin(table, lookup_list_offset + 2, @as(usize, lookup_count) * 2);
-    const feature_count =
-        try feature_core.validation.lookupReferences(table, lookup_count);
-    try feature_core.validation.scriptReferences(table, feature_count);
-    for (0..lookup_count) |lookup_i| {
-        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGpos(table, lookup_list_offset + 2 + lookup_i * 2));
-        try ensurePositionLookupHeaderAndExtensionPayloadsWithin(table, lookup_offset);
-        const lookup_type = try readU16BadGpos(table, lookup_offset);
-        const subtable_count = try readU16BadGpos(table, lookup_offset + 4);
-        try ensurePositionLookupSubtablesWithin(table, lookup_offset, lookup_type, subtable_count);
-    }
+    return validation.font.glyphBounds(
+        data,
+        offset,
+        length,
+        glyph_count,
+    );
 }
 
 /// Collect positioning adjustments for a post-GSUB glyph stream.
@@ -156,356 +108,6 @@ fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: Lo
 
 const collectLookup = runtime_lookup.dispatcher.collect;
 const collectLookupWithIndex = runtime_lookup.dispatcher.collectWithIndex;
-
-fn checkedRequiredPositionOffset(table: Table, base_offset: usize, relative_offset: u16) GposError!usize {
-    return table_core.offset.required16(table, base_offset, relative_offset);
-}
-
-fn checkedRequiredScriptListOffset(table: Table) GposError!usize {
-    // ScriptList is a mandatory top-level OpenType Layout table. Null would
-    // reinterpret the GPOS version/header words as script records, so reject it
-    // instead of letting selection and validation reason over aliased metadata.
-    return checkedRequiredPositionOffset(table, 0, try readU16BadGpos(table, 4));
-}
-
-fn checkedRequiredFeatureListOffset(table: Table) GposError!usize {
-    // FeatureList is required even when empty. Accepting zero as "no features"
-    // would bypass the activation graph and can make callers apply every
-    // positioning lookup from an otherwise malformed table.
-    return checkedRequiredPositionOffset(table, 0, try readU16BadGpos(table, 6));
-}
-
-fn checkedRequiredLookupListOffset(table: Table) GposError!usize {
-    // The top-level LookupList offset is mandatory for GPOS. Treating zero as
-    // table-relative would reinterpret the GPOS header/version fields as a
-    // LookupList and lets malformed fonts pass validation with no real lookup
-    // topology or with lookup records derived from unrelated header bytes.
-    return checkedRequiredPositionOffset(table, 0, try readU16BadGpos(table, 8));
-}
-
-fn checkedRequiredLookupOffset(table: Table, lookup_list_offset: usize, relative_offset: u16) GposError!usize {
-    // LookupList offsets are required children. A zero entry aliases the
-    // LookupList's count/offset array as a Lookup header and can turn layout
-    // directory metadata into positioning operations or mark-filtering state.
-    return checkedRequiredPositionOffset(table, lookup_list_offset, relative_offset);
-}
-
-fn ensureBytesWithin(table: Table, offset: usize, len: usize) GposError!void {
-    return table.ensure(offset, len);
-}
-
-fn readU16BadGpos(table: Table, relative: usize) GposError!u16 {
-    return readU16(table, relative) catch |err| {
-        return switch (err) {
-            error.EndOfStream => error.BadGpos,
-            else => err,
-        };
-    };
-}
-
-fn readU32BadGpos(table: Table, relative: usize) GposError!u32 {
-    return readU32(table, relative) catch |err| {
-        return switch (err) {
-            error.EndOfStream => error.BadGpos,
-            else => err,
-        };
-    };
-}
-
-test "GPOS rejects reserved LookupFlag bits" {
-    var bytes = [_]u8{0} ** 42;
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 38); // Empty ScriptList.
-    writeU16Test(&bytes, 6, 40); // Empty FeatureList.
-    writeU16Test(&bytes, 8, 10); // LookupList offset.
-    writeU16Test(&bytes, 10, 1);
-    writeU16Test(&bytes, 12, 4);
-    writeU16Test(&bytes, 14, 1); // SinglePos lookup.
-    writeU16Test(&bytes, 16, 0x0020); // Reserved middle-bit range in LookupFlag.
-    writeU16Test(&bytes, 18, 1);
-    writeU16Test(&bytes, 20, 10); // Leave room for MarkFilteringSet when bit 4 is set.
-    const subtable: usize = 24;
-    writeU16Test(&bytes, subtable + 0, 1); // SinglePos format 1.
-    writeU16Test(&bytes, subtable + 2, 8);
-    writeU16Test(&bytes, subtable + 4, 0x0004); // xAdvance.
-    writeI16Test(&bytes, subtable + 6, 20);
-    writeU16Test(&bytes, subtable + 8, 1); // Coverage format 1.
-    writeU16Test(&bytes, subtable + 10, 1);
-    writeU16Test(&bytes, subtable + 12, 1);
-    writeU16Test(&bytes, 38, 0); // ScriptCount.
-    writeU16Test(&bytes, 40, 0); // FeatureCount.
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, positioning.lookup.dispatch.validateHeader(table, 14));
-    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-
-    writeU16Test(&bytes, 16, 0xff10); // MarkAttachmentType plus UseMarkFilteringSet are valid.
-    writeU16Test(&bytes, 22, 0); // MarkFilteringSet index follows the subtable-offset array.
-    try positioning.lookup.dispatch.validateHeader(table, 14);
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-}
-
-test "GPOS rejects null top-level LookupList offsets" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 40;
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 36); // Empty ScriptList.
-    writeU16Test(&bytes, 6, 38); // Empty FeatureList.
-    writeU16Test(&bytes, 8, 10); // LookupList offset.
-    writeU16Test(&bytes, 10, 1);
-    writeU16Test(&bytes, 12, 4);
-    writeSinglePositionLookup(&bytes, 14, 1, 0, 20);
-    writeU16Test(&bytes, 36, 0); // ScriptCount.
-    writeU16Test(&bytes, 38, 0); // FeatureCount.
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    var adjustments = std.ArrayList(Adjustment).empty;
-    defer adjustments.deinit(allocator);
-
-    writeU16Test(&bytes, 8, 0); // Invalid: LookupList is a required top-level table.
-    try std.testing.expectError(error.BadGpos, checkedRequiredLookupListOffset(table));
-    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-    try std.testing.expectError(error.BadGpos, collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &.{1}, &adjustments, allocator, .{}));
-    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
-
-    // With the LookupList restored, the same SinglePos lookup is valid and
-    // still applies normally; only the header-aliasing null offset is invalid.
-    writeU16Test(&bytes, 8, 10);
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-    try collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &.{1}, &adjustments, allocator, .{});
-    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
-    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
-    try std.testing.expectEqual(@as(i16, 20), adjustments.items[0].x_placement);
-}
-
-test "GPOS rejects null LookupList child offsets" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 42;
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 38); // Empty ScriptList.
-    writeU16Test(&bytes, 6, 40); // Empty FeatureList.
-    writeU16Test(&bytes, 8, 10); // LookupList.
-    writeU16Test(&bytes, 10, 1); // LookupCount.
-    writeU16Test(&bytes, 12, 0); // Invalid: LookupList child offsets are required.
-
-    // Without the required-child check, offset zero aliases the LookupList
-    // header as a SinglePos lookup: LookupCount becomes LookupType, the null
-    // offset slot becomes LookupFlag, and following words supply a plausible
-    // SubTable offset and payload. This keeps the regression focused on the
-    // child pointer instead of depending on accidental truncation.
-    writeU16Test(&bytes, 14, 1); // Aliased SubTableCount.
-    writeU16Test(&bytes, 16, 8); // Aliased SubTable offset: 10 + 8 == 18.
-    writeU16Test(&bytes, 18, 1); // SinglePos format 1.
-    writeU16Test(&bytes, 20, 8);
-    writeU16Test(&bytes, 22, 0x0001); // xPlacement.
-    writeI16Test(&bytes, 24, 20);
-    writeCoverage1Test(&bytes, 26, 1);
-    writeU16Test(&bytes, 38, 0); // ScriptCount.
-    writeU16Test(&bytes, 40, 0); // FeatureCount.
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, checkedRequiredLookupOffset(table, 10, 0));
-    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-
-    var adjustments = std.ArrayList(Adjustment).empty;
-    defer adjustments.deinit(allocator);
-    try std.testing.expectError(error.BadGpos, collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &.{1}, &adjustments, allocator, .{}));
-    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
-
-    // Rebuild the lookup with a non-null child offset. The repaired table keeps
-    // the same logical positioning operation and applies normally.
-    @memset(&bytes, 0);
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 38);
-    writeU16Test(&bytes, 6, 40);
-    writeU16Test(&bytes, 8, 10);
-    writeU16Test(&bytes, 10, 1);
-    writeU16Test(&bytes, 12, 4);
-    writeSinglePositionLookup(&bytes, 14, 1, 0, 20);
-    writeU16Test(&bytes, 38, 0);
-    writeU16Test(&bytes, 40, 0);
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-    try collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &.{1}, &adjustments, allocator, .{});
-    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
-    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
-    try std.testing.expectEqual(@as(i16, 20), adjustments.items[0].x_placement);
-}
-
-test "GPOS rejects null top-level ScriptList and FeatureList offsets" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 40;
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 36); // ScriptList.
-    writeU16Test(&bytes, 6, 38); // FeatureList.
-    writeU16Test(&bytes, 8, 10); // LookupList.
-    writeU16Test(&bytes, 10, 1);
-    writeU16Test(&bytes, 12, 4);
-    writeSinglePositionLookup(&bytes, 14, 1, 0, 20);
-    writeU16Test(&bytes, 36, 0); // Empty ScriptList.
-    writeU16Test(&bytes, 38, 0); // Empty FeatureList.
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    var adjustments = std.ArrayList(Adjustment).empty;
-    defer adjustments.deinit(allocator);
-
-    writeU16Test(&bytes, 4, 0); // Invalid: ScriptList is required, even when empty.
-    try std.testing.expectError(error.BadGpos, checkedRequiredScriptListOffset(table));
-    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-    try std.testing.expectError(error.BadGpos, collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &.{1}, &adjustments, allocator, .{}));
-    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
-
-    writeU16Test(&bytes, 4, 36);
-    writeU16Test(&bytes, 6, 0); // Invalid: FeatureList is required, even when empty.
-    try std.testing.expectError(error.BadGpos, checkedRequiredFeatureListOffset(table));
-    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-    try std.testing.expectError(error.BadGpos, collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &.{1}, &adjustments, allocator, .{}));
-    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
-
-    // Non-null empty ScriptList/FeatureList tables are valid. With no selected
-    // feature topology, the low-level collector retains the all-lookup fallback
-    // and applies this SinglePos adjustment normally.
-    writeU16Test(&bytes, 6, 38);
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-    try collectAdjustmentsWithOptions(&bytes, 0, bytes.len, &.{1}, &adjustments, allocator, .{});
-    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
-    try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
-    try std.testing.expectEqual(@as(i16, 20), adjustments.items[0].x_placement);
-}
-
-test "GPOS rejects null Lookup SubTable offsets" {
-    var bytes = [_]u8{0} ** 42;
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 38); // Empty ScriptList.
-    writeU16Test(&bytes, 6, 40); // Empty FeatureList.
-    writeU16Test(&bytes, 8, 10); // LookupList offset.
-    writeU16Test(&bytes, 10, 1);
-    writeU16Test(&bytes, 12, 4);
-    writeU16Test(&bytes, 14, 1); // SinglePos lookup.
-    writeU16Test(&bytes, 16, 0);
-    writeU16Test(&bytes, 18, 1);
-    writeU16Test(&bytes, 20, 0); // Invalid: Lookup.SubTable offsets are required.
-    const subtable: usize = 24;
-    writeU16Test(&bytes, subtable + 0, 1); // SinglePos format 1.
-    writeU16Test(&bytes, subtable + 2, 8);
-    writeU16Test(&bytes, subtable + 4, 0x0001); // xPlacement.
-    writeI16Test(&bytes, subtable + 6, 20);
-    writeCoverage1Test(&bytes, subtable + 8, 1);
-    writeU16Test(&bytes, 38, 0); // ScriptCount.
-    writeU16Test(&bytes, 40, 0); // FeatureCount.
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, ensurePositionLookupSubtablesWithin(table, 14, 1, 1));
-    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-
-    var adjustments = std.ArrayList(Adjustment).empty;
-    defer adjustments.deinit(std.testing.allocator);
-    try std.testing.expectError(error.BadGpos, collectLookup(table, 14, &.{1}, &adjustments, std.testing.allocator, .{}));
-    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
-
-    // A non-null child pointer to an otherwise ordinary SinglePos subtable
-    // remains valid; only the aliasing null offset is rejected.
-    writeU16Test(&bytes, 20, 10);
-    try ensurePositionLookupSubtablesWithin(table, 14, 1, 1);
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-}
-
-test "GPOS rejects null required Coverage offsets" {
-    var bytes = [_]u8{0} ** 42;
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 38); // Empty ScriptList.
-    writeU16Test(&bytes, 6, 40); // Empty FeatureList.
-    writeU16Test(&bytes, 8, 10); // LookupList offset.
-    writeU16Test(&bytes, 10, 1);
-    writeU16Test(&bytes, 12, 4);
-    writeU16Test(&bytes, 14, 1); // SinglePos lookup.
-    writeU16Test(&bytes, 16, 0);
-    writeU16Test(&bytes, 18, 1);
-    writeU16Test(&bytes, 20, 10);
-    const subtable: usize = 24;
-    writeU16Test(&bytes, subtable + 0, 1); // SinglePos format 1.
-    writeU16Test(&bytes, subtable + 2, 0); // Invalid: Coverage offsets are required.
-    writeU16Test(&bytes, subtable + 4, 0x0001); // xPlacement.
-    writeI16Test(&bytes, subtable + 6, 20);
-    writeCoverage1Test(&bytes, subtable + 8, 1);
-    writeU16Test(&bytes, 38, 0); // ScriptCount.
-    writeU16Test(&bytes, 40, 0); // FeatureCount.
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, positioning.lookup.single.validate(table, subtable));
-    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-
-    var adjustments = std.ArrayList(Adjustment).empty;
-    defer adjustments.deinit(std.testing.allocator);
-    try std.testing.expectError(error.BadGpos, collectSingleAdjustment(table, subtable, &.{1}, &adjustments, std.testing.allocator, 0, .{}));
-    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
-    try std.testing.expectError(error.BadGpos, collectLookup(table, 14, &.{1}, &adjustments, std.testing.allocator, .{}));
-    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
-
-    // With the Coverage pointer repaired, the same subtable is a normal
-    // SinglePos; only the aliasing null child pointer is invalid.
-    writeU16Test(&bytes, subtable + 2, 8);
-    try positioning.lookup.single.validate(table, subtable);
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-}
-
-test "GPOS validates FeatureList lookup indexes against LookupList" {
-    var bytes = [_]u8{0} ** 56;
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 54); // Empty ScriptList; this test targets FeatureList topology.
-    writeU16Test(&bytes, 6, 10); // FeatureList.
-    writeU16Test(&bytes, 8, 24); // LookupList.
-
-    writeU16Test(&bytes, 10, 1); // FeatureCount.
-    writeU32Test(&bytes, 12, unicode.tag("kern"));
-    writeU16Test(&bytes, 16, 8); // FeatureTable at offset 18.
-    writeU16Test(&bytes, 20, 1); // LookupIndexCount.
-    writeU16Test(&bytes, 22, 1); // Dangling: LookupList has only index 0.
-
-    writeU16Test(&bytes, 24, 1);
-    writeU16Test(&bytes, 26, 4);
-    writeSinglePositionLookup(&bytes, 28, 1, 0, 0);
-    writeU16Test(&bytes, 54, 0); // ScriptCount.
-
-    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-
-    writeU16Test(&bytes, 22, 0);
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-}
-
-test "GPOS validates ScriptList LangSys feature indexes against FeatureList" {
-    var bytes = [_]u8{0} ** 86;
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 10); // ScriptList.
-    writeU16Test(&bytes, 6, 40); // FeatureList.
-    writeU16Test(&bytes, 8, 56); // LookupList.
-
-    writeU16Test(&bytes, 10, 1);
-    writeU32Test(&bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
-    writeU16Test(&bytes, 16, 8);
-
-    writeU16Test(&bytes, 18, 4); // DefaultLangSys at offset 22.
-    writeU16Test(&bytes, 20, 0);
-    writeU16Test(&bytes, 22, 0);
-    writeU16Test(&bytes, 24, 0xffff);
-    writeU16Test(&bytes, 26, 1);
-    writeU16Test(&bytes, 28, 1); // Dangling: FeatureList has only index 0.
-
-    writeU16Test(&bytes, 40, 1);
-    writeFeatureRecordTest(&bytes, 42, unicode.tag("kern"), 8);
-    writeFeatureTest(&bytes, 50, 0);
-
-    writeU16Test(&bytes, 56, 1);
-    writeU16Test(&bytes, 58, 4);
-    writeSinglePositionLookup(&bytes, 60, 1, 0, 0);
-
-    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-
-    writeU16Test(&bytes, 28, 0);
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-
-    writeU16Test(&bytes, 24, 1); // ReqFeatureIndex is checked too.
-    try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-}
 
 test "GPOS ContextPos rejects null required rule offsets" {
     var bytes = [_]u8{0} ** 36;

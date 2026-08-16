@@ -8,6 +8,11 @@ const GlyphDigest = @import("../../glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("../../glyph.zig").GlyphId;
 const class_context = @import("../../opentype/class_context.zig");
 
+/// Contextual and ligature acceleration use fixed stack scratch for component
+/// offsets. Builders omit larger authored definitions so runtime execution and
+/// cached sidecars share one explicit bound.
+pub const max_ligature_components = 64;
+
 pub const Lookup = struct {
     /// Dispatch fields decoded once from the validated Lookup table. Runtime
     /// use checks `lookup_offset`, so a stale or foreign sidecar falls back to

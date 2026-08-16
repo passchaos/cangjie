@@ -235,6 +235,38 @@ test "variation inspection exposes table-level variable font data" {
     );
 }
 
+test "layout inspection covers cross-platform and AAT metadata" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    const layout = cangjie.font.metadata.layout.inspect(&face);
+    try std.testing.expect((try layout.baseline(allocator)) == null);
+    try std.testing.expectEqual(
+        cangjie.font.metadata.layout.GlyphClass.unclassified,
+        try layout.glyphClass(1),
+    );
+    try std.testing.expectEqual(@as(u16, 0), try layout.markAttachClass(1));
+    try std.testing.expectEqual(@as(i16, 0), try layout.kerning(0, 1));
+    if (try layout.kern(allocator)) |kern| {
+        defer layout.freeKern(allocator, kern);
+        try std.testing.expect(kern.subtables.len != 0);
+    }
+    try std.testing.expect((try layout.cff2()) == null);
+    const language_tags = try layout.languageTags(allocator);
+    defer allocator.free(language_tags);
+
+    const aat = cangjie.font.metadata.layout.aat.inspect(&face);
+    try std.testing.expect((try aat.anchors(allocator)) == null);
+    const features = try aat.features(allocator);
+    defer aat.freeFeatures(allocator, features);
+    try std.testing.expect((try aat.tracking(allocator)) == null);
+    try std.testing.expect((try aat.extendedKerning(allocator)) == null);
+    try std.testing.expect((try aat.glyphMetamorphosis(allocator)) == null);
+}
+
 test "concrete engine remains valid after a value move" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalTtf(allocator);

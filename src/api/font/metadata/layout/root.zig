@@ -17,4 +17,6 @@ pub const Cff2CharStringScan = font.Cff2CharStringScanInfo;
 pub const Cff2CharStringBounds = font.Cff2CharStringBoundsInfo;
 
 pub const LanguageTag = font.LtagRecordInfo;
+pub const Inspection = @import("inspection.zig").View;
+pub const inspect = @import("inspection.zig").inspect;
 pub const aat = @import("aat.zig");

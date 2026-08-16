@@ -24,3 +24,6 @@ pub const Morx = font.MorxInfo;
 pub const MorxChain = font.MorxChainInfo;
 pub const MorxFeature = font.MorxFeatureInfo;
 pub const MorxSubtable = font.MorxSubtableInfo;
+
+pub const Inspection = @import("aat_inspection.zig").View;
+pub const inspect = @import("aat_inspection.zig").inspect;

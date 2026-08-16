@@ -45,6 +45,51 @@ test "MarkMarkPos attaches one mark to the preceding covered mark" {
     try std.testing.expectEqual(@as(?usize, 0), mark.attachment_parent_index);
 }
 
+test "MarkMarkPos skips lookup-flag ignored glyphs" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 64;
+    writeU16(&bytes, 0, 1);
+    writeU16(&bytes, 2, 12);
+    writeU16(&bytes, 4, 18);
+    writeU16(&bytes, 6, 1);
+    writeU16(&bytes, 8, 24);
+    writeU16(&bytes, 10, 44);
+    writeCoverage1(&bytes, 12, 12);
+    writeCoverage1(&bytes, 18, 10);
+    writeU16(&bytes, 24, 1);
+    writeU16(&bytes, 26, 0);
+    writeU16(&bytes, 28, 8);
+    writeAnchor1(&bytes, 32, 0, 0);
+    writeU16(&bytes, 44, 1);
+    writeU16(&bytes, 46, 6);
+    writeAnchor1(&bytes, 50, 50, 70);
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+    };
+    var glyph_classes = [_]u16{0} ** 13;
+    glyph_classes[10] = 3;
+    glyph_classes[11] = 1;
+    glyph_classes[12] = 3;
+    var adjustments = std.ArrayList(marks.mark.Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try marks.mark.collect(
+        view,
+        0,
+        &.{ 10, 11, 12 },
+        &adjustments,
+        allocator,
+        0x0002,
+        .{ .glyph_classes = &glyph_classes },
+    );
+    const mark = output_state.adjustments.find(adjustments.items, 2).?;
+    try std.testing.expectEqual(@as(?usize, 0), mark.attachment_parent_index);
+    try std.testing.expectEqual(@as(i16, 50), mark.x_placement);
+    try std.testing.expectEqual(@as(i16, 70), mark.y_placement);
+}
+
 fn writeCoverage1(bytes: []u8, offset: usize, glyph: u16) void {
     writeU16(bytes, offset, 1);
     writeU16(bytes, offset + 2, 1);

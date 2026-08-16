@@ -94,6 +94,99 @@ test "nested MarkBasePos targets only the requested mark" {
     ) != null);
 }
 
+test "MarkBasePos stops at an intervening non-covered base" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 56;
+    writeU16(&bytes, 0, 1);
+    writeU16(&bytes, 2, 12);
+    writeU16(&bytes, 4, 18);
+    writeU16(&bytes, 6, 1);
+    writeU16(&bytes, 8, 24);
+    writeU16(&bytes, 10, 38);
+    writeCoverage1(&bytes, 12, 12);
+    writeCoverage1(&bytes, 18, 10);
+    writeU16(&bytes, 24, 1);
+    writeU16(&bytes, 26, 0);
+    writeU16(&bytes, 28, 8);
+    writeAnchor1(&bytes, 32, 0, 0);
+    writeU16(&bytes, 38, 1);
+    writeU16(&bytes, 40, 4);
+    writeAnchor1(&bytes, 42, 100, 120);
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+    };
+    var glyph_classes = [_]u16{0} ** 13;
+    glyph_classes[10] = 1;
+    glyph_classes[11] = 1;
+    glyph_classes[12] = 3;
+    var adjustments = std.ArrayList(marks.base.Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try marks.base.collect(
+        view,
+        0,
+        &.{ 10, 11, 12 },
+        &adjustments,
+        allocator,
+        0,
+        .{ .glyph_classes = &glyph_classes },
+    );
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
+test "MarkBasePos cached search keeps already attached marks transparent" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 80;
+    writeU16(&bytes, 0, 1);
+    writeU16(&bytes, 2, 12);
+    writeU16(&bytes, 4, 20);
+    writeU16(&bytes, 6, 1);
+    writeU16(&bytes, 8, 26);
+    writeU16(&bytes, 10, 50);
+    writeCoverageList1(&bytes, 12, &.{ 12, 13 });
+    writeCoverage1(&bytes, 20, 10);
+    writeU16(&bytes, 26, 2);
+    writeU16(&bytes, 28, 0);
+    writeU16(&bytes, 30, 10);
+    writeU16(&bytes, 32, 0);
+    writeU16(&bytes, 34, 16);
+    writeAnchor1(&bytes, 36, 10, 15);
+    writeAnchor1(&bytes, 42, 30, 35);
+    writeU16(&bytes, 50, 1);
+    writeU16(&bytes, 52, 4);
+    writeAnchor1(&bytes, 54, 100, 120);
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+    };
+    var glyph_classes = [_]u16{0} ** 14;
+    glyph_classes[10] = 1;
+    glyph_classes[12] = 3;
+    glyph_classes[13] = 3;
+    var adjustments = std.ArrayList(marks.base.Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try marks.base.collect(
+        view,
+        0,
+        &.{ 10, 12, 13 },
+        &adjustments,
+        allocator,
+        0,
+        .{ .glyph_classes = &glyph_classes },
+    );
+    try std.testing.expectEqual(@as(usize, 2), adjustments.items.len);
+    const first = output_state.adjustments.find(adjustments.items, 1).?;
+    const second = output_state.adjustments.find(adjustments.items, 2).?;
+    try std.testing.expectEqual(@as(?usize, 0), first.attachment_parent_index);
+    try std.testing.expectEqual(@as(?usize, 0), second.attachment_parent_index);
+    try std.testing.expectEqual(@as(i16, 90), first.x_placement);
+    try std.testing.expectEqual(@as(i16, 70), second.x_placement);
+}
+
 fn writeCoverage1(bytes: []u8, offset: usize, glyph: u16) void {
     writeCoverageList1(bytes, offset, &.{glyph});
 }

@@ -10,8 +10,17 @@ pub fn writeLookup(bytes: []u8, lookup_type: u16, children: []const u16) void {
 }
 
 pub fn writeExtensionWrapper(bytes: []u8, wrapper: usize, payload: usize) void {
+    writeExtensionWrapperType(bytes, wrapper, payload, 5);
+}
+
+pub fn writeExtensionWrapperType(
+    bytes: []u8,
+    wrapper: usize,
+    payload: usize,
+    lookup_type: u16,
+) void {
     writeU16(bytes, wrapper, 1);
-    writeU16(bytes, wrapper + 2, 5);
+    writeU16(bytes, wrapper + 2, lookup_type);
     writeU32(bytes, wrapper + 4, @intCast(payload - wrapper));
 }
 

@@ -301,6 +301,29 @@ test "MATH inspection is consumable by formula layout libraries" {
     );
 }
 
+test "color inspection exposes table-level palette and asset metadata" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    const color = cangjie.font.metadata.color.inspect(&face);
+
+    const palettes = try color.palettes(allocator);
+    defer allocator.free(palettes);
+    const labels = try color.paletteEntryLabels(allocator);
+    defer allocator.free(labels);
+    try std.testing.expect((try color.layerPaint(0, &.{})) == null);
+    try std.testing.expect((try color.glyphPaint(1, &.{})) == null);
+    try std.testing.expect((try color.svg(1)) == null);
+    try std.testing.expect((try color.resolvedSvg(allocator, 1)) == null);
+    const strikes = try color.bitmapStrikes(allocator);
+    defer allocator.free(strikes);
+    try std.testing.expectEqual(@as(usize, 0), strikes.len);
+    try std.testing.expect((try color.bestBitmapPpem(16)) == null);
+}
+
 test "concrete engine remains valid after a value move" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalTtf(allocator);

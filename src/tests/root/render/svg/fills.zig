@@ -27,8 +27,6 @@ test "reads OpenType SVG glyph document metadata" {
     try std.testing.expect(std.mem.startsWith(u8, document.data, "<svg"));
     try std.testing.expect(std.mem.indexOf(u8, document.data, "<path") != null);
 
-    const bytes_only = (try font.svgDocument(1)).?;
-    try std.testing.expectEqualSlices(u8, document.data, bytes_only);
     try std.testing.expect(try font.svgGlyphDocument(0) == null);
 }
 

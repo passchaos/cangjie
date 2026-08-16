@@ -15,3 +15,6 @@ pub const BitmapPng = font.BitmapGlyphPng;
 pub const BitmapGlyph = font.BitmapGlyphInfo;
 pub const BitmapStrike = font.BitmapStrikeInfo;
 pub const BitmapStrikeSource = font.BitmapStrikeSource;
+
+pub const Inspection = @import("inspection.zig").View;
+pub const inspect = @import("inspection.zig").inspect;

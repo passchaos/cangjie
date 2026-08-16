@@ -3862,11 +3862,6 @@ pub const Font = struct {
         return try self.rawSvgGlyphDocument(glyph_id);
     }
 
-    pub fn svgDocument(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?[]const u8 {
-        const document = try self.svgGlyphDocument(glyph_id);
-        return if (document) |value| value.data else null;
-    }
-
     fn appendBitmapStrikesFromLocationTables(
         self: *const Font,
         allocator: std.mem.Allocator,

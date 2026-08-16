@@ -1572,105 +1572,6 @@ test "GSUB validates coverage indexes against substitution arrays" {
     }
 }
 
-test "GSUB cached lookup executor requires an exact nonempty plan" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 80;
-    writeCachedSingleFeatureGsubTest(&bytes);
-
-    const accelerators = try accelerator_root.build.lookup.build(&bytes, 0, bytes.len, allocator);
-    defer deinitLookupAccelerators(allocator, accelerators);
-    var operations_left: usize = 64;
-    const options = LookupOptions{
-        .selected_lookups = &.{0},
-        .lookup_accelerators = accelerators,
-        .operations_left = &operations_left,
-        .max_glyph_count = 64,
-        .assume_validated = true,
-    };
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.append(allocator, 10);
-    try std.testing.expect(try applyCachedLookupSelectionWithOptionsAfterMetadataProof(
-        &bytes,
-        0,
-        bytes.len,
-        &glyphs,
-        allocator,
-        options,
-    ));
-    try std.testing.expectEqualSlices(GlyphId, &.{11}, glyphs.items);
-
-    // Empty selections retain the generic executor's FeatureList/topology
-    // semantics. A copied table, a selection outside the exact accelerator,
-    // or a caller without the shared shaping budget must also decline before
-    // changing the run.
-    glyphs.items[0] = 10;
-    var empty_options = options;
-    empty_options.selected_lookups = &.{};
-    try std.testing.expect(!try applyCachedLookupSelectionWithOptionsAfterMetadataProof(
-        &bytes,
-        0,
-        bytes.len,
-        &glyphs,
-        allocator,
-        empty_options,
-    ));
-    try std.testing.expectEqualSlices(GlyphId, &.{10}, glyphs.items);
-
-    var foreign_bytes = bytes;
-    try std.testing.expect(!try applyCachedLookupSelectionWithOptionsAfterMetadataProof(
-        &foreign_bytes,
-        0,
-        foreign_bytes.len,
-        &glyphs,
-        allocator,
-        options,
-    ));
-    try std.testing.expectEqualSlices(GlyphId, &.{10}, glyphs.items);
-
-    const copied_accelerators = try allocator.dupe(LookupAccelerator, accelerators);
-    defer allocator.free(copied_accelerators);
-    var copied_options = options;
-    copied_options.lookup_accelerators = copied_accelerators;
-    try std.testing.expect(!try applyCachedLookupSelectionWithOptionsAfterMetadataProof(
-        &bytes,
-        0,
-        bytes.len,
-        &glyphs,
-        allocator,
-        copied_options,
-    ));
-    try std.testing.expectEqualSlices(GlyphId, &.{10}, glyphs.items);
-
-    var invalid_selection_options = options;
-    // The valid first index must not run before the invalid second index is
-    // rejected; fallback is safe only while the complete cached selection is
-    // known to be non-mutating on failure.
-    invalid_selection_options.selected_lookups = &.{ 0, 1 };
-    try std.testing.expect(!try applyCachedLookupSelectionWithOptionsAfterMetadataProof(
-        &bytes,
-        0,
-        bytes.len,
-        &glyphs,
-        allocator,
-        invalid_selection_options,
-    ));
-    try std.testing.expectEqualSlices(GlyphId, &.{10}, glyphs.items);
-
-    var unbounded_options = options;
-    unbounded_options.operations_left = null;
-    try std.testing.expect(!try applyCachedLookupSelectionWithOptionsAfterMetadataProof(
-        &bytes,
-        0,
-        bytes.len,
-        &glyphs,
-        allocator,
-        unbounded_options,
-    ));
-    try std.testing.expectEqualSlices(GlyphId, &.{10}, glyphs.items);
-}
-
 test "GSUB chaining class substitution applies nested lookup" {
     const allocator = std.testing.allocator;
     const bytes = try allocator.alloc(u8, 112);
@@ -3770,40 +3671,6 @@ fn writeSingleLookupGsubTest(bytes: []u8, lookup_type: u16) usize {
     return 26;
 }
 
-fn writeCachedSingleFeatureGsubTest(bytes: []u8) void {
-    writeU32Test(bytes, 0, 0x00010000);
-    writeU16Test(bytes, 4, 10); // ScriptList.
-    writeU16Test(bytes, 6, 30); // FeatureList.
-    writeU16Test(bytes, 8, 44); // LookupList.
-
-    writeU16Test(bytes, 10, 1);
-    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
-    writeU16Test(bytes, 16, 8);
-    writeU16Test(bytes, 18, 4);
-    writeU16Test(bytes, 20, 0);
-    writeU16Test(bytes, 22, 0);
-    writeU16Test(bytes, 24, 0xffff);
-    writeU16Test(bytes, 26, 1);
-    writeU16Test(bytes, 28, 0);
-
-    writeU16Test(bytes, 30, 1);
-    writeFeatureRecord(bytes, 32, unicode.tag("liga"), 8);
-    writeFeature(bytes, 38, 0);
-
-    writeU16Test(bytes, 44, 1);
-    writeU16Test(bytes, 46, 4);
-    writeU16Test(bytes, 48, 1); // SingleSubst lookup.
-    writeU16Test(bytes, 50, 0);
-    writeU16Test(bytes, 52, 1);
-    writeU16Test(bytes, 54, 8);
-
-    const single = 56;
-    writeU16Test(bytes, single + 0, 1);
-    writeU16Test(bytes, single + 2, 6);
-    writeI16Test(bytes, single + 4, 1);
-    writeCoverage1(bytes, single + 6, 10);
-}
-
 fn writeCoverage1(bytes: []u8, offset: usize, glyph: GlyphId) void {
     writeU16Test(bytes, offset + 0, 1);
     writeU16Test(bytes, offset + 2, 1);
@@ -3823,17 +3690,6 @@ fn writeClassDef1(bytes: []u8, offset: usize, start: GlyphId, class: u16) void {
     writeU16Test(bytes, offset + 2, start);
     writeU16Test(bytes, offset + 4, 1);
     writeU16Test(bytes, offset + 6, class);
-}
-
-fn writeFeatureRecord(bytes: []u8, offset: usize, tag_value: u32, feature_offset: u16) void {
-    writeU32Test(bytes, offset, tag_value);
-    writeU16Test(bytes, offset + 4, feature_offset);
-}
-
-fn writeFeature(bytes: []u8, offset: usize, lookup_index: u16) void {
-    writeU16Test(bytes, offset, 0);
-    writeU16Test(bytes, offset + 2, 1);
-    writeU16Test(bytes, offset + 4, lookup_index);
 }
 
 test "GSUB public apply validates source metadata cardinality" {
@@ -3894,6 +3750,12 @@ const FeatureIntegrationTestBindings = struct {
     pub const validate = validateGlyphBounds;
 };
 
+const CacheIntegrationTestBindings = struct {
+    pub const applyLookup = ContextualRecordExecutor.applyLookup;
+    pub const applyCachedSelection =
+        applyCachedLookupSelectionWithOptionsAfterMetadataProof;
+};
+
 const TopologyTestBindings = struct {
     pub const apply = applyWithOptions;
     pub const validate = validateGlyphBounds;
@@ -3915,7 +3777,7 @@ test {
     _ = @import("gsub/tests/feature/integration/root.zig")
         .selectionSuite(FeatureIntegrationTestBindings);
     _ = @import("gsub/tests/runtime/cache_integration.zig")
-        .suite(ContextualRecordExecutor);
+        .suite(CacheIntegrationTestBindings);
     _ = @import("gsub/tests/runtime/root.zig");
     _ = @import("gsub/tests/table/root.zig");
     _ = @import("gsub/tests/validation/table/topology.zig")

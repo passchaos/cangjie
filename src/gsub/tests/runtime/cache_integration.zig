@@ -1,8 +1,8 @@
-//! Root lookup dispatcher and run-digest integration contracts.
+//! Cached lookup selection and shared run-digest integration contracts.
 //!
-//! This suite is instantiated by `gsub.zig` with its private static lookup
-//! dispatcher. Keeping the binding comptime avoids exporting test-only hooks or
-//! introducing runtime callbacks merely to organize integration tests.
+//! This suite is instantiated by `gsub.zig` with private static orchestration
+//! entry points. Keeping the binding comptime avoids exporting test-only hooks
+//! or introducing runtime callbacks merely to organize integration tests.
 
 const std = @import("std");
 const acceleration = @import("../../accelerator/root.zig");
@@ -12,6 +12,7 @@ const prefilter = @import("../../runtime/prefilter/root.zig");
 const state = @import("../../runtime/state.zig");
 const table = @import("../../table/root.zig");
 const GlyphId = @import("../../../glyph.zig").GlyphId;
+const unicode = @import("../../../unicode.zig");
 
 pub fn suite(comptime Bindings: type) type {
     return struct {
@@ -152,7 +153,163 @@ pub fn suite(comptime Bindings: type) type {
             try std.testing.expect(final.mayHave(9));
             try std.testing.expect(!final.mayHave(5));
         }
+
+        test "GSUB cached selection requires exact nonempty bounded inputs" {
+            const allocator = std.testing.allocator;
+            var bytes = [_]u8{0} ** 80;
+            writeCachedSingleFeature(&bytes);
+
+            const sidecars = try acceleration.build.lookup.build(
+                &bytes,
+                0,
+                bytes.len,
+                allocator,
+            );
+            defer acceleration.ownership.deinit(allocator, sidecars);
+            var operations_left: usize = 64;
+            const run = options.Options{
+                .selected_lookups = &.{0},
+                .lookup_accelerators = sidecars,
+                .operations_left = &operations_left,
+                .max_glyph_count = 64,
+                .assume_validated = true,
+            };
+
+            var glyphs = std.ArrayList(GlyphId).empty;
+            defer glyphs.deinit(allocator);
+            try glyphs.append(allocator, 10);
+            try std.testing.expect(try Bindings.applyCachedSelection(
+                &bytes,
+                0,
+                bytes.len,
+                &glyphs,
+                allocator,
+                run,
+            ));
+            try std.testing.expectEqualSlices(
+                GlyphId,
+                &.{11},
+                glyphs.items,
+            );
+
+            // Every rejection must happen before the valid first lookup can
+            // mutate the run; generic fallback is safe only under that atomic
+            // decline contract.
+            glyphs.items[0] = 10;
+            var empty = run;
+            empty.selected_lookups = &.{};
+            try expectCachedDecline(
+                Bindings,
+                &bytes,
+                &glyphs,
+                allocator,
+                empty,
+            );
+
+            var foreign_bytes = bytes;
+            try std.testing.expect(!try Bindings.applyCachedSelection(
+                &foreign_bytes,
+                0,
+                foreign_bytes.len,
+                &glyphs,
+                allocator,
+                run,
+            ));
+            try std.testing.expectEqualSlices(
+                GlyphId,
+                &.{10},
+                glyphs.items,
+            );
+
+            const copied_sidecars = try allocator.dupe(
+                acceleration.Lookup,
+                sidecars,
+            );
+            defer allocator.free(copied_sidecars);
+            var copied = run;
+            copied.lookup_accelerators = copied_sidecars;
+            try expectCachedDecline(
+                Bindings,
+                &bytes,
+                &glyphs,
+                allocator,
+                copied,
+            );
+
+            var invalid = run;
+            invalid.selected_lookups = &.{ 0, 1 };
+            try expectCachedDecline(
+                Bindings,
+                &bytes,
+                &glyphs,
+                allocator,
+                invalid,
+            );
+
+            var unbounded = run;
+            unbounded.operations_left = null;
+            try expectCachedDecline(
+                Bindings,
+                &bytes,
+                &glyphs,
+                allocator,
+                unbounded,
+            );
+        }
     };
+}
+
+fn expectCachedDecline(
+    comptime Bindings: type,
+    bytes: []const u8,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    run: options.Options,
+) !void {
+    try std.testing.expect(!try Bindings.applyCachedSelection(
+        bytes,
+        0,
+        bytes.len,
+        glyphs,
+        allocator,
+        run,
+    ));
+    try std.testing.expectEqualSlices(GlyphId, &.{10}, glyphs.items);
+}
+
+fn writeCachedSingleFeature(bytes: []u8) void {
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 10);
+    writeU16(bytes, 6, 30);
+    writeU16(bytes, 8, 44);
+
+    writeU16(bytes, 10, 1);
+    writeU32(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
+    writeU16(bytes, 16, 8);
+    writeU16(bytes, 18, 4);
+    writeU16(bytes, 20, 0);
+    writeU16(bytes, 22, 0);
+    writeU16(bytes, 24, 0xffff);
+    writeU16(bytes, 26, 1);
+    writeU16(bytes, 28, 0);
+
+    writeU16(bytes, 30, 1);
+    writeU32(bytes, 32, unicode.tag("liga"));
+    writeU16(bytes, 36, 8);
+    writeU16(bytes, 38, 0);
+    writeU16(bytes, 40, 1);
+    writeU16(bytes, 42, 0);
+
+    writeU16(bytes, 44, 1);
+    writeU16(bytes, 46, 4);
+    writeU16(bytes, 48, 1);
+    writeU16(bytes, 50, 0);
+    writeU16(bytes, 52, 1);
+    writeU16(bytes, 54, 8);
+    writeU16(bytes, 56, 1);
+    writeU16(bytes, 58, 6);
+    writeI16(bytes, 60, 1);
+    writeCoverage1(bytes, 62, 10);
 }
 
 fn writeTwoLigatureTable(bytes: []u8) void {

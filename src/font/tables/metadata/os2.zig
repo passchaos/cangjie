@@ -1,7 +1,7 @@
 //! Versioned OS/2 metadata decoding and style validation.
 
-const bin = @import("../../binary.zig");
-const sfnt = @import("../sfnt/root.zig");
+const bin = @import("../../../binary.zig");
+const sfnt = @import("../../sfnt/root.zig");
 
 pub const Error = sfnt.Error || error{EndOfStream};
 

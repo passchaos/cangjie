@@ -39,7 +39,9 @@ const presentation_metrics = font_metrics.presentation;
 const table_only_fixture = @import("font/tests/fixtures/table_only.zig");
 const bitmap_mod = @import("font/tables/bitmap/root.zig");
 const color_tables = @import("font/tables/color/root.zig");
-const os2_mod = @import("font/tables/os2.zig");
+const metadata_tables = @import("font/tables/metadata/root.zig");
+const os2_mod = metadata_tables.os2;
+const post_mod = metadata_tables.post;
 const colr_v0_mod = color_tables.colr_v0;
 const colr_v1_mod = color_tables.colr_v1;
 const colr_paint = colr_v1_mod.paint;
@@ -214,18 +216,7 @@ pub const GlyphLocationInfo = struct {
     empty: bool,
 };
 
-pub const PostInfo = struct {
-    format: u32,
-    italic_angle: f32,
-    underline_position: i16,
-    underline_thickness: i16,
-    is_fixed_pitch: bool,
-    min_mem_type42: u32,
-    max_mem_type42: u32,
-    min_mem_type1: u32,
-    max_mem_type1: u32,
-    glyph_name_count: ?u16 = null,
-};
+pub const PostInfo = post_mod.Info;
 
 pub const PcltInfo = struct {
     version: u32,
@@ -986,7 +977,7 @@ pub const Font = struct {
         try validateMaxpTable(data, maxp, format);
 
         const glyph_count = try bin.readU16At(data, maxp.offset + 4);
-        if (post) |post_table| try validatePostTable(data, post_table, glyph_count, .{
+        if (post) |post_table| try post_mod.validate(data, post_table, glyph_count, .{
             .compat_ttc_face = is_ttc_face,
             // Glyph names are optional metadata and do not affect cmap,
             // shaping, metrics, or outlines. Keep parse-time validation
@@ -3067,10 +3058,10 @@ pub const Font = struct {
     pub fn postInfo(self: *const Font) FontError!?PostInfo {
         const post = self.post orelse return null;
         try sfnt.checksum.validate(self.data, post);
-        try validatePostTable(self.data, post, self.glyph_count, .{
+        try post_mod.validate(self.data, post, self.glyph_count, .{
             .custom_name_validation = .structural_only,
         });
-        return try readPostInfo(self.data, post);
+        return try post_mod.info(self.data, post);
     }
 
     /// Read validated metadata from the optional SFNT `PCLT` table.
@@ -3092,16 +3083,16 @@ pub const Font = struct {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const post = self.post orelse return null;
         try sfnt.checksum.validate(self.data, post);
-        try validatePostTable(self.data, post, self.glyph_count, .{
+        try post_mod.validate(self.data, post, self.glyph_count, .{
             .custom_name_validation = .allow_empty,
         });
-        return try readPostGlyphName(self.data, post, glyph_id);
+        return try post_mod.glyphName(self.data, post, glyph_id);
     }
 
     pub fn decorationMetrics(self: *const Font) FontError!FontDecorationMetrics {
         if (self.post) |post| {
             try sfnt.checksum.validate(self.data, post);
-            try validatePostTable(self.data, post, self.glyph_count, .{
+            try post_mod.validate(self.data, post, self.glyph_count, .{
                 .custom_name_validation = .structural_only,
             });
         }
@@ -5696,443 +5687,6 @@ fn readArray6At(data: []const u8, offset: usize) FontError![6]u8 {
     return value;
 }
 
-fn readPostInfo(data: []const u8, post: TableRecord) FontError!PostInfo {
-    try sfnt.requireLength(post, 32);
-    const format = try bin.readU32At(data, post.offset);
-    const glyph_name_count: ?u16 = switch (format) {
-        0x00020000, 0x00025000 => try bin.readU16At(data, post.offset + 32),
-        0x00040000 => @intCast((post.length - 32) / 2),
-        else => null,
-    };
-    return .{
-        .format = format,
-        .italic_angle = fixed16_16ToF32(try bin.readI32At(data, post.offset + 4)),
-        .underline_position = try bin.readI16At(data, post.offset + 8),
-        .underline_thickness = try bin.readI16At(data, post.offset + 10),
-        .is_fixed_pitch = (try bin.readU32At(data, post.offset + 12)) != 0,
-        .min_mem_type42 = try bin.readU32At(data, post.offset + 16),
-        .max_mem_type42 = try bin.readU32At(data, post.offset + 20),
-        .min_mem_type1 = try bin.readU32At(data, post.offset + 24),
-        .max_mem_type1 = try bin.readU32At(data, post.offset + 28),
-        .glyph_name_count = glyph_name_count,
-    };
-}
-
-const PostValidationOptions = struct {
-    compat_ttc_face: bool = false,
-    custom_name_validation: enum {
-        strict,
-        allow_empty,
-        structural_only,
-    } = .strict,
-};
-
-fn validatePostTable(data: []const u8, post: TableRecord, glyph_count: u16, options: PostValidationOptions) FontError!void {
-    try sfnt.requireLength(post, 32);
-    const version = try bin.readU32At(data, post.offset);
-    switch (version) {
-        0x00010000 => {
-            // Format 1.0 implies the complete standard Macintosh glyph-name
-            // set. If maxp advertises a different glyph count, consumers that
-            // synthesize glyph names from `post` and consumers that use maxp
-            // for metrics/outlines disagree on the addressable glyph set.
-            if (glyph_count != 258) return error.BadSfnt;
-        },
-        0x00020000 => try validatePostFormat2(data, post, glyph_count, options),
-        0x00025000 => try validatePostFormat25(data, post, glyph_count),
-        0x00030000 => {},
-        0x00040000 => try validatePostFormat4(post, glyph_count),
-        else => return error.BadSfnt,
-    }
-}
-
-fn validatePostFormat2(data: []const u8, post: TableRecord, glyph_count: u16, options: PostValidationOptions) FontError!void {
-    const table = data[post.offset .. post.offset + post.length];
-    if (post.length - 32 < 2) return error.BadSfnt;
-    const number_of_glyphs = try bin.readU16At(table, 32);
-    if (number_of_glyphs != glyph_count) return error.BadSfnt;
-    const glyph_name_indices_offset: usize = 34;
-    const glyph_name_indices_len = @as(usize, number_of_glyphs) * 2;
-    if (glyph_name_indices_len > post.length - glyph_name_indices_offset) return error.BadSfnt;
-
-    var custom_name_count: usize = 0;
-    for (0..number_of_glyphs) |glyph_index| {
-        const name_index = try bin.readU16At(table, glyph_name_indices_offset + glyph_index * 2);
-        if (name_index >= 258) {
-            custom_name_count = @max(custom_name_count, @as(usize, name_index) - 257);
-        }
-    }
-
-    var cursor = glyph_name_indices_offset + glyph_name_indices_len;
-    for (0..custom_name_count) |_| {
-        if (cursor >= post.length) return error.BadSfnt;
-        const name_len = table[cursor];
-        cursor += 1;
-        if (name_len > 63) return error.BadSfnt;
-        if (@as(usize, name_len) > post.length - cursor) return error.BadSfnt;
-        if (!options.compat_ttc_face) switch (options.custom_name_validation) {
-            .strict => {
-                if (name_len == 0 or !isPostGlyphName(table[cursor .. cursor + name_len])) return error.BadSfnt;
-            },
-            .allow_empty => {
-                if (name_len != 0 and !isPostGlyphName(table[cursor .. cursor + name_len])) return error.BadSfnt;
-            },
-            .structural_only => {},
-        };
-        cursor += name_len;
-    }
-    if (!options.compat_ttc_face and cursor != post.length) return error.BadSfnt;
-}
-
-fn validatePostFormat25(data: []const u8, post: TableRecord, glyph_count: u16) FontError!void {
-    const table = data[post.offset .. post.offset + post.length];
-    if (post.length - 32 < 2) return error.BadSfnt;
-    const number_of_glyphs = try bin.readU16At(table, 32);
-    if (number_of_glyphs != glyph_count) return error.BadSfnt;
-    const offsets_offset: usize = 34;
-    // Format 2.5 is only the fixed post header, numberOfGlyphs, and one signed
-    // delta byte per glyph. It has no trailing name pool. Require exact
-    // consumption so unreachable bytes cannot be preserved by one consumer and
-    // ignored by another.
-    const required_len = offsets_offset + @as(usize, number_of_glyphs);
-    if (post.length != required_len) return error.BadSfnt;
-
-    for (0..number_of_glyphs) |glyph_index| {
-        const signed_delta: i8 = @bitCast(table[offsets_offset + glyph_index]);
-        const standard_index = @as(i32, @intCast(glyph_index)) + @as(i32, signed_delta);
-        if (standard_index < 0 or standard_index >= 258) return error.BadSfnt;
-    }
-}
-
-fn validatePostFormat4(post: TableRecord, glyph_count: u16) FontError!void {
-    // Format 4.0 stores exactly one uint16 character-code slot per glyph after
-    // the fixed post header. It has no string pool or extension payload, so
-    // reject tail bytes that no conforming consumer can address.
-    const required_len = 32 + @as(usize, glyph_count) * 2;
-    if (post.length != required_len) return error.BadSfnt;
-}
-
-fn readPostGlyphName(data: []const u8, post: TableRecord, glyph_id: glyph_mod.GlyphId) FontError!?[]const u8 {
-    const table = data[post.offset .. post.offset + post.length];
-    const version = try bin.readU32At(table, 0);
-    return switch (version) {
-        0x00010000 => try postStandardGlyphName(glyph_id),
-        0x00020000 => try readPostFormat2GlyphName(table, glyph_id),
-        0x00025000 => try readPostFormat25GlyphName(table, glyph_id),
-        // Format 3.0 deliberately omits glyph names. Format 4.0 maps glyphs
-        // to character codes for old composite-font workflows rather than to
-        // PostScript names, so this API reports no glyph name for it.
-        0x00030000, 0x00040000 => null,
-        else => error.BadSfnt,
-    };
-}
-
-fn readPostFormat2GlyphName(table: []const u8, glyph_id: glyph_mod.GlyphId) FontError!?[]const u8 {
-    const number_of_glyphs = try bin.readU16At(table, 32);
-    if (glyph_id >= number_of_glyphs) return error.InvalidGlyph;
-    const glyph_name_indices_offset: usize = 34;
-    const name_index = try bin.readU16At(table, glyph_name_indices_offset + @as(usize, glyph_id) * 2);
-    if (name_index < post_standard_glyph_names.len) return try postStandardGlyphName(name_index);
-
-    // Custom names are Pascal strings stored in ordinal order immediately after
-    // the glyphNameIndex array. The index value 258 names the first custom
-    // string, 259 the second, and so on; validation has already guaranteed that
-    // all ordinals up to the largest referenced index are structurally present.
-    const name = try readPostCustomGlyphName(table, name_index - post_standard_glyph_names.len);
-    return if (name.len == 0) null else name;
-}
-
-fn readPostCustomGlyphName(table: []const u8, ordinal: usize) FontError![]const u8 {
-    const number_of_glyphs = try bin.readU16At(table, 32);
-    var cursor: usize = 34 + @as(usize, number_of_glyphs) * 2;
-    for (0..ordinal) |_| {
-        if (cursor >= table.len) return error.BadSfnt;
-        const name_len = table[cursor];
-        cursor += 1 + @as(usize, name_len);
-        if (cursor > table.len) return error.BadSfnt;
-    }
-    if (cursor >= table.len) return error.BadSfnt;
-    const name_len = table[cursor];
-    cursor += 1;
-    if (@as(usize, name_len) > table.len - cursor) return error.BadSfnt;
-    return table[cursor .. cursor + name_len];
-}
-
-fn readPostFormat25GlyphName(table: []const u8, glyph_id: glyph_mod.GlyphId) FontError!?[]const u8 {
-    const number_of_glyphs = try bin.readU16At(table, 32);
-    if (glyph_id >= number_of_glyphs) return error.InvalidGlyph;
-    const signed_delta: i8 = @bitCast(table[34 + @as(usize, glyph_id)]);
-    const standard_index = @as(i32, @intCast(glyph_id)) + @as(i32, signed_delta);
-    if (standard_index < 0 or standard_index >= post_standard_glyph_names.len) return error.BadSfnt;
-    return try postStandardGlyphName(@intCast(standard_index));
-}
-
-fn postStandardGlyphName(index: usize) FontError![]const u8 {
-    if (index >= post_standard_glyph_names.len) return error.BadSfnt;
-    return post_standard_glyph_names[index];
-}
-
-const post_standard_glyph_names = [_][]const u8{
-    ".notdef",
-    ".null",
-    "nonmarkingreturn",
-    "space",
-    "exclam",
-    "quotedbl",
-    "numbersign",
-    "dollar",
-    "percent",
-    "ampersand",
-    "quotesingle",
-    "parenleft",
-    "parenright",
-    "asterisk",
-    "plus",
-    "comma",
-    "hyphen",
-    "period",
-    "slash",
-    "zero",
-    "one",
-    "two",
-    "three",
-    "four",
-    "five",
-    "six",
-    "seven",
-    "eight",
-    "nine",
-    "colon",
-    "semicolon",
-    "less",
-    "equal",
-    "greater",
-    "question",
-    "at",
-    "A",
-    "B",
-    "C",
-    "D",
-    "E",
-    "F",
-    "G",
-    "H",
-    "I",
-    "J",
-    "K",
-    "L",
-    "M",
-    "N",
-    "O",
-    "P",
-    "Q",
-    "R",
-    "S",
-    "T",
-    "U",
-    "V",
-    "W",
-    "X",
-    "Y",
-    "Z",
-    "bracketleft",
-    "backslash",
-    "bracketright",
-    "asciicircum",
-    "underscore",
-    "grave",
-    "a",
-    "b",
-    "c",
-    "d",
-    "e",
-    "f",
-    "g",
-    "h",
-    "i",
-    "j",
-    "k",
-    "l",
-    "m",
-    "n",
-    "o",
-    "p",
-    "q",
-    "r",
-    "s",
-    "t",
-    "u",
-    "v",
-    "w",
-    "x",
-    "y",
-    "z",
-    "braceleft",
-    "bar",
-    "braceright",
-    "asciitilde",
-    "Adieresis",
-    "Aring",
-    "Ccedilla",
-    "Eacute",
-    "Ntilde",
-    "Odieresis",
-    "Udieresis",
-    "aacute",
-    "agrave",
-    "acircumflex",
-    "adieresis",
-    "atilde",
-    "aring",
-    "ccedilla",
-    "eacute",
-    "egrave",
-    "ecircumflex",
-    "edieresis",
-    "iacute",
-    "igrave",
-    "icircumflex",
-    "idieresis",
-    "ntilde",
-    "oacute",
-    "ograve",
-    "ocircumflex",
-    "odieresis",
-    "otilde",
-    "uacute",
-    "ugrave",
-    "ucircumflex",
-    "udieresis",
-    "dagger",
-    "degree",
-    "cent",
-    "sterling",
-    "section",
-    "bullet",
-    "paragraph",
-    "germandbls",
-    "registered",
-    "copyright",
-    "trademark",
-    "acute",
-    "dieresis",
-    "notequal",
-    "AE",
-    "Oslash",
-    "infinity",
-    "plusminus",
-    "lessequal",
-    "greaterequal",
-    "yen",
-    "mu",
-    "partialdiff",
-    "summation",
-    "product",
-    "pi",
-    "integral",
-    "ordfeminine",
-    "ordmasculine",
-    "Omega",
-    "ae",
-    "oslash",
-    "questiondown",
-    "exclamdown",
-    "logicalnot",
-    "radical",
-    "florin",
-    "approxequal",
-    "Delta",
-    "guillemotleft",
-    "guillemotright",
-    "ellipsis",
-    "nonbreakingspace",
-    "Agrave",
-    "Atilde",
-    "Otilde",
-    "OE",
-    "oe",
-    "endash",
-    "emdash",
-    "quotedblleft",
-    "quotedblright",
-    "quoteleft",
-    "quoteright",
-    "divide",
-    "lozenge",
-    "ydieresis",
-    "Ydieresis",
-    "fraction",
-    "currency",
-    "guilsinglleft",
-    "guilsinglright",
-    "fi",
-    "fl",
-    "daggerdbl",
-    "periodcentered",
-    "quotesinglbase",
-    "quotedblbase",
-    "perthousand",
-    "Acircumflex",
-    "Ecircumflex",
-    "Aacute",
-    "Edieresis",
-    "Egrave",
-    "Iacute",
-    "Icircumflex",
-    "Idieresis",
-    "Igrave",
-    "Oacute",
-    "Ocircumflex",
-    "apple",
-    "Ograve",
-    "Uacute",
-    "Ucircumflex",
-    "Ugrave",
-    "dotlessi",
-    "circumflex",
-    "tilde",
-    "macron",
-    "breve",
-    "dotaccent",
-    "ring",
-    "cedilla",
-    "hungarumlaut",
-    "ogonek",
-    "caron",
-    "Lslash",
-    "lslash",
-    "Scaron",
-    "scaron",
-    "Zcaron",
-    "zcaron",
-    "brokenbar",
-    "Eth",
-    "eth",
-    "Yacute",
-    "yacute",
-    "Thorn",
-    "thorn",
-    "minus",
-    "multiply",
-    "onesuperior",
-    "twosuperior",
-    "threesuperior",
-    "onehalf",
-    "onequarter",
-    "threequarters",
-    "franc",
-    "Gbreve",
-    "gbreve",
-    "Idotaccent",
-    "Scedilla",
-    "scedilla",
-    "Cacute",
-    "cacute",
-    "Ccaron",
-    "ccaron",
-    "dcroat",
-};
-
 fn readKernInfo(allocator: std.mem.Allocator, data: []const u8, kern: TableRecord) FontError!KernInfo {
     try sfnt.requireLength(kern, 4);
     const version = try bin.readU32At(data, kern.offset);
@@ -6360,20 +5914,6 @@ test "kern format 0 accepts the canonical empty pair array" {
     defer font.deinit();
 
     try std.testing.expectEqual(@as(?i16, 0), try font.kerning(1, 1));
-}
-
-fn isPostGlyphName(name: []const u8) bool {
-    for (name) |byte| {
-        if (std.ascii.isAlphanumeric(byte) or byte == ' ' or byte == '.' or byte == '_' or byte == '-') continue;
-        return false;
-    }
-    return true;
-}
-
-test "post glyph names accept printable fixture spaces but reject controls" {
-    try std.testing.expect(isPostGlyphName("Dot Below"));
-    try std.testing.expect(isPostGlyphName("Virama-Killer"));
-    try std.testing.expect(!isPostGlyphName("Dot\tBelow"));
 }
 
 fn hmtxRequiredLength(glyph_count: u16, number_of_h_metrics: u16) FontError!usize {
@@ -12988,259 +12528,6 @@ test "head table invariants are validated at parse time" {
     }
 }
 
-test "post table structural contracts are validated at parse time" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        var post: [32]u8 = .{0} ** 32;
-        writePostHeaderTest(&post, 0x00030000);
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        var font = try Font.parse(allocator, bytes);
-        font.deinit();
-    }
-
-    {
-        var post: [44]u8 = .{0} ** 44;
-        writePostHeaderTest(&post, 0x00020000);
-        writeU16Test(&post, 32, 2);
-        writeU16Test(&post, 34, 0);
-        writeU16Test(&post, 36, 258);
-        post[38] = 5;
-        @memcpy(post[39..44], "A.alt");
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        var font = try Font.parse(allocator, bytes);
-        font.deinit();
-    }
-
-    {
-        var post: [36]u8 = .{0} ** 36;
-        writePostHeaderTest(&post, 0x00020000);
-        writeU16Test(&post, 32, 3); // Must match maxp.numGlyphs == 2.
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        var post: [42]u8 = .{0} ** 42;
-        writePostHeaderTest(&post, 0x00020000);
-        writeU16Test(&post, 32, 2);
-        writeU16Test(&post, 34, 0);
-        writeU16Test(&post, 36, 258);
-        post[38] = 4; // Only three bytes of the Pascal string are present.
-        @memcpy(post[39..42], "Alt");
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        var post: [46]u8 = .{0} ** 46;
-        writePostHeaderTest(&post, 0x00020000);
-        writeU16Test(&post, 32, 2);
-        writeU16Test(&post, 34, 0);
-        writeU16Test(&post, 36, 258);
-        post[38] = 5;
-        @memcpy(post[39..44], "A.alt");
-        post[44] = 1; // Unreferenced trailing custom Pascal string.
-        post[45] = 'B';
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        var post: [44]u8 = .{0} ** 44;
-        writePostHeaderTest(&post, 0x00020000);
-        writeU16Test(&post, 32, 2);
-        writeU16Test(&post, 34, 0);
-        writeU16Test(&post, 36, 258);
-        post[38] = 5;
-        @memcpy(post[39..44], "bad/-"); // Slash is not valid in `post` glyph names.
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-
-        // Custom glyph-name text is optional metadata, so malformed text must
-        // not prevent otherwise valid outlines, cmap, metrics, or shaping from
-        // being used. The dedicated accessor remains strict because it exposes
-        // that borrowed text to callers.
-        _ = try font.postInfo();
-        _ = try font.decorationMetrics();
-        try std.testing.expectError(error.BadSfnt, font.glyphName(1));
-    }
-
-    {
-        var post: [39]u8 = .{0} ** 39;
-        writePostHeaderTest(&post, 0x00020000);
-        writeU16Test(&post, 32, 2);
-        writeU16Test(&post, 34, 0);
-        writeU16Test(&post, 36, 258);
-        post[38] = 0; // A production Mongolian font encodes “no name” this way.
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-
-        // The OpenType recommendation is to use standard index 0 (.notdef)
-        // when no custom name exists. FreeType, FontTools, and HarfBuzz also
-        // accept this deployed zero-length Pascal-string representation, so
-        // expose it as absence rather than inventing or returning an empty name.
-        try std.testing.expectEqual(@as(?[]const u8, null), try font.glyphName(1));
-    }
-
-    {
-        var post: [44]u8 = .{0} ** 44;
-        writePostHeaderTest(&post, 0x00020000);
-        writeU16Test(&post, 32, 2);
-        writeU16Test(&post, 34, 0);
-        writeU16Test(&post, 36, 258);
-        post[38] = 5;
-        @memcpy(post[39..44], "ae-ar"); // Production Arabic fonts use hyphenated glyph names.
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-        try std.testing.expectEqualStrings("ae-ar", (try font.glyphName(1)).?);
-    }
-
-    {
-        var post: [36]u8 = .{0} ** 36;
-        writePostHeaderTest(&post, 0x00025000);
-        writeU16Test(&post, 32, 2);
-        post[34] = 0;
-        post[35] = 0;
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        var font = try Font.parse(allocator, bytes);
-        font.deinit();
-    }
-
-    {
-        var post: [36]u8 = .{0} ** 36;
-        writePostHeaderTest(&post, 0x00025000);
-        writeU16Test(&post, 32, 2);
-        post[34] = 0xff; // Glyph 0 would map to standard index -1.
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        var post: [37]u8 = .{0} ** 37;
-        writePostHeaderTest(&post, 0x00025000);
-        writeU16Test(&post, 32, 2);
-        post[34] = 0;
-        post[35] = 0;
-        post[36] = 0; // Format 2.5 has no trailing payload after deltas.
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        var post: [36]u8 = .{0} ** 36;
-        writePostHeaderTest(&post, 0x00040000);
-        writeU16Test(&post, 32, 0xffff);
-        writeU16Test(&post, 34, 'A');
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        var font = try Font.parse(allocator, bytes);
-        font.deinit();
-    }
-
-    {
-        var post: [38]u8 = .{0} ** 38;
-        writePostHeaderTest(&post, 0x00040000);
-        writeU16Test(&post, 32, 0xffff);
-        writeU16Test(&post, 34, 'A');
-        post[36] = 0;
-        post[37] = 0; // Format 4.0 has no payload after glyph character codes.
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        var post: [34]u8 = .{0} ** 34;
-        writePostHeaderTest(&post, 0x00040000);
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        var post: [32]u8 = .{0} ** 32;
-        writePostHeaderTest(&post, 0x00010000); // Format 1.0 implies exactly 258 glyphs.
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        var post: [32]u8 = .{0} ** 32;
-        writePostHeaderTest(&post, 0x00050000);
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-}
-
-test "post glyph names support standard aliases and absent-name formats" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        var post: [36]u8 = .{0} ** 36;
-        writePostHeaderTest(&post, 0x00025000);
-        writeU16Test(&post, 32, 2);
-        post[34] = 0; // glyph 0 -> standard name 0.
-        post[35] = 35; // glyph 1 + 35 -> standard name 36 ("A").
-
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-
-        try std.testing.expectEqualStrings(".notdef", (try font.glyphName(0)).?);
-        try std.testing.expectEqualStrings("A", (try font.glyphName(1)).?);
-    }
-
-    {
-        var post: [32]u8 = .{0} ** 32;
-        writePostHeaderTest(&post, 0x00030000);
-
-        const bytes = try test_font.buildMinimalTtfWithPost(allocator, &post);
-        defer allocator.free(bytes);
-
-        var font = try Font.parse(allocator, bytes);
-        defer font.deinit();
-
-        try std.testing.expectEqual(@as(?[]const u8, null), try font.glyphName(1));
-    }
-}
-
 test "TTC face offsets cannot overlap collection metadata" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -14995,18 +14282,6 @@ fn writeKernFormat0Body(bytes: []u8, offset: usize, left: glyph_mod.GlyphId, rig
     writeU16Test(bytes, offset + 8, left);
     writeU16Test(bytes, offset + 10, right);
     writeI16Test(bytes, offset + 12, value);
-}
-
-fn writePostHeaderTest(bytes: []u8, version: u32) void {
-    writeU32Test(bytes, 0, version);
-    writeU32Test(bytes, 4, 0); // italicAngle.
-    writeI16Test(bytes, 8, 0); // underlinePosition.
-    writeI16Test(bytes, 10, 0); // underlineThickness.
-    writeU32Test(bytes, 12, 0); // isFixedPitch.
-    writeU32Test(bytes, 16, 0); // minMemType42.
-    writeU32Test(bytes, 20, 0); // maxMemType42.
-    writeU32Test(bytes, 24, 0); // minMemType1.
-    writeU32Test(bytes, 28, 0); // maxMemType1.
 }
 
 fn writeFvarAxisTest(bytes: []u8, offset: usize, tag_text: []const u8, min: f32, default: f32, max: f32, name_id: u16) void {

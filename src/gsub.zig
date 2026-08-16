@@ -257,7 +257,7 @@ fn applySelectedSourceFeatureWithOptions(
     };
     if (try readU16(table, 0) != 1) return error.UnsupportedGsub;
     if (try isEmptyGsubTopology(table)) return;
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
+    const lookup_list_offset = try table_core.service.requiredLookupList(table);
     const lookup_count = try readU16(table, lookup_list_offset);
     var run_digest_cache = runtime_prefilter.Cache.init();
     try feature_domain.plan.apply.shared.indices(
@@ -966,26 +966,6 @@ fn isEmptyGsubTopology(table: Table) GsubError!bool {
     return table_core.service.isEmpty(table);
 }
 
-fn checkedRequiredScriptListOffset(table: Table) GsubError!usize {
-    return table_core.service.requiredScriptList(table);
-}
-
-fn checkedRequiredFeatureListOffset(table: Table) GsubError!usize {
-    return table_core.service.requiredFeatureList(table);
-}
-
-fn checkedRequiredLookupListOffset(table: Table) GsubError!usize {
-    return table_core.service.requiredLookupList(table);
-}
-
-fn checkedRequiredLookupOffset(table: Table, lookup_list_offset: usize, relative_offset: u16) GsubError!usize {
-    return table_core.service.requiredLookup(
-        table,
-        lookup_list_offset,
-        relative_offset,
-    );
-}
-
 fn readU16(table: Table, relative: usize) GsubError!u16 {
     return table.readU16(relative);
 }
@@ -1189,333 +1169,6 @@ test "GSUB parse-time contextual records avoid recursively validating lookup pay
         1,
     );
     try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 10));
-}
-
-test "GSUB rejects reserved LookupFlag bits" {
-    var bytes = [_]u8{0} ** 40;
-    _ = writeSingleLookupGsubTest(&bytes, 1);
-    writeU16Test(&bytes, 24, 10); // Leave room for MarkFilteringSet when bit 4 is set.
-    const subtable: usize = 28;
-    writeU16Test(&bytes, 20, 0x0020); // Reserved middle-bit range in LookupFlag.
-    writeU16Test(&bytes, subtable + 0, 1); // SingleSubst format 1.
-    writeU16Test(&bytes, subtable + 2, 6);
-    writeI16Test(&bytes, subtable + 4, 0);
-    writeCoverage1(&bytes, subtable + 6, 1);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(
-        error.BadGsub,
-        validation.lookup.validateHeader(
-            ContextualRecordExecutor,
-            table,
-            18,
-        ),
-    );
-    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-
-    writeU16Test(&bytes, 20, 0xff10); // MarkAttachmentType plus UseMarkFilteringSet are valid.
-    writeU16Test(&bytes, 26, 0); // MarkFilteringSet index follows the subtable-offset array.
-    _ = try validation.lookup.validateHeader(
-        ContextualRecordExecutor,
-        table,
-        18,
-    );
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-}
-
-test "GSUB rejects null top-level LookupList offsets" {
-    var bytes = [_]u8{0} ** 38;
-    const subtable = writeSingleLookupGsubTest(&bytes, 1);
-    writeU16Test(&bytes, subtable + 0, 1); // SingleSubst format 1.
-    writeU16Test(&bytes, subtable + 2, 6);
-    writeI16Test(&bytes, subtable + 4, 0);
-    writeCoverage1(&bytes, subtable + 6, 1);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(std.testing.allocator);
-    try glyphs.append(std.testing.allocator, 1);
-
-    writeU16Test(&bytes, 8, 0); // Invalid: LookupList is a required top-level table.
-    try std.testing.expectError(error.BadGsub, checkedRequiredLookupListOffset(table));
-    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-    try std.testing.expectError(error.BadGsub, applyWithOptions(&bytes, 0, bytes.len, &glyphs, std.testing.allocator, .{}));
-    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
-
-    // Restoring the real LookupList pointer makes the same no-op lookup valid;
-    // only aliasing the GSUB header as a LookupList is rejected.
-    writeU16Test(&bytes, 8, 14);
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-    try applyWithOptions(&bytes, 0, bytes.len, &glyphs, std.testing.allocator, .{});
-    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
-}
-
-test "GSUB rejects null LookupList child offsets" {
-    var bytes = [_]u8{0} ** 38;
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 10); // Empty ScriptList.
-    writeU16Test(&bytes, 6, 12); // Empty FeatureList.
-    writeU16Test(&bytes, 8, 14); // LookupList.
-    writeU16Test(&bytes, 10, 0);
-    writeU16Test(&bytes, 12, 0);
-    writeU16Test(&bytes, 14, 1); // LookupCount.
-    writeU16Test(&bytes, 16, 0); // Invalid: LookupList child offsets are required.
-
-    // If the null child pointer were accepted, the LookupList header would be
-    // reinterpreted as a valid SingleSubst lookup: LookupCount becomes
-    // LookupType, the null child offset becomes LookupFlag, and the following
-    // words point at this real subtable. Keep the alias plausible so this test
-    // covers the child-pointer contract rather than relying on later truncation.
-    writeU16Test(&bytes, 18, 1); // Aliased SubTableCount.
-    writeU16Test(&bytes, 20, 8); // Aliased SubTable offset: 14 + 8 == 22.
-    writeU16Test(&bytes, 22, 1); // SingleSubst format 1.
-    writeU16Test(&bytes, 24, 6);
-    writeI16Test(&bytes, 26, 1);
-    writeCoverage1(&bytes, 28, 1);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGsub, checkedRequiredLookupOffset(table, 14, 0));
-    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(std.testing.allocator);
-    try glyphs.append(std.testing.allocator, 1);
-    try std.testing.expectError(error.BadGsub, applyWithOptions(&bytes, 0, bytes.len, &glyphs, std.testing.allocator, .{}));
-    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
-
-    // Rebuild the same logical lookup with a non-null LookupList child offset.
-    // The repaired table applies normally; only the null Lookup pointer was bad.
-    const subtable = writeSingleLookupGsubTest(&bytes, 1);
-    writeU16Test(&bytes, subtable + 0, 1);
-    writeU16Test(&bytes, subtable + 2, 6);
-    writeI16Test(&bytes, subtable + 4, 1);
-    writeCoverage1(&bytes, subtable + 6, 1);
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-    try applyWithOptions(&bytes, 0, bytes.len, &glyphs, std.testing.allocator, .{});
-    try std.testing.expectEqualSlices(GlyphId, &.{2}, glyphs.items);
-}
-
-test "GSUB accepts the all-null empty topology" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 10;
-    writeU32Test(&bytes, 0, 0x00010000);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expect(try isEmptyGsubTopology(table));
-    try std.testing.expect(try isEmptyTable(&bytes, 0, bytes.len));
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-    try std.testing.expect(!(try hasFeature(&bytes, 0, bytes.len, unicode.tag("liga"))));
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 2 });
-    try applyWithOptions(&bytes, 0, bytes.len, &glyphs, allocator, .{});
-    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
-
-    const selected = try selectedLookupIndicesForOptions(&bytes, 0, bytes.len, allocator, .{});
-    defer allocator.free(selected);
-    try std.testing.expectEqual(@as(usize, 0), selected.len);
-
-    var feature_plan = try buildFeatureLookupPlan(
-        &bytes,
-        0,
-        bytes.len,
-        &.{.{ .tag = unicode.tag("liga") }},
-        allocator,
-        .{},
-    );
-    defer feature_plan.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 0), feature_plan.entries.len);
-    try applyFeatureLookupPlanWithOptions(&bytes, 0, bytes.len, feature_plan, &glyphs, allocator, .{});
-
-    var merged_plan = try buildMergedFeatureLookupPlan(
-        &bytes,
-        0,
-        bytes.len,
-        &.{.{ .tag = unicode.tag("liga") }},
-        allocator,
-        .{},
-    );
-    defer merged_plan.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 0), merged_plan.lookups.len);
-    try applyMergedFeatureLookupPlanWithOptions(&bytes, 0, bytes.len, merged_plan, &glyphs, allocator, .{});
-    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
-
-    const accelerators = try accelerator_root.build.lookup.build(&bytes, 0, bytes.len, allocator);
-    defer allocator.free(accelerators);
-    try std.testing.expectEqual(@as(usize, 0), accelerators.len);
-
-    // A partial null topology is not an empty table and must retain required
-    // child-pointer validation.
-    writeU16Test(&bytes, 4, 2);
-    try std.testing.expect(!(try isEmptyGsubTopology(table)));
-    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-}
-
-test "GSUB rejects null top-level ScriptList and FeatureList offsets" {
-    var bytes = [_]u8{0} ** 38;
-    const subtable = writeSingleLookupGsubTest(&bytes, 1);
-    writeU16Test(&bytes, subtable + 0, 1); // SingleSubst format 1.
-    writeU16Test(&bytes, subtable + 2, 6);
-    writeI16Test(&bytes, subtable + 4, 1);
-    writeCoverage1(&bytes, subtable + 6, 1);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(std.testing.allocator);
-    try glyphs.append(std.testing.allocator, 1);
-
-    writeU16Test(&bytes, 4, 0); // Invalid: ScriptList is required, even when empty.
-    try std.testing.expectError(error.BadGsub, checkedRequiredScriptListOffset(table));
-    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-    try applyWithOptions(&bytes, 0, bytes.len, &glyphs, std.testing.allocator, .{});
-    try std.testing.expectEqualSlices(GlyphId, &.{2}, glyphs.items);
-
-    writeU16Test(&bytes, 4, 10);
-    writeU16Test(&bytes, 6, 0); // Invalid: FeatureList is required, even when empty.
-    glyphs.clearRetainingCapacity();
-    try glyphs.append(std.testing.allocator, 1);
-    try std.testing.expectError(error.BadGsub, checkedRequiredFeatureListOffset(table));
-    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-    try std.testing.expectError(error.BadGsub, applyWithOptions(&bytes, 0, bytes.len, &glyphs, std.testing.allocator, .{}));
-    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
-
-    // Non-null empty ScriptList/FeatureList tables are valid. With no selected
-    // feature topology, the low-level apply API keeps its historical all-lookup
-    // fallback and applies this SingleSubst normally.
-    writeU16Test(&bytes, 6, 12);
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-    try applyWithOptions(&bytes, 0, bytes.len, &glyphs, std.testing.allocator, .{});
-    try std.testing.expectEqualSlices(GlyphId, &.{2}, glyphs.items);
-}
-
-test "GSUB rejects null Lookup SubTable offsets" {
-    var bytes = [_]u8{0} ** 38;
-    const subtable = writeSingleLookupGsubTest(&bytes, 1);
-    writeU16Test(&bytes, subtable + 0, 1); // SingleSubst format 1.
-    writeU16Test(&bytes, subtable + 2, 6);
-    writeI16Test(&bytes, subtable + 4, 0);
-    writeCoverage1(&bytes, subtable + 6, 1);
-    writeU16Test(&bytes, 24, 0); // Invalid: Lookup.SubTable offsets are required.
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(
-        error.BadGsub,
-        validation.lookup.validateSubtables(
-            ContextualRecordExecutor,
-            table,
-            18,
-            1,
-            1,
-            .strict,
-        ),
-    );
-    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(std.testing.allocator);
-    try glyphs.append(std.testing.allocator, 1);
-    try std.testing.expectError(error.BadGsub, applyLookup(table, 18, &glyphs, std.testing.allocator, .{}));
-    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
-
-    // Repairing only the child pointer should make the otherwise valid lookup
-    // pass; the test guards against rejecting empty/no-op substitution data.
-    writeU16Test(&bytes, 24, 8);
-    try validation.lookup.validateSubtables(
-        ContextualRecordExecutor,
-        table,
-        18,
-        1,
-        1,
-        .strict,
-    );
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-}
-
-test "GSUB rejects null required Coverage offsets" {
-    var bytes = [_]u8{0} ** 38;
-    const subtable = writeSingleLookupGsubTest(&bytes, 1);
-    writeU16Test(&bytes, subtable + 0, 1); // SingleSubst format 1.
-    writeU16Test(&bytes, subtable + 2, 0); // Invalid: Coverage offsets are required.
-    writeI16Test(&bytes, subtable + 4, 1);
-    writeCoverage1(&bytes, subtable + 6, 1);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGsub, validation.direct.single.validate(table, subtable));
-    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(std.testing.allocator);
-    try glyphs.append(std.testing.allocator, 1);
-    try std.testing.expectError(error.BadGsub, direct_single.subtable(table, subtable, &glyphs, 0, .{}));
-    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
-    try std.testing.expectError(error.BadGsub, applyLookup(table, 18, &glyphs, std.testing.allocator, .{}));
-    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
-
-    // With the Coverage pointer repaired, the same subtable is a normal
-    // SingleSubst; only the aliasing null child pointer is invalid.
-    writeU16Test(&bytes, subtable + 2, 6);
-    try validation.direct.single.validate(table, subtable);
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-}
-
-test "GSUB validates FeatureList lookup indexes against LookupList" {
-    var bytes = [_]u8{0} ** 50;
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 48); // Empty ScriptList; this test targets FeatureList topology.
-    writeU16Test(&bytes, 6, 10); // FeatureList.
-    writeU16Test(&bytes, 8, 24); // LookupList.
-
-    writeU16Test(&bytes, 10, 1); // FeatureCount.
-    writeU32Test(&bytes, 12, unicode.tag("liga"));
-    writeU16Test(&bytes, 16, 8); // FeatureTable at offset 18.
-    writeU16Test(&bytes, 20, 1); // LookupIndexCount.
-    writeU16Test(&bytes, 22, 1); // Dangling: LookupList has only index 0.
-
-    writeU16Test(&bytes, 24, 1);
-    writeU16Test(&bytes, 26, 4);
-    writeSingleDeltaLookup(&bytes, 28, 1, 0);
-    writeU16Test(&bytes, 48, 0); // ScriptCount.
-
-    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-
-    writeU16Test(&bytes, 22, 0);
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-}
-
-test "GSUB validates ScriptList LangSys feature indexes against FeatureList" {
-    var bytes = [_]u8{0} ** 80;
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 10); // ScriptList.
-    writeU16Test(&bytes, 6, 40); // FeatureList.
-    writeU16Test(&bytes, 8, 56); // LookupList.
-
-    writeU16Test(&bytes, 10, 1);
-    writeU32Test(&bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
-    writeU16Test(&bytes, 16, 8);
-
-    writeU16Test(&bytes, 18, 4); // DefaultLangSys at offset 22.
-    writeU16Test(&bytes, 20, 0);
-    writeU16Test(&bytes, 22, 0);
-    writeU16Test(&bytes, 24, 0xffff);
-    writeU16Test(&bytes, 26, 1);
-    writeU16Test(&bytes, 28, 1); // Dangling: FeatureList has only index 0.
-
-    writeU16Test(&bytes, 40, 1);
-    writeFeatureRecord(&bytes, 42, unicode.tag("liga"), 8);
-    writeFeature(&bytes, 50, 0);
-
-    writeU16Test(&bytes, 56, 1);
-    writeU16Test(&bytes, 58, 4);
-    writeSingleDeltaLookup(&bytes, 60, 1, 0);
-
-    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-
-    writeU16Test(&bytes, 28, 0);
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-
-    writeU16Test(&bytes, 24, 1); // ReqFeatureIndex is checked too.
-    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
 }
 
 test "GSUB contextual class subtables allow covered class indexes outside set arrays" {
@@ -5011,6 +4664,22 @@ test "GSUB public apply validates ligature component source order" {
     }));
 }
 
+/// Static test bindings let the topology suite exercise root orchestration
+/// without widening the production API or paying for runtime callbacks.
+const topologyTestHasFeature = hasFeature;
+
+const TopologyTestBindings = struct {
+    pub const apply = applyWithOptions;
+    pub const validate = validateGlyphBounds;
+    pub const isEmpty = isEmptyTable;
+    pub const hasFeature = topologyTestHasFeature;
+    pub const selectedLookups = selectedLookupIndicesForOptions;
+    pub const buildPlan = buildFeatureLookupPlan;
+    pub const applyPlan = applyFeatureLookupPlanWithOptions;
+    pub const buildMergedPlan = buildMergedFeatureLookupPlan;
+    pub const applyMergedPlan = applyMergedFeatureLookupPlanWithOptions;
+};
+
 test {
     _ = @import("gsub/tests/accelerator/root.zig");
     _ = @import("gsub/tests/execution/root.zig");
@@ -5019,6 +4688,8 @@ test {
         .suite(ContextualRecordExecutor);
     _ = @import("gsub/tests/runtime/root.zig");
     _ = @import("gsub/tests/table/root.zig");
+    _ = @import("gsub/tests/validation/table/topology.zig")
+        .suite(TopologyTestBindings);
     _ = @import("gsub/tests/validation/root.zig");
 }
 

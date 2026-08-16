@@ -265,61 +265,11 @@ pub fn deinitLookupAccelerators(allocator: std.mem.Allocator, accelerators: []Lo
 }
 
 fn selectedLookupIndices(table: Table, allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!std.ArrayList(u16) {
-    var lookups = try feature_core.selection.lookupIndices(
+    return feature_core.run_selection.lookupIndices(
         table,
         allocator,
-        .{
-            .script_tag = options.script_tag,
-            .language_tag = options.language_tag,
-            .overrides = options.features,
-        },
+        options,
     );
-    errdefer lookups.deinit(allocator);
-
-    // Filter in place so separating activation-graph parsing from execution
-    // does not add another allocation to every uncached shaping selection.
-    var write: usize = 0;
-    for (lookups.items) |lookup_index| {
-        if (!try selectedLookupMayApply(table, lookup_index, options)) continue;
-        lookups.items[write] = lookup_index;
-        write += 1;
-    }
-    lookups.shrinkRetainingCapacity(write);
-
-    sortUniqueLookupIndices(&lookups);
-    return lookups;
-}
-
-fn selectedLookupMayApply(table: Table, lookup_index: u16, options: LookupOptions) GposError!bool {
-    if (options.run_may_have_mark_attachments orelse true) return true;
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16(table, lookup_list_offset);
-    if (lookup_index >= lookup_count) return true;
-    const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
-    const lookup_type = try readU16(table, lookup_offset);
-    return switch (lookup_type) {
-        4, 5, 6 => false,
-        9 => try extensionLookupMayApplyWithoutGdefMarks(table, lookup_offset),
-        else => true,
-    };
-}
-
-fn extensionLookupMayApplyWithoutGdefMarks(table: Table, lookup_offset: usize) GposError!bool {
-    const subtable_count = try readU16(table, lookup_offset + 4);
-    for (0..subtable_count) |i| {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
-        if (try readU16(table, subtable_offset) != 1) return true;
-        const wrapped_type = try readU16(table, subtable_offset + 2);
-        switch (wrapped_type) {
-            4, 5, 6 => {},
-            else => return true,
-        }
-    }
-    return false;
-}
-
-fn lookupIndexLessThan(_: void, lhs: u16, rhs: u16) bool {
-    return lhs < rhs;
 }
 
 fn recordGposLookupProfile(profile: ?*shape_profile_mod.ShapeStageProfile, lookup_type: u16) void {
@@ -333,21 +283,6 @@ fn recordGposLookupProfile(profile: ?*shape_profile_mod.ShapeStageProfile, looku
         9 => p.gpos_extension_lookup_count += 1,
         else => {},
     }
-}
-
-fn sortUniqueLookupIndices(lookups: *std.ArrayList(u16)) void {
-    if (lookups.items.len < 2) return;
-
-    std.sort.heap(u16, lookups.items, {}, lookupIndexLessThan);
-    var write: usize = 1;
-    var previous = lookups.items[0];
-    for (lookups.items[1..]) |lookup_index| {
-        if (lookup_index == previous) continue;
-        lookups.items[write] = lookup_index;
-        write += 1;
-        previous = lookup_index;
-    }
-    lookups.shrinkRetainingCapacity(write);
 }
 
 fn collectLookup(table: Table, lookup_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -1798,77 +1733,6 @@ test "GPOS skips direct mark lookups when GDEF classes show no marks" {
         .glyph_classes = &glyph_classes,
     });
     try std.testing.expectEqual(@as(usize, 1), classified_adjustments.items.len);
-}
-
-test "GPOS LangSys required feature bypasses feature overrides" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 72;
-    writeRequiredFeatureSelectionTable(&bytes, unicode.tag("kern"), unicode.tag("mark"));
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-
-    var lookups = try selectedLookupIndices(table, allocator, .{
-        .script_tag = .dflt,
-        // Required features are mandatory LangSys data, while overrides only
-        // opt optional/default feature tags in or out.
-        .features = &.{
-            .{ .tag = unicode.tag("kern"), .enabled = false },
-            .{ .tag = unicode.tag("mark"), .enabled = false },
-        },
-    });
-    defer lookups.deinit(allocator);
-
-    try std.testing.expectEqualSlices(u16, &.{0}, lookups.items);
-}
-
-test "GPOS lookup selection sorts and deduplicates repeated feature lookups" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 78;
-    writeRepeatedLookupSelectionTable(&bytes, unicode.tag("kern"));
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-
-    var lookups = try selectedLookupIndices(table, allocator, .{ .script_tag = .dflt });
-    defer lookups.deinit(allocator);
-
-    try std.testing.expectEqualSlices(u16, &.{ 1, 2, 3 }, lookups.items);
-}
-
-test "GPOS default feature selection matches shaping defaults" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 78;
-    writeRepeatedLookupSelectionTable(&bytes, unicode.tag("ordn"));
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-
-    var default_lookups = try selectedLookupIndices(table, allocator, .{ .script_tag = .dflt });
-    defer default_lookups.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 0), default_lookups.items.len);
-
-    var enabled_lookups = try selectedLookupIndices(table, allocator, .{
-        .script_tag = .dflt,
-        .features = &.{.{ .tag = unicode.tag("ordn"), .enabled = true }},
-    });
-    defer enabled_lookups.deinit(allocator);
-    try std.testing.expectEqualSlices(u16, &.{ 1, 2, 3 }, enabled_lookups.items);
-}
-
-test "GPOS lookup selection skips mark positioning for runs without attachment targets" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 104;
-    writeMarkLookupSelectionTable(&bytes);
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-
-    var unmarked = try selectedLookupIndices(table, allocator, .{
-        .script_tag = .dflt,
-        .run_may_have_mark_attachments = false,
-    });
-    defer unmarked.deinit(allocator);
-    try std.testing.expectEqualSlices(u16, &.{0}, unmarked.items);
-
-    var marked = try selectedLookupIndices(table, allocator, .{
-        .script_tag = .dflt,
-        .run_may_have_mark_attachments = true,
-    });
-    defer marked.deinit(allocator);
-    try std.testing.expectEqualSlices(u16, &.{ 0, 1, 2 }, marked.items);
 }
 
 test "GPOS validates layout tag record ordering" {
@@ -3832,43 +3696,6 @@ fn writeLayoutTagOrderingTable(bytes: []u8) void {
     writeU16Test(bytes, 90, 0);
 }
 
-fn writeRequiredFeatureSelectionTable(bytes: []u8, required_tag: u32, optional_tag: u32) void {
-    const required_first = required_tag < optional_tag;
-    const required_feature_index: u16 = if (required_first) 0 else 1;
-    const optional_feature_index: u16 = if (required_first) 1 else 0;
-
-    writeU32Test(bytes, 0, 0x00010000);
-    writeU16Test(bytes, 4, 10);
-    writeU16Test(bytes, 6, 34);
-    writeU16Test(bytes, 8, 60);
-
-    writeU16Test(bytes, 10, 1);
-    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
-    writeU16Test(bytes, 16, 8);
-
-    writeU16Test(bytes, 18, 4);
-    writeU16Test(bytes, 20, 0);
-    writeU16Test(bytes, 22, 0);
-    writeU16Test(bytes, 24, required_feature_index);
-    writeU16Test(bytes, 26, 1);
-    writeU16Test(bytes, 28, optional_feature_index);
-
-    writeU16Test(bytes, 34, 2);
-    if (required_first) {
-        writeFeatureRecordTest(bytes, 36, required_tag, 14);
-        writeFeatureRecordTest(bytes, 42, optional_tag, 20);
-    } else {
-        writeFeatureRecordTest(bytes, 36, optional_tag, 20);
-        writeFeatureRecordTest(bytes, 42, required_tag, 14);
-    }
-    writeFeatureTest(bytes, 48, 0);
-    writeFeatureTest(bytes, 54, 1);
-
-    writeU16Test(bytes, 60, 2);
-    writeU16Test(bytes, 62, 0);
-    writeU16Test(bytes, 64, 0);
-}
-
 fn writeFeatureRecordTest(bytes: []u8, offset: usize, tag_value: u32, feature_offset: u16) void {
     writeU32Test(bytes, offset, tag_value);
     writeU16Test(bytes, offset + 4, feature_offset);
@@ -3886,85 +3713,6 @@ fn writeFeatureListTest(bytes: []u8, offset: usize, lookups: []const u16) void {
     for (lookups, 0..) |lookup_index, index| {
         writeU16Test(bytes, offset + 4 + index * 2, lookup_index);
     }
-}
-
-fn writeRepeatedLookupSelectionTable(bytes: []u8, feature_tag: u32) void {
-    writeU32Test(bytes, 0, 0x00010000);
-    writeU16Test(bytes, 4, 10);
-    writeU16Test(bytes, 6, 34);
-    writeU16Test(bytes, 8, 66);
-
-    writeU16Test(bytes, 10, 1);
-    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
-    writeU16Test(bytes, 16, 8);
-
-    writeU16Test(bytes, 18, 4);
-    writeU16Test(bytes, 20, 0);
-    writeU16Test(bytes, 22, 0);
-    writeU16Test(bytes, 24, 0xffff);
-    writeU16Test(bytes, 26, 2);
-    writeU16Test(bytes, 28, 0);
-    writeU16Test(bytes, 30, 1);
-
-    writeU16Test(bytes, 34, 2);
-    writeFeatureRecordTest(bytes, 36, feature_tag, 14);
-    writeFeatureRecordTest(bytes, 42, feature_tag, 24);
-    writeFeatureListTest(bytes, 48, &.{ 3, 1, 3 });
-    writeFeatureListTest(bytes, 58, &.{ 2, 1 });
-
-    writeU16Test(bytes, 66, 4);
-    writeU16Test(bytes, 68, 0);
-    writeU16Test(bytes, 70, 0);
-    writeU16Test(bytes, 72, 0);
-    writeU16Test(bytes, 74, 0);
-}
-
-fn writeMarkLookupSelectionTable(bytes: []u8) void {
-    writeU32Test(bytes, 0, 0x00010000);
-    writeU16Test(bytes, 4, 10);
-    writeU16Test(bytes, 6, 34);
-    writeU16Test(bytes, 8, 66);
-
-    writeU16Test(bytes, 10, 1);
-    writeU32Test(bytes, 12, @intFromEnum(unicode.OpenTypeScriptTag.dflt));
-    writeU16Test(bytes, 16, 8);
-
-    writeU16Test(bytes, 18, 4);
-    writeU16Test(bytes, 20, 0);
-    writeU16Test(bytes, 22, 0);
-    writeU16Test(bytes, 24, 0xffff);
-    writeU16Test(bytes, 26, 2);
-    writeU16Test(bytes, 28, 0);
-    writeU16Test(bytes, 30, 1);
-
-    writeU16Test(bytes, 34, 2);
-    writeFeatureRecordTest(bytes, 36, unicode.tag("kern"), 14);
-    writeFeatureRecordTest(bytes, 42, unicode.tag("mark"), 20);
-    writeFeatureListTest(bytes, 48, &.{0});
-    writeFeatureListTest(bytes, 54, &.{ 1, 2 });
-
-    writeU16Test(bytes, 66, 3);
-    writeU16Test(bytes, 68, 8);
-    writeU16Test(bytes, 70, 14);
-    writeU16Test(bytes, 72, 20);
-
-    writeU16Test(bytes, 74, 2);
-    writeU16Test(bytes, 76, 0);
-    writeU16Test(bytes, 78, 0);
-
-    writeU16Test(bytes, 80, 4);
-    writeU16Test(bytes, 82, 0);
-    writeU16Test(bytes, 84, 0);
-
-    writeU16Test(bytes, 86, 9);
-    writeU16Test(bytes, 88, 0);
-    writeU16Test(bytes, 90, 1);
-    writeU16Test(bytes, 92, 8);
-
-    const extension = 94;
-    writeU16Test(bytes, extension + 0, 1);
-    writeU16Test(bytes, extension + 2, 5);
-    writeU32Test(bytes, extension + 4, 8);
 }
 
 test "GPOS public adjustment collection validates source metadata cardinality" {

@@ -9,6 +9,24 @@ pub const Error = table.view.Error || error{UnsupportedGpos};
 pub const View = table.View;
 pub const MarkToBase = accelerator.model.MarkToBaseSubtable;
 
+pub const MarkToLigature = struct {
+    subtable_offset: usize,
+    mark_coverage_offset: usize,
+    ligature_coverage_offset: usize,
+    class_count: u16,
+    mark_array_offset: usize,
+    ligature_array_offset: usize,
+};
+
+pub const MarkToMark = struct {
+    subtable_offset: usize,
+    mark_1_coverage_offset: usize,
+    mark_2_coverage_offset: usize,
+    class_count: u16,
+    mark_1_array_offset: usize,
+    mark_2_array_offset: usize,
+};
+
 pub fn parseMarkToBase(
     view: View,
     subtable_offset: usize,
@@ -71,83 +89,128 @@ pub fn validateMarkToLigature(
     view: View,
     subtable_offset: usize,
 ) Error!void {
-    try requireFormat1(view, subtable_offset);
-    const mark_coverage = try requiredOffset(
+    const parsed = try parseMarkToLigatureForValidation(
         view,
         subtable_offset,
-        try readU16ForValidation(view, subtable_offset + 2),
     );
-    const ligature_coverage = try requiredOffset(
+    try table.coverage.validate(view, parsed.mark_coverage_offset, .indexed);
+    try table.coverage.validate(
         view,
-        subtable_offset,
-        try readU16ForValidation(view, subtable_offset + 4),
+        parsed.ligature_coverage_offset,
+        .indexed,
     );
-    const class_count =
-        try readU16ForValidation(view, subtable_offset + 6);
-    const mark_array = try requiredOffset(
+    const mark_count = try validateMarkArray(
         view,
-        subtable_offset,
-        try readU16ForValidation(view, subtable_offset + 8),
+        parsed.mark_array_offset,
+        parsed.class_count,
     );
-    const ligature_array = try requiredOffset(
-        view,
-        subtable_offset,
-        try readU16ForValidation(view, subtable_offset + 10),
-    );
-    try table.coverage.validate(view, mark_coverage, .indexed);
-    try table.coverage.validate(view, ligature_coverage, .indexed);
-    const mark_count = try validateMarkArray(view, mark_array, class_count);
     const ligature_count = try validateLigatureArray(
         view,
-        ligature_array,
-        class_count,
+        parsed.ligature_array_offset,
+        parsed.class_count,
     );
-    try table.coverage.validateIndices(view, mark_coverage, mark_count);
     try table.coverage.validateIndices(
         view,
-        ligature_coverage,
+        parsed.mark_coverage_offset,
+        mark_count,
+    );
+    try table.coverage.validateIndices(
+        view,
+        parsed.ligature_coverage_offset,
         ligature_count,
     );
 }
 
+pub fn parseMarkToLigature(
+    view: View,
+    subtable_offset: usize,
+) Error!MarkToLigature {
+    if (try view.readU16(subtable_offset) != 1) {
+        return error.UnsupportedGpos;
+    }
+    return .{
+        .subtable_offset = subtable_offset,
+        .mark_coverage_offset = try requiredOffset(
+            view,
+            subtable_offset,
+            try view.readU16(subtable_offset + 2),
+        ),
+        .ligature_coverage_offset = try requiredOffset(
+            view,
+            subtable_offset,
+            try view.readU16(subtable_offset + 4),
+        ),
+        .class_count = try view.readU16(subtable_offset + 6),
+        .mark_array_offset = try requiredOffset(
+            view,
+            subtable_offset,
+            try view.readU16(subtable_offset + 8),
+        ),
+        .ligature_array_offset = try requiredOffset(
+            view,
+            subtable_offset,
+            try view.readU16(subtable_offset + 10),
+        ),
+    };
+}
+
 pub fn validateMarkToMark(view: View, subtable_offset: usize) Error!void {
-    try requireFormat1(view, subtable_offset);
-    const mark_1_coverage = try requiredOffset(
-        view,
-        subtable_offset,
-        try readU16ForValidation(view, subtable_offset + 2),
-    );
-    const mark_2_coverage = try requiredOffset(
-        view,
-        subtable_offset,
-        try readU16ForValidation(view, subtable_offset + 4),
-    );
-    const class_count =
-        try readU16ForValidation(view, subtable_offset + 6);
-    const mark_1_array = try requiredOffset(
-        view,
-        subtable_offset,
-        try readU16ForValidation(view, subtable_offset + 8),
-    );
-    const mark_2_array = try requiredOffset(
-        view,
-        subtable_offset,
-        try readU16ForValidation(view, subtable_offset + 10),
-    );
-    try table.coverage.validate(view, mark_1_coverage, .indexed);
-    try table.coverage.validate(view, mark_2_coverage, .indexed);
+    const parsed = try parseMarkToMarkForValidation(view, subtable_offset);
+    try table.coverage.validate(view, parsed.mark_1_coverage_offset, .indexed);
+    try table.coverage.validate(view, parsed.mark_2_coverage_offset, .indexed);
     const mark_1_count = try validateMarkArray(
         view,
-        mark_1_array,
-        class_count,
+        parsed.mark_1_array_offset,
+        parsed.class_count,
     );
     const mark_2_count = try validateMark2Array(
         view,
-        mark_2_array,
-        class_count,
+        parsed.mark_2_array_offset,
+        parsed.class_count,
     );
-    try table.coverage.validateIndices(view, mark_1_coverage, mark_1_count);
-    try table.coverage.validateIndices(view, mark_2_coverage, mark_2_count);
+    try table.coverage.validateIndices(
+        view,
+        parsed.mark_1_coverage_offset,
+        mark_1_count,
+    );
+    try table.coverage.validateIndices(
+        view,
+        parsed.mark_2_coverage_offset,
+        mark_2_count,
+    );
+}
+
+pub fn parseMarkToMark(
+    view: View,
+    subtable_offset: usize,
+) Error!MarkToMark {
+    if (try view.readU16(subtable_offset) != 1) {
+        return error.UnsupportedGpos;
+    }
+    return .{
+        .subtable_offset = subtable_offset,
+        .mark_1_coverage_offset = try requiredOffset(
+            view,
+            subtable_offset,
+            try view.readU16(subtable_offset + 2),
+        ),
+        .mark_2_coverage_offset = try requiredOffset(
+            view,
+            subtable_offset,
+            try view.readU16(subtable_offset + 4),
+        ),
+        .class_count = try view.readU16(subtable_offset + 6),
+        .mark_1_array_offset = try requiredOffset(
+            view,
+            subtable_offset,
+            try view.readU16(subtable_offset + 8),
+        ),
+        .mark_2_array_offset = try requiredOffset(
+            view,
+            subtable_offset,
+            try view.readU16(subtable_offset + 10),
+        ),
+    };
 }
 
 fn validateMarkArray(
@@ -260,10 +323,24 @@ fn parseMarkToBaseForValidation(
     };
 }
 
-fn requireFormat1(view: View, subtable_offset: usize) Error!void {
-    if (try readU16ForValidation(view, subtable_offset) != 1) {
-        return error.UnsupportedGpos;
-    }
+fn parseMarkToLigatureForValidation(
+    view: View,
+    subtable_offset: usize,
+) Error!MarkToLigature {
+    return parseMarkToLigature(view, subtable_offset) catch |err| switch (err) {
+        error.EndOfStream => error.BadGpos,
+        else => err,
+    };
+}
+
+fn parseMarkToMarkForValidation(
+    view: View,
+    subtable_offset: usize,
+) Error!MarkToMark {
+    return parseMarkToMark(view, subtable_offset) catch |err| switch (err) {
+        error.EndOfStream => error.BadGpos,
+        else => err,
+    };
 }
 
 fn requiredOffset(view: View, base: usize, relative: u16) Error!usize {

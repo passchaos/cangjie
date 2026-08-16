@@ -12,7 +12,8 @@ const search = @import("search.zig");
 const table = @import("../../../table/root.zig");
 
 pub const Adjustment = positioning.Adjustment;
-pub const Error = table.view.Error || error{UnsupportedGpos};
+pub const Error =
+    table.view.Error || error{ UnsupportedGpos, InvalidShapingInput };
 pub const Options = options.Options;
 pub const Parsed = accelerator.model.MarkToBaseSubtable;
 pub const View = table.View;

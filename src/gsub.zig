@@ -49,7 +49,7 @@ pub const acceleration = struct {
     pub const Lookup = accelerator_root.Lookup;
 
     pub const build = buildLookupAccelerators;
-    pub const deinit = deinitLookupAccelerators;
+    pub const deinit = accelerator_root.ownership.deinit;
     pub const hasRandomFeature = accelerator_root.feature_index.hasRandomFeature;
 };
 
@@ -90,6 +90,17 @@ const ChainingSubtableGroup = accelerator_model.ChainingGroup;
 const ChainingSubtablePair = accelerator_model.ChainingPair;
 const ChainingPairSubtableGroup = accelerator_model.ChainingPairGroup;
 const ChainingPairSubtablePair = accelerator_model.ChainingPairEntry;
+const deinitLookupAccelerators = accelerator_root.ownership.deinit;
+const deinitLookupAcceleratorContents =
+    accelerator_root.ownership.deinitContents;
+const deinitContextClassSubtableAccelerators =
+    accelerator_root.ownership.deinitContextClassSubtables;
+const deinitContextClassSubtableAcceleratorContents =
+    accelerator_root.ownership.deinitContextClassSubtableContents;
+const deinitChainingClassSubtableAccelerators =
+    accelerator_root.ownership.deinitChainingClassSubtables;
+const deinitChainingClassSubtableAcceleratorContents =
+    accelerator_root.ownership.deinitChainingClassSubtableContents;
 
 // HarfBuzz's fast LigatureSet path extracts the second component once before
 // trying definitions. Select these thresholds once per lookup rather than
@@ -1144,81 +1155,6 @@ fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, alloc
         }
     }
     return accelerators;
-}
-
-fn deinitLookupAccelerators(allocator: std.mem.Allocator, accelerators: []LookupAccelerator) void {
-    deinitLookupAcceleratorContents(allocator, accelerators);
-    allocator.free(accelerators);
-}
-
-fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: []LookupAccelerator) void {
-    for (accelerators, 0..) |accelerator, accelerator_index| {
-        if (accelerator_index == 0) {
-            if (accelerator.feature_index) |feature_index| {
-                accelerator_root.feature_index.destroy(
-                    feature_index,
-                    allocator,
-                );
-            }
-        }
-        allocator.free(accelerator.single_subst_entries);
-        allocator.free(accelerator.multiple_subst.entries);
-        allocator.free(accelerator.ligature_subst.sets);
-        allocator.free(accelerator.ligature_subst.set_slots);
-        allocator.free(accelerator.ligature_subst.definitions);
-        allocator.free(accelerator.ligature_subst.components);
-        deinitContextClassSubtableAccelerators(allocator, accelerator.context_class_subtables);
-        allocator.free(accelerator.context_coverage_subtables);
-        allocator.free(accelerator.context_coverage_offsets);
-        for (accelerator.context_groups) |group| allocator.free(group.subtable_indices);
-        allocator.free(accelerator.context_groups);
-        allocator.free(accelerator.context_group_slots);
-        allocator.free(accelerator.chaining_subtable_digests);
-        allocator.free(accelerator.chaining_subtables);
-        for (accelerator.chaining_groups) |group| {
-            allocator.free(group.subtable_indices);
-        }
-        allocator.free(accelerator.chaining_groups);
-        allocator.free(accelerator.chaining_group_slots);
-        for (accelerator.chaining_pair_groups) |group| {
-            allocator.free(group.subtable_indices);
-        }
-        allocator.free(accelerator.chaining_pair_groups);
-        allocator.free(accelerator.chaining_pair_group_slots);
-        deinitChainingClassSubtableAccelerators(allocator, accelerator.chaining_class_subtables);
-        allocator.free(accelerator.reverse_chaining_subtables);
-        allocator.free(accelerator.reverse_chaining_exact_contexts);
-        for (accelerator.reverse_chaining_groups) |group| {
-            allocator.free(group.subtable_indices);
-        }
-        allocator.free(accelerator.reverse_chaining_groups);
-    }
-}
-
-fn deinitContextClassSubtableAccelerators(allocator: std.mem.Allocator, subtables: []const ContextClassSubtableAccelerator) void {
-    deinitContextClassSubtableAcceleratorContents(allocator, subtables);
-    allocator.free(subtables);
-}
-
-fn deinitContextClassSubtableAcceleratorContents(allocator: std.mem.Allocator, subtables: []const ContextClassSubtableAccelerator) void {
-    for (subtables) |subtable| {
-        allocator.free(subtable.rules);
-        allocator.free(subtable.classes);
-        allocator.free(subtable.groups);
-    }
-}
-
-fn deinitChainingClassSubtableAccelerators(allocator: std.mem.Allocator, subtables: []const ChainingClassSubtableAccelerator) void {
-    deinitChainingClassSubtableAcceleratorContents(allocator, subtables);
-    allocator.free(subtables);
-}
-
-fn deinitChainingClassSubtableAcceleratorContents(allocator: std.mem.Allocator, subtables: []const ChainingClassSubtableAccelerator) void {
-    for (subtables) |subtable| {
-        allocator.free(subtable.rules);
-        allocator.free(subtable.classes);
-        allocator.free(subtable.groups);
-    }
 }
 
 const ContextCoverageLookupData = struct {

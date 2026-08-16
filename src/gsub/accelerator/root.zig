@@ -2,5 +2,6 @@
 
 pub const feature_index = @import("feature_index.zig");
 pub const model = @import("model.zig");
+pub const ownership = @import("ownership.zig");
 
 pub const Lookup = model.Lookup;

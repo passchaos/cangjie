@@ -9,6 +9,7 @@ const ligature_provenance = @import("ligature_provenance.zig");
 const class_context = @import("opentype/class_context.zig");
 pub const runtime = @import("gsub/runtime/root.zig");
 const table_core = @import("gsub/table/root.zig");
+const validation = @import("gsub/validation/root.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const unicode = @import("unicode.zig");
@@ -5175,7 +5176,11 @@ fn ensureLigatureLookupSubtablesWithinForShaping(table: Table, lookup_offset: us
     for (0..subtable_count) |subtable_i| {
         const subtable_offset = try checkedRequiredSubtableOffset(table, lookup_offset, try readU16BadGsub(table, lookup_offset + 6 + subtable_i * 2));
         try ensureSubstitutionSubtableFixedHeaderWithin(table, subtable_offset, 4);
-        try ensureLigatureSubstitutionSubtableWithinForShaping(table, subtable_offset);
+        try validation.direct.ligature.validate(
+            table,
+            subtable_offset,
+            .shaping,
+        );
     }
 }
 
@@ -5218,10 +5223,20 @@ fn ensureSubstitutionSubtableFixedHeaderWithin(table: Table, subtable_offset: us
 
 fn ensureSubstitutionSubtableVariableDataWithin(table: Table, subtable_offset: usize, lookup_type: u16) GsubError!void {
     switch (lookup_type) {
-        1 => try ensureSingleSubstitutionSubtableWithin(table, subtable_offset),
-        2 => try ensureMultipleSubstitutionSubtableWithin(table, subtable_offset),
-        3 => try ensureAlternateSubstitutionSubtableWithin(table, subtable_offset),
-        4 => try ensureLigatureSubstitutionSubtableWithin(table, subtable_offset),
+        1 => try validation.direct.single.validate(table, subtable_offset),
+        2 => try validation.direct.set_sequence.multiple(
+            table,
+            subtable_offset,
+        ),
+        3 => try validation.direct.set_sequence.alternate(
+            table,
+            subtable_offset,
+        ),
+        4 => try validation.direct.ligature.validate(
+            table,
+            subtable_offset,
+            .strict,
+        ),
         5 => try ensureContextSubstitutionSubtableWithin(table, subtable_offset),
         6 => try ensureChainingContextSubstitutionSubtableWithin(table, subtable_offset),
         8 => try ensureReverseChainingSingleSubstitutionSubtableWithin(table, subtable_offset),
@@ -5238,157 +5253,6 @@ fn ensureSubstitutionSubtableVariableDataWithinForShaping(table: Table, subtable
         // validate bounds and glyph IDs without imposing strict order.
         6 => try ensureChainingContextSubstitutionSubtableWithinForShaping(table, subtable_offset),
         else => try ensureSubstitutionSubtableVariableDataWithin(table, subtable_offset, lookup_type),
-    }
-}
-
-fn ensureSingleSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
-    const subst_format = try readU16BadGsub(table, subtable_offset);
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
-    switch (subst_format) {
-        // Format 1 explicitly defines modulo-16-bit results. A lookup may use
-        // an intermediate ID outside maxp as both this lookup's output and a
-        // later format-1 lookup's Coverage input (the OpenType AOTS modulo
-        // fixture does exactly this). Validate the Coverage topology and full
-        // 16-bit domain, but defer renderable-glyph bounds until the complete
-        // GSUB lookup sequence has finished.
-        1 => if (table.allow_transient_single_delta) {
-            var transient_table = table;
-            transient_table.glyph_count = null;
-            try ensureCoverageTableWithin(transient_table, coverage_offset);
-        } else {
-            try ensureCoverageTableWithin(table, coverage_offset);
-            const delta = try readI16BadGsub(table, subtable_offset + 4);
-            try ensureSingleDeltaSubstitutionWithinMaxp(table, coverage_offset, delta);
-        },
-        2 => {
-            try ensureCoverageTableWithin(table, coverage_offset);
-            const glyph_count = try readU16BadGsub(table, subtable_offset + 4);
-            // Format 2 Coverage indexes address the substitute glyph array
-            // directly. Reject uncovered array slots at validation time instead
-            // of letting shaping silently skip malformed covered glyphs.
-            try ensureCoverageIndicesWithin(table, coverage_offset, glyph_count);
-            try ensureBytesWithin(table, subtable_offset + 6, @as(usize, glyph_count) * 2);
-            for (0..glyph_count) |glyph_i| {
-                try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, subtable_offset + 6 + glyph_i * 2));
-            }
-        },
-        else => return error.UnsupportedGsub,
-    }
-}
-
-fn ensureMultipleSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
-    const subst_format = try readU16BadGsub(table, subtable_offset);
-    if (subst_format != 1) return error.UnsupportedGsub;
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
-    try ensureCoverageTableWithin(table, coverage_offset);
-    const sequence_count = try readU16BadGsub(table, subtable_offset + 4);
-    // Coverage indexes select Sequence offsets one-for-one. A dangling
-    // coverage entry would otherwise make a declared substitution disappear
-    // for only the affected glyph.
-    try ensureCoverageIndicesWithin(table, coverage_offset, sequence_count);
-    const sequence_offsets_pos = subtable_offset + 6;
-    try ensureBytesWithin(table, sequence_offsets_pos, @as(usize, sequence_count) * 2);
-    for (0..sequence_count) |sequence_i| {
-        const sequence_relative = try readU16BadGsub(table, sequence_offsets_pos + sequence_i * 2);
-        // SequenceOffset entries are required children keyed by Coverage
-        // index. Offset zero would reinterpret the MultipleSubst header as a
-        // Sequence table, deriving replacement glyphs from unrelated fields.
-        const sequence_offset = try checkedRequiredSubtableOffset(table, subtable_offset, sequence_relative);
-        const glyph_count = try readU16BadGsub(table, sequence_offset);
-        try ensureBytesWithin(table, sequence_offset + 2, @as(usize, glyph_count) * 2);
-        for (0..glyph_count) |glyph_i| {
-            try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, sequence_offset + 2 + glyph_i * 2));
-        }
-    }
-}
-
-fn ensureAlternateSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
-    const subst_format = try readU16BadGsub(table, subtable_offset);
-    if (subst_format != 1) return error.UnsupportedGsub;
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
-    try ensureCoverageTableWithin(table, coverage_offset);
-    const alternate_set_count = try readU16BadGsub(table, subtable_offset + 4);
-    // AlternateSet offsets share the same coverage-index topology as
-    // MultipleSubst sequences; every covered glyph needs an addressable set.
-    try ensureCoverageIndicesWithin(table, coverage_offset, alternate_set_count);
-    const alternate_set_offsets_pos = subtable_offset + 6;
-    try ensureBytesWithin(table, alternate_set_offsets_pos, @as(usize, alternate_set_count) * 2);
-    for (0..alternate_set_count) |alternate_set_i| {
-        const alternate_set_relative = try readU16BadGsub(table, alternate_set_offsets_pos + alternate_set_i * 2);
-        // AlternateSet offsets are required children selected by Coverage
-        // index. Treating zero as a real offset aliases the AlternateSubst
-        // header as an AlternateSet and can synthesize replacement glyph ids
-        // from unrelated header fields.
-        const alternate_set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, alternate_set_relative);
-        const glyph_count = try readU16BadGsub(table, alternate_set_offset);
-        try ensureBytesWithin(table, alternate_set_offset + 2, @as(usize, glyph_count) * 2);
-        for (0..glyph_count) |glyph_i| {
-            try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, alternate_set_offset + 2 + glyph_i * 2));
-        }
-    }
-}
-
-fn ensureLigatureSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
-    const subst_format = try readU16BadGsub(table, subtable_offset);
-    if (subst_format != 1) return error.UnsupportedGsub;
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
-    try ensureCoverageTableWithin(table, coverage_offset);
-    const lig_set_count = try readU16BadGsub(table, subtable_offset + 4);
-    // LigatureSet offsets are selected by coverage index. Reject dangling
-    // indexes up front so covered first components cannot be silently ignored.
-    try ensureCoverageIndicesWithin(table, coverage_offset, lig_set_count);
-    const lig_set_offsets_pos = subtable_offset + 6;
-    try ensureBytesWithin(table, lig_set_offsets_pos, @as(usize, lig_set_count) * 2);
-    for (0..lig_set_count) |set_i| {
-        // LigatureSet offsets are required for each covered first component.
-        // Zero would alias the LigatureSubst header as a LigatureSet and can
-        // reinterpret coverage/offset metadata as a real ligature definition.
-        const set_offset = try checkedRequiredSubtableOffset(table, subtable_offset, try readU16BadGsub(table, lig_set_offsets_pos + set_i * 2));
-        const ligature_count = try readU16BadGsub(table, set_offset);
-        const ligature_offsets_pos = set_offset + 2;
-        try ensureBytesWithin(table, ligature_offsets_pos, @as(usize, ligature_count) * 2);
-        for (0..ligature_count) |ligature_i| {
-            // Ligature offsets inside a non-empty LigatureSet are required
-            // children as well. Reject nulls before they can be treated as the
-            // LigatureSet header and silently skipped or misread by shaping.
-            const ligature_offset = try checkedRequiredSubtableOffset(table, set_offset, try readU16BadGsub(table, ligature_offsets_pos + ligature_i * 2));
-            try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, ligature_offset));
-            const component_count = try readU16BadGsub(table, ligature_offset + 2);
-            if (component_count == 0) return error.BadGsub;
-            try ensureBytesWithin(table, ligature_offset + 4, (@as(usize, component_count) - 1) * 2);
-            for (1..component_count) |component_i| {
-                try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, ligature_offset + 4 + (component_i - 1) * 2));
-            }
-        }
-    }
-}
-
-fn ensureLigatureSubstitutionSubtableWithinForShaping(table: Table, subtable_offset: usize) GsubError!void {
-    const subst_format = try readU16BadGsub(table, subtable_offset);
-    if (subst_format != 1) return error.UnsupportedGsub;
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
-    try ensureCoverageTableWithin(table, coverage_offset);
-    const lig_set_count = try readU16BadGsub(table, subtable_offset + 4);
-    try ensureCoverageIndicesWithin(table, coverage_offset, lig_set_count);
-    const lig_set_offsets_pos = subtable_offset + 6;
-    try ensureBytesWithin(table, lig_set_offsets_pos, @as(usize, lig_set_count) * 2);
-    for (0..lig_set_count) |set_i| {
-        const set_relative = try readU16BadGsub(table, lig_set_offsets_pos + set_i * 2);
-        const set_offset = checkedRequiredSubtableOffset(table, subtable_offset, set_relative) catch continue;
-        const ligature_count = try readU16BadGsub(table, set_offset);
-        const ligature_offsets_pos = set_offset + 2;
-        try ensureBytesWithin(table, ligature_offsets_pos, @as(usize, ligature_count) * 2);
-        for (0..ligature_count) |ligature_i| {
-            const ligature_relative = try readU16BadGsub(table, ligature_offsets_pos + ligature_i * 2);
-            const ligature_offset = checkedRequiredSubtableOffset(table, set_offset, ligature_relative) catch continue;
-            try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, ligature_offset));
-            const component_count = try readU16BadGsub(table, ligature_offset + 2);
-            if (component_count == 0) continue;
-            try ensureBytesWithin(table, ligature_offset + 4, (@as(usize, component_count) - 1) * 2);
-            for (1..component_count) |component_i| {
-                try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, ligature_offset + 4 + (component_i - 1) * 2));
-            }
-        }
     }
 }
 
@@ -5669,35 +5533,6 @@ fn ensureCoverageTableWithin(table: Table, coverage_offset: usize) GsubError!voi
 
 fn ensureCoverageTableWithinForMembership(table: Table, coverage_offset: usize) GsubError!void {
     return table_core.coverage.validate(table, coverage_offset, .membership);
-}
-
-fn ensureSingleDeltaSubstitutionWithinMaxp(table: Table, coverage_offset: usize, delta: i16) GsubError!void {
-    const format = try readU16BadGsub(table, coverage_offset);
-    switch (format) {
-        1 => {
-            const glyph_count = try readU16BadGsub(table, coverage_offset + 2);
-            for (0..glyph_count) |glyph_i| {
-                const glyph = try readU16BadGsub(table, coverage_offset + 4 + glyph_i * 2);
-                try ensureGlyphIdWithinMaxp(table, singleSubstDeltaResult(glyph, delta));
-            }
-        },
-        2 => {
-            const range_count = try readU16BadGsub(table, coverage_offset + 2);
-            for (0..range_count) |range_i| {
-                const range_offset = coverage_offset + 4 + range_i * 6;
-                const start = try readU16BadGsub(table, range_offset);
-                const end = try readU16BadGsub(table, range_offset + 2);
-                for (@as(usize, start)..@as(usize, end) + 1) |glyph| {
-                    try ensureGlyphIdWithinMaxp(table, singleSubstDeltaResult(@intCast(glyph), delta));
-                }
-            }
-        },
-        else => return error.UnsupportedGsub,
-    }
-}
-
-fn singleSubstDeltaResult(glyph_id: GlyphId, delta: i16) GlyphId {
-    return @bitCast(@as(i16, @bitCast(glyph_id)) +% delta);
 }
 
 fn ensureGlyphIdWithinMaxp(table: Table, glyph_id: usize) GsubError!void {
@@ -6683,7 +6518,7 @@ test "GSUB rejects null required Coverage offsets" {
     writeCoverage1(&bytes, subtable + 6, 1);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGsub, ensureSingleSubstitutionSubtableWithin(table, subtable));
+    try std.testing.expectError(error.BadGsub, validation.direct.single.validate(table, subtable));
     try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
 
     var glyphs = std.ArrayList(GlyphId).empty;
@@ -6697,7 +6532,7 @@ test "GSUB rejects null required Coverage offsets" {
     // With the Coverage pointer repaired, the same subtable is a normal
     // SingleSubst; only the aliasing null child pointer is invalid.
     writeU16Test(&bytes, subtable + 2, 6);
-    try ensureSingleSubstitutionSubtableWithin(table, subtable);
+    try validation.direct.single.validate(table, subtable);
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
 }
 
@@ -7275,7 +7110,7 @@ test "GSUB MultipleSubst rejects null Sequence offsets" {
     writeCoverage1(&bytes, subtable + 8, 1);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGsub, ensureMultipleSubstitutionSubtableWithin(table, subtable));
+    try std.testing.expectError(error.BadGsub, validation.direct.set_sequence.multiple(table, subtable));
     try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
 
     var glyphs = std.ArrayList(GlyphId).empty;
@@ -7288,7 +7123,7 @@ test "GSUB MultipleSubst rejects null Sequence offsets" {
     // pointer itself is required to name a real Sequence table.
     writeU16Test(&bytes, subtable + 6, 14);
     writeU16Test(&bytes, subtable + 14, 0); // Sequence.GlyphCount.
-    try ensureMultipleSubstitutionSubtableWithin(table, subtable);
+    try validation.direct.set_sequence.multiple(table, subtable);
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
 }
 
@@ -7302,7 +7137,7 @@ test "GSUB AlternateSubst rejects null AlternateSet offsets" {
     writeCoverage1(&bytes, subtable + 8, 1);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGsub, ensureAlternateSubstitutionSubtableWithin(table, subtable));
+    try std.testing.expectError(error.BadGsub, validation.direct.set_sequence.alternate(table, subtable));
     try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
 
     var glyphs = std.ArrayList(GlyphId).empty;
@@ -7315,7 +7150,7 @@ test "GSUB AlternateSubst rejects null AlternateSet offsets" {
     // the child pointer itself is required to name an actual AlternateSet.
     writeU16Test(&bytes, subtable + 6, 14);
     writeU16Test(&bytes, subtable + 14, 0); // AlternateSet.GlyphCount.
-    try ensureAlternateSubstitutionSubtableWithin(table, subtable);
+    try validation.direct.set_sequence.alternate(table, subtable);
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
 }
 
@@ -7330,7 +7165,7 @@ test "GSUB LigatureSubst rejects null required offsets" {
         writeCoverage1(&bytes, subtable + 8, 1);
 
         const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-        try std.testing.expectError(error.BadGsub, ensureLigatureSubstitutionSubtableWithin(table, subtable));
+        try std.testing.expectError(error.BadGsub, validation.direct.ligature.validate(table, subtable, .strict));
         try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
 
         var glyphs = std.ArrayList(GlyphId).empty;
@@ -7346,7 +7181,7 @@ test "GSUB LigatureSubst rejects null required offsets" {
         // offset itself is required to name a real child table.
         writeU16Test(&bytes, subtable + 6, 14);
         writeU16Test(&bytes, subtable + 14, 0); // LigatureSet.LigatureCount.
-        try ensureLigatureSubstitutionSubtableWithin(table, subtable);
+        try validation.direct.ligature.validate(table, subtable, .strict);
         try validateGlyphBounds(&bytes, 0, bytes.len, 4);
     }
 
@@ -7363,7 +7198,7 @@ test "GSUB LigatureSubst rejects null required offsets" {
         writeCoverage1(&bytes, subtable + 12, 1);
 
         const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-        try std.testing.expectError(error.BadGsub, ensureLigatureSubstitutionSubtableWithin(table, subtable));
+        try std.testing.expectError(error.BadGsub, validation.direct.ligature.validate(table, subtable, .strict));
         try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
 
         var glyphs = std.ArrayList(GlyphId).empty;
@@ -11465,6 +11300,7 @@ test {
     _ = @import("gsub/tests/feature/root.zig");
     _ = @import("gsub/tests/runtime/root.zig");
     _ = @import("gsub/tests/table/root.zig");
+    _ = @import("gsub/tests/validation/root.zig");
 }
 
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {

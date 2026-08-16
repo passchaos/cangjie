@@ -34,6 +34,8 @@ const ot_layout = @import("opentype/layout.zig");
 const trak_mod = @import("opentype/trak.zig");
 const tt_program_mod = @import("opentype/tt_program.zig");
 const sfnt = @import("font/sfnt/root.zig");
+const font_metrics = @import("font/metrics/root.zig");
+const presentation_metrics = font_metrics.presentation;
 const table_only_fixture = @import("font/tests/fixtures/table_only.zig");
 const bitmap_mod = @import("font/tables/bitmap/root.zig");
 const color_tables = @import("font/tables/color/root.zig");
@@ -381,74 +383,11 @@ pub const Os2Info = struct {
     upper_optical_point_size: ?u16 = null,
 };
 
-pub const FontDecorationMetricSource = enum {
-    font,
-    fallback,
-};
-
-pub const ScaledFontDecorationMetrics = struct {
-    underline_position: f32,
-    underline_thickness: f32,
-    strikeout_position: f32,
-    strikeout_thickness: f32,
-};
-
-pub const ScaledFontScriptMetrics = struct {
-    superscript_x_size: f32,
-    superscript_y_size: f32,
-    superscript_x_offset: f32,
-    superscript_y_offset: f32,
-    subscript_x_size: f32,
-    subscript_y_size: f32,
-    subscript_x_offset: f32,
-    subscript_y_offset: f32,
-};
-
-pub const FontScriptMetrics = struct {
-    superscript_x_size: i16,
-    superscript_y_size: i16,
-    superscript_x_offset: i16,
-    superscript_y_offset: i16,
-    subscript_x_size: i16,
-    subscript_y_size: i16,
-    subscript_x_offset: i16,
-    subscript_y_offset: i16,
-
-    pub fn scale(self: FontScriptMetrics, font_size: f32, units_per_em: u16) ScaledFontScriptMetrics {
-        const units = @max(@as(f32, @floatFromInt(units_per_em)), 1.0);
-        const factor = font_size / units;
-        return .{
-            .superscript_x_size = @as(f32, @floatFromInt(self.superscript_x_size)) * factor,
-            .superscript_y_size = @as(f32, @floatFromInt(self.superscript_y_size)) * factor,
-            .superscript_x_offset = @as(f32, @floatFromInt(self.superscript_x_offset)) * factor,
-            .superscript_y_offset = @as(f32, @floatFromInt(self.superscript_y_offset)) * factor,
-            .subscript_x_size = @as(f32, @floatFromInt(self.subscript_x_size)) * factor,
-            .subscript_y_size = @as(f32, @floatFromInt(self.subscript_y_size)) * factor,
-            .subscript_x_offset = @as(f32, @floatFromInt(self.subscript_x_offset)) * factor,
-            .subscript_y_offset = @as(f32, @floatFromInt(self.subscript_y_offset)) * factor,
-        };
-    }
-};
-
-pub const FontDecorationMetrics = struct {
-    underline_position: i16,
-    underline_thickness: i16,
-    strikeout_position: i16,
-    strikeout_thickness: i16,
-    underline_source: FontDecorationMetricSource = .fallback,
-    strikeout_source: FontDecorationMetricSource = .fallback,
-
-    pub fn scale(self: FontDecorationMetrics, font_size: f32, units_per_em: u16) ScaledFontDecorationMetrics {
-        const units = @max(@as(f32, @floatFromInt(units_per_em)), 1.0);
-        const factor = font_size / units;
-        return .{
-            .underline_position = @as(f32, @floatFromInt(self.underline_position)) * factor,
-            .underline_thickness = @max(0.5, @as(f32, @floatFromInt(self.underline_thickness)) * factor),
-            .strikeout_position = @as(f32, @floatFromInt(self.strikeout_position)) * factor,
-            .strikeout_thickness = @max(0.5, @as(f32, @floatFromInt(self.strikeout_thickness)) * factor),
-        };
-    }
-};
+pub const FontDecorationMetricSource = presentation_metrics.Source;
+pub const ScaledFontDecorationMetrics = presentation_metrics.ScaledDecoration;
+pub const ScaledFontScriptMetrics = presentation_metrics.ScaledScript;
+pub const FontScriptMetrics = presentation_metrics.Script;
+pub const FontDecorationMetrics = presentation_metrics.Decoration;
 
 pub const VerticalMetrics = struct {
     advance_height: u16,
@@ -3211,7 +3150,14 @@ pub const Font = struct {
             try sfnt.checksum.validate(self.data, os2);
             _ = try readOs2StyleAttributes(self.data, os2);
         }
-        return try readFontDecorationMetrics(self.data, self.post, self.os2, self.units_per_em, self.ascender, self.descender);
+        return try presentation_metrics.decoration(
+            self.data,
+            self.post,
+            self.os2,
+            self.units_per_em,
+            self.ascender,
+            self.descender,
+        );
     }
 
     pub fn scaledDecorationMetrics(self: *const Font, font_size: f32) FontError!ScaledFontDecorationMetrics {
@@ -3222,7 +3168,7 @@ pub const Font = struct {
         const os2 = self.os2 orelse return null;
         try sfnt.checksum.validate(self.data, os2);
         _ = try readOs2StyleAttributes(self.data, os2);
-        return try readOs2ScriptMetrics(self.data, os2);
+        return try presentation_metrics.script(self.data, os2);
     }
 
     pub fn scaledScriptMetrics(self: *const Font, font_size: f32) FontError!?ScaledFontScriptMetrics {
@@ -5640,91 +5586,6 @@ fn readOs2StyleAttributes(data: []const u8, os2: TableRecord) FontError!StyleAtt
         .italic = (fs_selection & 0x0001) != 0,
         .bold = (fs_selection & 0x0020) != 0,
     };
-}
-
-fn readFontDecorationMetrics(
-    data: []const u8,
-    post: ?TableRecord,
-    os2: ?TableRecord,
-    units_per_em: u16,
-    ascender: i16,
-    descender: i16,
-) FontError!FontDecorationMetrics {
-    var metrics = fallbackDecorationMetrics(units_per_em, ascender, descender);
-    if (post) |post_table| {
-        const post_metrics = try readPostDecorationMetrics(data, post_table);
-        if (post_metrics.thickness > 0) {
-            metrics.underline_position = post_metrics.position;
-            metrics.underline_thickness = post_metrics.thickness;
-            metrics.underline_source = .font;
-        }
-    }
-    if (os2) |os2_table| {
-        const strike_metrics = try readOs2StrikeoutMetrics(data, os2_table);
-        if (strike_metrics.thickness > 0) {
-            metrics.strikeout_position = strike_metrics.position;
-            metrics.strikeout_thickness = strike_metrics.thickness;
-            metrics.strikeout_source = .font;
-        }
-    }
-    return metrics;
-}
-
-fn readPostDecorationMetrics(data: []const u8, post: TableRecord) FontError!struct { position: i16, thickness: i16 } {
-    try sfnt.requireLength(post, 12);
-    return .{
-        .position = try bin.readI16At(data, post.offset + 8),
-        .thickness = try bin.readI16At(data, post.offset + 10),
-    };
-}
-
-fn readOs2StrikeoutMetrics(data: []const u8, os2: TableRecord) FontError!struct { position: i16, thickness: i16 } {
-    try sfnt.requireLength(os2, 30);
-    return .{
-        .thickness = try bin.readI16At(data, os2.offset + 26),
-        .position = try bin.readI16At(data, os2.offset + 28),
-    };
-}
-
-fn readOs2ScriptMetrics(data: []const u8, os2: TableRecord) FontError!FontScriptMetrics {
-    try sfnt.requireLength(os2, 26);
-    const metrics = FontScriptMetrics{
-        .subscript_x_size = try bin.readI16At(data, os2.offset + 10),
-        .subscript_y_size = try bin.readI16At(data, os2.offset + 12),
-        .subscript_x_offset = try bin.readI16At(data, os2.offset + 14),
-        .subscript_y_offset = try bin.readI16At(data, os2.offset + 16),
-        .superscript_x_size = try bin.readI16At(data, os2.offset + 18),
-        .superscript_y_size = try bin.readI16At(data, os2.offset + 20),
-        .superscript_x_offset = try bin.readI16At(data, os2.offset + 22),
-        .superscript_y_offset = try bin.readI16At(data, os2.offset + 24),
-    };
-    if (metrics.subscript_x_size <= 0 or metrics.subscript_y_size <= 0 or
-        metrics.superscript_x_size <= 0 or metrics.superscript_y_size <= 0)
-    {
-        return error.InvalidMetrics;
-    }
-    return metrics;
-}
-
-fn fallbackDecorationMetrics(units_per_em: u16, ascender: i16, descender: i16) FontDecorationMetrics {
-    const units = @max(@as(i32, @intCast(units_per_em)), 1);
-    const thickness = @max(1, @divTrunc(units, 16));
-    const underline_position = -@as(i32, @max(thickness, @divTrunc(units, 9)));
-    const asc = if (ascender > 0) @as(i32, ascender) else @divTrunc(units * 4, 5);
-    const desc = if (descender < 0) -@as(i32, descender) else @divTrunc(units, 5);
-    const strikeout_position = @max(thickness, @divTrunc(asc * 3, 10));
-    return .{
-        .underline_position = clampI16(underline_position),
-        .underline_thickness = clampI16(thickness),
-        .strikeout_position = clampI16(@min(strikeout_position, asc + desc)),
-        .strikeout_thickness = clampI16(thickness),
-    };
-}
-
-fn clampI16(value: i32) i16 {
-    if (value < std.math.minInt(i16)) return std.math.minInt(i16);
-    if (value > std.math.maxInt(i16)) return std.math.maxInt(i16);
-    return @intCast(value);
 }
 
 fn validateBaseTable(data: []const u8, base: TableRecord) FontError!void {

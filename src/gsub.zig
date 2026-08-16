@@ -1391,187 +1391,6 @@ test "GSUB LigatureSubst rejects null required offsets" {
     }
 }
 
-test "GSUB glyph ids are validated against maxp glyph count" {
-    const max_glyphs: u16 = 3;
-
-    {
-        var bytes = [_]u8{0} ** 38;
-        const subtable = writeSingleLookupGsubTest(&bytes, 1);
-        writeU16Test(&bytes, subtable + 0, 1); // SingleSubst format 1.
-        writeU16Test(&bytes, subtable + 2, 6);
-        writeI16Test(&bytes, subtable + 4, 0);
-        writeCoverage1(&bytes, subtable + 6, 3); // Invalid Coverage glyph.
-
-        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
-    }
-
-    {
-        var bytes = [_]u8{0} ** 38;
-        const subtable = writeSingleLookupGsubTest(&bytes, 1);
-        writeU16Test(&bytes, subtable + 0, 1); // SingleSubst format 1.
-        writeU16Test(&bytes, subtable + 2, 6);
-        writeI16Test(&bytes, subtable + 4, 0x7fff);
-        writeCoverage1(&bytes, subtable + 6, 1);
-
-        // Delta results use the full 16-bit glyph-id domain and may be
-        // transient inputs to a later lookup. Only the covered source glyph
-        // must be renderable at this validation boundary.
-        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
-        try validateGlyphBoundsForShaping(&bytes, 0, bytes.len, max_glyphs);
-    }
-
-    {
-        var bytes = [_]u8{0} ** 42;
-        const subtable = writeSingleLookupGsubTest(&bytes, 1);
-        writeU16Test(&bytes, subtable + 0, 2); // SingleSubst format 2.
-        writeU16Test(&bytes, subtable + 2, 10);
-        writeU16Test(&bytes, subtable + 4, 1);
-        writeU16Test(&bytes, subtable + 6, 3); // Invalid substitute glyph.
-        writeCoverage1(&bytes, subtable + 10, 1);
-
-        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
-    }
-
-    {
-        var bytes = [_]u8{0} ** 46;
-        const subtable = writeSingleLookupGsubTest(&bytes, 2);
-        writeU16Test(&bytes, subtable + 0, 1);
-        writeU16Test(&bytes, subtable + 2, 14);
-        writeU16Test(&bytes, subtable + 4, 1);
-        writeU16Test(&bytes, subtable + 6, 8);
-        writeU16Test(&bytes, subtable + 8, 2);
-        writeU16Test(&bytes, subtable + 10, 1);
-        writeU16Test(&bytes, subtable + 12, 3); // Invalid MultipleSubst sequence glyph.
-        writeCoverage1(&bytes, subtable + 14, 1);
-
-        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
-    }
-
-    {
-        var bytes = [_]u8{0} ** 46;
-        const subtable = writeSingleLookupGsubTest(&bytes, 3);
-        writeU16Test(&bytes, subtable + 0, 1);
-        writeU16Test(&bytes, subtable + 2, 14);
-        writeU16Test(&bytes, subtable + 4, 1);
-        writeU16Test(&bytes, subtable + 6, 8);
-        writeU16Test(&bytes, subtable + 8, 2);
-        writeU16Test(&bytes, subtable + 10, 2);
-        writeU16Test(&bytes, subtable + 12, 3); // Invalid alternate glyph.
-        writeCoverage1(&bytes, subtable + 14, 1);
-
-        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
-    }
-
-    {
-        var bytes = [_]u8{0} ** 50;
-        const subtable = writeSingleLookupGsubTest(&bytes, 4);
-        writeU16Test(&bytes, subtable + 0, 1);
-        writeU16Test(&bytes, subtable + 2, 18);
-        writeU16Test(&bytes, subtable + 4, 1);
-        writeU16Test(&bytes, subtable + 6, 8);
-        writeU16Test(&bytes, subtable + 8, 1);
-        writeU16Test(&bytes, subtable + 10, 4);
-        writeU16Test(&bytes, subtable + 12, 2);
-        writeU16Test(&bytes, subtable + 14, 2);
-        writeU16Test(&bytes, subtable + 16, 3); // Invalid ligature component glyph.
-        writeCoverage1(&bytes, subtable + 18, 1);
-
-        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
-    }
-
-    {
-        var bytes = [_]u8{0} ** 48;
-        const subtable = writeSingleLookupGsubTest(&bytes, 5);
-        writeU16Test(&bytes, subtable + 0, 2); // ContextSubst format 2.
-        writeU16Test(&bytes, subtable + 2, 8);
-        writeU16Test(&bytes, subtable + 4, 14);
-        writeU16Test(&bytes, subtable + 6, 0);
-        writeCoverage1(&bytes, subtable + 8, 1);
-        writeU16Test(&bytes, subtable + 14, 1); // ClassDef format 1.
-        writeU16Test(&bytes, subtable + 16, 3); // Invalid ClassDef glyph range start.
-        writeU16Test(&bytes, subtable + 18, 1);
-        writeU16Test(&bytes, subtable + 20, 1);
-
-        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
-    }
-
-    {
-        var bytes = [_]u8{0} ** 44;
-        const subtable = writeSingleLookupGsubTest(&bytes, 8);
-        writeU16Test(&bytes, subtable + 0, 1);
-        writeU16Test(&bytes, subtable + 2, 12);
-        writeU16Test(&bytes, subtable + 4, 0);
-        writeU16Test(&bytes, subtable + 6, 0);
-        writeU16Test(&bytes, subtable + 8, 1);
-        writeU16Test(&bytes, subtable + 10, 3); // Invalid ReverseChainSingle substitute.
-        writeCoverage1(&bytes, subtable + 12, 1);
-
-        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, max_glyphs));
-    }
-}
-
-test "GSUB validates coverage indexes against substitution arrays" {
-    {
-        var bytes = [_]u8{0} ** 44;
-        const subtable = writeSingleLookupGsubTest(&bytes, 1);
-        writeU16Test(&bytes, subtable + 0, 2); // SingleSubst format 2.
-        writeU16Test(&bytes, subtable + 2, 10);
-        writeU16Test(&bytes, subtable + 4, 1); // One substitute for two covered glyphs.
-        writeU16Test(&bytes, subtable + 6, 2);
-        writeCoverage1List(&bytes, subtable + 10, &.{ 1, 2 });
-
-        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-    }
-
-    {
-        var bytes = [_]u8{0} ** 46;
-        const subtable = writeSingleLookupGsubTest(&bytes, 2);
-        writeU16Test(&bytes, subtable + 0, 1);
-        writeU16Test(&bytes, subtable + 2, 12);
-        writeU16Test(&bytes, subtable + 4, 1); // One Sequence offset for two covered glyphs.
-        writeU16Test(&bytes, subtable + 6, 8);
-        const sequence = subtable + 8;
-        writeU16Test(&bytes, sequence + 0, 1);
-        writeU16Test(&bytes, sequence + 2, 2);
-        writeCoverage1List(&bytes, subtable + 12, &.{ 1, 2 });
-
-        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-    }
-
-    {
-        var bytes = [_]u8{0} ** 46;
-        const subtable = writeSingleLookupGsubTest(&bytes, 3);
-        writeU16Test(&bytes, subtable + 0, 1);
-        writeU16Test(&bytes, subtable + 2, 12);
-        writeU16Test(&bytes, subtable + 4, 1); // One AlternateSet offset for two covered glyphs.
-        writeU16Test(&bytes, subtable + 6, 8);
-        const alternate_set = subtable + 8;
-        writeU16Test(&bytes, alternate_set + 0, 1);
-        writeU16Test(&bytes, alternate_set + 2, 2);
-        writeCoverage1List(&bytes, subtable + 12, &.{ 1, 2 });
-
-        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-    }
-
-    {
-        var bytes = [_]u8{0} ** 50;
-        const subtable = writeSingleLookupGsubTest(&bytes, 4);
-        writeU16Test(&bytes, subtable + 0, 1);
-        writeU16Test(&bytes, subtable + 2, 16);
-        writeU16Test(&bytes, subtable + 4, 1); // One LigatureSet offset for two covered first glyphs.
-        writeU16Test(&bytes, subtable + 6, 8);
-        const lig_set = subtable + 8;
-        writeU16Test(&bytes, lig_set + 0, 1);
-        writeU16Test(&bytes, lig_set + 2, 4);
-        const ligature = lig_set + 4;
-        writeU16Test(&bytes, ligature + 0, 2);
-        writeU16Test(&bytes, ligature + 2, 1);
-        writeCoverage1List(&bytes, subtable + 16, &.{ 1, 2 });
-
-        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-    }
-}
-
 test "GSUB chaining class substitution applies nested lookup" {
     const allocator = std.testing.allocator;
     const bytes = try allocator.alloc(u8, 112);
@@ -3487,14 +3306,6 @@ fn writeCoverage1(bytes: []u8, offset: usize, glyph: GlyphId) void {
     writeU16Test(bytes, offset + 4, glyph);
 }
 
-fn writeCoverage1List(bytes: []u8, offset: usize, glyphs: []const GlyphId) void {
-    writeU16Test(bytes, offset + 0, 1);
-    writeU16Test(bytes, offset + 2, @intCast(glyphs.len));
-    for (glyphs, 0..) |glyph, i| {
-        writeU16Test(bytes, offset + 4 + i * 2, glyph);
-    }
-}
-
 fn writeClassDef1(bytes: []u8, offset: usize, start: GlyphId, class: u16) void {
     writeU16Test(bytes, offset + 0, 1);
     writeU16Test(bytes, offset + 2, start);
@@ -3541,6 +3352,11 @@ const MetadataIntegrationTestBindings = struct {
     pub const apply = applyWithOptions;
 };
 
+const GlyphBoundsTestBindings = struct {
+    pub const validate = validateGlyphBounds;
+    pub const validateForShaping = validateGlyphBoundsForShaping;
+};
+
 const TopologyTestBindings = struct {
     pub const apply = applyWithOptions;
     pub const validate = validateGlyphBounds;
@@ -3569,6 +3385,8 @@ test {
         .suite(MetadataIntegrationTestBindings);
     _ = @import("gsub/tests/runtime/root.zig");
     _ = @import("gsub/tests/table/root.zig");
+    _ = @import("gsub/tests/validation/table/glyph_bounds.zig")
+        .suite(GlyphBoundsTestBindings);
     _ = @import("gsub/tests/validation/table/topology.zig")
         .suite(TopologyTestBindings);
     _ = @import("gsub/tests/validation/root.zig");

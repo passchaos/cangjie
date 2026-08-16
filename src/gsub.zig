@@ -48,7 +48,7 @@ pub const feature = struct {
 pub const acceleration = struct {
     pub const Lookup = accelerator_root.Lookup;
 
-    pub const build = buildLookupAccelerators;
+    pub const build = accelerator_root.build.lookup.build;
     pub const deinit = accelerator_root.ownership.deinit;
     pub const hasRandomFeature = accelerator_root.feature_index.hasRandomFeature;
 };
@@ -1086,220 +1086,6 @@ fn applyLookupPlanEntry(table: Table, lookup_count: u16, entry: FeatureLookupPla
     }
 }
 
-fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]LookupAccelerator {
-    if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
-    const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = true };
-    const major = try readU16(table, 0);
-    if (major != 1) return error.UnsupportedGsub;
-    if (try isEmptyGsubTopology(table)) return try allocator.alloc(LookupAccelerator, 0);
-
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16(table, lookup_list_offset);
-    const accelerators = try allocator.alloc(LookupAccelerator, lookup_count);
-    @memset(accelerators, .{});
-    var built_count: usize = 0;
-    errdefer {
-        deinitLookupAcceleratorContents(allocator, accelerators[0..built_count]);
-        allocator.free(accelerators);
-    }
-    var table_uses_run_digest_cache = false;
-    var ligature_digest_lookup_count: usize = 0;
-    for (accelerators, 0..) |*accelerator, lookup_i| {
-        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + lookup_i * 2));
-        // Dispatch fields are trusted by the shaping hot path. Prove the fixed
-        // header here even though the caller normally parsed the full font
-        // already, so direct accelerator builders retain the same validation
-        // contract as uncached lookup application.
-        try ensureLookupHeaderWithin(table, lookup_offset);
-        accelerator.* = try buildLookupAccelerator(table, lookup_offset, allocator);
-        table_uses_run_digest_cache = table_uses_run_digest_cache or
-            (accelerator.chaining_coverage_only and !accelerator.chaining_input_digest.isEmpty());
-        if (!accelerator.ligature_subst.first_component_digest.isEmpty()) {
-            ligature_digest_lookup_count += 1;
-        }
-        built_count += 1;
-    }
-    // A single ligature lookup already scans the run once, so building an
-    // approximate summary first would usually be duplicate work. Two or more
-    // lookups amortize one mutation-aware run digest across their independent
-    // first-component coverages, which is common in Latin `ccmp`/`liga`.
-    table_uses_run_digest_cache = table_uses_run_digest_cache or ligature_digest_lookup_count >= 2;
-    if (accelerators.len != 0) {
-        accelerators[0].table_uses_run_digest_cache = table_uses_run_digest_cache;
-        // Detached low-level GSUB fixtures may intentionally expose only a
-        // LookupList. Feature indexing is optional for those callers; a
-        // present non-zero FeatureList offset is still parsed strictly.
-        if (try readU16(table, 6) != 0) {
-            accelerators[0].feature_index =
-                try accelerator_root.feature_index.create(
-                    table,
-                    accelerators,
-                    lookup_count,
-                    allocator,
-                );
-        }
-    }
-    return accelerators;
-}
-
-fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!LookupAccelerator {
-    const lookup_type = try readU16(table, lookup_offset);
-    const lookup_flag = try readU16(table, lookup_offset + 2);
-    const subtable_count = try readU16(table, lookup_offset + 4);
-    var accelerator = LookupAccelerator{
-        .lookup_offset = lookup_offset,
-        .lookup_type = lookup_type,
-        .lookup_flag = lookup_flag,
-        .subtable_count = subtable_count,
-        .mark_filtering_set = if ((lookup_flag & 0x0010) != 0)
-            try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2)
-        else
-            null,
-    };
-    if (lookup_type == 1 and subtable_count == 1) {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
-        accelerator.single_subst_entries = try buildSingleSubstEntries(table, subtable_offset, allocator);
-        errdefer allocator.free(accelerator.single_subst_entries);
-        if (lookup_flag == 0) {
-            accelerator.single_subst = try buildSingleSubstAccelerator(table, subtable_offset);
-        }
-    }
-    if (lookup_type == 2 and subtable_count == 1) {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
-        accelerator.multiple_subst = try buildMultipleSubstAccelerator(table, subtable_offset, allocator);
-    }
-    if (lookup_type == 4 and subtable_count == 1) {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6);
-        accelerator.ligature_subst = try buildLigatureSubstAccelerator(table, subtable_offset, allocator);
-    }
-    if (lookup_type == 5) {
-        accelerator.context_class_subtables =
-            try accelerator_root.build.class_context.context.build(
-                table,
-                lookup_offset,
-                subtable_count,
-                .direct,
-                allocator,
-            );
-        if (accelerator.context_class_subtables.len != 0) return accelerator;
-        const context_coverage =
-            try accelerator_root.build.context_coverage.build(
-                table,
-                lookup_offset,
-                subtable_count,
-                allocator,
-            );
-        accelerator.context_coverage_subtables = context_coverage.subtables;
-        accelerator.context_coverage_offsets = context_coverage.coverage_offsets;
-        accelerator.context_groups = context_coverage.groups;
-        accelerator.context_group_slots = context_coverage.group_slots;
-        if (accelerator.context_coverage_subtables.len != 0) return accelerator;
-    }
-    if (lookup_type == 7) {
-        accelerator.extension_lookup_type = try extensionLookupType(table, lookup_offset, subtable_count);
-        if (accelerator.extension_lookup_type) |wrapped_type| {
-            if (wrapped_type == 6 and try accelerator_root.build.chaining_coverage.lookupUsesCoverageOnly(table, lookup_offset, subtable_count, true)) {
-                var chaining = try accelerator_root.build.chaining_coverage.build(table, lookup_offset, subtable_count, true, accelerator.single_subst, accelerator.extension_lookup_type, allocator);
-                copyLookupDispatch(&chaining, accelerator);
-                return chaining;
-            }
-            if (wrapped_type == 5) {
-                accelerator.context_class_subtables =
-                    try accelerator_root.build.class_context.context.build(
-                        table,
-                        lookup_offset,
-                        subtable_count,
-                        .extension,
-                        allocator,
-                    );
-                if (accelerator.context_class_subtables.len != 0) return accelerator;
-            }
-            if (wrapped_type == 6) {
-                accelerator.chaining_class_subtables =
-                    try accelerator_root.build.class_context.chaining.build(
-                        table,
-                        lookup_offset,
-                        subtable_count,
-                        .extension,
-                        allocator,
-                    );
-                if (accelerator.chaining_class_subtables.len != 0) return accelerator;
-            }
-            if (wrapped_type == 8) {
-                const reverse_subtables = try allocator.alloc(ReverseChainingSingleSubtable, subtable_count);
-                errdefer allocator.free(reverse_subtables);
-                @memset(reverse_subtables, .{});
-                var group_pairs = std.ArrayList(ChainingSubtablePair).empty;
-                errdefer group_pairs.deinit(allocator);
-                var exact_contexts = std.ArrayList(ReverseChainingContextEntry).empty;
-                errdefer exact_contexts.deinit(allocator);
-                var saw_coverage = false;
-                for (0..subtable_count) |subtable_i| {
-                    const wrapper_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-                    const subtable_offset = try extensionSubtablePayload(table, wrapper_offset, 8);
-                    const parsed = try parseReverseChainingSingleSubtable(table, subtable_offset);
-                    reverse_subtables[subtable_i] = parsed;
-                    try accelerator_root.build.chaining_coverage
-                        .appendCoveragePairs(
-                        table,
-                        parsed.coverage_offset,
-                        @intCast(subtable_i),
-                        &group_pairs,
-                        allocator,
-                    );
-                    try appendReverseChainingExactContext(table, parsed, @intCast(subtable_i), &exact_contexts, allocator);
-                    saw_coverage = true;
-                }
-                if (!saw_coverage or group_pairs.items.len == 0) {
-                    group_pairs.deinit(allocator);
-                    exact_contexts.deinit(allocator);
-                    allocator.free(reverse_subtables);
-                    return accelerator;
-                }
-                const reverse_groups = try accelerator_root.index.chaining.buildGroups(group_pairs.items, allocator);
-                group_pairs.deinit(allocator);
-                errdefer {
-                    for (reverse_groups) |group| allocator.free(group.subtable_indices);
-                    allocator.free(reverse_groups);
-                }
-                const exact_contexts_slice = if (exact_contexts.items.len == subtable_count)
-                    try buildReverseChainingExactContexts(exact_contexts.items, allocator)
-                else
-                    try allocator.alloc(ReverseChainingContextEntry, 0);
-                exact_contexts.deinit(allocator);
-                accelerator.reverse_chaining_subtables = reverse_subtables;
-                accelerator.reverse_chaining_groups = reverse_groups;
-                accelerator.reverse_chaining_exact_contexts = exact_contexts_slice;
-                return accelerator;
-            }
-        }
-    }
-    if (lookup_type == 6) {
-        accelerator.chaining_class_subtables =
-            try accelerator_root.build.class_context.chaining.build(
-                table,
-                lookup_offset,
-                subtable_count,
-                .direct,
-                allocator,
-            );
-        if (accelerator.chaining_class_subtables.len != 0) return accelerator;
-    }
-    if (lookup_type != 6 or !try accelerator_root.build.chaining_coverage.lookupUsesCoverageOnly(table, lookup_offset, subtable_count, false)) return accelerator;
-
-    var chaining = try accelerator_root.build.chaining_coverage.build(table, lookup_offset, subtable_count, false, accelerator.single_subst, accelerator.extension_lookup_type, allocator);
-    copyLookupDispatch(&chaining, accelerator);
-    return chaining;
-}
-
-fn copyLookupDispatch(target: *LookupAccelerator, source: LookupAccelerator) void {
-    target.lookup_offset = source.lookup_offset;
-    target.lookup_type = source.lookup_type;
-    target.lookup_flag = source.lookup_flag;
-    target.subtable_count = source.subtable_count;
-    target.mark_filtering_set = source.mark_filtering_set;
-}
-
 fn classGroupForGlyph(classes: []const u16, first_index_start: usize, groups: []const class_context.RuleGroup, glyph: GlyphId) ?class_context.RuleGroup {
     return accelerator_root.index.class_first.find(
         classes,
@@ -1313,10 +1099,6 @@ fn chainingClassGroupForGlyph(subtable: ChainingClassSubtableAccelerator, glyph:
     return classGroupForGlyph(subtable.classes, subtable.first_index_start, subtable.groups, glyph);
 }
 
-fn buildSingleSubstAccelerator(table: Table, subtable_offset: usize) GsubError!SingleSubstAccelerator {
-    return accelerator_root.build.single.compact(table, subtable_offset);
-}
-
 fn buildSingleSubstEntries(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)![]SingleSubstEntry {
     return accelerator_root.build.single.entries(
         table,
@@ -1325,21 +1107,8 @@ fn buildSingleSubstEntries(table: Table, subtable_offset: usize, allocator: std.
     );
 }
 
-fn buildMultipleSubstAccelerator(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!MultipleSubstAccelerator {
-    return accelerator_root.build.multiple.build(
-        table,
-        subtable_offset,
-        allocator,
-    );
-}
-
 const buildLigatureSubstAccelerator =
     accelerator_root.build.ligature.build;
-
-const appendReverseChainingExactContext =
-    accelerator_root.build.reverse.appendExact;
-const buildReverseChainingExactContexts =
-    accelerator_root.build.reverse.finish;
 
 /// Validate GSUB glyph references that are meaningful at font-load time.
 ///
@@ -1781,7 +1550,11 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
         )) |accelerator|
             accelerator.extension_lookup_type orelse 0
         else
-            try extensionLookupType(table, lookup_offset, subtable_count) orelse 0;
+            try accelerator_root.build.lookup.extension.commonType(
+                table,
+                lookup_offset,
+                subtable_count,
+            ) orelse 0;
         switch (wrapped_type) {
             1 => {
                 try applyExtensionSingleSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
@@ -2031,29 +1804,12 @@ fn consumeNestedGsubOperation(options: LookupOptions) GsubError!void {
     operations_left.* -= 1;
 }
 
-fn extensionLookupType(table: Table, lookup_offset: usize, subtable_count: u16) GsubError!?u16 {
-    var common_type: ?u16 = null;
-    for (0..subtable_count) |i| {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
-        if (try readU16(table, subtable_offset) != 1) return null;
-        const wrapped_type = try readU16(table, subtable_offset + 2);
-        if (wrapped_type == 7) return error.UnsupportedGsub;
-        if (common_type) |existing| {
-            if (existing != wrapped_type) return null;
-        } else {
-            common_type = wrapped_type;
-        }
-    }
-    return common_type;
-}
-
 fn extensionSubtablePayload(table: Table, subtable_offset: usize, expected_lookup_type: u16) GsubError!usize {
-    const subst_format = try readU16(table, subtable_offset);
-    if (subst_format != 1) return error.UnsupportedGsub;
-    const extension_lookup_type = try readU16(table, subtable_offset + 2);
-    if (extension_lookup_type == 7) return error.UnsupportedGsub;
-    if (extension_lookup_type != expected_lookup_type) return error.UnsupportedGsub;
-    return checkedExtensionSubtablePayloadOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
+    return accelerator_root.build.lookup.extension.payload(
+        table,
+        subtable_offset,
+        expected_lookup_type,
+    );
 }
 
 const stack_matched_capacity = 128;
@@ -4080,7 +3836,7 @@ test "GSUB ligature run digest activates only when reusable" {
     writeU16Test(&single_lookup_bytes, 12, 4); // Lookup at 14.
     writeLigatureLookupTest(&single_lookup_bytes, 14, 1, 2, 5);
 
-    const single_accelerators = try buildLookupAccelerators(
+    const single_accelerators = try accelerator_root.build.lookup.build(
         &single_lookup_bytes,
         0,
         single_lookup_bytes.len,
@@ -4108,7 +3864,7 @@ test "GSUB ligature run digest activates only when reusable" {
     writeLigatureLookupTest(&two_lookup_bytes, 16, 1, 2, 5);
     writeLigatureLookupTest(&two_lookup_bytes, 48, 5, 3, 9);
 
-    const two_accelerators = try buildLookupAccelerators(
+    const two_accelerators = try accelerator_root.build.lookup.build(
         &two_lookup_bytes,
         0,
         two_lookup_bytes.len,
@@ -4137,7 +3893,7 @@ test "GSUB ligature run digest invalidates after an earlier ligature" {
     writeLigatureLookupTest(&bytes, 16, 1, 2, 5);
     writeLigatureLookupTest(&bytes, 48, 5, 3, 9);
 
-    const accelerators = try buildLookupAccelerators(&bytes, 0, bytes.len, allocator);
+    const accelerators = try accelerator_root.build.lookup.build(&bytes, 0, bytes.len, allocator);
     defer deinitLookupAccelerators(allocator, accelerators);
 
     var glyphs = std.ArrayList(GlyphId).empty;
@@ -5383,27 +5139,9 @@ fn ensureLookupHeaderWithin(table: Table, lookup_offset: usize) GsubError!void {
 }
 
 fn ensureLookupFixedHeaderWithin(table: Table, lookup_offset: usize) GsubError!u16 {
-    if (lookup_offset > table.length or table.length - lookup_offset < 6) return error.BadGsub;
+    try accelerator_root.build.lookup.header.validate(table, lookup_offset);
     const lookup_type = try readU16BadGsub(table, lookup_offset);
-    const lookup_flag = try readU16BadGsub(table, lookup_offset + 2);
-    const subtable_count = try readU16BadGsub(table, lookup_offset + 4);
-    try validateLookupFlag(lookup_flag);
-    const subtable_offsets_pos = lookup_offset + 6;
-    const subtable_offsets_len = @as(usize, subtable_count) * 2;
-    if (subtable_offsets_pos > table.length or subtable_offsets_len > table.length - subtable_offsets_pos) return error.BadGsub;
-    if ((lookup_flag & 0x0010) != 0) {
-        const mark_filtering_set_pos = subtable_offsets_pos + subtable_offsets_len;
-        if (mark_filtering_set_pos > table.length or table.length - mark_filtering_set_pos < 2) return error.BadGsub;
-    }
     return lookup_type;
-}
-
-fn validateLookupFlag(lookup_flag: u16) GsubError!void {
-    // OpenType currently defines only low bits 0..4 and the high-byte
-    // MarkAttachmentType. Rejecting the reserved middle bits keeps a malformed
-    // private lookup from being accepted and later interpreted with semantics
-    // this shaper does not implement.
-    if ((lookup_flag & 0x00e0) != 0) return error.BadGsub;
 }
 
 fn ensureSubstitutionLookupSubtablesWithin(table: Table, lookup_offset: usize, lookup_type: u16, subtable_count: u16) GsubError!void {
@@ -6164,7 +5902,8 @@ fn applyNestedExtensionSubstitutionAt(table: Table, subtable_offset: usize, glyp
 }
 
 fn applyReverseChainingSingleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), lookup_flag: u16, options: LookupOptions, matched: ?[]bool) GsubError!void {
-    const parsed = try parseReverseChainingSingleSubtable(table, subtable_offset);
+    const parsed =
+        try accelerator_root.build.reverse.parse(table, subtable_offset);
 
     if (glyphs.items.len == 0) return;
     // Reverse chaining scans backward so earlier replacements cannot influence
@@ -6320,7 +6059,8 @@ noinline fn applyAcceleratedChainingClassSubstitutionWithBacktrackAt(table: Tabl
 }
 
 fn applyReverseChainingSingleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, lookup_flag: u16, options: LookupOptions) GsubError!bool {
-    const parsed = try parseReverseChainingSingleSubtable(table, subtable_offset);
+    const parsed =
+        try accelerator_root.build.reverse.parse(table, subtable_offset);
     return try applyParsedReverseChainingSingleSubstitutionAt(table, parsed, glyphs, pos, lookup_flag, options);
 }
 
@@ -6355,36 +6095,6 @@ fn previousUnignoredGlyph(glyphs: []const GlyphId, pos: usize, lookup_flag: u16,
         return glyphs[glyph_i];
     }
     return null;
-}
-
-fn parseReverseChainingSingleSubtable(table: Table, subtable_offset: usize) GsubError!ReverseChainingSingleSubtable {
-    const subst_format = try readU16(table, subtable_offset);
-    if (subst_format != 1) return error.UnsupportedGsub;
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    var cursor = subtable_offset + 4;
-
-    const backtrack_count = try readU16(table, cursor);
-    cursor += 2;
-    const backtrack_offsets_pos = cursor;
-    cursor += backtrack_count * 2;
-
-    const lookahead_count = try readU16(table, cursor);
-    cursor += 2;
-    const lookahead_offsets_pos = cursor;
-    cursor += lookahead_count * 2;
-
-    const glyph_count = try readU16(table, cursor);
-    cursor += 2;
-    return .{
-        .subtable_offset = subtable_offset,
-        .coverage_offset = coverage_offset,
-        .backtrack_offsets_pos = backtrack_offsets_pos,
-        .backtrack_count = backtrack_count,
-        .lookahead_offsets_pos = lookahead_offsets_pos,
-        .lookahead_count = lookahead_count,
-        .glyph_count = glyph_count,
-        .substitutes_pos = cursor,
-    };
 }
 
 fn applyParsedReverseChainingSingleSubstitutionAt(table: Table, subtable: ReverseChainingSingleSubtable, glyphs: *std.ArrayList(GlyphId), pos: usize, lookup_flag: u16, options: LookupOptions) GsubError!bool {
@@ -6890,7 +6600,7 @@ test "GSUB accepts the all-null empty topology" {
     try applyMergedFeatureLookupPlanWithOptions(&bytes, 0, bytes.len, merged_plan, &glyphs, allocator, .{});
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
 
-    const accelerators = try buildLookupAccelerators(&bytes, 0, bytes.len, allocator);
+    const accelerators = try accelerator_root.build.lookup.build(&bytes, 0, bytes.len, allocator);
     defer allocator.free(accelerators);
     try std.testing.expectEqual(@as(usize, 0), accelerators.len);
 
@@ -8226,7 +7936,7 @@ test "GSUB cached lookup executor requires an exact nonempty plan" {
     var bytes = [_]u8{0} ** 80;
     writeCachedSingleFeatureGsubTest(&bytes);
 
-    const accelerators = try buildLookupAccelerators(&bytes, 0, bytes.len, allocator);
+    const accelerators = try accelerator_root.build.lookup.build(&bytes, 0, bytes.len, allocator);
     defer deinitLookupAccelerators(allocator, accelerators);
     var operations_left: usize = 64;
     const options = LookupOptions{
@@ -8519,7 +8229,7 @@ test "GSUB chaining coverage lookup tries subtables per position" {
 
     glyphs.clearRetainingCapacity();
     try glyphs.appendSlice(allocator, &.{ 99, 1, 1 });
-    const accelerators = try buildLookupAccelerators(&bytes, 0, bytes.len, allocator);
+    const accelerators = try accelerator_root.build.lookup.build(&bytes, 0, bytes.len, allocator);
     defer deinitLookupAccelerators(allocator, accelerators);
     try std.testing.expect(!accelerators[0].chaining_input_digest.mayHave(99));
     try applyLookupWithIndex(
@@ -9355,7 +9065,7 @@ test "GSUB context coverage accelerator preserves order skips and cardinality ch
     try generic.appendSlice(allocator, &.{ 1, 9, 2, 1, 9, 2 });
     try applyLookup(table, context_lookup, &generic, allocator, options);
 
-    const accelerator = try buildLookupAccelerator(table, context_lookup, allocator);
+    const accelerator = try accelerator_root.build.lookup.one(table, context_lookup, allocator);
     defer {
         var accelerators = [_]LookupAccelerator{accelerator};
         deinitLookupAcceleratorContents(allocator, &accelerators);
@@ -9441,7 +9151,7 @@ test "GSUB context coverage accelerator preserves order skips and cardinality ch
         second_context + 16,
         accelerator_root.build.context_coverage.max_direct_group_slots,
     );
-    const sparse_accelerator = try buildLookupAccelerator(table, context_lookup, allocator);
+    const sparse_accelerator = try accelerator_root.build.lookup.one(table, context_lookup, allocator);
     defer {
         var accelerators = [_]LookupAccelerator{sparse_accelerator};
         deinitLookupAcceleratorContents(allocator, &accelerators);
@@ -10980,7 +10690,7 @@ test "GSUB accelerates extension reverse chaining without changing subtable orde
     writeCoverage1(&bytes, reverse1 + 12, 2);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true };
-    const accelerator = try buildLookupAccelerator(table, 0, allocator);
+    const accelerator = try accelerator_root.build.lookup.one(table, 0, allocator);
     defer {
         var accelerators = [_]LookupAccelerator{accelerator};
         deinitLookupAcceleratorContents(allocator, accelerators[0..]);
@@ -11049,7 +10759,7 @@ test "GSUB exact extension reverse chaining context accelerator" {
     writeCoverage1(&bytes, second_reverse + 36, 5);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true };
-    const accelerator = try buildLookupAccelerator(table, 0, allocator);
+    const accelerator = try accelerator_root.build.lookup.one(table, 0, allocator);
     defer {
         var accelerators = [_]LookupAccelerator{accelerator};
         deinitLookupAcceleratorContents(allocator, accelerators[0..]);
@@ -11226,7 +10936,7 @@ test "GSUB lookup flags honor GDEF mark filtering sets" {
     // The validated Font path serves LookupFlag metadata from the accelerator
     // rather than rereading the variable-length header on every run.
     glyphs.items[0] = 5;
-    const accelerator = try buildLookupAccelerator(.{
+    const accelerator = try accelerator_root.build.lookup.one(.{
         .data = &bytes,
         .offset = 0,
         .length = bytes.len,

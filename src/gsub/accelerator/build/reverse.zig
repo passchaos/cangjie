@@ -9,6 +9,44 @@ pub const Error = table.coverage.Error;
 pub const Parsed = model.ReverseChainingSingleSubtable;
 pub const View = table.View;
 
+/// Parse ReverseChainSingleSubst format 1 once for both cached construction
+/// and runtime execution. Cursor positions remain table-relative so the model
+/// stays a concrete, allocation-free borrowed view.
+pub fn parse(view: View, subtable_offset: usize) Error!Parsed {
+    if (try view.readU16(subtable_offset) != 1) {
+        return error.UnsupportedGsub;
+    }
+    const coverage_offset = try table.offset.required16(
+        view,
+        subtable_offset,
+        try view.readU16(subtable_offset + 2),
+    );
+    var cursor = subtable_offset + 4;
+
+    const backtrack_count = try view.readU16(cursor);
+    cursor += 2;
+    const backtrack_offsets_pos = cursor;
+    cursor += @as(usize, backtrack_count) * 2;
+
+    const lookahead_count = try view.readU16(cursor);
+    cursor += 2;
+    const lookahead_offsets_pos = cursor;
+    cursor += @as(usize, lookahead_count) * 2;
+
+    const glyph_count = try view.readU16(cursor);
+    cursor += 2;
+    return .{
+        .subtable_offset = subtable_offset,
+        .coverage_offset = coverage_offset,
+        .backtrack_offsets_pos = backtrack_offsets_pos,
+        .backtrack_count = backtrack_count,
+        .lookahead_offsets_pos = lookahead_offsets_pos,
+        .lookahead_count = lookahead_count,
+        .glyph_count = glyph_count,
+        .substitutes_pos = cursor,
+    };
+}
+
 /// Append one exact Gulzar-style context when every relevant coverage is a
 /// singleton. Other shapes remain on the generic grouped-coverage path.
 pub fn appendExact(

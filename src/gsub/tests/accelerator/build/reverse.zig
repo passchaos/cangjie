@@ -80,6 +80,33 @@ test "reverse builder leaves non-exact shapes on generic path" {
     try std.testing.expectEqual(@as(usize, 0), contexts.items.len);
 }
 
+test "reverse parser records all cursor regions" {
+    var bytes = [_]u8{0} ** 30;
+    writeU16(&bytes, 0, 1);
+    writeU16(&bytes, 2, 18);
+    writeU16(&bytes, 4, 1);
+    writeU16(&bytes, 6, 24);
+    writeU16(&bytes, 8, 2);
+    writeU16(&bytes, 10, 24);
+    writeU16(&bytes, 12, 24);
+    writeU16(&bytes, 14, 1);
+    writeU16(&bytes, 16, 9);
+    writeCoverage1(&bytes, 18, 2);
+
+    const parsed = try build.reverse.parse(.{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+    }, 0);
+    try std.testing.expectEqual(@as(usize, 18), parsed.coverage_offset);
+    try std.testing.expectEqual(@as(usize, 6), parsed.backtrack_offsets_pos);
+    try std.testing.expectEqual(@as(u16, 1), parsed.backtrack_count);
+    try std.testing.expectEqual(@as(usize, 10), parsed.lookahead_offsets_pos);
+    try std.testing.expectEqual(@as(u16, 2), parsed.lookahead_count);
+    try std.testing.expectEqual(@as(usize, 16), parsed.substitutes_pos);
+    try std.testing.expectEqual(@as(u16, 1), parsed.glyph_count);
+}
+
 fn key(target: u16) model.ReverseChainingContextKey {
     return .{
         .target = target,

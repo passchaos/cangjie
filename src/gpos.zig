@@ -9,7 +9,6 @@ const runtime_lookup = @import("gpos/runtime/lookup/root.zig");
 const runtime_output = @import("gpos/runtime/output/root.zig");
 const table_core = @import("gpos/table/root.zig");
 const validation = @import("gpos/validation/root.zig");
-const class_context = @import("opentype/class_context.zig");
 const ligature_provenance = @import("ligature_provenance.zig");
 const run_metadata = @import("shaping/run_metadata.zig");
 const unicode = @import("unicode.zig");
@@ -44,8 +43,6 @@ const appendAdjustmentEx = runtime_output.adjustments.appendWithFlags;
 const findAdjustment = runtime_output.adjustments.find;
 const markUnsafePositioningPair = runtime_output.safety.markPair;
 const markUnsafePairApplication = runtime_output.safety.markPairApplication;
-const markUnsafePositioningChainingContext =
-    runtime_output.safety.markChainingContext;
 const context_runtime = runtime_lookup.contextual.context;
 const chaining_runtime = runtime_lookup.contextual.chaining;
 const collectCursiveAdjustment = runtime_lookup.cursive.collect;
@@ -147,10 +144,6 @@ const RunDigestCache = struct {
     }
 };
 
-const ChainingClassSubtableAccelerator =
-    accelerator_core.model.ChainingClassSubtable;
-const max_chaining_class_region_glyphs = 64;
-
 const ChainingSubtableGroup = accelerator_core.glyph_groups.Group;
 const max_context_preflight_depth = validation.lookup.max_context_depth;
 const ensurePositionRecordsWithin = validation.lookup.records;
@@ -173,10 +166,6 @@ const ensureCoverageTableWithin = validation.lookup.coverage;
 const ensureClassDefTableWithin = validation.lookup.classDef;
 const ensureClassDefTableWithinLimit =
     validation.lookup.classDefWithLimit;
-const contextual_matching =
-    @import("gpos/runtime/lookup/contextual/matching.zig");
-const collectForwardUnignoredGlyphs =
-    contextual_matching.forward;
 
 /// Validate GPOS glyph references that are meaningful at font-load time.
 ///
@@ -568,7 +557,7 @@ noinline fn collectLookupWithIndexPrepared(
                 8 => {
                     if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
                         if (accelerator.chaining_class_subtables.len != 0) {
-                            try collectExtensionChainingClassPositioningLookup(table, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options, accelerator);
+                            try chaining_runtime.class_accelerated.lookup.collect(table, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options, accelerator, collectNestedAdjustment);
                             return;
                         }
                     }
@@ -880,89 +869,6 @@ fn collectChainingContextAdjustmentAt(table: Table, subtable_offset: usize, glyp
     }
 }
 
-fn collectNestedExtensionChainingClassPositioningAt(table: Table, subtable_count: u16, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: *const LookupAccelerator) (GposError || std.mem.Allocator.Error)!bool {
-    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return false;
-    var subtable_i: usize = 0;
-    while (subtable_i < subtable_count and subtable_i < accelerator.chaining_class_subtables.len) : (subtable_i += 1) {
-        const subtable = accelerator.chaining_class_subtables[subtable_i];
-        if (subtable.rules.len == 0) continue;
-        if ((try collectAcceleratedChainingClassPositioningAt(table, subtable, glyphs, pos, adjustments, allocator, lookup_flag, options)).matched) return true;
-    }
-    return false;
-}
-
-fn collectExtensionChainingClassPositioningLookup(table: Table, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: *const LookupAccelerator) (GposError || std.mem.Allocator.Error)!void {
-    var pos: usize = 0;
-    while (pos < glyphs.len) {
-        var next_pos = pos + 1;
-        defer pos = next_pos;
-        if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
-        var subtable_i: usize = 0;
-        while (subtable_i < subtable_count and subtable_i < accelerator.chaining_class_subtables.len) : (subtable_i += 1) {
-            const subtable = accelerator.chaining_class_subtables[subtable_i];
-            if (subtable.rules.len == 0) continue;
-            const result = try collectAcceleratedChainingClassPositioningAt(table, subtable, glyphs, pos, adjustments, allocator, lookup_flag, options);
-            if (result.matched) {
-                next_pos = @max(next_pos, result.next_pos);
-                break;
-            }
-        }
-    }
-}
-
-fn collectAcceleratedChainingClassPositioningAt(table: Table, subtable: ChainingClassSubtableAccelerator, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!PositionContextResult {
-    if (try table_core.coverage.index(table, subtable.coverage_offset, glyphs[pos]) == null) return .{};
-    const input_class = try table_core.class_def.value(table, subtable.input_class_def, glyphs[pos]);
-    const group = class_context.groupForClass(subtable.groups, input_class) orelse return .{};
-    if (group.max_input_count == 0 or group.max_input_count > max_chaining_class_region_glyphs or group.max_lookahead_count > max_chaining_class_region_glyphs) return error.UnsupportedGpos;
-
-    var input_indices: [max_chaining_class_region_glyphs]usize = undefined;
-    if (!collectForwardUnignoredGlyphs(glyphs, pos, lookup_flag, options, input_indices[0..group.max_input_count])) return .{};
-    var input_classes: [max_chaining_class_region_glyphs]u16 = undefined;
-    for (1..group.max_input_count) |input_i| {
-        input_classes[input_i - 1] = try table_core.class_def.value(table, subtable.input_class_def, glyphs[input_indices[input_i]]);
-    }
-
-    var lookahead_indices: [max_chaining_class_region_glyphs]usize = undefined;
-    var lookahead_classes: [max_chaining_class_region_glyphs]u16 = undefined;
-    var lookahead_count: usize = 0;
-    var glyph_i = input_indices[group.max_input_count - 1] + 1;
-    while (glyph_i < glyphs.len and lookahead_count < group.max_lookahead_count) : (glyph_i += 1) {
-        if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, glyph_i)) continue;
-        lookahead_indices[lookahead_count] = glyph_i;
-        lookahead_classes[lookahead_count] = try table_core.class_def.value(table, subtable.lookahead_class_def, glyphs[glyph_i]);
-        lookahead_count += 1;
-    }
-
-    const rules = subtable.rules[group.start .. group.start + group.len];
-    for (rules) |rule| {
-        if (rule.input_count > group.max_input_count) return error.BadGpos;
-        if (rule.input_count == 0) continue;
-        if (rule.lookahead_count > group.max_lookahead_count) return error.BadGpos;
-        if (rule.lookahead_count > lookahead_count) continue;
-        const extra_input_count = @as(usize, rule.input_count) - 1;
-        var hash = class_context.sequenceHash(input_classes[0..extra_input_count]);
-        for (lookahead_classes[0..rule.lookahead_count]) |class| hash = class_context.sequenceHashAppend(hash, class);
-        if (rule.hash != hash) continue;
-        const expected_input = subtable.classes[rule.classes_start .. rule.classes_start + extra_input_count];
-        if (!std.mem.eql(u16, expected_input, input_classes[0..extra_input_count])) continue;
-        const expected_lookahead = subtable.classes[rule.classes_start + extra_input_count .. rule.classes_start + extra_input_count + rule.lookahead_count];
-        if (!std.mem.eql(u16, expected_lookahead, lookahead_classes[0..rule.lookahead_count])) continue;
-
-        const matched_inputs = input_indices[0..rule.input_count];
-        try markUnsafePositioningChainingContext(
-            allocator,
-            &options,
-            &.{},
-            matched_inputs,
-            lookahead_indices[0..rule.lookahead_count],
-        );
-        try collectNestedAdjustment(table, glyphs, matched_inputs[0], rule.lookup_index, adjustments, allocator, options);
-        return .{ .matched = true, .next_pos = matched_inputs[matched_inputs.len - 1] + 1 };
-    }
-    return .{};
-}
-
 fn collectPositionRecordsMapped(table: Table, records_pos: usize, record_count: usize, input_indices: []const usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     if (!table.assume_validated) {
         try ensurePositionRecordsWithin(table, records_pos, record_count, input_indices.len);
@@ -1091,7 +997,7 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
     if (lookup_type == 9) {
         if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
             if (accelerator.chaining_class_subtables.len != 0) {
-                _ = try collectNestedExtensionChainingClassPositioningAt(table, subtable_count, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, accelerator);
+                _ = try chaining_runtime.class_accelerated.lookup.collectNestedAt(table, subtable_count, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, accelerator, collectNestedAdjustment);
                 return;
             }
         }

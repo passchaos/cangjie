@@ -1150,100 +1150,6 @@ fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, alloc
     return accelerators;
 }
 
-const ContextCoverageLookupData = struct {
-    subtables: []ContextCoverageSubtable,
-    coverage_offsets: []usize,
-    groups: []ChainingSubtableGroup,
-    group_slots: []u16,
-};
-
-// A direct slot is a u16 `group_index + 1`; zero remains the miss sentinel.
-// Cap each lookup at 8 KiB so sparse, high-glyph fonts retain the compact
-// binary-search representation rather than trading unbounded memory for O(1)
-// dispatch.
-const max_context_direct_group_slots = 4096;
-
-fn buildContextCoverageLookupAccelerator(
-    table: Table,
-    lookup_offset: usize,
-    subtable_count: u16,
-    allocator: std.mem.Allocator,
-) (GsubError || std.mem.Allocator.Error)!ContextCoverageLookupData {
-    for (0..subtable_count) |subtable_i| {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-        if (try readU16(table, subtable_offset) != 3) {
-            return .{
-                .subtables = try allocator.alloc(ContextCoverageSubtable, 0),
-                .coverage_offsets = try allocator.alloc(usize, 0),
-                .groups = try allocator.alloc(ChainingSubtableGroup, 0),
-                .group_slots = try allocator.alloc(u16, 0),
-            };
-        }
-    }
-    const subtables = try allocator.alloc(ContextCoverageSubtable, subtable_count);
-    errdefer allocator.free(subtables);
-    @memset(subtables, .{});
-    var coverage_offsets = std.ArrayList(usize).empty;
-    errdefer coverage_offsets.deinit(allocator);
-    var group_pairs = std.ArrayList(ChainingSubtablePair).empty;
-    errdefer group_pairs.deinit(allocator);
-
-    for (subtables, 0..) |*subtable, subtable_i| {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-        const glyph_count = try readU16(table, subtable_offset + 2);
-        if (glyph_count == 0 or glyph_count > 64) return error.UnsupportedGsub;
-        const subst_count = try readU16(table, subtable_offset + 4);
-        const coverage_start = coverage_offsets.items.len;
-        try coverage_offsets.ensureUnusedCapacity(allocator, glyph_count);
-        for (0..glyph_count) |coverage_i| {
-            const coverage_offset = try checkedRequiredCoverageOffset(
-                table,
-                subtable_offset,
-                try readU16(table, subtable_offset + 6 + coverage_i * 2),
-            );
-            coverage_offsets.appendAssumeCapacity(coverage_offset);
-            if (coverage_i == 0) {
-                try appendChainingSubtablePairs(table, coverage_offset, @intCast(subtable_i), &group_pairs, allocator);
-            }
-        }
-        subtable.* = .{
-            .glyph_count = glyph_count,
-            .coverage_start = coverage_start,
-            .subst_count = subst_count,
-            .records_pos = subtable_offset + 6 + @as(usize, glyph_count) * 2,
-        };
-    }
-    const groups = try accelerator_root.index.chaining.buildGroups(group_pairs.items, allocator);
-    group_pairs.deinit(allocator);
-    errdefer {
-        for (groups) |group| allocator.free(group.subtable_indices);
-        allocator.free(groups);
-    }
-    const group_slots = slots: {
-        if (groups.len == 0 or
-            groups[groups.len - 1].glyph >= max_context_direct_group_slots or
-            groups.len > std.math.maxInt(u16))
-        {
-            break :slots try allocator.alloc(u16, 0);
-        }
-        // Context format 3 probes one first glyph at every position. Compact
-        // glyph spaces can dispatch directly, avoiding hash/collision walks.
-        const slots = try allocator.alloc(u16, @as(usize, groups[groups.len - 1].glyph) + 1);
-        @memset(slots, 0);
-        for (groups, 0..) |group, group_index| {
-            slots[group.glyph] = @intCast(group_index + 1);
-        }
-        break :slots slots;
-    };
-    errdefer allocator.free(group_slots);
-    return .{
-        .subtables = subtables,
-        .coverage_offsets = try coverage_offsets.toOwnedSlice(allocator),
-        .groups = groups,
-        .group_slots = group_slots,
-    };
-}
-
 fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem.Allocator) (GsubError || std.mem.Allocator.Error)!LookupAccelerator {
     const lookup_type = try readU16(table, lookup_offset);
     const lookup_flag = try readU16(table, lookup_offset + 2);
@@ -1277,7 +1183,13 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
     if (lookup_type == 5) {
         accelerator.context_class_subtables = try buildContextClassSubtableAccelerators(table, lookup_offset, subtable_count, allocator);
         if (accelerator.context_class_subtables.len != 0) return accelerator;
-        const context_coverage = try buildContextCoverageLookupAccelerator(table, lookup_offset, subtable_count, allocator);
+        const context_coverage =
+            try accelerator_root.build.context_coverage.build(
+                table,
+                lookup_offset,
+                subtable_count,
+                allocator,
+            );
         accelerator.context_coverage_subtables = context_coverage.subtables;
         accelerator.context_coverage_offsets = context_coverage.coverage_offsets;
         accelerator.context_groups = context_coverage.groups;
@@ -10423,8 +10335,16 @@ test "GSUB context coverage accelerator preserves order skips and cardinality ch
     // A high first glyph would make a dense array wasteful. Rebuild the same
     // lookup with glyph 4096 and verify that the empty-slot representation
     // falls back to ordered group search without changing substitution order.
-    writeCoverage1(&bytes, first_context + 16, max_context_direct_group_slots);
-    writeCoverage1(&bytes, second_context + 16, max_context_direct_group_slots);
+    writeCoverage1(
+        &bytes,
+        first_context + 16,
+        accelerator_root.build.context_coverage.max_direct_group_slots,
+    );
+    writeCoverage1(
+        &bytes,
+        second_context + 16,
+        accelerator_root.build.context_coverage.max_direct_group_slots,
+    );
     const sparse_accelerator = try buildLookupAccelerator(table, context_lookup, allocator);
     defer {
         var accelerators = [_]LookupAccelerator{sparse_accelerator};
@@ -10434,7 +10354,11 @@ test "GSUB context coverage accelerator preserves order skips and cardinality ch
 
     var sparse_glyphs = std.ArrayList(GlyphId).empty;
     defer sparse_glyphs.deinit(allocator);
-    try sparse_glyphs.appendSlice(allocator, &.{ max_context_direct_group_slots, 9, 2 });
+    try sparse_glyphs.appendSlice(allocator, &.{
+        accelerator_root.build.context_coverage.max_direct_group_slots,
+        9,
+        2,
+    });
     try applyContextCoverageLookupAccelerated(
         table,
         &sparse_glyphs,
@@ -10448,7 +10372,12 @@ test "GSUB context coverage accelerator preserves order skips and cardinality ch
     );
     try std.testing.expectEqualSlices(
         GlyphId,
-        &.{ max_context_direct_group_slots, 9, 20, 21 },
+        &.{
+            accelerator_root.build.context_coverage.max_direct_group_slots,
+            9,
+            20,
+            21,
+        },
         sparse_glyphs.items,
     );
 }

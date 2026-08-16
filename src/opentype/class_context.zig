@@ -51,6 +51,14 @@ pub fn ruleLessThan(_: void, lhs: Rule, rhs: Rule) bool {
 }
 
 pub fn groupForClass(groups: []const RuleGroup, class_set: u16) ?RuleGroup {
+    const index = groupIndexForClass(groups, class_set) orelse return null;
+    return groups[index];
+}
+
+pub fn groupIndexForClass(
+    groups: []const RuleGroup,
+    class_set: u16,
+) ?usize {
     var lo: usize = 0;
     var hi: usize = groups.len;
     while (lo < hi) {
@@ -61,7 +69,7 @@ pub fn groupForClass(groups: []const RuleGroup, class_set: u16) ?RuleGroup {
         } else if (class_set > candidate) {
             lo = mid + 1;
         } else {
-            return groups[mid];
+            return mid;
         }
     }
     return null;

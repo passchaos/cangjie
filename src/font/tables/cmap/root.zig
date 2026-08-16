@@ -6,6 +6,7 @@ const types = @import("types.zig");
 const validation = @import("validation/root.zig");
 const formats = @import("validation/formats.zig");
 const glyphs = @import("validation/glyphs.zig");
+const lookup = @import("lookup/root.zig");
 
 pub const Info = types.Info;
 pub const Subtable = types.Subtable;
@@ -31,3 +32,7 @@ pub const format8_groups_offset = formats.format8_groups_offset;
 pub const validateFormat0 = formats.validateFormat0;
 pub const format14PayloadOffset = validation.format14.payloadOffset;
 pub const format14RecordsEnd = validation.format14.recordsEnd;
+
+pub const glyph = lookup.glyph;
+pub const VariationResult = lookup.VariationResult;
+pub const variationGlyph = lookup.variationGlyph;

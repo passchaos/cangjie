@@ -6,7 +6,10 @@ const feature_domain = @import("gsub/feature/root.zig");
 const direct_alternate = @import("gsub/execution/direct/alternate/root.zig");
 const direct_ligature = @import("gsub/execution/direct/ligature/root.zig");
 const direct_multiple = @import("gsub/execution/direct/multiple/root.zig");
+const direct_reverse = @import("gsub/execution/direct/reverse/root.zig");
 const direct_single = @import("gsub/execution/direct/single/root.zig");
+const context_traversal =
+    @import("gsub/execution/support/context_traversal.zig");
 const GlyphId = @import("glyph.zig").GlyphId;
 const ligature_provenance = @import("ligature_provenance.zig");
 const class_context = @import("opentype/class_context.zig");
@@ -83,9 +86,6 @@ const ContextCoverageSubtable = accelerator_model.ContextCoverageSubtable;
 const ChainingCoverageSubtable = accelerator_model.ChainingCoverageSubtable;
 const FastSingleRecord = accelerator_model.FastSingleRecord;
 const ChainingClassSubtableAccelerator = accelerator_model.ChainingClassSubtable;
-const ReverseChainingSingleSubtable = accelerator_model.ReverseChainingSingleSubtable;
-const ReverseChainingContextKey = accelerator_model.ReverseChainingContextKey;
-const ReverseChainingContextEntry = accelerator_model.ReverseChainingContextEntry;
 const ChainingSubtableGroup = accelerator_model.ChainingGroup;
 const ChainingSubtablePair = accelerator_model.ChainingPair;
 const ChainingPairSubtableGroup = accelerator_model.ChainingPairGroup;
@@ -113,6 +113,14 @@ const FeatureLookupPlan = feature.LookupPlan;
 const sourceFeatureMaskForTag = feature.sourceMaskForTag;
 
 const SelectedLookup = feature_domain.run_selection.SelectedLookup;
+
+const collectForwardUnignoredGlyphs = context_traversal.collectForward;
+const collectForwardUnignoredGlyphPrefix =
+    context_traversal.collectForwardPrefix;
+const nextUnignoredGlyph = context_traversal.nextGlyph;
+const nextUnignoredGlyphIndex = context_traversal.nextIndex;
+const previousUnignoredGlyph = context_traversal.previousGlyph;
+const collectBacktrackUnignoredGlyphs = context_traversal.collectBacktrack;
 
 /// HarfBuzz enables `rand` globally with HB_OT_MAP_MAX_VALUE. Keep the sentinel
 /// public so explicit script shapers can place the common feature in the same
@@ -1520,7 +1528,7 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
                 return;
             },
             8 => {
-                try applyExtensionReverseChainingSingleSubstitutionLookup(
+                try direct_reverse.extensionLookup(
                     table,
                     lookup_offset,
                     subtable_count,
@@ -1650,7 +1658,14 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
         }
     }
     if (lookup_type == 8) {
-        try applyReverseChainingSingleSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, lookup_flag, lookup_options);
+        try direct_reverse.lookup(
+            table,
+            lookup_offset,
+            subtable_count,
+            glyphs,
+            lookup_flag,
+            lookup_options,
+        );
     }
 }
 
@@ -1815,7 +1830,13 @@ fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std
         4 => try direct_ligature.subtable(table, extension_subtable, glyphs, allocator, lookup_flag, options),
         5 => try applyContextSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options),
         6 => try applyChainingContextSubstitution(table, extension_subtable, glyphs, allocator, lookup_flag, options),
-        8 => try applyReverseChainingSingleSubstitution(table, extension_subtable, glyphs, lookup_flag, options, null),
+        8 => try direct_reverse.subtable(
+            table,
+            extension_subtable,
+            glyphs,
+            lookup_flag,
+            options,
+        ),
         else => {},
     }
 }
@@ -2618,52 +2639,6 @@ fn applyChainingClassSubstitutionLookupAccelerated(
     }
 }
 
-fn applyReverseChainingSingleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), lookup_flag: u16, options: LookupOptions) GsubError!void {
-    if (glyphs.items.len == 0) return;
-    var pos = glyphs.items.len;
-    while (pos > 0) {
-        pos -= 1;
-        for (0..subtable_count) |subtable_i| {
-            const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-            if (try applyReverseChainingSingleSubstitutionAt(table, subtable_offset, glyphs, pos, lookup_flag, options)) break;
-        }
-    }
-}
-
-fn applyExtensionReverseChainingSingleSubstitutionLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), lookup_flag: u16, options: LookupOptions, accelerator: ?*const LookupAccelerator) GsubError!void {
-    if (glyphs.items.len == 0) return;
-    var pos = glyphs.items.len;
-    while (pos > 0) {
-        pos -= 1;
-        if (accelerator) |accel| {
-            const glyph = glyphs.items[pos];
-            if (!runtime_filtering.sourceFeatureAllowsGlyph(options, pos)) continue;
-            if (runtime_filtering.lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
-            if (accel.reverse_chaining_exact_contexts.len != 0) {
-                const key = reverseChainingContextKeyForPosition(glyphs.items, pos, glyph, lookup_flag, options) orelse continue;
-                const entry = runtime.reverse_context.find(
-                    accel.reverse_chaining_exact_contexts,
-                    key,
-                ) orelse continue;
-                glyphs.items[pos] = entry.substitute;
-                runtime_mutation.markSubstituted(options, pos);
-                continue;
-            }
-            const grouped_subtables = accelerator_root.index.chaining.findIndices(accel.reverse_chaining_groups, &.{}, glyph) orelse continue;
-            for (grouped_subtables) |subtable_i| {
-                if (subtable_i >= accel.reverse_chaining_subtables.len) return error.BadGsub;
-                if (try applyParsedReverseChainingSingleSubstitutionAt(table, accel.reverse_chaining_subtables[subtable_i], glyphs, pos, lookup_flag, options)) break;
-            }
-            continue;
-        }
-        for (0..subtable_count) |subtable_i| {
-            const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-            const extension_subtable = try extensionSubtablePayload(table, subtable_offset, 8);
-            if (try applyReverseChainingSingleSubstitutionAt(table, extension_subtable, glyphs, pos, lookup_flag, options)) break;
-        }
-    }
-}
-
 fn applyChainingContextSubstitutionAt(table: Table, subtable_offset: usize, parsed_subtable: ?ChainingCoverageSubtable, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
     const subst_format = try readU16(table, subtable_offset);
     return switch (subst_format) {
@@ -3114,66 +3089,6 @@ fn applyFastChainingSingleRecords(table: Table, subtable: ChainingCoverageSubtab
     return true;
 }
 
-const CoverageSequenceKind = enum {
-    backtrack,
-    input,
-    lookahead,
-};
-
-fn collectForwardUnignoredGlyphs(glyphs: []const GlyphId, start: usize, lookup_flag: u16, options: LookupOptions, out: []usize, context_match: bool, anchor_index: usize) bool {
-    // Contextual GSUB sequences are written in terms of glyphs that the lookup
-    // participates in. IgnoreBase/Ligature/Mark and mark attachment filters
-    // remove glyphs from matching, but those skipped glyphs must remain in the
-    // buffer so sequence indexes can still target the original glyph positions.
-    // HarfBuzz also skips default-ignorable joiners only for contextual
-    // backtrack/lookahead matching when the active feature allows auto joiners;
-    // input matching keeps ZWNJ/ZWJ visible unless LookupFlag itself ignores it.
-    return collectForwardUnignoredGlyphPrefix(glyphs, start, lookup_flag, options, out, context_match, anchor_index) == out.len;
-}
-
-fn collectForwardUnignoredGlyphPrefix(glyphs: []const GlyphId, start: usize, lookup_flag: u16, options: LookupOptions, out: []usize, context_match: bool, anchor_index: usize) usize {
-    var out_i: usize = 0;
-    var glyph_i = start;
-    const anchor_syllable = runtime_filtering.sourceSyllableForGlyph(options, anchor_index);
-    while (glyph_i < glyphs.len and out_i < out.len) : (glyph_i += 1) {
-        if (runtime_filtering.contextualMaySkipGlyph(lookup_flag, options, glyphs, glyph_i, context_match)) continue;
-        if (!runtime_filtering.sourceSyllableAllowsGlyph(options, anchor_syllable, glyph_i)) break;
-        out[out_i] = glyph_i;
-        out_i += 1;
-    }
-    return out_i;
-}
-
-fn nextUnignoredGlyph(glyphs: []const GlyphId, start: usize, lookup_flag: u16, options: LookupOptions, context_match: bool, anchor_index: usize) ?GlyphId {
-    const index = nextUnignoredGlyphIndex(glyphs, start, lookup_flag, options, context_match, anchor_index) orelse return null;
-    return glyphs[index];
-}
-
-fn nextUnignoredGlyphIndex(glyphs: []const GlyphId, start: usize, lookup_flag: u16, options: LookupOptions, context_match: bool, anchor_index: usize) ?usize {
-    var glyph_i = start;
-    const anchor_syllable = runtime_filtering.sourceSyllableForGlyph(options, anchor_index);
-    while (glyph_i < glyphs.len) : (glyph_i += 1) {
-        if (runtime_filtering.contextualMaySkipGlyph(lookup_flag, options, glyphs, glyph_i, context_match)) continue;
-        if (!runtime_filtering.sourceSyllableAllowsGlyph(options, anchor_syllable, glyph_i)) return null;
-        return glyph_i;
-    }
-    return null;
-}
-
-fn collectBacktrackUnignoredGlyphs(glyphs: []const GlyphId, pos: usize, lookup_flag: u16, options: LookupOptions, out: []usize, context_match: bool, anchor_index: usize) bool {
-    var out_i: usize = 0;
-    var glyph_i = pos;
-    const anchor_syllable = runtime_filtering.sourceSyllableForGlyph(options, anchor_index);
-    while (glyph_i > 0 and out_i < out.len) {
-        glyph_i -= 1;
-        if (runtime_filtering.contextualMaySkipGlyph(lookup_flag, options, glyphs, glyph_i, context_match)) continue;
-        if (!runtime_filtering.sourceSyllableAllowsGlyph(options, anchor_syllable, glyph_i)) return false;
-        out[out_i] = glyph_i;
-        out_i += 1;
-    }
-    return out_i == out.len;
-}
-
 fn coverageIndicesMatch(table: Table, base_offset: usize, glyphs: []const GlyphId, indices: []const usize, offsets_pos: usize) GsubError!bool {
     return coverageIndicesMatchFrom(table, base_offset, glyphs, indices, offsets_pos, 0);
 }
@@ -3183,22 +3098,6 @@ fn coverageIndicesMatchFrom(table: Table, base_offset: usize, glyphs: []const Gl
     while (i < indices.len) : (i += 1) {
         const glyph_index = indices[i];
         const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16(table, offsets_pos + i * 2));
-        if (try table_core.coverage.index(table, coverage_offset, glyphs[glyph_index]) == null) return false;
-    }
-    return true;
-}
-
-fn coverageSequenceMatches(table: Table, base_offset: usize, glyphs: []const GlyphId, pos: usize, offsets_pos: usize, count: usize, kind: CoverageSequenceKind) GsubError!bool {
-    switch (kind) {
-        .backtrack => if (pos < count) return false,
-        .input, .lookahead => if (pos + count > glyphs.len) return false,
-    }
-    for (0..count) |i| {
-        const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16(table, offsets_pos + i * 2));
-        const glyph_index = switch (kind) {
-            .backtrack => pos - 1 - i,
-            .input, .lookahead => pos + i,
-        };
         if (try table_core.coverage.index(table, coverage_offset, glyphs[glyph_index]) == null) return false;
     }
     return true;
@@ -4213,25 +4112,6 @@ fn applyNestedExtensionSubstitutionAt(table: Table, subtable_offset: usize, glyp
     }
 }
 
-fn applyReverseChainingSingleSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), lookup_flag: u16, options: LookupOptions, matched: ?[]bool) GsubError!void {
-    const parsed =
-        try accelerator_root.build.reverse.parse(table, subtable_offset);
-
-    if (glyphs.items.len == 0) return;
-    // Reverse chaining scans backward so earlier replacements cannot influence
-    // the lookahead context of glyphs that have not been visited yet.
-    var pos = glyphs.items.len;
-    while (pos > 0) {
-        pos -= 1;
-        if (matched) |items| {
-            if (items[pos]) continue;
-        }
-        if (try applyParsedReverseChainingSingleSubstitutionAt(table, parsed, glyphs, pos, lookup_flag, options)) {
-            if (matched) |items| items[pos] = true;
-        }
-    }
-}
-
 fn applyAcceleratedChainingClassSubstitutionAt(table: Table, subtable: ChainingClassSubtableAccelerator, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
     const group = chainingClassGroupForGlyph(subtable, glyphs.items[pos]) orelse return .{};
     if (group.max_input_count == 0 or group.max_input_count > max_chaining_class_region_glyphs or group.max_lookahead_count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
@@ -4368,72 +4248,6 @@ noinline fn applyAcceleratedChainingClassSubstitutionWithBacktrackAt(table: Tabl
         };
     }
     return .{};
-}
-
-fn applyReverseChainingSingleSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, lookup_flag: u16, options: LookupOptions) GsubError!bool {
-    const parsed =
-        try accelerator_root.build.reverse.parse(table, subtable_offset);
-    return try applyParsedReverseChainingSingleSubstitutionAt(table, parsed, glyphs, pos, lookup_flag, options);
-}
-
-fn reverseChainingContextKeyForPosition(glyphs: []const GlyphId, pos: usize, target: GlyphId, lookup_flag: u16, options: LookupOptions) ?ReverseChainingContextKey {
-    const backtrack = previousUnignoredGlyph(glyphs, pos, lookup_flag, options, true, pos) orelse return null;
-    var lookahead: [2]GlyphId = undefined;
-    var lookahead_i: usize = 0;
-    var glyph_i = pos + 1;
-    const anchor_syllable = runtime_filtering.sourceSyllableForGlyph(options, pos);
-    while (glyph_i < glyphs.len and lookahead_i < lookahead.len) : (glyph_i += 1) {
-        if (runtime_filtering.contextualMaySkipGlyph(lookup_flag, options, glyphs, glyph_i, true)) continue;
-        if (!runtime_filtering.sourceSyllableAllowsGlyph(options, anchor_syllable, glyph_i)) return null;
-        lookahead[lookahead_i] = glyphs[glyph_i];
-        lookahead_i += 1;
-    }
-    if (lookahead_i != lookahead.len) return null;
-    return .{
-        .target = target,
-        .backtrack = backtrack,
-        .lookahead_0 = lookahead[0],
-        .lookahead_1 = lookahead[1],
-    };
-}
-
-fn previousUnignoredGlyph(glyphs: []const GlyphId, pos: usize, lookup_flag: u16, options: LookupOptions, context_match: bool, anchor_index: usize) ?GlyphId {
-    var glyph_i = pos;
-    const anchor_syllable = runtime_filtering.sourceSyllableForGlyph(options, anchor_index);
-    while (glyph_i > 0) {
-        glyph_i -= 1;
-        if (runtime_filtering.contextualMaySkipGlyph(lookup_flag, options, glyphs, glyph_i, context_match)) continue;
-        if (!runtime_filtering.sourceSyllableAllowsGlyph(options, anchor_syllable, glyph_i)) return null;
-        return glyphs[glyph_i];
-    }
-    return null;
-}
-
-fn applyParsedReverseChainingSingleSubstitutionAt(table: Table, subtable: ReverseChainingSingleSubtable, glyphs: *std.ArrayList(GlyphId), pos: usize, lookup_flag: u16, options: LookupOptions) GsubError!bool {
-    if (pos >= glyphs.items.len) return false;
-    if (!runtime_filtering.sourceFeatureAllowsGlyph(options, pos)) return false;
-    const glyph = glyphs.items[pos];
-    if (runtime_filtering.lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
-
-    const coverage = try table_core.coverage.index(table, subtable.coverage_offset, glyph) orelse return false;
-    if (coverage >= subtable.glyph_count) return false;
-    if (!try reverseCoverageMatches(table, subtable.subtable_offset, glyphs.items, pos, subtable.backtrack_offsets_pos, subtable.backtrack_count, true, lookup_flag, options)) return false;
-    if (!try reverseCoverageMatches(table, subtable.subtable_offset, glyphs.items, pos, subtable.lookahead_offsets_pos, subtable.lookahead_count, false, lookup_flag, options)) return false;
-
-    glyphs.items[pos] = try readU16(table, subtable.substitutes_pos + coverage * 2);
-    runtime_mutation.markSubstituted(options, pos);
-    return true;
-}
-fn reverseCoverageMatches(table: Table, subtable_offset: usize, glyphs: []const GlyphId, pos: usize, offsets_pos: usize, count: usize, backtrack: bool, lookup_flag: u16, options: LookupOptions) GsubError!bool {
-    var indices_buf: [64]usize = undefined;
-    if (count > indices_buf.len) return error.UnsupportedGsub;
-    const indices = indices_buf[0..count];
-    const has_context = if (backtrack)
-        collectBacktrackUnignoredGlyphs(glyphs, pos, lookup_flag, options, indices, true, pos)
-    else
-        collectForwardUnignoredGlyphs(glyphs, pos + 1, lookup_flag, options, indices, true, pos);
-    if (!has_context) return false;
-    return try coverageIndicesMatch(table, subtable_offset, glyphs, indices, offsets_pos);
 }
 
 fn readU16(table: Table, relative: usize) GsubError!u16 {
@@ -7990,323 +7804,6 @@ test "GSUB extension single substitution subtables do not cascade within lookup"
     // SingleSubst: the glyph created by the first wrapper is not eligible for
     // the later wrapper in the same lookup.
     try std.testing.expectEqualSlices(GlyphId, &.{ 20, 30 }, glyphs.items);
-}
-
-test "GSUB reverse chaining skips lookup-flag ignored context glyphs" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 46;
-
-    writeU16Test(&bytes, 0, 8);
-    writeU16Test(&bytes, 2, 0x0008);
-    writeU16Test(&bytes, 4, 1);
-    writeU16Test(&bytes, 6, 8);
-
-    const reverse = 8;
-    writeU16Test(&bytes, reverse + 0, 1);
-    writeU16Test(&bytes, reverse + 2, 20);
-    writeU16Test(&bytes, reverse + 4, 1);
-    writeU16Test(&bytes, reverse + 6, 26);
-    writeU16Test(&bytes, reverse + 8, 1);
-    writeU16Test(&bytes, reverse + 10, 32);
-    writeU16Test(&bytes, reverse + 12, 1);
-    writeU16Test(&bytes, reverse + 14, 9);
-    writeCoverage1(&bytes, reverse + 20, 2);
-    writeCoverage1(&bytes, reverse + 26, 1);
-    writeCoverage1(&bytes, reverse + 32, 3);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 4, 2, 5, 3 });
-
-    const glyph_classes = [_]u16{ 0, 0, 0, 0, 3, 3 };
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
-        .glyph_classes = &glyph_classes,
-    });
-
-    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 4, 9, 5, 3 }, glyphs.items);
-}
-
-test "GSUB substituted default ignorables stay visible to contextual matching" {
-    const allocator = std.testing.allocator;
-    const glyphs = [_]GlyphId{ 10, 11, 12 };
-    const codepoints = [_]u21{ 'A', 0x200c, 'B' };
-
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(allocator);
-    try sources.appendSlice(allocator, &.{ 0, 1, 2 });
-
-    var substituted = std.ArrayList(bool).empty;
-    defer substituted.deinit(allocator);
-    try substituted.appendSlice(allocator, &.{ false, false, false });
-
-    const options = LookupOptions{
-        .glyph_source_indices = &sources,
-        .glyph_substituted = &substituted,
-        .source_codepoints = &codepoints,
-    };
-
-    try std.testing.expect(runtime_filtering.contextualMaySkipGlyph(0, options, &glyphs, 1, true));
-    substituted.items[1] = true;
-    try std.testing.expect(!runtime_filtering.contextualMaySkipGlyph(0, options, &glyphs, 1, true));
-
-    const cgj_codepoints = [_]u21{ 'A', 0x034f, 'B' };
-    const cgj_options = LookupOptions{
-        .glyph_source_indices = &sources,
-        .glyph_substituted = &substituted,
-        .source_codepoints = &cgj_codepoints,
-    };
-    // CGJ remains transparent even after GSUB touched its glyph, and input
-    // matching treats it as transparent just like context matching does.
-    try std.testing.expect(runtime_filtering.contextualMaySkipGlyph(0, cgj_options, &glyphs, 1, true));
-    try std.testing.expect(runtime_filtering.contextualMaySkipGlyph(0, cgj_options, &glyphs, 1, false));
-
-    const mongolian_fvs_codepoints = [_]u21{ 0x1868, 0x180d, 0x180a };
-    const mongolian_fvs_options = LookupOptions{
-        .glyph_source_indices = &sources,
-        .glyph_substituted = &substituted,
-        .source_codepoints = &mongolian_fvs_codepoints,
-    };
-    try std.testing.expect(!runtime_filtering.contextualMaySkipGlyph(0, mongolian_fvs_options, &glyphs, 1, true));
-    try std.testing.expect(!runtime_filtering.contextualMaySkipGlyph(0, mongolian_fvs_options, &glyphs, 1, false));
-}
-
-test "GSUB reverse chaining subtables do not cascade within lookup" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 120;
-
-    writeU16Test(&bytes, 0, 8);
-    writeU16Test(&bytes, 2, 0);
-    writeU16Test(&bytes, 4, 3);
-    writeU16Test(&bytes, 6, 12);
-    writeU16Test(&bytes, 8, 48);
-    writeU16Test(&bytes, 10, 86);
-
-    const first_reverse = 12;
-    writeU16Test(&bytes, first_reverse + 0, 1);
-    writeU16Test(&bytes, first_reverse + 2, 20);
-    writeU16Test(&bytes, first_reverse + 4, 1);
-    writeU16Test(&bytes, first_reverse + 6, 26);
-    writeU16Test(&bytes, first_reverse + 8, 0);
-    writeU16Test(&bytes, first_reverse + 10, 1);
-    writeU16Test(&bytes, first_reverse + 12, 3);
-    writeCoverage1(&bytes, first_reverse + 20, 2);
-    writeCoverage1(&bytes, first_reverse + 26, 1);
-
-    const second_reverse = 48;
-    writeU16Test(&bytes, second_reverse + 0, 1);
-    writeU16Test(&bytes, second_reverse + 2, 20);
-    writeU16Test(&bytes, second_reverse + 4, 1);
-    writeU16Test(&bytes, second_reverse + 6, 26);
-    writeU16Test(&bytes, second_reverse + 8, 0);
-    writeU16Test(&bytes, second_reverse + 10, 1);
-    writeU16Test(&bytes, second_reverse + 12, 4);
-    writeCoverage1(&bytes, second_reverse + 20, 3);
-    writeCoverage1(&bytes, second_reverse + 26, 1);
-
-    const third_reverse = 86;
-    writeU16Test(&bytes, third_reverse + 0, 1);
-    writeU16Test(&bytes, third_reverse + 2, 20);
-    writeU16Test(&bytes, third_reverse + 4, 0);
-    writeU16Test(&bytes, third_reverse + 6, 1);
-    writeU16Test(&bytes, third_reverse + 8, 26);
-    writeU16Test(&bytes, third_reverse + 10, 1);
-    writeU16Test(&bytes, third_reverse + 12, 5);
-    writeCoverage1(&bytes, third_reverse + 20, 1);
-    writeCoverage1(&bytes, third_reverse + 26, 3);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 2 });
-
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{});
-
-    // The rightmost glyph first matches subtable 0 (2 -> 3). The left glyph
-    // then sees that refined lookahead and may match subtable 2 (1 -> 5).
-    // A subtable-global implementation would visit subtable 2 before subtable
-    // 0 has refined the right glyph and would leave the left glyph unchanged.
-    // The middle subtable also proves a replacement is not fed through later
-    // subtables for the same original position.
-    try std.testing.expectEqualSlices(GlyphId, &.{ 5, 3 }, glyphs.items);
-}
-
-test "GSUB accelerates extension reverse chaining without changing subtable order" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 72;
-
-    writeU16Test(&bytes, 0, 7); // ExtensionSubst lookup.
-    writeU16Test(&bytes, 2, 0);
-    writeU16Test(&bytes, 4, 2);
-    writeU16Test(&bytes, 6, 10); // Wrapper 0.
-    writeU16Test(&bytes, 8, 44); // Wrapper 1.
-
-    const wrapper0 = 10;
-    writeU16Test(&bytes, wrapper0 + 0, 1);
-    writeU16Test(&bytes, wrapper0 + 2, 8); // ReverseChainSingleSubst.
-    writeU32Test(&bytes, wrapper0 + 4, 8);
-    const reverse0 = wrapper0 + 8;
-    writeU16Test(&bytes, reverse0 + 0, 1);
-    writeU16Test(&bytes, reverse0 + 2, 14); // Coverage.
-    writeU16Test(&bytes, reverse0 + 4, 0); // BacktrackGlyphCount.
-    writeU16Test(&bytes, reverse0 + 6, 1); // LookaheadGlyphCount.
-    writeU16Test(&bytes, reverse0 + 8, 20);
-    writeU16Test(&bytes, reverse0 + 10, 1); // GlyphCount.
-    writeU16Test(&bytes, reverse0 + 12, 9); // Substitute glyph.
-    writeCoverage1(&bytes, reverse0 + 14, 2);
-    writeCoverage1(&bytes, reverse0 + 20, 3);
-
-    const wrapper1 = 44;
-    writeU16Test(&bytes, wrapper1 + 0, 1);
-    writeU16Test(&bytes, wrapper1 + 2, 8);
-    writeU32Test(&bytes, wrapper1 + 4, 8);
-    const reverse1 = wrapper1 + 8;
-    writeU16Test(&bytes, reverse1 + 0, 1);
-    writeU16Test(&bytes, reverse1 + 2, 12);
-    writeU16Test(&bytes, reverse1 + 4, 0);
-    writeU16Test(&bytes, reverse1 + 6, 0);
-    writeU16Test(&bytes, reverse1 + 8, 1);
-    writeU16Test(&bytes, reverse1 + 10, 10);
-    writeCoverage1(&bytes, reverse1 + 12, 2);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true };
-    const accelerator = try accelerator_root.build.lookup.one(table, 0, allocator);
-    defer {
-        var accelerators = [_]LookupAccelerator{accelerator};
-        deinitLookupAcceleratorContents(allocator, accelerators[0..]);
-    }
-    try std.testing.expect(accelerator.reverse_chaining_groups.len != 0);
-
-    var first = std.ArrayList(GlyphId).empty;
-    defer first.deinit(allocator);
-    try first.appendSlice(allocator, &.{ 2, 3 });
-    try applyExtensionReverseChainingSingleSubstitutionLookup(table, 0, 2, &first, 0, .{}, &accelerator);
-    try std.testing.expectEqualSlices(GlyphId, &.{ 9, 3 }, first.items);
-
-    var second = std.ArrayList(GlyphId).empty;
-    defer second.deinit(allocator);
-    try second.appendSlice(allocator, &.{ 2, 4 });
-    try applyExtensionReverseChainingSingleSubstitutionLookup(table, 0, 2, &second, 0, .{}, &accelerator);
-    try std.testing.expectEqualSlices(GlyphId, &.{ 10, 4 }, second.items);
-}
-
-test "GSUB exact extension reverse chaining context accelerator" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 110;
-
-    writeU16Test(&bytes, 0, 7); // ExtensionSubst lookup.
-    writeU16Test(&bytes, 2, 0);
-    writeU16Test(&bytes, 4, 2);
-    writeU16Test(&bytes, 6, 10); // Wrapper 0.
-    writeU16Test(&bytes, 8, 60); // Wrapper 1.
-
-    const first_wrapper = 10;
-    writeU16Test(&bytes, first_wrapper + 0, 1);
-    writeU16Test(&bytes, first_wrapper + 2, 8); // ReverseChainSingleSubst.
-    writeU32Test(&bytes, first_wrapper + 4, 8);
-    const first_reverse = first_wrapper + 8;
-    writeU16Test(&bytes, first_reverse + 0, 1);
-    writeU16Test(&bytes, first_reverse + 2, 18); // Target coverage.
-    writeU16Test(&bytes, first_reverse + 4, 1); // BacktrackGlyphCount.
-    writeU16Test(&bytes, first_reverse + 6, 24);
-    writeU16Test(&bytes, first_reverse + 8, 2); // LookaheadGlyphCount.
-    writeU16Test(&bytes, first_reverse + 10, 30);
-    writeU16Test(&bytes, first_reverse + 12, 36);
-    writeU16Test(&bytes, first_reverse + 14, 1); // GlyphCount.
-    writeU16Test(&bytes, first_reverse + 16, 9);
-    writeCoverage1(&bytes, first_reverse + 18, 2);
-    writeCoverage1(&bytes, first_reverse + 24, 1);
-    writeCoverage1(&bytes, first_reverse + 30, 3);
-    writeCoverage1(&bytes, first_reverse + 36, 4);
-
-    const second_wrapper = 60;
-    writeU16Test(&bytes, second_wrapper + 0, 1);
-    writeU16Test(&bytes, second_wrapper + 2, 8);
-    writeU32Test(&bytes, second_wrapper + 4, 8);
-    const second_reverse = second_wrapper + 8;
-    writeU16Test(&bytes, second_reverse + 0, 1);
-    writeU16Test(&bytes, second_reverse + 2, 18);
-    writeU16Test(&bytes, second_reverse + 4, 1);
-    writeU16Test(&bytes, second_reverse + 6, 24);
-    writeU16Test(&bytes, second_reverse + 8, 2);
-    writeU16Test(&bytes, second_reverse + 10, 30);
-    writeU16Test(&bytes, second_reverse + 12, 36);
-    writeU16Test(&bytes, second_reverse + 14, 1);
-    writeU16Test(&bytes, second_reverse + 16, 10);
-    writeCoverage1(&bytes, second_reverse + 18, 2);
-    writeCoverage1(&bytes, second_reverse + 24, 1);
-    writeCoverage1(&bytes, second_reverse + 30, 3);
-    writeCoverage1(&bytes, second_reverse + 36, 5);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true };
-    const accelerator = try accelerator_root.build.lookup.one(table, 0, allocator);
-    defer {
-        var accelerators = [_]LookupAccelerator{accelerator};
-        deinitLookupAcceleratorContents(allocator, accelerators[0..]);
-    }
-    try std.testing.expectEqual(@as(usize, 2), accelerator.reverse_chaining_exact_contexts.len);
-
-    var first = std.ArrayList(GlyphId).empty;
-    defer first.deinit(allocator);
-    try first.appendSlice(allocator, &.{ 1, 2, 3, 4 });
-    try applyExtensionReverseChainingSingleSubstitutionLookup(table, 0, 2, &first, 0, .{}, &accelerator);
-    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 9, 3, 4 }, first.items);
-
-    var second = std.ArrayList(GlyphId).empty;
-    defer second.deinit(allocator);
-    try second.appendSlice(allocator, &.{ 1, 2, 3, 5 });
-    try applyExtensionReverseChainingSingleSubstitutionLookup(table, 0, 2, &second, 0, .{}, &accelerator);
-    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 10, 3, 5 }, second.items);
-
-    var miss = std.ArrayList(GlyphId).empty;
-    defer miss.deinit(allocator);
-    try miss.appendSlice(allocator, &.{ 1, 2, 3, 6 });
-    try applyExtensionReverseChainingSingleSubstitutionLookup(table, 0, 2, &miss, 0, .{}, &accelerator);
-    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2, 3, 6 }, miss.items);
-}
-
-test "GSUB source syllable matching blocks reverse chaining backtrack" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 46;
-
-    writeU16Test(&bytes, 0, 8);
-    writeU16Test(&bytes, 2, 0);
-    writeU16Test(&bytes, 4, 1);
-    writeU16Test(&bytes, 6, 8);
-
-    const reverse = 8;
-    writeU16Test(&bytes, reverse + 0, 1);
-    writeU16Test(&bytes, reverse + 2, 20);
-    writeU16Test(&bytes, reverse + 4, 1);
-    writeU16Test(&bytes, reverse + 6, 26);
-    writeU16Test(&bytes, reverse + 8, 0);
-    writeU16Test(&bytes, reverse + 10, 1);
-    writeU16Test(&bytes, reverse + 12, 9);
-    writeCoverage1(&bytes, reverse + 20, 2);
-    writeCoverage1(&bytes, reverse + 26, 1);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 2 });
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(allocator);
-    try sources.appendSlice(allocator, &.{ 0, 1 });
-    const source_syllables = [_]u8{ 1, 2 };
-
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
-        .glyph_source_indices = &sources,
-        .source_syllables = &source_syllables,
-        .match_source_syllable = true,
-    });
-
-    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
-
-    const same_syllable = [_]u8{ 1, 1 };
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, allocator, .{
-        .glyph_source_indices = &sources,
-        .source_syllables = &same_syllable,
-        .match_source_syllable = true,
-    });
-
-    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 9 }, glyphs.items);
 }
 
 test "GSUB source syllable matching can target selected lookup indexes" {

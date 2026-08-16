@@ -47,6 +47,22 @@ test "MarkLigPos attaches a mark to a ligature component" {
     try std.testing.expectEqual(@as(i16, 90), mark.x_placement);
     try std.testing.expectEqual(@as(i16, 105), mark.y_placement);
     try std.testing.expectEqual(@as(?usize, 0), mark.attachment_parent_index);
+
+    adjustments.clearRetainingCapacity();
+    writeU16(&bytes, 38, 0);
+    try std.testing.expectError(
+        error.BadGpos,
+        marks.ligature.collect(
+            view,
+            0,
+            &.{ 20, 22 },
+            &adjustments,
+            std.testing.allocator,
+            0,
+            .{},
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
 
 test "MarkLigPos uses source metadata for component selection" {

@@ -43,6 +43,22 @@ test "MarkBasePos attaches a mark to the nearest covered base" {
     try std.testing.expectEqual(@as(i16, 90), mark.x_placement);
     try std.testing.expectEqual(@as(i16, 105), mark.y_placement);
     try std.testing.expectEqual(@as(?usize, 0), mark.attachment_parent_index);
+
+    adjustments.clearRetainingCapacity();
+    writeU16(&bytes, 8, 0);
+    try std.testing.expectError(
+        error.BadGpos,
+        marks.base.collect(
+            view,
+            0,
+            &.{ 20, 22 },
+            &adjustments,
+            std.testing.allocator,
+            0,
+            .{},
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
 
 test "nested MarkBasePos targets only the requested mark" {

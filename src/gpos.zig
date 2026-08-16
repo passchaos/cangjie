@@ -2483,24 +2483,14 @@ test "GPOS later cursive lookup replaces reciprocal attachment" {
 }
 
 fn collectCursiveAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    const parsed = try parseCursivePositionSubtable(table, subtable_offset);
+    const parsed = try positioning.lookup.cursive.parse(table, subtable_offset);
     try collectCursiveAdjustmentParsed(table, parsed, glyphs, adjustments, allocator, lookup_flag, options);
 }
 
 const CursivePositionSubtable = accelerator_core.model.CursivePositionSubtable;
 
-fn parseCursivePositionSubtable(table: Table, subtable_offset: usize) GposError!CursivePositionSubtable {
-    const pos_format = try readU16(table, subtable_offset);
-    if (pos_format != 1) return error.UnsupportedGpos;
-    return .{
-        .subtable_offset = subtable_offset,
-        .coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2)),
-        .entry_exit_count = try readU16(table, subtable_offset + 4),
-    };
-}
-
 fn buildCursivePositionSubtable(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!CursivePositionSubtable {
-    var subtable = try parseCursivePositionSubtable(table, subtable_offset);
+    var subtable = try positioning.lookup.cursive.parse(table, subtable_offset);
     errdefer if (subtable.coverage) |coverage| coverage.deinit(allocator);
     subtable.coverage = try accelerator_core.coverage.Owned.build(table, subtable.coverage_offset, allocator);
     return subtable;
@@ -2721,20 +2711,8 @@ const MarkBaseSearchState = struct {
     last_candidate_until: usize = 0,
 };
 
-fn parseMarkToBaseSubtable(table: Table, subtable_offset: usize) GposError!MarkToBaseSubtable {
-    const pos_format = try readU16(table, subtable_offset);
-    if (pos_format != 1) return error.UnsupportedGpos;
-    return .{
-        .mark_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2)),
-        .base_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 4)),
-        .class_count = try readU16(table, subtable_offset + 6),
-        .mark_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16(table, subtable_offset + 8)),
-        .base_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16(table, subtable_offset + 10)),
-    };
-}
-
 fn buildMarkToBaseSubtable(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!MarkToBaseSubtable {
-    var subtable = try parseMarkToBaseSubtable(table, subtable_offset);
+    var subtable = try positioning.lookup.marks.parseMarkToBase(table, subtable_offset);
     errdefer {
         if (subtable.mark_coverage) |coverage| coverage.deinit(allocator);
     }
@@ -2860,7 +2838,7 @@ test "GPOS chaining accelerator caches all Coverage regions" {
 }
 
 fn collectMarkToBaseAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    const subtable = try parseMarkToBaseSubtable(table, subtable_offset);
+    const subtable = try positioning.lookup.marks.parseMarkToBase(table, subtable_offset);
     return try collectMarkToBaseAdjustmentParsed(table, subtable, glyphs, adjustments, allocator, lookup_flag, options);
 }
 
@@ -2884,7 +2862,7 @@ fn collectMarkToBaseAdjustmentAt(table: Table, subtable_offset: usize, glyphs: [
     // input sequence. MarkBasePos still needs the surrounding run to find the
     // preceding base, but it must attach only that named mark instead of
     // rescanning and positioning every mark covered by the nested lookup.
-    const subtable = try parseMarkToBaseSubtable(table, subtable_offset);
+    const subtable = try positioning.lookup.marks.parseMarkToBase(table, subtable_offset);
     return try collectMarkToBaseAdjustmentAtParsed(table, subtable, glyphs, mark_position, adjustments, allocator, lookup_flag, options, attached_marks, null);
 }
 
@@ -3989,82 +3967,14 @@ fn ensurePositionSubtableVariableDataWithinDepth(table: Table, subtable_offset: 
     switch (lookup_type) {
         1 => try positioning.lookup.single.validate(table, subtable_offset),
         2 => try positioning.lookup.pair.validate(table, subtable_offset),
-        3 => try ensureCursivePositionSubtableWithin(table, subtable_offset),
-        4 => try ensureMarkToBasePositionSubtableWithin(table, subtable_offset),
-        5 => try ensureMarkToLigaturePositionSubtableWithin(table, subtable_offset),
-        6 => try ensureMarkToMarkPositionSubtableWithin(table, subtable_offset),
+        3 => try positioning.lookup.cursive.validate(table, subtable_offset),
+        4 => try positioning.lookup.marks.validateMarkToBase(table, subtable_offset),
+        5 => try positioning.lookup.marks.validateMarkToLigature(table, subtable_offset),
+        6 => try positioning.lookup.marks.validateMarkToMark(table, subtable_offset),
         7 => try ensureContextPositionSubtableWithin(table, subtable_offset, depth),
         8 => try ensureChainingContextPositionSubtableWithin(table, subtable_offset, depth),
         else => {},
     }
-}
-
-fn ensureCursivePositionSubtableWithin(table: Table, subtable_offset: usize) GposError!void {
-    const pos_format = try readU16BadGpos(table, subtable_offset);
-    if (pos_format != 1) return error.UnsupportedGpos;
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
-    const entry_exit_count = try readU16BadGpos(table, subtable_offset + 4);
-    try ensureCoverageTableWithin(table, coverage_offset);
-    try ensureCoverageIndicesWithin(table, coverage_offset, entry_exit_count);
-    try ensureBytesWithin(table, subtable_offset + 6, @as(usize, entry_exit_count) * 4);
-    for (0..entry_exit_count) |entry_i| {
-        const record = subtable_offset + 6 + entry_i * 4;
-        const entry_anchor = try readU16BadGpos(table, record);
-        const exit_anchor = try readU16BadGpos(table, record + 2);
-        if (entry_anchor != 0) try positioning.anchor.validate(table, try checkedPositionOffset(table, subtable_offset, entry_anchor));
-        if (exit_anchor != 0) try positioning.anchor.validate(table, try checkedPositionOffset(table, subtable_offset, exit_anchor));
-    }
-}
-
-fn ensureMarkToBasePositionSubtableWithin(table: Table, subtable_offset: usize) GposError!void {
-    const pos_format = try readU16BadGpos(table, subtable_offset);
-    if (pos_format != 1) return error.UnsupportedGpos;
-    const mark_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
-    const base_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 4));
-    const class_count = try readU16BadGpos(table, subtable_offset + 6);
-    // Mark attachment array offsets are mandatory OpenType child tables. A
-    // zero offset aliases the enclosing positioning subtable as an array and
-    // lets header fields masquerade as mark counts, classes, or anchor grids.
-    const mark_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
-    const base_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 10));
-    try ensureCoverageTableWithin(table, mark_coverage_offset);
-    try ensureCoverageTableWithin(table, base_coverage_offset);
-    const mark_count = try ensureMarkArrayWithin(table, mark_array_offset, class_count);
-    const base_count = try ensureBaseArrayWithin(table, base_array_offset, class_count);
-    try ensureCoverageIndicesWithin(table, mark_coverage_offset, mark_count);
-    try ensureCoverageIndicesWithin(table, base_coverage_offset, base_count);
-}
-
-fn ensureMarkToLigaturePositionSubtableWithin(table: Table, subtable_offset: usize) GposError!void {
-    const pos_format = try readU16BadGpos(table, subtable_offset);
-    if (pos_format != 1) return error.UnsupportedGpos;
-    const mark_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
-    const ligature_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 4));
-    const class_count = try readU16BadGpos(table, subtable_offset + 6);
-    const mark_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
-    const ligature_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 10));
-    try ensureCoverageTableWithin(table, mark_coverage_offset);
-    try ensureCoverageTableWithin(table, ligature_coverage_offset);
-    const mark_count = try ensureMarkArrayWithin(table, mark_array_offset, class_count);
-    const ligature_count = try ensureLigatureArrayWithin(table, ligature_array_offset, class_count);
-    try ensureCoverageIndicesWithin(table, mark_coverage_offset, mark_count);
-    try ensureCoverageIndicesWithin(table, ligature_coverage_offset, ligature_count);
-}
-
-fn ensureMarkToMarkPositionSubtableWithin(table: Table, subtable_offset: usize) GposError!void {
-    const pos_format = try readU16BadGpos(table, subtable_offset);
-    if (pos_format != 1) return error.UnsupportedGpos;
-    const mark_1_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
-    const mark_2_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 4));
-    const class_count = try readU16BadGpos(table, subtable_offset + 6);
-    const mark_1_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
-    const mark_2_array_offset = try checkedRequiredPositionOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 10));
-    try ensureCoverageTableWithin(table, mark_1_coverage_offset);
-    try ensureCoverageTableWithin(table, mark_2_coverage_offset);
-    const mark_1_count = try ensureMarkArrayWithin(table, mark_1_array_offset, class_count);
-    const mark_2_count = try ensureMark2ArrayWithin(table, mark_2_array_offset, class_count);
-    try ensureCoverageIndicesWithin(table, mark_1_coverage_offset, mark_1_count);
-    try ensureCoverageIndicesWithin(table, mark_2_coverage_offset, mark_2_count);
 }
 
 fn ensureContextPositionSubtableWithin(table: Table, subtable_offset: usize, depth: usize) GposError!void {
@@ -4254,75 +4164,10 @@ fn ensureChainingCoveragePositionSubtableWithin(table: Table, subtable_offset: u
     try ensurePositionRecordsWithinDepth(table, cursor, pos_count, input_count, depth);
 }
 
-fn ensureMarkArrayWithin(table: Table, mark_array_offset: usize, class_count: u16) GposError!usize {
-    const mark_count = try readU16BadGpos(table, mark_array_offset);
-    try ensureBytesWithin(table, mark_array_offset + 2, @as(usize, mark_count) * 4);
-    for (0..mark_count) |mark_i| {
-        const record = mark_array_offset + 2 + mark_i * 4;
-        const mark_class = try readU16BadGpos(table, record);
-        if (mark_class >= class_count) return error.BadGpos;
-        const anchor_offset = try readU16BadGpos(table, record + 2);
-        // MarkRecords require a real anchor. Treating zero as relative to the
-        // MarkArray header would reinterpret markCount/markClass metadata as a
-        // Paint-style child table and make malformed mark positioning stateful.
-        if (anchor_offset == 0) return error.BadGpos;
-        try positioning.anchor.validate(table, try checkedPositionOffset(table, mark_array_offset, anchor_offset));
-    }
-    return mark_count;
-}
-
-fn ensureBaseArrayWithin(table: Table, base_array_offset: usize, class_count: u16) GposError!usize {
-    const base_count = try readU16BadGpos(table, base_array_offset);
-    const anchor_count = try checkedMul(@as(usize, base_count), class_count);
-    try ensureBytesWithin(table, base_array_offset + 2, anchor_count * 2);
-    for (0..anchor_count) |anchor_i| {
-        const anchor_offset = try readU16BadGpos(table, base_array_offset + 2 + anchor_i * 2);
-        if (anchor_offset != 0) try positioning.anchor.validate(table, try checkedPositionOffset(table, base_array_offset, anchor_offset));
-    }
-    return base_count;
-}
-
-fn ensureLigatureArrayWithin(table: Table, ligature_array_offset: usize, class_count: u16) GposError!usize {
-    const ligature_count = try readU16BadGpos(table, ligature_array_offset);
-    try ensureBytesWithin(table, ligature_array_offset + 2, @as(usize, ligature_count) * 2);
-    for (0..ligature_count) |ligature_i| {
-        const attach_relative = try readU16BadGpos(table, ligature_array_offset + 2 + ligature_i * 2);
-        // LigatureAttach offsets are required child tables keyed by
-        // LigatureCoverage index. Zero would alias the LigatureArray header as
-        // a component count and make anchor availability depend on unrelated
-        // offset-slot bytes, so reject it instead of silently dropping marks.
-        if (attach_relative == 0) return error.BadGpos;
-        const attach_offset = try checkedPositionOffset(table, ligature_array_offset, attach_relative);
-        const component_count = try readU16BadGpos(table, attach_offset);
-        const anchor_count = try checkedMul(@as(usize, component_count), class_count);
-        try ensureBytesWithin(table, attach_offset + 2, anchor_count * 2);
-        for (0..anchor_count) |anchor_i| {
-            const anchor_offset = try readU16BadGpos(table, attach_offset + 2 + anchor_i * 2);
-            if (anchor_offset != 0) try positioning.anchor.validate(table, try checkedPositionOffset(table, attach_offset, anchor_offset));
-        }
-    }
-    return ligature_count;
-}
-
-fn ensureMark2ArrayWithin(table: Table, mark_2_array_offset: usize, class_count: u16) GposError!usize {
-    const mark_2_count = try readU16BadGpos(table, mark_2_array_offset);
-    const anchor_count = try checkedMul(@as(usize, mark_2_count), class_count);
-    try ensureBytesWithin(table, mark_2_array_offset + 2, anchor_count * 2);
-    for (0..anchor_count) |anchor_i| {
-        const anchor_offset = try readU16BadGpos(table, mark_2_array_offset + 2 + anchor_i * 2);
-        if (anchor_offset != 0) try positioning.anchor.validate(table, try checkedPositionOffset(table, mark_2_array_offset, anchor_offset));
-    }
-    return mark_2_count;
-}
-
 fn ensureGlyphIdWithinMaxp(table: Table, glyph_id: usize) GposError!void {
     if (table.glyph_count) |glyph_count| {
         if (glyph_id >= glyph_count) return error.BadGpos;
     }
-}
-
-fn ensureCoverageIndicesWithin(table: Table, coverage_offset: usize, target_count: usize) GposError!void {
-    return table_core.coverage.validateIndices(table, coverage_offset, target_count);
 }
 
 fn ensureContextCoverageOffsetArrayWithin(table: Table, base_offset: usize, offsets_pos: usize, count: u16) GposError!void {
@@ -4331,11 +4176,6 @@ fn ensureContextCoverageOffsetArrayWithin(table: Table, base_offset: usize, offs
         const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16BadGpos(table, offsets_pos + i * 2));
         try ensureContextCoverageTableWithin(table, coverage_offset);
     }
-}
-
-fn checkedMul(a: usize, b: usize) GposError!usize {
-    if (a != 0 and b > std.math.maxInt(usize) / a) return error.BadGpos;
-    return a * b;
 }
 
 fn ensureCoverageTableWithin(table: Table, coverage_offset: usize) GposError!void {
@@ -6675,10 +6515,10 @@ test "GPOS MarkBasePos rejects null required array offsets" {
     writeAnchor1Test(&bytes, base_array + 4, 100, 120);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try ensureMarkToBasePositionSubtableWithin(table, 0);
+    try positioning.lookup.marks.validateMarkToBase(table, 0);
 
     writeU16Test(&bytes, 8, 0); // Invalid: MarkArray offsets are not nullable.
-    try std.testing.expectError(error.BadGpos, ensureMarkToBasePositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.marks.validateMarkToBase(table, 0));
     var adjustments = std.ArrayList(Adjustment).empty;
     defer adjustments.deinit(allocator);
     try std.testing.expectError(error.BadGpos, collectMarkToBaseAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{}));
@@ -6686,11 +6526,11 @@ test "GPOS MarkBasePos rejects null required array offsets" {
 
     writeU16Test(&bytes, 8, 24);
     writeU16Test(&bytes, 10, 0); // Invalid: BaseArray offsets are not nullable.
-    try std.testing.expectError(error.BadGpos, ensureMarkToBasePositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.marks.validateMarkToBase(table, 0));
 
     writeU16Test(&bytes, 10, 36);
     writeU16Test(&bytes, mark_array + 4, 0); // Invalid: MarkRecord anchors are required.
-    try std.testing.expectError(error.BadGpos, ensureMarkToBasePositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.marks.validateMarkToBase(table, 0));
     try std.testing.expectError(error.BadGpos, collectMarkToBaseAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 
@@ -6810,18 +6650,18 @@ test "GPOS MarkLigPos rejects null LigatureAttach offsets" {
     defer adjustments.deinit(allocator);
 
     writeU16Test(&bytes, 8, 0); // Invalid: MarkArray offsets are not nullable.
-    try std.testing.expectError(error.BadGpos, ensureMarkToLigaturePositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.marks.validateMarkToLigature(table, 0));
     try std.testing.expectError(error.BadGpos, collectMarkToLigatureAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
     writeU16Test(&bytes, 8, 24);
 
     writeU16Test(&bytes, 10, 0); // Invalid: LigatureArray offsets are not nullable.
-    try std.testing.expectError(error.BadGpos, ensureMarkToLigaturePositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.marks.validateMarkToLigature(table, 0));
     try std.testing.expectError(error.BadGpos, collectMarkToLigatureAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
     writeU16Test(&bytes, 10, 36);
 
-    try std.testing.expectError(error.BadGpos, ensureMarkToLigaturePositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.marks.validateMarkToLigature(table, 0));
 
     // A real LigatureAttach may still omit individual class anchors with null
     // offsets; only the LigatureAttach child pointer itself is mandatory.
@@ -6829,14 +6669,14 @@ test "GPOS MarkLigPos rejects null LigatureAttach offsets" {
     const ligature_attach = ligature_array + 4;
     writeU16Test(&bytes, ligature_attach + 0, 1);
     writeU16Test(&bytes, ligature_attach + 2, 0);
-    try ensureMarkToLigaturePositionSubtableWithin(table, 0);
+    try positioning.lookup.marks.validateMarkToLigature(table, 0);
 
     writeU16Test(&bytes, ligature_attach + 2, 4);
     writeAnchor1Test(&bytes, ligature_attach + 4, 100, 120);
-    try ensureMarkToLigaturePositionSubtableWithin(table, 0);
+    try positioning.lookup.marks.validateMarkToLigature(table, 0);
 
     writeU16Test(&bytes, mark_array + 4, 0); // Invalid: MarkRecord anchors are required.
-    try std.testing.expectError(error.BadGpos, ensureMarkToLigaturePositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.marks.validateMarkToLigature(table, 0));
     try std.testing.expectError(error.BadGpos, collectMarkToLigatureAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 
@@ -6872,10 +6712,10 @@ test "GPOS MarkMarkPos rejects null required array offsets" {
     writeAnchor1Test(&bytes, mark_2_array + 4, 50, 70);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try ensureMarkToMarkPositionSubtableWithin(table, 0);
+    try positioning.lookup.marks.validateMarkToMark(table, 0);
 
     writeU16Test(&bytes, 8, 0); // Invalid: Mark1Array offsets are not nullable.
-    try std.testing.expectError(error.BadGpos, ensureMarkToMarkPositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.marks.validateMarkToMark(table, 0));
     var adjustments = std.ArrayList(Adjustment).empty;
     defer adjustments.deinit(allocator);
     try std.testing.expectError(error.BadGpos, collectMarkToMarkAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{}));
@@ -6883,11 +6723,11 @@ test "GPOS MarkMarkPos rejects null required array offsets" {
 
     writeU16Test(&bytes, 8, 24);
     writeU16Test(&bytes, 10, 0); // Invalid: Mark2Array offsets are not nullable.
-    try std.testing.expectError(error.BadGpos, ensureMarkToMarkPositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.marks.validateMarkToMark(table, 0));
 
     writeU16Test(&bytes, 10, 36);
     writeU16Test(&bytes, mark_1_array + 4, 0); // Invalid: MarkRecord anchors are required.
-    try std.testing.expectError(error.BadGpos, ensureMarkToMarkPositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.marks.validateMarkToMark(table, 0));
     try std.testing.expectError(error.BadGpos, collectMarkToMarkAdjustment(table, 0, &.{ 20, 22 }, &adjustments, allocator, 0, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 

@@ -366,7 +366,7 @@ fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem
             digest.unionWith(try table_core.coverage.digest(table, coverage_offset));
             try accelerator_core.glyph_groups.appendCoveragePairs(table, coverage_offset, @intCast(subtable_i), &coverage_pairs, allocator);
             if (single_pos_subtables.len != 0) {
-                single_pos_subtables[subtable_i] = try parseSinglePositionSubtable(table, subtable_offset);
+                single_pos_subtables[subtable_i] = try positioning.lookup.single.parse(table, subtable_offset);
             }
             if (pair_pos_subtables.len != 0) {
                 const pair_subtable_offset = if (extension_type == 2)
@@ -1429,7 +1429,7 @@ fn collectExtensionPairAdjustmentLookup(table: Table, lookup_offset: usize, subt
         for (0..subtable_count) |subtable_i| {
             const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
             const extension_subtable = try extensionPositionSubtablePayload(table, subtable_offset, 2);
-            const parsed = try parsePairPositionSubtable(table, extension_subtable);
+            const parsed = try positioning.lookup.pair.parse(table, extension_subtable);
             if (try collectPairAdjustmentAtParsed(table, parsed, glyphs, first_index, adjustments, allocator, lookup_flag, options)) {
                 matched_value_2 = parsed.value_format_2 != 0;
                 break;
@@ -1475,7 +1475,7 @@ fn collectExtensionAdjustmentLookup(table: Table, lookup_offset: usize, subtable
             2 => {
                 if (glyphs.len < 2) continue;
                 var first_index: usize = 0;
-                const parsed = try parsePairPositionSubtable(table, extension_subtable);
+                const parsed = try positioning.lookup.pair.parse(table, extension_subtable);
                 while (first_index + 1 < glyphs.len) {
                     var matched_value_2 = pair_matched[first_index] and pair_consumes_second[first_index];
                     if (!pair_matched[first_index] and
@@ -1511,7 +1511,7 @@ fn collectPairAdjustmentLookup(table: Table, lookup_offset: usize, subtable_coun
         var matched_value_2 = false;
         for (0..subtable_count) |subtable_i| {
             const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-            const parsed = try parsePairPositionSubtable(table, subtable_offset);
+            const parsed = try positioning.lookup.pair.parse(table, subtable_offset);
             if (try collectPairAdjustmentAtParsed(table, parsed, glyphs, first_index, adjustments, allocator, lookup_flag, options)) {
                 matched_value_2 = parsed.value_format_2 != 0;
                 break;
@@ -1697,7 +1697,7 @@ fn collectPairAdjustmentLookupAcceleratedImpl(
                 try extensionPositionSubtablePayload(table, lookup_subtable_offset, 2)
             else
                 lookup_subtable_offset;
-            const parsed = try parsePairPositionSubtable(table, pair_subtable_offset);
+            const parsed = try positioning.lookup.pair.parse(table, pair_subtable_offset);
             if (try collectPairAdjustmentAtParsed(table, parsed, glyphs, first_index, adjustments, allocator, lookup_flag, options)) {
                 matched_value_2 = parsed.value_format_2 != 0;
                 break;
@@ -1846,34 +1846,6 @@ fn collectSingleAdjustmentLookup(table: Table, lookup_offset: usize, subtable_co
         const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
         try collectSingleAdjustmentSubtable(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options, matched);
     }
-}
-
-fn parseSinglePositionSubtable(table: Table, subtable_offset: usize) GposError!SinglePosSubtable {
-    const pos_format = try readU16(table, subtable_offset);
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const value_format = try readU16(table, subtable_offset + 4);
-    const value_size = try positioning.value_record.size(value_format);
-    return switch (pos_format) {
-        1 => .{
-            .subtable_offset = subtable_offset,
-            .pos_format = pos_format,
-            .coverage_offset = coverage_offset,
-            .value_format = value_format,
-            .value_size = value_size,
-            .values_pos = subtable_offset + 6,
-            .value = try positioning.value_record.read(table, subtable_offset + 6, value_format, subtable_offset),
-        },
-        2 => .{
-            .subtable_offset = subtable_offset,
-            .pos_format = pos_format,
-            .coverage_offset = coverage_offset,
-            .value_format = value_format,
-            .value_count = try readU16(table, subtable_offset + 6),
-            .value_size = value_size,
-            .values_pos = subtable_offset + 8,
-        },
-        else => error.UnsupportedGpos,
-    };
 }
 
 fn collectSingleAdjustmentSubtable(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, matched: []bool) (GposError || std.mem.Allocator.Error)!void {
@@ -2103,7 +2075,7 @@ fn collectExtensionAdjustment(table: Table, subtable_offset: usize, glyphs: []co
 
 fn collectPairAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     if (glyphs.len < 2) return;
-    const parsed = try parsePairPositionSubtable(table, subtable_offset);
+    const parsed = try positioning.lookup.pair.parse(table, subtable_offset);
     var i: usize = 0;
     while (i + 1 < glyphs.len) {
         const matched = try collectPairAdjustmentAtParsed(table, parsed, glyphs, i, adjustments, allocator, lookup_flag, options);
@@ -2111,44 +2083,10 @@ fn collectPairAdjustment(table: Table, subtable_offset: usize, glyphs: []const G
     }
 }
 
-const PairPositionSubtable = struct {
-    subtable_offset: usize,
-    pos_format: u16,
-    coverage_offset: usize,
-    value_format_1: u16,
-    value_format_2: u16,
-    value_size_1: usize,
-    value_size_2: usize,
-    class_def_1: usize = 0,
-    class_def_2: usize = 0,
-    class_1_count: u16 = 0,
-    class_2_count: u16 = 0,
-    matrix_offset: usize = 0,
-};
-
-fn parsePairPositionSubtable(table: Table, subtable_offset: usize) GposError!PairPositionSubtable {
-    const pos_format = try readU16(table, subtable_offset);
-    var parsed = PairPositionSubtable{
-        .subtable_offset = subtable_offset,
-        .pos_format = pos_format,
-        .coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2)),
-        .value_format_1 = try readU16(table, subtable_offset + 4),
-        .value_format_2 = try readU16(table, subtable_offset + 6),
-        .value_size_1 = try positioning.value_record.size(try readU16(table, subtable_offset + 4)),
-        .value_size_2 = try positioning.value_record.size(try readU16(table, subtable_offset + 6)),
-    };
-    if (pos_format == 2) {
-        parsed.class_def_1 = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
-        parsed.class_def_2 = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 10));
-        parsed.class_1_count = try readU16(table, subtable_offset + 12);
-        parsed.class_2_count = try readU16(table, subtable_offset + 14);
-        parsed.matrix_offset = subtable_offset + 16;
-    }
-    return parsed;
-}
+const PairPositionSubtable = positioning.lookup.pair.Parsed;
 
 fn collectPairAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, first_index: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
-    const parsed = try parsePairPositionSubtable(table, subtable_offset);
+    const parsed = try positioning.lookup.pair.parse(table, subtable_offset);
     return try collectPairAdjustmentAtParsed(table, parsed, glyphs, first_index, adjustments, allocator, lookup_flag, options);
 }
 
@@ -2171,9 +2109,9 @@ fn collectPairAdjustmentAtParsed(table: Table, parsed: PairPositionSubtable, gly
             const pair_set_offset = parsed.subtable_offset + try readU16(table, parsed.subtable_offset + 10 + coverage * 2);
             const pair_value_count = try readU16(table, pair_set_offset);
             const pair_record = if (table.assume_validated)
-                try findValidatedPairValueRecord(table, pair_set_offset, pair_value_count, parsed.value_size_1, parsed.value_size_2, glyphs[second_index]) orelse return false
+                try positioning.lookup.pair.findAfterProof(table, pair_set_offset, pair_value_count, parsed.value_size_1, parsed.value_size_2, glyphs[second_index]) orelse return false
             else
-                try ensurePairValueRecordsWithin(
+                try positioning.lookup.pair.validatePairSet(
                     table,
                     pair_set_offset,
                     pair_value_count,
@@ -4049,8 +3987,8 @@ fn ensurePositionSubtableVariableDataWithin(table: Table, subtable_offset: usize
 
 fn ensurePositionSubtableVariableDataWithinDepth(table: Table, subtable_offset: usize, lookup_type: u16, depth: usize) GposError!void {
     switch (lookup_type) {
-        1 => try ensureSinglePositionSubtableWithin(table, subtable_offset),
-        2 => try ensurePairPositionSubtableWithin(table, subtable_offset),
+        1 => try positioning.lookup.single.validate(table, subtable_offset),
+        2 => try positioning.lookup.pair.validate(table, subtable_offset),
         3 => try ensureCursivePositionSubtableWithin(table, subtable_offset),
         4 => try ensureMarkToBasePositionSubtableWithin(table, subtable_offset),
         5 => try ensureMarkToLigaturePositionSubtableWithin(table, subtable_offset),
@@ -4059,139 +3997,6 @@ fn ensurePositionSubtableVariableDataWithinDepth(table: Table, subtable_offset: 
         8 => try ensureChainingContextPositionSubtableWithin(table, subtable_offset, depth),
         else => {},
     }
-}
-
-fn ensureSinglePositionSubtableWithin(table: Table, subtable_offset: usize) GposError!void {
-    const pos_format = try readU16BadGpos(table, subtable_offset);
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
-    try ensureCoverageTableWithin(table, coverage_offset);
-    const value_format = try readU16BadGpos(table, subtable_offset + 4);
-    const value_size = try positioning.value_record.size(value_format);
-    switch (pos_format) {
-        1 => try positioning.value_record.validate(table, subtable_offset + 6, value_format, subtable_offset),
-        2 => {
-            const value_count = try readU16BadGpos(table, subtable_offset + 6);
-            // Coverage indexes are direct indexes into the ValueRecord array.
-            // Reject dangling coverage entries during preflight instead of
-            // letting shaping silently skip a covered glyph whose record is
-            // absent from a malformed SinglePos format 2 subtable.
-            try ensureCoverageIndicesWithin(table, coverage_offset, value_count);
-            try ensureBytesWithin(table, subtable_offset + 8, @as(usize, value_count) * value_size);
-            if (positioning.value_record.hasDeviceOffsets(value_format)) {
-                for (0..value_count) |value_i| {
-                    try positioning.value_record.validate(table, subtable_offset + 8 + value_i * value_size, value_format, subtable_offset);
-                }
-            }
-        },
-        else => return error.UnsupportedGpos,
-    }
-}
-
-fn ensurePairPositionSubtableWithin(table: Table, subtable_offset: usize) GposError!void {
-    const pos_format = try readU16BadGpos(table, subtable_offset);
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 2));
-    try ensureCoverageTableWithin(table, coverage_offset);
-    const value_format_1 = try readU16BadGpos(table, subtable_offset + 4);
-    const value_format_2 = try readU16BadGpos(table, subtable_offset + 6);
-    const value_size_1 = try positioning.value_record.size(value_format_1);
-    const value_size_2 = try positioning.value_record.size(value_format_2);
-
-    switch (pos_format) {
-        1 => {
-            const pair_set_count = try readU16BadGpos(table, subtable_offset + 8);
-            // PairSet offsets are selected by the first glyph's coverage index.
-            // Every covered first glyph must therefore have a corresponding
-            // PairSet slot; otherwise positioning becomes data-dependent on a
-            // malformed coverage table and silently drops declared pairs.
-            try ensureCoverageIndicesWithin(table, coverage_offset, pair_set_count);
-            const pair_set_offsets_pos = subtable_offset + 10;
-            try ensureBytesWithin(table, pair_set_offsets_pos, @as(usize, pair_set_count) * 2);
-            for (0..pair_set_count) |pair_set_i| {
-                const pair_set_relative = try readU16BadGpos(table, pair_set_offsets_pos + pair_set_i * 2);
-                // PairSet offsets are required child tables. A zero offset
-                // aliases the PairPos header as PairSet.PairValueCount, which
-                // can make malformed fonts appear structurally valid or derive
-                // record bounds from unrelated header fields.
-                if (pair_set_relative == 0) return error.BadGpos;
-                const pair_set_offset = try checkedPositionOffset(table, subtable_offset, pair_set_relative);
-                const pair_value_count = try readU16BadGpos(table, pair_set_offset);
-                _ = try ensurePairValueRecordsWithin(table, pair_set_offset, pair_value_count, value_format_1, value_format_2, value_size_1, value_size_2, null);
-            }
-        },
-        2 => {
-            const class_def_1 = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 8));
-            const class_def_2 = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16BadGpos(table, subtable_offset + 10));
-            const class_1_count = try readU16BadGpos(table, subtable_offset + 12);
-            const class_2_count = try readU16BadGpos(table, subtable_offset + 14);
-            try ensureClassDefTableWithinLimit(table, class_def_1, class_1_count);
-            try ensureClassDefTableWithinLimit(table, class_def_2, class_2_count);
-            const record_size = value_size_1 + value_size_2;
-            try ensureBytesWithin(table, subtable_offset + 16, try checkedMul(try checkedMul(@as(usize, class_1_count), class_2_count), record_size));
-            if (positioning.value_record.hasDeviceOffsets(value_format_1) or positioning.value_record.hasDeviceOffsets(value_format_2)) {
-                const record_count = try checkedMul(@as(usize, class_1_count), class_2_count);
-                for (0..record_count) |record_i| {
-                    const record_offset = subtable_offset + 16 + record_i * record_size;
-                    if (positioning.value_record.hasDeviceOffsets(value_format_1)) {
-                        try positioning.value_record.validate(table, record_offset, value_format_1, subtable_offset);
-                    }
-                    if (positioning.value_record.hasDeviceOffsets(value_format_2)) {
-                        try positioning.value_record.validate(table, record_offset + value_size_1, value_format_2, subtable_offset);
-                    }
-                }
-            }
-        },
-        else => return error.UnsupportedGpos,
-    }
-}
-
-fn ensurePairValueRecordsWithin(table: Table, pair_set_offset: usize, pair_value_count: u16, value_format_1: u16, value_format_2: u16, value_size_1: usize, value_size_2: usize, target_second_glyph: ?GlyphId) GposError!?usize {
-    const pair_record_size = 2 + value_size_1 + value_size_2;
-    try ensureBytesWithin(table, pair_set_offset + 2, try checkedMul(@as(usize, pair_value_count), pair_record_size));
-
-    var previous_second: ?GlyphId = null;
-    var matched_record: ?usize = null;
-    for (0..pair_value_count) |pair_i| {
-        const pair_record_offset = pair_set_offset + 2 + pair_i * pair_record_size;
-        const second_glyph = try readU16BadGpos(table, pair_record_offset);
-        // OpenType requires each PairSet to be sorted by SecondGlyph. Enforce
-        // the strict order while preflighting so duplicate or descending
-        // records cannot make positioning depend on a linear-search accident.
-        if (previous_second) |previous| {
-            if (second_glyph <= previous) return error.BadGpos;
-        }
-        previous_second = second_glyph;
-
-        try ensureGlyphIdWithinMaxp(table, second_glyph);
-        if (positioning.value_record.hasDeviceOffsets(value_format_1)) {
-            try positioning.value_record.validate(table, pair_record_offset + 2, value_format_1, pair_set_offset);
-        }
-        if (positioning.value_record.hasDeviceOffsets(value_format_2)) {
-            try positioning.value_record.validate(table, pair_record_offset + 2 + value_size_1, value_format_2, pair_set_offset);
-        }
-        if (target_second_glyph) |target| {
-            if (second_glyph == target) matched_record = pair_record_offset;
-        }
-    }
-    return matched_record;
-}
-
-fn findValidatedPairValueRecord(table: Table, pair_set_offset: usize, pair_value_count: u16, value_size_1: usize, value_size_2: usize, target_second_glyph: GlyphId) GposError!?usize {
-    const pair_record_size = 2 + value_size_1 + value_size_2;
-    var lo: usize = 0;
-    var hi: usize = pair_value_count;
-    while (lo < hi) {
-        const mid = lo + (hi - lo) / 2;
-        const pair_record_offset = pair_set_offset + 2 + mid * pair_record_size;
-        const second_glyph = try readU16(table, pair_record_offset);
-        if (target_second_glyph < second_glyph) {
-            hi = mid;
-        } else if (target_second_glyph > second_glyph) {
-            lo = mid + 1;
-        } else {
-            return pair_record_offset;
-        }
-    }
-    return null;
 }
 
 fn ensureCursivePositionSubtableWithin(table: Table, subtable_offset: usize) GposError!void {
@@ -5464,7 +5269,7 @@ test "GPOS rejects reserved ValueFormat bits" {
     writeCoverage1Test(&bytes, 8, 5);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, ensureSinglePositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.single.validate(table, 0));
 }
 
 test "GPOS SinglePos format 2 rejects dangling coverage indexes" {
@@ -5480,7 +5285,7 @@ test "GPOS SinglePos format 2 rejects dangling coverage indexes" {
     writeU16Test(&bytes, 18, 6);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, ensureSinglePositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.single.validate(table, 0));
 }
 
 test "GPOS class format 1 handles upper glyph boundary" {
@@ -5812,7 +5617,7 @@ test "GPOS rejects null required Coverage offsets" {
     writeU16Test(&bytes, 40, 0); // FeatureCount.
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, ensureSinglePositionSubtableWithin(table, subtable));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.single.validate(table, subtable));
     try std.testing.expectError(error.BadGpos, validateGlyphBounds(&bytes, 0, bytes.len, 4));
 
     var adjustments = std.ArrayList(Adjustment).empty;
@@ -5825,7 +5630,7 @@ test "GPOS rejects null required Coverage offsets" {
     // With the Coverage pointer repaired, the same subtable is a normal
     // SinglePos; only the aliasing null child pointer is invalid.
     writeU16Test(&bytes, subtable + 2, 8);
-    try ensureSinglePositionSubtableWithin(table, subtable);
+    try positioning.lookup.single.validate(table, subtable);
     try validateGlyphBounds(&bytes, 0, bytes.len, 4);
 }
 
@@ -6028,7 +5833,7 @@ test "GPOS value records validate device offsets against parent base" {
     writeCoverage1Test(&bytes, 16, 5);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, ensureSinglePositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.single.validate(table, 0));
 
     // If the same offset were incorrectly interpreted relative to the
     // ValueRecord at byte 6 it would point into this valid Coverage table.
@@ -6036,7 +5841,7 @@ test "GPOS value records validate device offsets against parent base" {
     writeU16Test(&bytes, 10, 12);
     writeU16Test(&bytes, 12, 12);
     writeU16Test(&bytes, 14, 1);
-    try ensureSinglePositionSubtableWithin(table, 0);
+    try positioning.lookup.single.validate(table, 0);
 }
 
 test "GPOS PairPos format 1 value device offsets use PairSet base" {
@@ -6059,10 +5864,10 @@ test "GPOS PairPos format 1 value device offsets use PairSet base" {
     writeU16Test(&bytes, pair_set + 16, 0);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try ensurePairPositionSubtableWithin(table, 0);
+    try positioning.lookup.pair.validate(table, 0);
 
     writeU16Test(&bytes, pair_set + 6, 16); // Points at the Device payload word.
-    try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.pair.validate(table, 0));
 }
 
 test "GPOS PairPos format 1 rejects dangling coverage indexes" {
@@ -6080,7 +5885,7 @@ test "GPOS PairPos format 1 rejects dangling coverage indexes" {
     writeU16Test(&bytes, 22, 20);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.pair.validate(table, 0));
 }
 
 test "GPOS PairPos accelerator ignores unreachable trailing pair sets" {
@@ -6130,13 +5935,13 @@ test "GPOS PairPos format 1 rejects null PairSet offsets" {
     writeCoverage1Test(&bytes, 16, 10);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.pair.validate(table, 0));
 
     // A real, non-null empty PairSet remains valid. The parser must reject
     // only the aliasing offset, not empty pair data.
     writeU16Test(&bytes, 10, 12);
     writeU16Test(&bytes, 12, 0);
-    try ensurePairPositionSubtableWithin(table, 0);
+    try positioning.lookup.pair.validate(table, 0);
 }
 
 test "GPOS PairPos format 1 rejects unsorted PairValue records" {
@@ -6158,7 +5963,7 @@ test "GPOS PairPos format 1 rejects unsorted PairValue records" {
     writeCoverage1Test(&bytes, 22, 5);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.pair.validate(table, 0));
 
     var adjustments = std.ArrayList(Adjustment).empty;
     defer adjustments.deinit(allocator);
@@ -6166,7 +5971,7 @@ test "GPOS PairPos format 1 rejects unsorted PairValue records" {
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 
     writeU16Test(&bytes, pair_set + 6, 12);
-    try ensurePairPositionSubtableWithin(table, 0);
+    try positioning.lookup.pair.validate(table, 0);
     try collectPairAdjustment(table, 0, &.{ 5, 11 }, &adjustments, allocator, 0, .{});
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
     try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
@@ -6185,9 +5990,9 @@ test "GPOS validated PairSet lookup binary searches second glyph records" {
     writeI16Test(&bytes, pair_set + 12, -20);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true };
-    const hit = try findValidatedPairValueRecord(table, pair_set, 3, 2, 0, 12) orelse return error.TestUnexpectedResult;
+    const hit = try positioning.lookup.pair.findAfterProof(table, pair_set, 3, 2, 0, 12) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, pair_set + 6), hit);
-    try std.testing.expectEqual(@as(?usize, null), try findValidatedPairValueRecord(table, pair_set, 3, 2, 0, 11));
+    try std.testing.expectEqual(@as(?usize, null), try positioning.lookup.pair.findAfterProof(table, pair_set, 3, 2, 0, 11));
 }
 
 test "GPOS simple PairPos accelerator preserves zero adjustment precedence" {
@@ -6681,13 +6486,13 @@ test "GPOS PairPos format 2 rejects class values outside matrix" {
     writeCoverage1Test(&bytes, 32, 10);
 
     const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.pair.validate(table, 0));
 
     writeU16Test(&bytes, 22, 1);
-    try ensurePairPositionSubtableWithin(table, 0);
+    try positioning.lookup.pair.validate(table, 0);
 
     writeU16Test(&bytes, 30, 1); // Now ClassDef2 exceeds Class2Count.
-    try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.pair.validate(table, 0));
 }
 
 test "GPOS contextual class subtables allow covered class indexes outside set arrays" {
@@ -6762,7 +6567,7 @@ test "GPOS class-based positioning rejects null ClassDef offsets" {
     writeCoverage1Test(&pair_bytes, 34, 10);
 
     var table = Table{ .data = &pair_bytes, .offset = 0, .length = pair_bytes.len };
-    try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.pair.validate(table, 0));
 
     var adjustments = std.ArrayList(Adjustment).empty;
     defer adjustments.deinit(allocator);
@@ -6771,10 +6576,10 @@ test "GPOS class-based positioning rejects null ClassDef offsets" {
 
     writeU16Test(&pair_bytes, 8, 18);
     writeU16Test(&pair_bytes, 10, 0); // ClassDef2 is required too.
-    try std.testing.expectError(error.BadGpos, ensurePairPositionSubtableWithin(table, 0));
+    try std.testing.expectError(error.BadGpos, positioning.lookup.pair.validate(table, 0));
 
     writeU16Test(&pair_bytes, 10, 26);
-    try ensurePairPositionSubtableWithin(table, 0);
+    try positioning.lookup.pair.validate(table, 0);
     try collectPairAdjustment(table, 0, &.{ 10, 11 }, &adjustments, allocator, 0, .{});
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
     try std.testing.expectEqual(@as(i16, -15), adjustments.items[0].x_advance);

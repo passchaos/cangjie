@@ -116,6 +116,59 @@ test "PairPos format 1 validates and searches ordered PairSets" {
     );
 }
 
+test "PairPos format 1 validates coverage cardinality and device base" {
+    var bytes = [_]u8{0} ** 46;
+    writeU16(&bytes, 0, 1);
+    writeU16(&bytes, 2, 22);
+    writeU16(&bytes, 4, 0x0011);
+    writeU16(&bytes, 6, 0);
+    writeU16(&bytes, 8, 1);
+    writeU16(&bytes, 10, 28);
+    writeCoverage1(&bytes, 22, 10);
+    const pair_set = 28;
+    writeU16(&bytes, pair_set + 0, 1);
+    writeU16(&bytes, pair_set + 2, 11);
+    writeI16(&bytes, pair_set + 4, -30);
+    writeU16(&bytes, pair_set + 6, 10);
+    writeU16(&bytes, pair_set + 10, 12);
+    writeU16(&bytes, pair_set + 12, 12);
+    writeU16(&bytes, pair_set + 14, 1);
+    writeU16(&bytes, pair_set + 16, 0);
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+    };
+    try positioning.lookup.pair.validate(view, 0);
+
+    writeU16(&bytes, pair_set + 6, 16);
+    try std.testing.expectError(
+        error.BadGpos,
+        positioning.lookup.pair.validate(view, 0),
+    );
+
+    var cardinality = [_]u8{0} ** 24;
+    writeU16(&cardinality, 0, 1);
+    writeU16(&cardinality, 2, 16);
+    writeU16(&cardinality, 4, 0);
+    writeU16(&cardinality, 6, 0);
+    writeU16(&cardinality, 8, 1);
+    writeU16(&cardinality, 10, 12);
+    writeU16(&cardinality, 12, 0);
+    writeU16(&cardinality, 16, 1);
+    writeU16(&cardinality, 18, 2);
+    writeU16(&cardinality, 20, 10);
+    writeU16(&cardinality, 22, 20);
+    try std.testing.expectError(
+        error.BadGpos,
+        positioning.lookup.pair.validate(.{
+            .data = &cardinality,
+            .offset = 0,
+            .length = cardinality.len,
+        }, 0),
+    );
+}
+
 test "PairPos format 2 validates class matrix cardinality" {
     var bytes = [_]u8{0} ** 52;
     writeU16(&bytes, 0, 2);

@@ -77,6 +77,57 @@ test "PairPos ValueFormat2 consumes the second participating glyph" {
     );
 }
 
+test "PairPos rejects unsorted pair records before emitting output" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 34;
+    writeU16(&bytes, 0, 1);
+    writeU16(&bytes, 2, 22);
+    writeU16(&bytes, 4, 0x0004);
+    writeU16(&bytes, 6, 0);
+    writeU16(&bytes, 8, 1);
+    writeU16(&bytes, 10, 12);
+    writeU16(&bytes, 12, 2);
+    writeU16(&bytes, 14, 11);
+    writeI16(&bytes, 16, -20);
+    writeU16(&bytes, 18, 10);
+    writeI16(&bytes, 20, -40);
+    writeCoverage1(&bytes, 22, 5);
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+    };
+    var adjustments = std.ArrayList(pair.generic.Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try std.testing.expectError(
+        error.BadGpos,
+        pair.generic.collect(
+            view,
+            0,
+            &.{ 5, 11 },
+            &adjustments,
+            allocator,
+            0,
+            .{},
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+
+    writeU16(&bytes, 18, 12);
+    try pair.generic.collect(
+        view,
+        0,
+        &.{ 5, 11 },
+        &adjustments,
+        allocator,
+        0,
+        .{},
+    );
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(i16, -20), adjustments.items[0].x_advance);
+}
+
 fn writePairSubtable(
     bytes: []u8,
     offset: usize,

@@ -5,6 +5,7 @@ const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
 const positioning = @import("gpos/positioning/root.zig");
 pub const runtime = @import("gpos/runtime/root.zig");
+const runtime_lookup = @import("gpos/runtime/lookup/root.zig");
 const runtime_output = @import("gpos/runtime/output/root.zig");
 const table_core = @import("gpos/table/root.zig");
 const class_context = @import("opentype/class_context.zig");
@@ -44,14 +45,18 @@ const NativeCoverage = accelerator_core.coverage.Owned;
 const SinglePosSubtable = accelerator_core.model.SinglePositionSubtable;
 const appendAdjustment = runtime_output.adjustments.append;
 const appendAdjustmentEx = runtime_output.adjustments.appendWithFlags;
-const currentAdjustmentPlacement = runtime_output.adjustments.currentPlacement;
 const findAdjustment = runtime_output.adjustments.find;
-const findAdjustmentMutable = runtime_output.adjustments.findMutable;
 const markUnsafePositioningPair = runtime_output.safety.markPair;
 const markUnsafePairApplication = runtime_output.safety.markPairApplication;
 const markUnsafePositioningContext = runtime_output.safety.markContext;
 const markUnsafePositioningChainingContext =
     runtime_output.safety.markChainingContext;
+const collectCursiveAdjustment = runtime_lookup.cursive.collect;
+const collectCursiveAdjustmentParsed = runtime_lookup.cursive.collectParsed;
+const collectCursiveAdjustmentAt = runtime_lookup.cursive.collectAt;
+const buildCursivePositionSubtable = runtime_lookup.cursive.build;
+const deinitCursivePositionSubtables = runtime_lookup.cursive.deinit;
+const CursivePositionSubtable = runtime_lookup.cursive.Parsed;
 
 const max_run_digest_cache_entries = 16;
 
@@ -1652,258 +1657,6 @@ fn collectBacktrackUnignoredGlyphs(glyphs: []const GlyphId, pos: usize, lookup_f
         out_i += 1;
     }
     return out_i == out.len;
-}
-
-test "GPOS cursive positioning uses previous placement for overlapping joins" {
-    const allocator = std.testing.allocator;
-    var adjustments = std.ArrayList(Adjustment).empty;
-    defer adjustments.deinit(allocator);
-
-    try appendCursiveAdjustments(&adjustments, allocator, 0, 1, .{ .x = 120, .y = 35 }, .{ .x = 120, .y = 185 }, 0, .ltr);
-    try appendCursiveAdjustments(&adjustments, allocator, 1, 2, .{ .x = 268, .y = 139 }, .{ .x = 0, .y = 0 }, 0, .ltr);
-
-    var found = false;
-    for (adjustments.items) |adjustment| {
-        if (adjustment.index != 1) continue;
-        found = true;
-        try std.testing.expectEqual(@as(i16, 148), adjustment.x_advance);
-        try std.testing.expectEqual(@as(i16, -120), adjustment.x_placement);
-        try std.testing.expect(adjustment.x_advance_absolute);
-    }
-    try std.testing.expect(found);
-}
-
-test "GPOS cursive positioning reverses previous attachment chains" {
-    const allocator = std.testing.allocator;
-    var adjustments = std.ArrayList(Adjustment).empty;
-    defer adjustments.deinit(allocator);
-
-    try appendCursiveAdjustments(&adjustments, allocator, 0, 1, .{ .x = 120, .y = 44 }, .{ .x = 120, .y = 152 }, 0, .ltr);
-    try appendCursiveAdjustments(&adjustments, allocator, 2, 1, .{ .x = 376, .y = 79 }, .{ .x = 239, .y = 152 }, 0, .ltr);
-
-    var old_parent: ?Adjustment = null;
-    var middle: ?Adjustment = null;
-    for (adjustments.items) |adjustment| {
-        if (adjustment.index == 0) old_parent = adjustment;
-        if (adjustment.index == 1) middle = adjustment;
-    }
-
-    try std.testing.expectEqual(@as(?usize, 1), old_parent.?.attachment_parent_index);
-    try std.testing.expectEqual(AttachmentType.cursive, old_parent.?.attachment_type);
-    try std.testing.expectEqual(@as(i16, 108), old_parent.?.y_placement);
-    try std.testing.expectEqual(@as(?usize, 2), middle.?.attachment_parent_index);
-    try std.testing.expectEqual(AttachmentType.cursive, middle.?.attachment_type);
-    try std.testing.expectEqual(@as(i16, -73), middle.?.y_placement);
-}
-
-test "GPOS later cursive lookup replaces reciprocal attachment" {
-    const allocator = std.testing.allocator;
-    var adjustments = std.ArrayList(Adjustment).empty;
-    defer adjustments.deinit(allocator);
-
-    try appendCursiveAdjustments(&adjustments, allocator, 0, 1, .{ .x = 218, .y = 40 }, .{ .x = 82, .y = 184 }, 0x0001, .ltr);
-    try appendCursiveAdjustments(&adjustments, allocator, 0, 1, .{ .x = 218, .y = 40 }, .{ .x = 82, .y = 184 }, 0, .ltr);
-
-    var first: ?Adjustment = null;
-    var second: ?Adjustment = null;
-    for (adjustments.items) |adjustment| {
-        if (adjustment.index == 0) first = adjustment;
-        if (adjustment.index == 1) second = adjustment;
-    }
-
-    try std.testing.expectEqual(AttachmentType.none, first.?.attachment_type);
-    try std.testing.expectEqual(@as(?usize, null), first.?.attachment_parent_index);
-    try std.testing.expectEqual(@as(i16, 0), first.?.y_placement);
-    try std.testing.expectEqual(AttachmentType.cursive, second.?.attachment_type);
-    try std.testing.expectEqual(@as(?usize, 0), second.?.attachment_parent_index);
-    try std.testing.expectEqual(@as(i16, -144), second.?.y_placement);
-}
-
-fn collectCursiveAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    const parsed = try positioning.lookup.cursive.parse(table, subtable_offset);
-    try collectCursiveAdjustmentParsed(table, parsed, glyphs, adjustments, allocator, lookup_flag, options);
-}
-
-const CursivePositionSubtable = accelerator_core.model.CursivePositionSubtable;
-
-fn buildCursivePositionSubtable(table: Table, subtable_offset: usize, allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!CursivePositionSubtable {
-    var subtable = try positioning.lookup.cursive.parse(table, subtable_offset);
-    errdefer if (subtable.coverage) |coverage| coverage.deinit(allocator);
-    subtable.coverage = try accelerator_core.coverage.Owned.build(table, subtable.coverage_offset, allocator);
-    return subtable;
-}
-
-fn deinitCursivePositionSubtables(allocator: std.mem.Allocator, subtables: []const CursivePositionSubtable) void {
-    accelerator_core.model.deinitCursiveSubtables(subtables, allocator);
-}
-
-fn collectCursiveAdjustmentParsed(table: Table, parsed: CursivePositionSubtable, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    if (glyphs.len < 2) return;
-
-    var previous_covered_position: ?usize = null;
-    var previous_coverage_index: usize = 0;
-    for (glyphs, 0..) |glyph, i| {
-        if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, i)) continue;
-        const current_index = (if (parsed.coverage) |coverage|
-            coverage.index(glyph)
-        else
-            try table_core.coverage.index(table, parsed.coverage_offset, glyph)) orelse {
-            // A non-ignored, non-covered glyph breaks cursive adjacency. Ignored
-            // glyphs are skipped above, matching OpenType LookupFlag semantics.
-            previous_covered_position = null;
-            continue;
-        };
-        if (current_index >= parsed.entry_exit_count) {
-            previous_covered_position = null;
-            continue;
-        }
-
-        if (previous_covered_position) |previous_position| {
-            const current_record = parsed.subtable_offset + 6 + current_index * 4;
-            const previous_record = parsed.subtable_offset + 6 + previous_coverage_index * 4;
-            const entry_relative = try readU16(table, current_record);
-            const exit_relative = try readU16(table, previous_record + 2);
-            if (entry_relative != 0 and exit_relative != 0) {
-                const entry = try readAnchor(table, parsed.subtable_offset + entry_relative, options);
-                const exit = try readAnchor(table, parsed.subtable_offset + exit_relative, options);
-                try markUnsafePositioningPair(
-                    allocator,
-                    &options,
-                    previous_position,
-                    i,
-                );
-                try appendCursiveAdjustments(adjustments, allocator, previous_position, i, exit, entry, lookup_flag, options.direction);
-            }
-        }
-        previous_covered_position = i;
-        previous_coverage_index = current_index;
-    }
-}
-
-fn collectCursiveAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, target_index: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
-    // Contextual PosLookupRecords target exactly one matched input glyph.
-    // CursivePos still needs the preceding participating glyph from the real
-    // run, but a nested context lookup must not rescan and position every
-    // covered cursive join in the run.
-    const pos_format = try readU16(table, subtable_offset);
-    if (pos_format != 1) return error.UnsupportedGpos;
-    if (target_index >= glyphs.len) return false;
-    const glyph = glyphs[target_index];
-    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
-
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const entry_exit_count = try readU16(table, subtable_offset + 4);
-    const current_index = try table_core.coverage.index(table, coverage_offset, glyph) orelse return false;
-    if (current_index >= entry_exit_count) return false;
-    const previous_position = try previousCoveredCursiveGlyph(table, coverage_offset, glyphs, target_index, entry_exit_count, lookup_flag, options) orelse return false;
-    const previous_index = (try table_core.coverage.index(table, coverage_offset, glyphs[previous_position])) orelse return false;
-
-    const current_record = subtable_offset + 6 + current_index * 4;
-    const previous_record = subtable_offset + 6 + previous_index * 4;
-    const entry_relative = try readU16(table, current_record);
-    const exit_relative = try readU16(table, previous_record + 2);
-    if (entry_relative == 0 or exit_relative == 0) return false;
-
-    const entry = try readAnchor(table, subtable_offset + entry_relative, options);
-    const exit = try readAnchor(table, subtable_offset + exit_relative, options);
-    try markUnsafePositioningPair(
-        allocator,
-        &options,
-        previous_position,
-        target_index,
-    );
-    try appendCursiveAdjustments(adjustments, allocator, previous_position, target_index, exit, entry, lookup_flag, options.direction);
-    return true;
-}
-
-fn appendCursiveAdjustments(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, previous_position: usize, current_position: usize, exit: Anchor, entry: Anchor, lookup_flag: u16, direction: LookupOptions.Direction) std.mem.Allocator.Error!void {
-    const previous_placement = currentAdjustmentPlacement(adjustments.items, previous_position);
-    const current_placement = currentAdjustmentPlacement(adjustments.items, current_position);
-    const right_to_left = (lookup_flag & 0x0001) != 0;
-    const child_position = if (right_to_left) previous_position else current_position;
-    const parent_position = if (right_to_left) current_position else previous_position;
-    try reverseCursiveAttachmentChain(adjustments, allocator, child_position, parent_position);
-    clearCursiveAttachmentTo(adjustments.items, parent_position, child_position);
-
-    if (direction == .rtl) {
-        const previous_x_delta = -exit.x - previous_placement.x;
-        try appendAdjustmentEx(adjustments, allocator, previous_position, .{
-            .index = previous_position,
-            .x_advance = previous_x_delta,
-            .x_placement = -exit.x,
-        }, .{
-            .attachment_type = if (right_to_left) .cursive else .none,
-            .attachment_parent_index = if (right_to_left) current_position else null,
-            .x_placement_absolute = true,
-        });
-        try appendAdjustmentEx(adjustments, allocator, current_position, .{
-            .index = current_position,
-            .x_advance = entry.x + current_placement.x,
-        }, .{ .x_advance_absolute = true });
-    } else {
-        try appendAdjustmentEx(adjustments, allocator, previous_position, .{
-            .index = previous_position,
-            .x_advance = exit.x + previous_placement.x,
-        }, .{ .x_advance_absolute = true });
-        const current_x_delta = -entry.x - current_placement.x;
-        try appendAdjustmentEx(adjustments, allocator, current_position, .{
-            .index = current_position,
-            .x_advance = current_x_delta,
-            .x_placement = -entry.x,
-        }, .{
-            .attachment_type = if (right_to_left) .none else .cursive,
-            .attachment_parent_index = if (right_to_left) null else previous_position,
-            .x_placement_absolute = true,
-        });
-    }
-
-    if (right_to_left) {
-        try appendAdjustmentEx(adjustments, allocator, previous_position, .{
-            .index = previous_position,
-            .y_placement = entry.y - exit.y,
-        }, .{ .attachment_type = .cursive, .attachment_parent_index = current_position, .y_placement_absolute = true });
-    } else {
-        try appendAdjustmentEx(adjustments, allocator, current_position, .{
-            .index = current_position,
-            .y_placement = exit.y - entry.y,
-        }, .{ .attachment_type = .cursive, .attachment_parent_index = previous_position, .y_placement_absolute = true });
-    }
-}
-
-fn clearCursiveAttachmentTo(adjustments: []Adjustment, child_index: usize, parent_index: usize) void {
-    var record = findAdjustmentMutable(adjustments, child_index) orelse return;
-    if (record.attachment_type != .cursive) return;
-    if (record.attachment_parent_index != parent_index) return;
-    record.attachment_type = .none;
-    record.attachment_parent_index = null;
-    record.y_placement = 0;
-}
-
-fn reverseCursiveAttachmentChain(adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, child_index: usize, new_parent_index: usize) std.mem.Allocator.Error!void {
-    var child_record = findAdjustmentMutable(adjustments.items, child_index) orelse return;
-    if (child_record.attachment_type != .cursive) return;
-    const old_parent_index = child_record.attachment_parent_index orelse return;
-    const child_placement = currentAdjustmentPlacement(adjustments.items, child_index);
-    child_record.attachment_type = .none;
-    child_record.attachment_parent_index = null;
-    if (old_parent_index == new_parent_index) return;
-
-    try reverseCursiveAttachmentChain(adjustments, allocator, old_parent_index, new_parent_index);
-    try appendAdjustmentEx(adjustments, allocator, old_parent_index, .{
-        .index = old_parent_index,
-        .y_placement = -child_placement.y,
-    }, .{ .attachment_type = .cursive, .attachment_parent_index = child_index, .y_placement_absolute = true });
-}
-
-fn previousCoveredCursiveGlyph(table: Table, coverage_offset: usize, glyphs: []const GlyphId, target_index: usize, entry_exit_count: usize, lookup_flag: u16, options: LookupOptions) GposError!?usize {
-    var i = target_index;
-    while (i > 0) {
-        i -= 1;
-        if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, i)) continue;
-        const coverage = try table_core.coverage.index(table, coverage_offset, glyphs[i]) orelse return null;
-        return if (coverage < entry_exit_count) i else null;
-    }
-    return null;
 }
 
 const MarkToBaseSubtable = accelerator_core.model.MarkToBaseSubtable;

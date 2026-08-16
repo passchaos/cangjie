@@ -2158,57 +2158,6 @@ pub fn itemizeBidiRuns(allocator: std.mem.Allocator, text: []const u8, base_dire
     return try runs.toOwnedSlice(allocator);
 }
 
-pub fn visualOrderBidiRuns(allocator: std.mem.Allocator, runs: []const BidiRun, base_direction: BidiClass) ![]usize {
-    const order = try allocator.alloc(usize, runs.len);
-    if (base_direction == .rtl) {
-        for (order, 0..) |*slot, index| slot.* = runs.len - 1 - index;
-    } else {
-        for (order, 0..) |*slot, index| slot.* = index;
-    }
-    return order;
-}
-
-pub fn visualOrderCodepoints(allocator: std.mem.Allocator, text: []const u8, base_direction: BidiClass) ![]u21 {
-    var paragraph = try resolveBidiParagraph(
-        allocator,
-        text,
-        if (base_direction == .rtl) .rtl else .ltr,
-    );
-    defer paragraph.deinit();
-    const cluster_order = try visualGraphemeClusters(allocator, text, paragraph);
-    defer allocator.free(cluster_order.clusters);
-    const order = cluster_order.order;
-    defer allocator.free(order);
-
-    var output = std.ArrayList(u21).empty;
-    errdefer output.deinit(allocator);
-    for (order) |cluster_index| {
-        const cluster = cluster_order.clusters[cluster_index];
-        for (paragraph.scalars[cluster.scalar_start..cluster.scalar_end]) |scalar| {
-            if (isBidiFormatControl(scalar.codepoint)) continue;
-            const codepoint = if (cluster.level & 1 != 0)
-                bidi_paragraph.mirroredCodepoint(scalar.codepoint)
-            else
-                scalar.codepoint;
-            try output.append(allocator, codepoint);
-        }
-    }
-    return try output.toOwnedSlice(allocator);
-}
-
-pub fn visualOrderUtf8(allocator: std.mem.Allocator, text: []const u8, base_direction: BidiClass) ![]u8 {
-    const codepoints = try visualOrderCodepoints(allocator, text, base_direction);
-    defer allocator.free(codepoints);
-    var output = std.ArrayList(u8).empty;
-    errdefer output.deinit(allocator);
-    for (codepoints) |codepoint| {
-        var buffer: [4]u8 = undefined;
-        const len = std.unicode.utf8Encode(codepoint, &buffer) catch continue;
-        try output.appendSlice(allocator, buffer[0..len]);
-    }
-    return try output.toOwnedSlice(allocator);
-}
-
 pub fn buildBidiMap(allocator: std.mem.Allocator, text: []const u8, base_direction: BidiClass) !BidiMap {
     // The map keeps both visual order and logical-to-visual lookup, which lets
     // editor code move between byte offsets and rendered caret positions.
@@ -2420,20 +2369,6 @@ pub fn itemizeWordSegments(allocator: std.mem.Allocator, text: []const u8) ![]Wo
     return try words.toOwnedSlice(allocator);
 }
 
-pub fn itemizeSentenceSegments(allocator: std.mem.Allocator, text: []const u8) ![]SentenceSegment {
-    var sentences = std.ArrayList(SentenceSegment).empty;
-    errdefer sentences.deinit(allocator);
-
-    var iterator = try sentenceSegments(text);
-    while (iterator.next()) |segment| {
-        const slice = text[segment.byte_start..][0..segment.byte_len];
-        if (!sentenceSegmentIsBlank(slice)) {
-            try sentences.append(allocator, segment);
-        }
-    }
-    return try sentences.toOwnedSlice(allocator);
-}
-
 pub fn itemizeLineBreaks(allocator: std.mem.Allocator, text: []const u8) ![]LineBreak {
     var breaks = std.ArrayList(LineBreak).empty;
     errdefer breaks.deinit(allocator);
@@ -2499,19 +2434,6 @@ pub fn itemizeScriptRuns(allocator: std.mem.Allocator, text: []const u8) ![]Scri
 
 fn directionForLevel(level: u8) BidiClass {
     return if (level & 1 == 0) .ltr else .rtl;
-}
-
-fn isBidiFormatControl(codepoint: u21) bool {
-    return codepoint == 0x00ad or
-        codepoint == 0x034f or
-        codepoint == 0x061c or
-        codepoint == 0x180e or
-        (codepoint >= 0x180b and codepoint <= 0x180f) or
-        (codepoint >= 0x200b and codepoint <= 0x200f) or
-        (codepoint >= 0x202a and codepoint <= 0x202e) or
-        (codepoint >= 0x2060 and codepoint <= 0x206f) or
-        codepoint == 0xfeff or
-        (codepoint >= 0xe0000 and codepoint <= 0xe0fff);
 }
 
 test "RTL bidi map walks long grapheme runs without losing item boundaries" {
@@ -3394,28 +3316,40 @@ test "line breaks include breakable Unicode space separators" {
 }
 
 test "sentence segmentation keeps Arabic-Indic decimal numbers together" {
-    const allocator = std.testing.allocator;
-
     const text = "القيمة ١.٢ جيدة. انتهى";
-    const sentences = try itemizeSentenceSegments(allocator, text);
-    defer allocator.free(sentences);
-
-    try std.testing.expectEqual(@as(usize, 2), sentences.len);
-    try std.testing.expectEqualStrings("القيمة ١.٢ جيدة. ", text[sentences[0].byte_start..][0..sentences[0].byte_len]);
-    try std.testing.expectEqualStrings("انتهى", text[sentences[1].byte_start..][0..sentences[1].byte_len]);
+    var sentences = try sentenceSegments(text);
+    const first = sentences.next().?;
+    const second = sentences.next().?;
+    try std.testing.expect(sentences.next() == null);
+    try std.testing.expectEqualStrings(
+        "القيمة ١.٢ جيدة. ",
+        text[first.byte_start..][0..first.byte_len],
+    );
+    try std.testing.expectEqualStrings(
+        "انتهى",
+        text[second.byte_start..][0..second.byte_len],
+    );
 }
 
 test "sentence segmentation treats CRLF as a hard boundary" {
-    const allocator = std.testing.allocator;
-
     const text = "First\r\nSecond. Third";
-    const sentences = try itemizeSentenceSegments(allocator, text);
-    defer allocator.free(sentences);
-
-    try std.testing.expectEqual(@as(usize, 3), sentences.len);
-    try std.testing.expectEqualStrings("First\r\n", text[sentences[0].byte_start..][0..sentences[0].byte_len]);
-    try std.testing.expectEqualStrings("Second. ", text[sentences[1].byte_start..][0..sentences[1].byte_len]);
-    try std.testing.expectEqualStrings("Third", text[sentences[2].byte_start..][0..sentences[2].byte_len]);
+    var sentences = try sentenceSegments(text);
+    const first = sentences.next().?;
+    const second = sentences.next().?;
+    const third = sentences.next().?;
+    try std.testing.expect(sentences.next() == null);
+    try std.testing.expectEqualStrings(
+        "First\r\n",
+        text[first.byte_start..][0..first.byte_len],
+    );
+    try std.testing.expectEqualStrings(
+        "Second. ",
+        text[second.byte_start..][0..second.byte_len],
+    );
+    try std.testing.expectEqualStrings(
+        "Third",
+        text[third.byte_start..][0..third.byte_len],
+    );
 }
 
 test "grapheme clusters keep Devanagari virama ZWJ conjuncts atomic" {
@@ -5174,15 +5108,6 @@ fn isDecimalDigit(codepoint: u21) bool {
 
 fn isAsciiApostrophe(codepoint: u21) bool {
     return codepoint == '\'';
-}
-
-fn sentenceSegmentIsBlank(text: []const u8) bool {
-    for (text) |byte| {
-        if (byte != ' ' and byte != '\t' and byte != '\n' and byte != '\r') {
-            return false;
-        }
-    }
-    return true;
 }
 
 fn isWordExtender(codepoint: u21) bool {

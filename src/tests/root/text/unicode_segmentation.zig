@@ -20,16 +20,12 @@ const openTypeLanguageTagForLocale = support.openTypeLanguageTagForLocale;
 const itemizeBidiRuns = support.itemizeBidiRuns;
 const itemizeGraphemeClusters = support.itemizeGraphemeClusters;
 const itemizeLineBreaks = support.itemizeLineBreaks;
-const itemizeSentenceSegments = support.itemizeSentenceSegments;
 const itemizeScriptRuns = support.itemizeScriptRuns;
 const itemizeWordSegments = support.itemizeWordSegments;
 const openTypeTag = support.openTypeTag;
 const openTypeScriptTag = support.openTypeScriptTag;
 const scriptForCodepoint = support.scriptForCodepoint;
 const mirroredCodepoint = support.mirroredCodepoint;
-const visualOrderBidiRuns = support.visualOrderBidiRuns;
-const visualOrderCodepoints = support.visualOrderCodepoints;
-const visualOrderUtf8 = support.visualOrderUtf8;
 const bidiClassForCodepoint = support.bidiClassForCodepoint;
 const testing = support.testing;
 
@@ -129,39 +125,6 @@ test "detects bidi classes and itemizes bidi runs" {
     try std.testing.expectEqual(@as(usize, 10), runs[2].byte_start);
     try std.testing.expectEqual(@as(usize, 4), runs[2].byte_len);
     try std.testing.expectError(error.InvalidUtf8, itemizeBidiRuns(allocator, "abc \xff xyz", .ltr));
-
-    const ltr_order = try visualOrderBidiRuns(allocator, runs, .ltr);
-    defer allocator.free(ltr_order);
-    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, ltr_order);
-    const rtl_order = try visualOrderBidiRuns(allocator, runs, .rtl);
-    defer allocator.free(rtl_order);
-    try std.testing.expectEqualSlices(usize, &.{ 2, 1, 0 }, rtl_order);
-
-    const ltr_visual = try visualOrderCodepoints(allocator, "abבגcd", .ltr);
-    defer allocator.free(ltr_visual);
-    try std.testing.expectEqualSlices(u21, &.{ 'a', 'b', 0x05d2, 0x05d1, 'c', 'd' }, ltr_visual);
-    const rtl_visual = try visualOrderCodepoints(allocator, "abבגcd", .rtl);
-    defer allocator.free(rtl_visual);
-    try std.testing.expectEqualSlices(u21, &.{ 'c', 'd', 0x05d2, 0x05d1, 'a', 'b' }, rtl_visual);
-    try std.testing.expectEqual(@as(u21, ')'), mirroredCodepoint('('));
-    try std.testing.expectEqual(@as(u21, '('), mirroredCodepoint(')'));
-    const mirrored_visual = try visualOrderCodepoints(allocator, "(אב)", .rtl);
-    defer allocator.free(mirrored_visual);
-    try std.testing.expectEqualSlices(u21, &.{ '(', 0x05d1, 0x05d0, ')' }, mirrored_visual);
-    const mirrored_utf8 = try visualOrderUtf8(allocator, "(אב)", .rtl);
-    defer allocator.free(mirrored_utf8);
-    try std.testing.expectEqualStrings("(בא)", mirrored_utf8);
-
-    const variation_visual = try visualOrderCodepoints(allocator, "א\u{fe0f}ב", .rtl);
-    defer allocator.free(variation_visual);
-    try std.testing.expectEqualSlices(u21, &.{ 0x05d1, 0x05d0, 0xfe0f }, variation_visual);
-
-    const number_visual = try visualOrderCodepoints(allocator, "א12ב", .rtl);
-    defer allocator.free(number_visual);
-    try std.testing.expectEqualSlices(u21, &.{ 0x05d1, '1', '2', 0x05d0 }, number_visual);
-    const neutral_before_number_visual = try visualOrderCodepoints(allocator, "א 12ב", .rtl);
-    defer allocator.free(neutral_before_number_visual);
-    try std.testing.expectEqualSlices(u21, &.{ 0x05d1, '1', '2', ' ', 0x05d0 }, neutral_before_number_visual);
 
     const neutral_prefix = try itemizeBidiRuns(allocator, "  ב", .rtl);
     defer allocator.free(neutral_prefix);
@@ -514,49 +477,6 @@ test "word segments retain Unicode format controls" {
     defer allocator.free(word_joiner);
     try std.testing.expectEqual(@as(usize, 1), word_joiner.len);
     try std.testing.expectEqualStrings("hello\u{2060}world", "hello\u{2060}world"[word_joiner[0].byte_start..][0..word_joiner[0].byte_len]);
-}
-
-test "itemizes basic sentence segments" {
-    const allocator = std.testing.allocator;
-    const text = "Hello world!  Are you ok? 好。再见！";
-    const sentences = try itemizeSentenceSegments(allocator, text);
-    defer allocator.free(sentences);
-
-    try std.testing.expectEqual(@as(usize, 4), sentences.len);
-    try std.testing.expectEqualStrings("Hello world!  ", text[sentences[0].byte_start..][0..sentences[0].byte_len]);
-    try std.testing.expectEqualStrings("Are you ok? ", text[sentences[1].byte_start..][0..sentences[1].byte_len]);
-    try std.testing.expectEqualStrings("好。", text[sentences[2].byte_start..][0..sentences[2].byte_len]);
-    try std.testing.expectEqualStrings("再见！", text[sentences[3].byte_start..][0..sentences[3].byte_len]);
-
-    const no_terminal = try itemizeSentenceSegments(allocator, "No terminator");
-    defer allocator.free(no_terminal);
-    try std.testing.expectEqual(@as(usize, 1), no_terminal.len);
-    try std.testing.expectEqualStrings("No terminator", "No terminator"[no_terminal[0].byte_start..][0..no_terminal[0].byte_len]);
-
-    const quoted_text = "He said ‘hi!’ Next.";
-    const quoted = try itemizeSentenceSegments(allocator, quoted_text);
-    defer allocator.free(quoted);
-    try std.testing.expectEqual(@as(usize, 2), quoted.len);
-    try std.testing.expectEqualStrings("He said ‘hi!’ ", quoted_text[quoted[0].byte_start..][0..quoted[0].byte_len]);
-    try std.testing.expectEqualStrings("Next.", quoted_text[quoted[1].byte_start..][0..quoted[1].byte_len]);
-
-    const blank = try itemizeSentenceSegments(allocator, " \t\r\n");
-    defer allocator.free(blank);
-    try std.testing.expectEqual(@as(usize, 0), blank.len);
-
-    try std.testing.expectError(error.InvalidUtf8, itemizeSentenceSegments(allocator, "Hello.\xffNext"));
-}
-
-test "sentence segments keep decimal full stops inside numbers" {
-    const allocator = std.testing.allocator;
-    const text = "Version 1.2 works. Next.";
-
-    const sentences = try itemizeSentenceSegments(allocator, text);
-    defer allocator.free(sentences);
-
-    try std.testing.expectEqual(@as(usize, 2), sentences.len);
-    try std.testing.expectEqualStrings("Version 1.2 works. ", text[sentences[0].byte_start..][0..sentences[0].byte_len]);
-    try std.testing.expectEqualStrings("Next.", text[sentences[1].byte_start..][0..sentences[1].byte_len]);
 }
 
 test "streams Unicode sentence boundaries with lowercase abbreviation context" {

@@ -10,6 +10,8 @@ const direct_reverse = @import("gsub/execution/direct/reverse/root.zig");
 const direct_single = @import("gsub/execution/direct/single/root.zig");
 const contextual_context =
     @import("gsub/execution/contextual/context/root.zig");
+const contextual_chaining_class =
+    @import("gsub/execution/contextual/chaining/class/root.zig");
 const contextual_chaining_coverage =
     @import("gsub/execution/contextual/chaining/coverage/root.zig");
 const contextual_chaining_glyph =
@@ -94,7 +96,6 @@ const LookupAccelerator = acceleration.Lookup;
 const ContextClassSubtableAccelerator = accelerator_model.ContextClassSubtable;
 const ChainingCoverageSubtable = accelerator_model.ChainingCoverageSubtable;
 const FastSingleRecord = accelerator_model.FastSingleRecord;
-const ChainingClassSubtableAccelerator = accelerator_model.ChainingClassSubtable;
 const ChainingSubtableGroup = accelerator_model.ChainingGroup;
 const ChainingSubtablePair = accelerator_model.ChainingPair;
 const ChainingPairSubtableGroup = accelerator_model.ChainingPairGroup;
@@ -102,15 +103,6 @@ const ChainingPairSubtablePair = accelerator_model.ChainingPairEntry;
 const deinitLookupAccelerators = accelerator_root.ownership.deinit;
 const deinitLookupAcceleratorContents =
     accelerator_root.ownership.deinitContents;
-
-// HarfBuzz's fast LigatureSet path extracts the second component once before
-// trying definitions. Select these thresholds once per lookup rather than
-// adding branches to every candidate glyph.
-fn chainingClassRuleBacktrackCount(rule: class_context.Rule) u16 {
-    // The conservative accelerator subset has no substitution-record offset,
-    // so this shared Rule field carries its already-proven backtrack count.
-    return @intCast(rule.records_offset);
-}
 
 const empty_class_def_offset = table_core.class_def.empty_offset;
 
@@ -125,10 +117,7 @@ const SelectedLookup = feature_domain.run_selection.SelectedLookup;
 
 const ContextApplyResult = contextual_model.ApplyResult;
 const NestedGlyphChange = contextual_model.Change;
-const contextNextPosAfterMutation =
-    contextual_model.nextPositionAfterMutation;
 const markUnsafeContextMatch = contextual_safety.markInput;
-const markUnsafeChainingMatch = contextual_safety.markRegions;
 
 const nextUnignoredGlyph = context_traversal.nextGlyph;
 const nextUnignoredGlyphIndex = context_traversal.nextIndex;
@@ -1044,15 +1033,6 @@ fn applyLookupPlanEntry(table: Table, lookup_count: u16, entry: FeatureLookupPla
     }
 }
 
-fn chainingClassGroupForGlyph(subtable: ChainingClassSubtableAccelerator, glyph: GlyphId) ?class_context.RuleGroup {
-    return accelerator_root.index.class_first.find(
-        subtable.classes,
-        subtable.first_index_start,
-        subtable.groups,
-        glyph,
-    );
-}
-
 /// Validate GSUB glyph references that are meaningful at font-load time.
 ///
 /// Runtime shaping only reaches records whose lookup and coverage match the
@@ -1543,7 +1523,16 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
                     lookup_index,
                     lookup_options,
                 )) |accelerator| {
-                    try applyExtensionChainingClassSubstitutionLookupAccelerated(table, subtable_count, glyphs, allocator, lookup_flag, lookup_options, accelerator);
+                    try contextual_chaining_class.acceleratedLookup(
+                        ContextualRecordExecutor,
+                        table,
+                        subtable_count,
+                        glyphs,
+                        allocator,
+                        lookup_flag,
+                        lookup_options,
+                        accelerator,
+                    );
                 } else if (runtime.dispatch.chainingCoverage(
                     lookup_index,
                     lookup_options,
@@ -1621,7 +1610,8 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
             lookup_index,
             lookup_options,
         )) |accelerator| {
-            try applyChainingClassSubstitutionLookupAccelerated(
+            try contextual_chaining_class.acceleratedLookup(
+                ContextualRecordExecutor,
                 table,
                 subtable_count,
                 glyphs,
@@ -1914,7 +1904,15 @@ fn applyChainingContextSubstitution(table: Table, subtable_offset: usize, glyphs
             lookup_flag,
             options,
         ),
-        2 => try applyChainingClassSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, options),
+        2 => try contextual_chaining_class.subtable(
+            ContextualRecordExecutor,
+            table,
+            subtable_offset,
+            glyphs,
+            allocator,
+            lookup_flag,
+            options,
+        ),
         3 => try contextual_chaining_coverage.subtable(
             ContextualRecordExecutor,
             table,
@@ -2255,46 +2253,6 @@ fn applyExtensionChainingContextSubstitutionLookup(table: Table, lookup_offset: 
     }
 }
 
-fn applyExtensionChainingClassSubstitutionLookupAccelerated(table: Table, subtable_count: u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: *const LookupAccelerator) (GsubError || std.mem.Allocator.Error)!void {
-    return try applyChainingClassSubstitutionLookupAccelerated(
-        table,
-        subtable_count,
-        glyphs,
-        allocator,
-        lookup_flag,
-        options,
-        accelerator,
-    );
-}
-
-fn applyChainingClassSubstitutionLookupAccelerated(
-    table: Table,
-    subtable_count: u16,
-    glyphs: *std.ArrayList(GlyphId),
-    allocator: std.mem.Allocator,
-    lookup_flag: u16,
-    options: LookupOptions,
-    accelerator: *const LookupAccelerator,
-) (GsubError || std.mem.Allocator.Error)!void {
-    var pos: usize = 0;
-    while (pos < glyphs.items.len) {
-        var next_pos = pos + 1;
-        defer pos = next_pos;
-        if (!runtime_filtering.sourceFeatureAllowsGlyph(options, pos)) continue;
-        if (runtime_filtering.lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) continue;
-        var subtable_i: usize = 0;
-        while (subtable_i < subtable_count and subtable_i < accelerator.chaining_class_subtables.len) : (subtable_i += 1) {
-            const subtable = accelerator.chaining_class_subtables[subtable_i];
-            if (subtable.rules.len == 0) continue;
-            const result = try applyAcceleratedChainingClassSubstitutionWithBacktrackAt(table, subtable, glyphs, pos, allocator, lookup_flag, options);
-            if (result.matched) {
-                next_pos = @max(next_pos, result.next_pos);
-                break;
-            }
-        }
-    }
-}
-
 fn applyChainingContextSubstitutionAt(table: Table, subtable_offset: usize, parsed_subtable: ?ChainingCoverageSubtable, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
     const subst_format = try readU16(table, subtable_offset);
     return switch (subst_format) {
@@ -2308,7 +2266,16 @@ fn applyChainingContextSubstitutionAt(table: Table, subtable_offset: usize, pars
             lookup_flag,
             options,
         ),
-        2 => try applyChainingClassSubstitutionAt(table, subtable_offset, glyphs, pos, allocator, lookup_flag, options),
+        2 => try contextual_chaining_class.at(
+            ContextualRecordExecutor,
+            table,
+            subtable_offset,
+            glyphs,
+            pos,
+            allocator,
+            lookup_flag,
+            options,
+        ),
         3 => try contextual_chaining_coverage.at(
             ContextualRecordExecutor,
             table,
@@ -2325,303 +2292,6 @@ fn applyChainingContextSubstitutionAt(table: Table, subtable_offset: usize, pars
         ),
         else => .{},
     };
-}
-
-fn applyChainingClassSubstitution(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const backtrack_class_def = try checkedOptionalClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
-    const input_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 6));
-    const lookahead_class_def = try checkedOptionalClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
-    const set_count = try readU16(table, subtable_offset + 10);
-    var pos: usize = 0;
-    while (pos < glyphs.items.len) {
-        var next_pos = pos + 1;
-        defer pos = next_pos;
-        if (!runtime_filtering.sourceFeatureAllowsGlyph(options, pos)) continue;
-        if (runtime_filtering.lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) continue;
-        if (try table_core.coverage.index(table, coverage_offset, glyphs.items[pos]) == null) continue;
-        const input_class = try table_core.class_def.value(table, input_class_def, glyphs.items[pos]);
-        if (input_class >= set_count) continue;
-        const set_relative = try readU16(table, subtable_offset + 12 + @as(usize, input_class) * 2);
-        if (set_relative == 0) continue;
-        const result = try applyChainingClassRuleSet(table, subtable_offset + set_relative, backtrack_class_def, input_class_def, lookahead_class_def, glyphs, pos, allocator, lookup_flag, options);
-        if (result.matched) next_pos = @max(next_pos, result.next_pos);
-    }
-}
-
-fn applyChainingClassSubstitutionAt(table: Table, subtable_offset: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
-    if (!runtime_filtering.sourceFeatureAllowsGlyph(options, pos)) return .{};
-    if (pos >= glyphs.items.len) return .{};
-    if (runtime_filtering.lookupIgnoresGlyph(lookup_flag, options, glyphs.items[pos])) return .{};
-
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const backtrack_class_def = try checkedOptionalClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
-    const input_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 6));
-    const lookahead_class_def = try checkedOptionalClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 8));
-    const set_count = try readU16(table, subtable_offset + 10);
-    if (try table_core.coverage.index(table, coverage_offset, glyphs.items[pos]) == null) return .{};
-    const input_class = try table_core.class_def.value(table, input_class_def, glyphs.items[pos]);
-    if (input_class >= set_count) return .{};
-    const set_relative = try readU16(table, subtable_offset + 12 + @as(usize, input_class) * 2);
-    if (set_relative == 0) return .{};
-    return try applyChainingClassRuleSet(table, subtable_offset + set_relative, backtrack_class_def, input_class_def, lookahead_class_def, glyphs, pos, allocator, lookup_flag, options);
-}
-
-const max_chaining_class_region_glyphs =
-    accelerator_model.max_context_region_glyphs;
-
-const ChainingClassRuleMatchWindow = struct {
-    table: Table,
-    glyphs: []const GlyphId,
-    backtrack_class_def: usize,
-    input_class_def: usize,
-    lookahead_class_def: usize,
-    lookup_flag: u16,
-    options: LookupOptions,
-    anchor_syllable: ?u8,
-
-    input_indices: [max_chaining_class_region_glyphs]usize = undefined,
-    input_classes: [max_chaining_class_region_glyphs]u16 = undefined,
-    input_class_valid: [max_chaining_class_region_glyphs]bool = [_]bool{false} ** max_chaining_class_region_glyphs,
-    input_len: usize = 0,
-    input_scan: usize,
-    input_exhausted: bool = false,
-
-    backtrack_indices: [max_chaining_class_region_glyphs]usize = undefined,
-    backtrack_classes: [max_chaining_class_region_glyphs]u16 = undefined,
-    backtrack_class_valid: [max_chaining_class_region_glyphs]bool = [_]bool{false} ** max_chaining_class_region_glyphs,
-    backtrack_len: usize = 0,
-    backtrack_scan: usize,
-    backtrack_exhausted: bool = false,
-
-    lookahead_indices: [max_chaining_class_region_glyphs]usize = undefined,
-    lookahead_classes: [max_chaining_class_region_glyphs]u16 = undefined,
-    lookahead_class_valid: [max_chaining_class_region_glyphs]bool = [_]bool{false} ** max_chaining_class_region_glyphs,
-    lookahead_len: usize = 0,
-    lookahead_scan: usize = 0,
-    lookahead_start: usize = std.math.maxInt(usize),
-    lookahead_exhausted: bool = false,
-
-    fn init(table: Table, glyphs: []const GlyphId, pos: usize, backtrack_class_def: usize, input_class_def: usize, lookahead_class_def: usize, lookup_flag: u16, options: LookupOptions) ChainingClassRuleMatchWindow {
-        return .{
-            .table = table,
-            .glyphs = glyphs,
-            .backtrack_class_def = backtrack_class_def,
-            .input_class_def = input_class_def,
-            .lookahead_class_def = lookahead_class_def,
-            .lookup_flag = lookup_flag,
-            .options = options,
-            .anchor_syllable = runtime_filtering.sourceSyllableForGlyph(options, pos),
-            .input_scan = pos,
-            .backtrack_scan = pos,
-        };
-    }
-
-    fn inputSlice(self: *ChainingClassRuleMatchWindow, count: usize) GsubError!?[]const usize {
-        if (count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
-        if (!try self.ensureInputCount(count)) return null;
-        return self.input_indices[0..count];
-    }
-
-    fn inputClassAt(self: *ChainingClassRuleMatchWindow, index: usize) GsubError!?u16 {
-        if (index >= max_chaining_class_region_glyphs) return error.UnsupportedGsub;
-        if (!try self.ensureInputCount(index + 1)) return null;
-        if (!self.input_class_valid[index]) {
-            self.input_classes[index] = try table_core.class_def.value(self.table, self.input_class_def, self.glyphs[self.input_indices[index]]);
-            self.input_class_valid[index] = true;
-        }
-        return self.input_classes[index];
-    }
-
-    fn backtrackClassAt(self: *ChainingClassRuleMatchWindow, index: usize) GsubError!?u16 {
-        if (index >= max_chaining_class_region_glyphs) return error.UnsupportedGsub;
-        if (!try self.ensureBacktrackCount(index + 1)) return null;
-        if (!self.backtrack_class_valid[index]) {
-            self.backtrack_classes[index] = try table_core.class_def.value(self.table, self.backtrack_class_def, self.glyphs[self.backtrack_indices[index]]);
-            self.backtrack_class_valid[index] = true;
-        }
-        return self.backtrack_classes[index];
-    }
-
-    fn lookaheadClassAt(self: *ChainingClassRuleMatchWindow, input_count: usize, index: usize) GsubError!?u16 {
-        if (index >= max_chaining_class_region_glyphs) return error.UnsupportedGsub;
-        if (!try self.ensureLookaheadCount(input_count, index + 1)) return null;
-        if (!self.lookahead_class_valid[index]) {
-            self.lookahead_classes[index] = try table_core.class_def.value(self.table, self.lookahead_class_def, self.glyphs[self.lookahead_indices[index]]);
-            self.lookahead_class_valid[index] = true;
-        }
-        return self.lookahead_classes[index];
-    }
-
-    fn ensureInputCount(self: *ChainingClassRuleMatchWindow, count: usize) GsubError!bool {
-        if (count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
-        while (self.input_len < count) {
-            if (self.input_exhausted) return false;
-            var found = false;
-            while (self.input_scan < self.glyphs.len) : (self.input_scan += 1) {
-                const glyph_index = self.input_scan;
-                if (runtime_filtering.contextualMaySkipGlyph(self.lookup_flag, self.options, self.glyphs, glyph_index, false)) continue;
-                if (!runtime_filtering.sourceSyllableAllowsGlyph(self.options, self.anchor_syllable, glyph_index)) {
-                    self.input_exhausted = true;
-                    return false;
-                }
-                self.input_indices[self.input_len] = glyph_index;
-                self.input_len += 1;
-                self.input_scan += 1;
-                found = true;
-                break;
-            }
-            if (!found) {
-                self.input_exhausted = true;
-                return false;
-            }
-        }
-        return true;
-    }
-
-    fn ensureBacktrackCount(self: *ChainingClassRuleMatchWindow, count: usize) GsubError!bool {
-        if (count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
-        while (self.backtrack_len < count) {
-            if (self.backtrack_exhausted) return false;
-            var found = false;
-            while (self.backtrack_scan > 0) {
-                self.backtrack_scan -= 1;
-                if (runtime_filtering.contextualMaySkipGlyph(self.lookup_flag, self.options, self.glyphs, self.backtrack_scan, true)) continue;
-                if (!runtime_filtering.sourceSyllableAllowsGlyph(self.options, self.anchor_syllable, self.backtrack_scan)) {
-                    self.backtrack_exhausted = true;
-                    return false;
-                }
-                self.backtrack_indices[self.backtrack_len] = self.backtrack_scan;
-                self.backtrack_len += 1;
-                found = true;
-                break;
-            }
-            if (!found) {
-                self.backtrack_exhausted = true;
-                return false;
-            }
-        }
-        return true;
-    }
-
-    fn ensureLookaheadCount(self: *ChainingClassRuleMatchWindow, input_count: usize, count: usize) GsubError!bool {
-        if (input_count == 0 or input_count > max_chaining_class_region_glyphs or count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
-        if (!try self.ensureInputCount(input_count)) return false;
-        const start = self.input_indices[input_count - 1] + 1;
-        if (self.lookahead_start != start) {
-            self.lookahead_start = start;
-            self.lookahead_scan = start;
-            self.lookahead_len = 0;
-            self.lookahead_exhausted = false;
-            @memset(&self.lookahead_class_valid, false);
-        }
-        while (self.lookahead_len < count) {
-            if (self.lookahead_exhausted) return false;
-            var found = false;
-            while (self.lookahead_scan < self.glyphs.len) : (self.lookahead_scan += 1) {
-                const glyph_index = self.lookahead_scan;
-                if (runtime_filtering.contextualMaySkipGlyph(self.lookup_flag, self.options, self.glyphs, glyph_index, true)) continue;
-                if (!runtime_filtering.sourceSyllableAllowsGlyph(self.options, self.anchor_syllable, glyph_index)) {
-                    self.lookahead_exhausted = true;
-                    return false;
-                }
-                self.lookahead_indices[self.lookahead_len] = glyph_index;
-                self.lookahead_len += 1;
-                self.lookahead_scan += 1;
-                found = true;
-                break;
-            }
-            if (!found) {
-                self.lookahead_exhausted = true;
-                return false;
-            }
-        }
-        return true;
-    }
-};
-
-fn applyChainingClassRuleSet(table: Table, set_offset: usize, backtrack_class_def: usize, input_class_def: usize, lookahead_class_def: usize, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
-    const rule_count = try readU16(table, set_offset);
-    var window = ChainingClassRuleMatchWindow.init(table, glyphs.items, pos, backtrack_class_def, input_class_def, lookahead_class_def, lookup_flag, options);
-    for (0..rule_count) |rule_i| {
-        const rule_offset = set_offset + try readU16(table, set_offset + 2 + rule_i * 2);
-        var cursor = rule_offset;
-
-        // Chaining rules match three regions around `pos`: backtrack before the
-        // input, input at `pos`, and lookahead after the input.
-        const backtrack_count = try readU16(table, cursor);
-        cursor += 2;
-        if (backtrack_count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
-        var matched = true;
-        for (0..backtrack_count) |i| {
-            const expected_class = try readU16(table, cursor + i * 2);
-            const actual_class = (try window.backtrackClassAt(i)) orelse {
-                matched = false;
-                break;
-            };
-            if (actual_class != expected_class) {
-                matched = false;
-                break;
-            }
-        }
-        if (!matched) continue;
-        cursor += backtrack_count * 2;
-
-        const input_count = try readU16(table, cursor);
-        cursor += 2;
-        if (input_count == 0) continue;
-        if (input_count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
-        const input_indices = (try window.inputSlice(input_count)) orelse continue;
-        for (1..input_count) |i| {
-            const expected_class = try readU16(table, cursor + (i - 1) * 2);
-            const actual_class = (try window.inputClassAt(i)) orelse {
-                matched = false;
-                break;
-            };
-            if (actual_class != expected_class) {
-                matched = false;
-                break;
-            }
-        }
-        if (!matched) continue;
-        cursor += (@as(usize, input_count) - 1) * 2;
-
-        const lookahead_count = try readU16(table, cursor);
-        cursor += 2;
-        if (lookahead_count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
-        if (!try window.ensureLookaheadCount(input_count, lookahead_count)) continue;
-        for (0..lookahead_count) |i| {
-            const expected_class = try readU16(table, cursor + i * 2);
-            const actual_class = (try window.lookaheadClassAt(input_count, i)) orelse {
-                matched = false;
-                break;
-            };
-            if (actual_class != expected_class) {
-                matched = false;
-                break;
-            }
-        }
-        if (!matched) continue;
-        cursor += lookahead_count * 2;
-
-        const subst_count = try readU16(table, cursor);
-        cursor += 2;
-        try markUnsafeChainingMatch(
-            allocator,
-            options,
-            window.backtrack_indices[0..backtrack_count],
-            input_indices,
-            window.lookahead_indices[0..lookahead_count],
-        );
-        const glyph_count_before = glyphs.items.len;
-        try applySubstitutionRecordsMapped(table, glyphs, cursor, subst_count, input_indices, allocator, options);
-        const original_next = input_indices[input_count - 1] + 1;
-        return .{
-            .matched = true,
-            .next_pos = contextNextPosAfterMutation(original_next, pos, glyph_count_before, glyphs.items.len),
-        };
-    }
-    return .{};
 }
 
 const ContextualRecordExecutor = struct {
@@ -3276,144 +2946,6 @@ fn applyNestedExtensionSubstitutionAt(table: Table, subtable_offset: usize, glyp
     }
 }
 
-fn applyAcceleratedChainingClassSubstitutionAt(table: Table, subtable: ChainingClassSubtableAccelerator, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
-    const group = chainingClassGroupForGlyph(subtable, glyphs.items[pos]) orelse return .{};
-    if (group.max_input_count == 0 or group.max_input_count > max_chaining_class_region_glyphs or group.max_lookahead_count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
-
-    var window = ChainingClassRuleMatchWindow.init(table, glyphs.items, pos, empty_class_def_offset, subtable.input_class_def, subtable.lookahead_class_def, lookup_flag, options);
-    var input_classes: [max_chaining_class_region_glyphs]u16 = undefined;
-    var lookahead_classes: [max_chaining_class_region_glyphs]u16 = undefined;
-
-    const rules = subtable.rules[group.start .. group.start + group.len];
-    for (rules) |rule| {
-        if (rule.input_count == 0 or rule.input_count > group.max_input_count) continue;
-        if (rule.lookahead_count > group.max_lookahead_count) continue;
-        // Rules in one class set are tried in font order and may have different
-        // input lengths. Do not prefetch the group's longest window: a short
-        // early rule can match at the end of a syllable even when a later long
-        // rule has more inputs than remain in the run.
-        const input_indices = (try window.inputSlice(rule.input_count)) orelse continue;
-        var input_available = true;
-        for (1..rule.input_count) |input_i| {
-            input_classes[input_i - 1] = (try window.inputClassAt(input_i)) orelse {
-                input_available = false;
-                break;
-            };
-        }
-        if (!input_available) continue;
-        if (!try window.ensureLookaheadCount(rule.input_count, rule.lookahead_count)) continue;
-        const extra_input_count = @as(usize, rule.input_count) - 1;
-        var hash = class_context.sequenceHash(input_classes[0..extra_input_count]);
-        for (0..rule.lookahead_count) |lookahead_i| {
-            const class = (try window.lookaheadClassAt(rule.input_count, lookahead_i)) orelse {
-                hash = 0;
-                break;
-            };
-            lookahead_classes[lookahead_i] = class;
-            hash = class_context.sequenceHashAppend(hash, class);
-        }
-        if (rule.hash != hash) continue;
-        const expected_input = subtable.classes[rule.classes_start .. rule.classes_start + extra_input_count];
-        if (!std.mem.eql(u16, expected_input, input_classes[0..extra_input_count])) continue;
-        const expected_lookahead = subtable.classes[rule.classes_start + extra_input_count .. rule.classes_start + extra_input_count + rule.lookahead_count];
-        if (!std.mem.eql(u16, expected_lookahead, lookahead_classes[0..rule.lookahead_count])) continue;
-
-        try markUnsafeChainingMatch(
-            allocator,
-            options,
-            window.backtrack_indices[0..0],
-            input_indices,
-            window.lookahead_indices[0..rule.lookahead_count],
-        );
-        const glyph_count_before = glyphs.items.len;
-        _ = try applyNestedGlyphLookup(table, glyphs, input_indices[0], rule.lookup_index, allocator, options);
-        const original_next = input_indices[rule.input_count - 1] + 1;
-        return .{
-            .matched = true,
-            .next_pos = contextNextPosAfterMutation(original_next, pos, glyph_count_before, glyphs.items.len),
-        };
-    }
-    return .{};
-}
-
-noinline fn applyAcceleratedChainingClassSubstitutionWithBacktrackAt(table: Table, subtable: ChainingClassSubtableAccelerator, glyphs: *std.ArrayList(GlyphId), pos: usize, allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!ContextApplyResult {
-    const group = chainingClassGroupForGlyph(subtable, glyphs.items[pos]) orelse return .{};
-    if (group.max_input_count == 0 or group.max_input_count > max_chaining_class_region_glyphs or group.max_lookahead_count > max_chaining_class_region_glyphs) return error.UnsupportedGsub;
-
-    var window = ChainingClassRuleMatchWindow.init(table, glyphs.items, pos, subtable.backtrack_class_def, subtable.input_class_def, subtable.lookahead_class_def, lookup_flag, options);
-    var backtrack_classes: [max_chaining_class_region_glyphs]u16 = undefined;
-    var input_classes: [max_chaining_class_region_glyphs]u16 = undefined;
-    var lookahead_classes: [max_chaining_class_region_glyphs]u16 = undefined;
-
-    const rules = subtable.rules[group.start .. group.start + group.len];
-    for (rules) |rule| {
-        const backtrack_count = chainingClassRuleBacktrackCount(rule);
-        if (backtrack_count > max_chaining_class_region_glyphs) continue;
-        if (rule.input_count == 0 or rule.input_count > group.max_input_count) continue;
-        if (rule.lookahead_count > group.max_lookahead_count) continue;
-        // Rules in one class set are tried in font order and may have different
-        // input lengths. Do not prefetch the group's longest window: a short
-        // early rule can match at the end of a syllable even when a later long
-        // rule has more inputs than remain in the run.
-        const input_indices = (try window.inputSlice(rule.input_count)) orelse continue;
-        var backtrack_available = true;
-        for (0..backtrack_count) |backtrack_i| {
-            backtrack_classes[backtrack_i] = (try window.backtrackClassAt(backtrack_i)) orelse {
-                backtrack_available = false;
-                break;
-            };
-        }
-        if (!backtrack_available) continue;
-        var input_available = true;
-        for (1..rule.input_count) |input_i| {
-            input_classes[input_i - 1] = (try window.inputClassAt(input_i)) orelse {
-                input_available = false;
-                break;
-            };
-        }
-        if (!input_available) continue;
-        if (!try window.ensureLookaheadCount(rule.input_count, rule.lookahead_count)) continue;
-        var hash = class_context.sequenceHash(backtrack_classes[0..backtrack_count]);
-        const extra_input_count = @as(usize, rule.input_count) - 1;
-        for (input_classes[0..extra_input_count]) |class| {
-            hash = class_context.sequenceHashAppend(hash, class);
-        }
-        for (0..rule.lookahead_count) |lookahead_i| {
-            const class = (try window.lookaheadClassAt(rule.input_count, lookahead_i)) orelse {
-                hash = 0;
-                break;
-            };
-            lookahead_classes[lookahead_i] = class;
-            hash = class_context.sequenceHashAppend(hash, class);
-        }
-        if (rule.hash != hash) continue;
-        const expected_backtrack = subtable.classes[rule.classes_start .. rule.classes_start + backtrack_count];
-        if (!std.mem.eql(u16, expected_backtrack, backtrack_classes[0..backtrack_count])) continue;
-        const input_start = rule.classes_start + backtrack_count;
-        const expected_input = subtable.classes[input_start .. input_start + extra_input_count];
-        if (!std.mem.eql(u16, expected_input, input_classes[0..extra_input_count])) continue;
-        const lookahead_start = input_start + extra_input_count;
-        const expected_lookahead = subtable.classes[lookahead_start .. lookahead_start + rule.lookahead_count];
-        if (!std.mem.eql(u16, expected_lookahead, lookahead_classes[0..rule.lookahead_count])) continue;
-
-        try markUnsafeChainingMatch(
-            allocator,
-            options,
-            window.backtrack_indices[0..backtrack_count],
-            input_indices,
-            window.lookahead_indices[0..rule.lookahead_count],
-        );
-        const glyph_count_before = glyphs.items.len;
-        _ = try applyNestedGlyphLookup(table, glyphs, input_indices[0], rule.lookup_index, allocator, options);
-        const original_next = input_indices[rule.input_count - 1] + 1;
-        return .{
-            .matched = true,
-            .next_pos = contextNextPosAfterMutation(original_next, pos, glyph_count_before, glyphs.items.len),
-        };
-    }
-    return .{};
-}
-
 fn readU16(table: Table, relative: usize) GsubError!u16 {
     return table.readU16(relative);
 }
@@ -3982,7 +3514,15 @@ test "GSUB contextual class subtables allow covered class indexes outside set ar
 
     table = .{ .data = &chaining_bytes, .offset = 0, .length = chaining_bytes.len };
     try ensureChainingContextSubstitutionSubtableWithin(table, 0);
-    try applyChainingClassSubstitution(table, 0, &glyphs, allocator, 0, .{});
+    try contextual_chaining_class.subtable(
+        ContextualRecordExecutor,
+        table,
+        0,
+        &glyphs,
+        allocator,
+        0,
+        .{},
+    );
     try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
 
     writeClassDef1(&chaining_bytes, 30, 5, 0);
@@ -4033,24 +3573,59 @@ test "GSUB class-based substitutions handle null ClassDef offsets where HarfBuzz
 
     writeU16Test(&chaining_bytes, 4, 0);
     try ensureChainingContextSubstitutionSubtableWithin(table, 0);
-    try applyChainingClassSubstitution(table, 0, &glyphs, allocator, 0, .{});
+    try contextual_chaining_class.subtable(
+        ContextualRecordExecutor,
+        table,
+        0,
+        &glyphs,
+        allocator,
+        0,
+        .{},
+    );
     try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
     writeU16Test(&chaining_bytes, 4, 22);
 
     writeU16Test(&chaining_bytes, 6, 0);
     try std.testing.expectError(error.BadGsub, ensureChainingContextSubstitutionSubtableWithin(table, 0));
-    try std.testing.expectError(error.BadGsub, applyChainingClassSubstitution(table, 0, &glyphs, allocator, 0, .{}));
+    try std.testing.expectError(
+        error.BadGsub,
+        contextual_chaining_class.subtable(
+            ContextualRecordExecutor,
+            table,
+            0,
+            &glyphs,
+            allocator,
+            0,
+            .{},
+        ),
+    );
     try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
     writeU16Test(&chaining_bytes, 6, 30);
 
     writeU16Test(&chaining_bytes, 8, 0);
     try ensureChainingContextSubstitutionSubtableWithin(table, 0);
-    try applyChainingClassSubstitution(table, 0, &glyphs, allocator, 0, .{});
+    try contextual_chaining_class.subtable(
+        ContextualRecordExecutor,
+        table,
+        0,
+        &glyphs,
+        allocator,
+        0,
+        .{},
+    );
     try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
     writeU16Test(&chaining_bytes, 8, 38);
 
     try ensureChainingContextSubstitutionSubtableWithin(table, 0);
-    try applyChainingClassSubstitution(table, 0, &glyphs, allocator, 0, .{});
+    try contextual_chaining_class.subtable(
+        ContextualRecordExecutor,
+        table,
+        0,
+        &glyphs,
+        allocator,
+        0,
+        .{},
+    );
     try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
 }
 
@@ -4158,230 +3733,6 @@ test "GSUB accelerated context class matching keeps shorter rules at syllable en
     try std.testing.expect(source_boundaries.isUnsafeBeforeByte(1));
     try std.testing.expect(source_boundaries.isUnsafeBeforeByte(2));
     try std.testing.expect(!source_boundaries.isUnsafeBeforeByte(3));
-}
-
-test "GSUB accelerated chaining class matching keeps shorter rules at run end" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 96;
-
-    // The first two glyphs form the short rule's input and the third is its
-    // lookahead. A later rule in the same class set declares four inputs, so
-    // eager collection of the group-wide maximum would incorrectly reject the
-    // whole subtable before trying the short rule.
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 8, 10);
-    writeU16Test(&bytes, 10, 1);
-    writeU16Test(&bytes, 12, 4);
-    writeSingleDeltaLookup(&bytes, 14, 1, 10);
-
-    const coverage = 40;
-    writeCoverage1(&bytes, coverage, 1);
-    const input_class_def = 46;
-    writeU16Test(&bytes, input_class_def + 0, 1);
-    writeU16Test(&bytes, input_class_def + 2, 1);
-    writeU16Test(&bytes, input_class_def + 4, 3);
-    writeU16Test(&bytes, input_class_def + 6, 3);
-    writeU16Test(&bytes, input_class_def + 8, 5);
-    writeU16Test(&bytes, input_class_def + 10, 5);
-    const lookahead_class_def = 60;
-    writeU16Test(&bytes, lookahead_class_def + 0, 1);
-    writeU16Test(&bytes, lookahead_class_def + 2, 1);
-    writeU16Test(&bytes, lookahead_class_def + 4, 3);
-    writeU16Test(&bytes, lookahead_class_def + 6, 9);
-    writeU16Test(&bytes, lookahead_class_def + 8, 1);
-    writeU16Test(&bytes, lookahead_class_def + 10, 7);
-
-    const classes = [_]u16{
-        5, 7, // Short rule: one extra input and one lookahead.
-        5,                                                  5, 5, // Long rule: three extra inputs.
-        accelerator_root.index.class_first.sorted_encoding, 1, 0,
-    };
-    const rules = [_]class_context.Rule{
-        .{
-            .class_set = 3,
-            .input_count = 2,
-            .lookahead_count = 1,
-            .hash = class_context.sequenceHash(classes[0..2]),
-            .order = 0,
-            .lookup_index = 0,
-            .classes_start = 0,
-        },
-        .{
-            .class_set = 3,
-            .input_count = 4,
-            .lookahead_count = 0,
-            .hash = class_context.sequenceHash(classes[2..5]),
-            .order = 1,
-            .lookup_index = 0,
-            .classes_start = 2,
-        },
-    };
-    const groups = [_]class_context.RuleGroup{.{
-        .class_set = 3,
-        .start = 0,
-        .len = rules.len,
-        .max_input_count = 4,
-        .max_lookahead_count = 1,
-    }};
-    const subtable = ChainingClassSubtableAccelerator{
-        .first_index_start = 5,
-        .input_class_def = input_class_def,
-        .lookahead_class_def = lookahead_class_def,
-        .rules = &rules,
-        .classes = &classes,
-        .groups = &groups,
-    };
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 2, 3 });
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(allocator);
-    try sources.appendSlice(allocator, &.{ 0, 1, 2 });
-    const source_byte_starts = [_]usize{ 0, 1, 2 };
-    var source_boundaries = cluster_safety.SourceBoundaries{};
-    defer source_boundaries.deinit(allocator);
-    source_boundaries.reset(0, 3, &source_byte_starts);
-
-    const result = try applyAcceleratedChainingClassSubstitutionAt(
-        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
-        subtable,
-        &glyphs,
-        0,
-        allocator,
-        0,
-        .{
-            .glyph_source_indices = &sources,
-            .source_boundaries = &source_boundaries,
-        },
-    );
-
-    try std.testing.expect(result.matched);
-    try std.testing.expectEqual(@as(usize, 2), result.next_pos);
-    try std.testing.expectEqualSlices(GlyphId, &.{ 11, 2, 3 }, glyphs.items);
-    try std.testing.expect(!source_boundaries.isUnsafeBeforeByte(0));
-    try std.testing.expect(source_boundaries.isUnsafeBeforeByte(1));
-    try std.testing.expect(source_boundaries.isUnsafeBeforeByte(2));
-}
-
-test "GSUB accelerated chaining class matching preserves backtrack order and boundaries" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 96;
-
-    // Nested lookup 0 replaces the current input glyph. The contextual table
-    // itself is represented by the accelerator fixture below.
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 8, 10);
-    writeU16Test(&bytes, 10, 1);
-    writeU16Test(&bytes, 12, 4);
-    writeSingleDeltaLookup(&bytes, 14, 1, 10);
-
-    const coverage = 40;
-    writeCoverage1(&bytes, coverage, 1);
-    const backtrack_class_def = 46;
-    writeU16Test(&bytes, backtrack_class_def + 0, 1);
-    writeU16Test(&bytes, backtrack_class_def + 2, 4);
-    writeU16Test(&bytes, backtrack_class_def + 4, 2);
-    writeU16Test(&bytes, backtrack_class_def + 6, 6); // Far glyph 4.
-    writeU16Test(&bytes, backtrack_class_def + 8, 2); // Near glyph 5.
-    const input_class_def = 58;
-    writeClassDef1(&bytes, input_class_def, 1, 3);
-    const lookahead_class_def = 66;
-    writeClassDef1(&bytes, lookahead_class_def, 3, 7);
-
-    // OpenType stores backtrack classes nearest to the input first. Keeping
-    // that order in the sidecar avoids reversing either the font data or the
-    // lazily collected backtrack window.
-    const classes = [_]u16{
-        2,                                                  6, 7,
-        accelerator_root.index.class_first.sorted_encoding, 1, 0,
-    };
-    const rules = [_]class_context.Rule{.{
-        .class_set = 3,
-        .input_count = 1,
-        .lookahead_count = 1,
-        .hash = class_context.sequenceHash(classes[0..3]),
-        .order = 0,
-        .lookup_index = 0,
-        .classes_start = 0,
-        .records_offset = 2,
-    }};
-    const groups = [_]class_context.RuleGroup{.{
-        .class_set = 3,
-        .start = 0,
-        .len = rules.len,
-        .max_input_count = 1,
-        .max_lookahead_count = 1,
-    }};
-    const subtable = ChainingClassSubtableAccelerator{
-        .first_index_start = 3,
-        .backtrack_class_def = backtrack_class_def,
-        .input_class_def = input_class_def,
-        .lookahead_class_def = lookahead_class_def,
-        .rules = &rules,
-        .classes = &classes,
-        .groups = &groups,
-    };
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    // Marks 9 and 8 are transparent in the backtrack and lookahead regions.
-    try glyphs.appendSlice(allocator, &.{ 4, 9, 5, 1, 8, 3 });
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(allocator);
-    try sources.appendSlice(allocator, &.{ 0, 1, 2, 3, 4, 5 });
-    const source_byte_starts = [_]usize{ 0, 1, 2, 3, 4, 5 };
-    var source_boundaries = cluster_safety.SourceBoundaries{};
-    defer source_boundaries.deinit(allocator);
-    source_boundaries.reset(0, 6, &source_byte_starts);
-    var glyph_classes = [_]u16{0} ** 10;
-    glyph_classes[8] = 3;
-    glyph_classes[9] = 3;
-
-    // The farther backtrack glyph belongs to another source syllable. Matching
-    // must stop there rather than leaking context across the shaping boundary.
-    const split_syllables = [_]u8{ 1, 1, 2, 2, 2, 2 };
-    var result = try applyAcceleratedChainingClassSubstitutionWithBacktrackAt(
-        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
-        subtable,
-        &glyphs,
-        3,
-        allocator,
-        0x0008,
-        .{
-            .glyph_classes = &glyph_classes,
-            .glyph_source_indices = &sources,
-            .source_boundaries = &source_boundaries,
-            .source_syllables = &split_syllables,
-            .match_source_syllable = true,
-        },
-    );
-    try std.testing.expect(!result.matched);
-    try std.testing.expectEqualSlices(GlyphId, &.{ 4, 9, 5, 1, 8, 3 }, glyphs.items);
-    try std.testing.expect(!source_boundaries.isUnsafeBeforeByte(3));
-
-    const one_syllable = [_]u8{2} ** 6;
-    result = try applyAcceleratedChainingClassSubstitutionWithBacktrackAt(
-        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
-        subtable,
-        &glyphs,
-        3,
-        allocator,
-        0x0008,
-        .{
-            .glyph_classes = &glyph_classes,
-            .glyph_source_indices = &sources,
-            .source_boundaries = &source_boundaries,
-            .source_syllables = &one_syllable,
-            .match_source_syllable = true,
-        },
-    );
-    try std.testing.expect(result.matched);
-    try std.testing.expectEqual(@as(usize, 4), result.next_pos);
-    try std.testing.expectEqualSlices(GlyphId, &.{ 4, 9, 5, 11, 8, 3 }, glyphs.items);
-    for (1..6) |boundary| {
-        try std.testing.expect(source_boundaries.isUnsafeBeforeByte(boundary));
-    }
 }
 
 test "GSUB ContextSubst rejects null required rule offsets" {

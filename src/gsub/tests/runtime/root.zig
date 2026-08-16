@@ -5,5 +5,6 @@ test {
     _ = @import("filtering.zig");
     _ = @import("limits.zig");
     _ = @import("metadata.zig");
+    _ = @import("mutation.zig");
     _ = @import("options.zig");
 }

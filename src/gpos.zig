@@ -4,6 +4,7 @@ const feature_core = @import("gpos/feature/root.zig");
 const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
 const positioning = @import("gpos/positioning/root.zig");
+pub const runtime = @import("gpos/runtime/root.zig");
 const table_core = @import("gpos/table/root.zig");
 const class_context = @import("opentype/class_context.zig");
 const ligature_provenance = @import("ligature_provenance.zig");
@@ -30,67 +31,10 @@ const PositionContextResult = struct {
 
 const Table = table_core.View;
 
-pub const LookupOptions = struct {
-    pub const Direction = enum {
-        ltr,
-        rtl,
-    };
-
-    script_tag: unicode.OpenTypeScriptTag = .dflt,
-    language_tag: unicode.OpenTypeLanguageTag = .dflt,
-    direction: Direction = .ltr,
-    /// OpenType attachment propagation treats the axis orthogonal to the text
-    /// flow differently from the advance axis. Horizontal shaping snapshots y
-    /// placement when a mark lookup applies; vertical shaping snapshots x.
-    vertical: bool = false,
-    features: []const unicode.FeatureOverride = &.{},
-    /// Normalized fvar-axis coordinates after avar mapping. AnchorFormat3
-    /// VariationIndex children resolve through the GDEF ItemVariationStore in
-    /// this same axis order.
-    normalized_variation_coords: []const f32 = &.{},
-    gdef_variation_store: ?VariationStore = null,
-    apply_all_if_unselected: bool = true,
-    glyph_classes: ?[]const u16 = null,
-    mark_attach_classes: ?[]const u16 = null,
-    mark_filtering_sets: ?[]const []const GlyphId = null,
-    active_mark_filtering_set: ?u16 = null,
-    /// Cached run-level mark attachment possibility after GSUB. This includes
-    /// GDEF mark glyph classes and Unicode marks; some fonts cover a mark glyph
-    /// in MarkBasePos while misclassifying it in GDEF.
-    run_may_have_mark_attachments: ?bool = null,
-    /// Cached source-level default-ignorable presence. A known-false value
-    /// proves that LookupFlag=0 matching can advance to the adjacent glyph
-    /// without consulting source metadata or Unicode properties.
-    run_has_default_ignorables: ?bool = null,
-    /// Correlated post-GSUB source and provenance sidecars. Keeping them behind
-    /// one borrowed object avoids copying several slices through every GPOS
-    /// helper while preserving detached callers that need no source metadata.
-    run_metadata: *const run_metadata.Positioning = &.{},
-    /// HarfBuzz-compatible parity switch: an unsupported variation selector
-    /// mapped to a synthetic not-found glyph remains visible to positioning
-    /// lookups instead of being skipped as a hidden default-ignorable.
-    visible_variation_selectors: bool = false,
-    /// Preselected lookup indices for the active script/language/features.
-    /// This is a shaping fast path; callers that supply it must keep it in
-    /// sync with the other selection options.
-    selected_lookups: ?[]const u16 = null,
-    /// Run-local inline output flags kept hot for PairPos.
-    unsafe_glyphs: ?*run_metadata.UnsafeGlyphs = null,
-    /// Optional per-lookup prefilters built once for the validated GPOS table.
-    /// The slice is indexed by LookupList index and may be shared across runs.
-    lookup_accelerators: ?[]const LookupAccelerator = null,
-    assume_validated: bool = false,
-    shape_profile: ?*shape_profile_mod.ShapeStageProfile = null,
-    profile_io: ?std.Io = null,
-    /// PosLookupRecord recursion depth for contextual lookups. Public callers
-    /// leave this at zero; nested contextual dispatch increments it so cyclic
-    /// lookup graphs are rejected instead of recursing indefinitely.
-    context_depth: usize = 0,
-};
-
 pub const VariationStore = positioning.VariationStore;
 
 pub const LookupAccelerator = accelerator_core.model.Lookup;
+pub const LookupOptions = runtime.Options;
 const PairPosAcceleratorKind = accelerator_core.model.PairPositionKind;
 const PairPosSubtableAccelerator = accelerator_core.model.PairPositionSubtable;
 const PairPosRecord = accelerator_core.model.PairPositionRecord;
@@ -193,7 +137,7 @@ pub fn collectAdjustments(data: []const u8, offset: usize, length: usize, glyphs
 
 pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGpos;
-    try validateShapingMetadata(options, glyphs.len);
+    try runtime.matching.validate(options, glyphs.len);
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGpos;
@@ -1056,7 +1000,7 @@ fn collectLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16
         // the caller's immutable value directly to the prepared worker.
         var customized_options = options;
         customized_options.active_mark_filtering_set = dispatch.mark_filtering_set;
-        try validateMarkFilteringSetIndex(customized_options);
+        try runtime.matching.validateMarkFilteringSetIndex(customized_options);
         return collectLookupWithIndexPrepared(
             table,
             lookup_offset,
@@ -1235,7 +1179,7 @@ noinline fn collectLookupWithIndexPrepared(
                 }
                 try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options);
             } else try collectCursiveAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
-            4 => if (runMayHaveMarkAttachments(glyphs, lookup_options)) {
+            4 => if (runtime.matching.runMayHaveMarkAttachments(glyphs, lookup_options)) {
                 if (lookupAccelerator(lookup_index, lookup_options)) |accelerator| {
                     if (i < accelerator.mark_to_base_subtables.len) {
                         try collectMarkToBaseAdjustmentParsed(table, accelerator.mark_to_base_subtables[i], glyphs, adjustments, allocator, lookup_flag, lookup_options);
@@ -1244,8 +1188,8 @@ noinline fn collectLookupWithIndexPrepared(
                 }
                 try collectMarkToBaseAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options);
             },
-            5 => if (runMayHaveMarkAttachments(glyphs, lookup_options)) try collectMarkToLigatureAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
-            6 => if (runMayHaveMarkAttachments(glyphs, lookup_options)) try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            5 => if (runtime.matching.runMayHaveMarkAttachments(glyphs, lookup_options)) try collectMarkToLigatureAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            6 => if (runtime.matching.runMayHaveMarkAttachments(glyphs, lookup_options)) try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             7 => try collectContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             8 => try collectChainingContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             9 => try collectExtensionAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
@@ -1309,7 +1253,7 @@ fn lookupAcceleratorAny(lookup_index: ?u16, options: LookupOptions) ?*const Look
 
 fn lookupCoverageGroupsMayMatchRun(groups: []const ChainingSubtableGroup, slots: []const u16, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) bool {
     for (glyphs) |glyph| {
-        if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
+        if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
         if (accelerator_core.glyph_groups.find(groups, slots, glyph) != null) return true;
     }
     return false;
@@ -1318,7 +1262,7 @@ fn lookupCoverageGroupsMayMatchRun(groups: []const ChainingSubtableGroup, slots:
 fn glyphRunDigest(glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GlyphDigest {
     var digest = GlyphDigest.empty();
     for (glyphs) |glyph| {
-        if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
+        if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
         digest.add(glyph);
     }
     return digest;
@@ -1587,7 +1531,7 @@ fn collectPairAdjustmentLookupAcceleratedImpl(
     const append_pairs_directly = adjustments.items.len == 0;
     var first_index: usize = 0;
     while (first_index + 1 < glyphs.len) {
-        if (!adjacent_pairs and lookupIgnoresGlyph(lookup_flag, options, glyphs[first_index])) {
+        if (!adjacent_pairs and runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[first_index])) {
             first_index += 1;
             continue;
         }
@@ -1857,7 +1801,7 @@ fn collectSingleAdjustmentSubtable(table: Table, subtable_offset: usize, glyphs:
             const value = try positioning.value_record.read(table, subtable_offset + 6, value_format, subtable_offset);
             for (glyphs, 0..) |glyph, i| {
                 if (matched[i]) continue;
-                if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
+                if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
                 if (try table_core.coverage.index(table, coverage_offset, glyph) != null) {
                     try appendAdjustment(adjustments, allocator, i, value, false);
                     matched[i] = true;
@@ -1869,7 +1813,7 @@ fn collectSingleAdjustmentSubtable(table: Table, subtable_offset: usize, glyphs:
             const value_size = try positioning.value_record.size(value_format);
             for (glyphs, 0..) |glyph, i| {
                 if (matched[i]) continue;
-                if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
+                if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
                 if (try table_core.coverage.index(table, coverage_offset, glyph)) |coverage| {
                     if (coverage < value_count) {
                         const value = try positioning.value_record.read(table, subtable_offset + 8 + coverage * value_size, value_format, subtable_offset);
@@ -1891,7 +1835,7 @@ fn collectSingleAdjustment(table: Table, subtable_offset: usize, glyphs: []const
         1 => {
             const value = try positioning.value_record.read(table, subtable_offset + 6, value_format, subtable_offset);
             for (glyphs, 0..) |glyph, i| {
-                if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
+                if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
                 if (try table_core.coverage.index(table, coverage_offset, glyph) != null) {
                     try appendAdjustment(adjustments, allocator, i, value, false);
                 }
@@ -1901,7 +1845,7 @@ fn collectSingleAdjustment(table: Table, subtable_offset: usize, glyphs: []const
             const value_count = try readU16(table, subtable_offset + 6);
             const value_size = try positioning.value_record.size(value_format);
             for (glyphs, 0..) |glyph, i| {
-                if (lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
+                if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
                 if (try table_core.coverage.index(table, coverage_offset, glyph)) |coverage| {
                     if (coverage < value_count) {
                         const value = try positioning.value_record.read(table, subtable_offset + 8 + coverage * value_size, value_format, subtable_offset);
@@ -1912,82 +1856,6 @@ fn collectSingleAdjustment(table: Table, subtable_offset: usize, glyphs: []const
         },
         else => return error.UnsupportedGpos,
     }
-}
-
-inline fn lookupIgnoresGlyph(lookup_flag: u16, options: LookupOptions, glyph: GlyphId) bool {
-    if (lookup_flag == 0) return false;
-    const classes = options.glyph_classes;
-    const class = if (classes) |items| if (glyph < items.len) items[glyph] else 0 else 0;
-    if (lookup_flag == 0x0008) return class == 3;
-    return lookupIgnoresGlyphComplex(lookup_flag, options, glyph, class);
-}
-
-noinline fn lookupIgnoresGlyphComplex(lookup_flag: u16, options: LookupOptions, glyph: GlyphId, class: u16) bool {
-    // UseMarkFilteringSet appends a set index after the SubTable offsets; it
-    // does not consume the high-byte MarkAttachmentType bits. Apply both mark
-    // filters independently so a lookup can require a selected mark set and a
-    // selected GDEF mark attachment class at the same time.
-    if ((lookup_flag & 0x0010) != 0) {
-        const mark_filtering_set_index = options.active_mark_filtering_set orelse return class == 3;
-        const mark_sets = options.mark_filtering_sets orelse return class == 3;
-        if (mark_filtering_set_index >= mark_sets.len) return class == 3;
-        const in_selected_set = glyphInMarkFilteringSet(mark_sets[mark_filtering_set_index], glyph);
-        const is_mark = class == 3;
-        if (is_mark and !in_selected_set) return true;
-    }
-
-    if (options.glyph_classes != null) {
-        if ((lookup_flag & 0x0002) != 0 and class == 1) return true;
-        if ((lookup_flag & 0x0004) != 0 and class == 2) return true;
-        if ((lookup_flag & 0x0008) != 0 and class == 3) return true;
-    }
-    const mark_attachment_type = lookup_flag >> 8;
-    if (mark_attachment_type != 0) {
-        const attach_classes = options.mark_attach_classes orelse return class == 3;
-        if (glyph >= attach_classes.len) return class == 3;
-        const attach_class = attach_classes[glyph];
-        // MarkAttachClassDef is mark-only data. Some fonts provide it without a
-        // useful GlyphClassDef; treat non-zero attachment classes as marks for
-        // MarkAttachmentType filtering while still letting an explicit mark
-        // glyph class cover attachment class zero.
-        const is_mark = class == 3 or (class == 0 and attach_class != 0);
-        if (!is_mark) return false;
-        return attach_class != mark_attachment_type;
-    }
-    return false;
-}
-
-fn glyphInAnyMarkFilteringSet(mark_sets: []const []const GlyphId, glyph: GlyphId) bool {
-    for (mark_sets) |set| {
-        if (glyphInMarkFilteringSet(set, glyph)) return true;
-    }
-    return false;
-}
-
-fn glyphInMarkFilteringSet(glyphs: []const GlyphId, glyph: GlyphId) bool {
-    for (glyphs) |candidate| {
-        if (candidate == glyph) return true;
-    }
-    return false;
-}
-
-fn validateMarkFilteringSetIndex(options: LookupOptions) GposError!void {
-    const mark_filtering_set_index = options.active_mark_filtering_set orelse return;
-    const mark_sets = options.mark_filtering_sets orelse return;
-    // A lookup that names a non-existent GDEF MarkGlyphSetsDef entry is
-    // malformed. Silently falling back to glyph-class metadata makes
-    // positioning depend on missing state instead of the font's declared lookup
-    // flag contract.
-    if (mark_filtering_set_index >= mark_sets.len) return error.BadGpos;
-}
-
-fn runMayHaveMarkAttachments(glyphs: []const GlyphId, options: LookupOptions) bool {
-    if (options.run_may_have_mark_attachments) |has_marks| return has_marks;
-    const classes = options.glyph_classes orelse return true;
-    for (glyphs) |glyph| {
-        if (glyph < classes.len and classes[glyph] == 3) return true;
-    }
-    return false;
 }
 
 fn shapeProfileNow(profile: ?*shape_profile_mod.ShapeStageProfile, io: ?std.Io) i128 {
@@ -2002,54 +1870,6 @@ inline fn positioningMetadata(
     options: LookupOptions,
 ) *const run_metadata.Positioning {
     return options.run_metadata;
-}
-
-fn validateShapingMetadata(options: LookupOptions, glyph_count: usize) GposError!void {
-    const metadata = positioningMetadata(options);
-    for (options.normalized_variation_coords) |coord| {
-        if (!std.math.isFinite(coord) or coord < -1 or coord > 1) return error.InvalidShapingInput;
-    }
-    if (metadata.glyph_source_indices) |sources| {
-        if (sources.len != glyph_count) return error.InvalidShapingInput;
-    }
-    if (metadata.glyph_substituted) |substituted| {
-        if (substituted.len != glyph_count) return error.InvalidShapingInput;
-    }
-    if (metadata.source_codepoints != null and metadata.glyph_source_indices == null) return error.InvalidShapingInput;
-    if (metadata.source_boundaries != null and metadata.glyph_source_indices == null) return error.InvalidShapingInput;
-    if (metadata.ligature_components) |store| {
-        if (store.infos.items.len != glyph_count or !store.isValid()) return error.InvalidShapingInput;
-    }
-}
-
-fn sourceForGlyph(options: LookupOptions, glyph_index: usize) usize {
-    const sources = positioningMetadata(options).glyph_source_indices orelse return glyph_index;
-    if (glyph_index >= sources.len) return glyph_index;
-    return sources[glyph_index];
-}
-
-fn sourceCodepointForGlyph(options: LookupOptions, glyph_index: usize) ?u21 {
-    const codepoints = positioningMetadata(options).source_codepoints orelse return null;
-    const source = sourceForGlyph(options, glyph_index);
-    if (source >= codepoints.len) return null;
-    return codepoints[source];
-}
-
-fn glyphWasSubstituted(options: LookupOptions, glyph_index: usize) bool {
-    const substituted = positioningMetadata(options).glyph_substituted orelse return false;
-    return glyph_index < substituted.len and substituted[glyph_index];
-}
-
-fn markAttachmentSearchSkipsGlyph(options: LookupOptions, glyph_index: usize) bool {
-    if (options.run_has_default_ignorables == false) return false;
-    const codepoint = sourceCodepointForGlyph(options, glyph_index) orelse return false;
-    if (options.visible_variation_selectors and unicode.isVariationSelector(codepoint)) return false;
-    return unicode.isDefaultIgnorableForShaping(codepoint) and !glyphWasSubstituted(options, glyph_index);
-}
-
-fn matchSkipsGlyph(lookup_flag: u16, options: LookupOptions, glyphs: []const GlyphId, glyph_index: usize) bool {
-    if (lookupIgnoresGlyph(lookup_flag, options, glyphs[glyph_index])) return true;
-    return markAttachmentSearchSkipsGlyph(options, glyph_index);
 }
 
 fn collectExtensionAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -2096,7 +1916,7 @@ fn collectPairAdjustmentAtParsed(table: Table, parsed: PairPositionSubtable, gly
     // PairPos and nested PosLookupRecord application share the same semantics,
     // including transparent lookup-flag ignored glyphs between the pair.
     if (first_index + 1 >= glyphs.len) return false;
-    if (lookupIgnoresGlyph(lookup_flag, options, glyphs[first_index])) return false;
+    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[first_index])) return false;
     const second_index = nextUnignoredGlyph(glyphs, first_index + 1, lookup_flag, options) orelse return false;
 
     switch (parsed.pos_format) {
@@ -2169,7 +1989,7 @@ fn collectPairAdjustmentAtParsed(table: Table, parsed: PairPositionSubtable, gly
 fn nextUnignoredGlyph(glyphs: []const GlyphId, start: usize, lookup_flag: u16, options: LookupOptions) ?usize {
     var i = start;
     while (i < glyphs.len) : (i += 1) {
-        if (!matchSkipsGlyph(lookup_flag, options, glyphs, i)) return i;
+        if (!runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, i)) return i;
     }
     return null;
 }
@@ -2178,7 +1998,7 @@ fn collectForwardUnignoredGlyphs(glyphs: []const GlyphId, start: usize, lookup_f
     var out_i: usize = 0;
     var glyph_i = start;
     while (glyph_i < glyphs.len and out_i < out.len) : (glyph_i += 1) {
-        if (matchSkipsGlyph(lookup_flag, options, glyphs, glyph_i)) continue;
+        if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, glyph_i)) continue;
         out[out_i] = glyph_i;
         out_i += 1;
     }
@@ -2190,7 +2010,7 @@ fn collectBacktrackUnignoredGlyphs(glyphs: []const GlyphId, pos: usize, lookup_f
     var glyph_i = pos;
     while (glyph_i > 0 and out_i < out.len) {
         glyph_i -= 1;
-        if (matchSkipsGlyph(lookup_flag, options, glyphs, glyph_i)) continue;
+        if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, glyph_i)) continue;
         out[out_i] = glyph_i;
         out_i += 1;
     }
@@ -2506,7 +2326,7 @@ fn collectCursiveAdjustmentParsed(table: Table, parsed: CursivePositionSubtable,
     var previous_covered_position: ?usize = null;
     var previous_coverage_index: usize = 0;
     for (glyphs, 0..) |glyph, i| {
-        if (matchSkipsGlyph(lookup_flag, options, glyphs, i)) continue;
+        if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, i)) continue;
         const current_index = (if (parsed.coverage) |coverage|
             coverage.index(glyph)
         else
@@ -2552,7 +2372,7 @@ fn collectCursiveAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []co
     if (pos_format != 1) return error.UnsupportedGpos;
     if (target_index >= glyphs.len) return false;
     const glyph = glyphs[target_index];
-    if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
+    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
 
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const entry_exit_count = try readU16(table, subtable_offset + 4);
@@ -2697,7 +2517,7 @@ fn previousCoveredCursiveGlyph(table: Table, coverage_offset: usize, glyphs: []c
     var i = target_index;
     while (i > 0) {
         i -= 1;
-        if (matchSkipsGlyph(lookup_flag, options, glyphs, i)) continue;
+        if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, i)) continue;
         const coverage = try table_core.coverage.index(table, coverage_offset, glyphs[i]) orelse return null;
         return if (coverage < entry_exit_count) i else null;
     }
@@ -2869,7 +2689,7 @@ fn collectMarkToBaseAdjustmentAt(table: Table, subtable_offset: usize, glyphs: [
 fn collectMarkToBaseAdjustmentAtParsed(table: Table, subtable: MarkToBaseSubtable, glyphs: []const GlyphId, mark_position: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, attached_marks: []const bool, search_state: ?*MarkBaseSearchState) (GposError || std.mem.Allocator.Error)!bool {
     if (mark_position >= glyphs.len) return false;
     const glyph = glyphs[mark_position];
-    if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
+    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
     if (subtable.class_count == 0 or glyphs.len < 2) return false;
 
     const mark_index = if (subtable.mark_coverage) |coverage|
@@ -2942,7 +2762,7 @@ fn previousCoveredBaseGlyphParsed(table: Table, subtable: MarkToBaseSubtable, gl
 
 fn markBaseSearchSkipsGlyphParsed(table: Table, subtable: MarkToBaseSubtable, glyphs: []const GlyphId, index: usize, attached_marks: []const bool, lookup_flag: u16, options: LookupOptions) GposError!bool {
     if (index < attached_marks.len and attached_marks[index]) return true;
-    if (matchSkipsGlyph(lookup_flag, options, glyphs, index)) return true;
+    if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, index)) return true;
 
     // MarkBasePos attaches to the nearest previous participating base. A
     // non-mark glyph that is not in BaseCoverage is a real blocker for this
@@ -2967,7 +2787,7 @@ fn previousUnignoredCoveredGlyph(table: Table, coverage_offset: usize, glyphs: [
         // lookup flag. Ignored glyphs are transparent for this adjacency check;
         // the first non-ignored glyph either matches the target coverage or
         // blocks the attachment.
-        if (matchSkipsGlyph(lookup_flag, options, glyphs, i)) continue;
+        if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, i)) continue;
         return if (try table_core.coverage.index(table, coverage_offset, glyphs[i]) != null) i else null;
     }
     return null;
@@ -2983,7 +2803,7 @@ fn collectContextAdjustment(table: Table, subtable_offset: usize, glyphs: []cons
             while (pos < glyphs.len) {
                 var next_pos = pos + 1;
                 defer pos = next_pos;
-                if (matchSkipsGlyph(lookup_flag, options, glyphs, pos)) continue;
+                if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, pos)) continue;
                 const coverage = try table_core.coverage.index(table, coverage_offset, glyphs[pos]) orelse continue;
                 if (coverage >= rule_set_count) continue;
                 const set_relative = try readU16(table, subtable_offset + 6 + coverage * 2);
@@ -3003,7 +2823,7 @@ fn collectContextAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []co
     const pos_format = try readU16(table, subtable_offset);
     switch (pos_format) {
         1 => {
-            if (matchSkipsGlyph(lookup_flag, options, glyphs, pos)) return false;
+            if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, pos)) return false;
             const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
             const coverage = try table_core.coverage.index(table, coverage_offset, glyphs[pos]) orelse return false;
             const rule_set_count = try readU16(table, subtable_offset + 4);
@@ -3026,7 +2846,7 @@ fn collectClassPositioning(table: Table, subtable_offset: usize, glyphs: []const
     while (pos < glyphs.len) {
         var next_pos = pos + 1;
         defer pos = next_pos;
-        if (matchSkipsGlyph(lookup_flag, options, glyphs, pos)) continue;
+        if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, pos)) continue;
         if (try table_core.coverage.index(table, coverage_offset, glyphs[pos]) == null) continue;
         const class = try table_core.class_def.value(table, class_def_offset, glyphs[pos]);
         if (class >= class_set_count) continue;
@@ -3039,7 +2859,7 @@ fn collectClassPositioning(table: Table, subtable_offset: usize, glyphs: []const
 
 fn collectClassPositioningAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
     if (pos >= glyphs.len) return false;
-    if (matchSkipsGlyph(lookup_flag, options, glyphs, pos)) return false;
+    if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, pos)) return false;
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     if (try table_core.coverage.index(table, coverage_offset, glyphs[pos]) == null) return false;
     const class_def_offset = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
@@ -3061,7 +2881,7 @@ fn collectCoveragePositioning(table: Table, subtable_offset: usize, glyphs: []co
 
 fn collectCoveragePositioningAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!PositionContextResult {
     if (pos >= glyphs.len) return .{};
-    if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return .{};
+    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return .{};
     const glyph_count = try readU16(table, subtable_offset + 2);
     if (glyph_count == 0) return .{};
     var input_indices_buf: [64]usize = undefined;
@@ -3149,7 +2969,7 @@ fn collectChainingGlyphPositioning(table: Table, subtable_offset: usize, glyphs:
     while (pos < glyphs.len) {
         var next_pos = pos + 1;
         defer pos = next_pos;
-        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
+        if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
         const coverage = try table_core.coverage.index(table, coverage_offset, glyphs[pos]) orelse continue;
         if (coverage >= chain_set_count) continue;
         const set_relative = try readU16(table, subtable_offset + 6 + coverage * 2);
@@ -3161,7 +2981,7 @@ fn collectChainingGlyphPositioning(table: Table, subtable_offset: usize, glyphs:
 
 fn collectChainingGlyphPositioningAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
     if (pos >= glyphs.len) return false;
-    if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return false;
+    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return false;
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const coverage = try table_core.coverage.index(table, coverage_offset, glyphs[pos]) orelse return false;
     const chain_set_count = try readU16(table, subtable_offset + 4);
@@ -3249,7 +3069,7 @@ fn collectChainingClassPositioning(table: Table, subtable_offset: usize, glyphs:
     while (pos < glyphs.len) {
         var next_pos = pos + 1;
         defer pos = next_pos;
-        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
+        if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
         if (try table_core.coverage.index(table, coverage_offset, glyphs[pos]) == null) continue;
         const input_class = try table_core.class_def.value(table, input_class_def, glyphs[pos]);
         if (input_class >= set_count) continue;
@@ -3262,7 +3082,7 @@ fn collectChainingClassPositioning(table: Table, subtable_offset: usize, glyphs:
 
 fn collectChainingClassPositioningAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
     if (pos >= glyphs.len) return false;
-    if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return false;
+    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return false;
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     if (try table_core.coverage.index(table, coverage_offset, glyphs[pos]) == null) return false;
     const input_class_def = try checkedRequiredClassDefOffset(table, subtable_offset, try readU16(table, subtable_offset + 6));
@@ -3294,7 +3114,7 @@ const ChainingClassMatchContext = struct {
     }
 
     fn skipsGlyph(self: *ChainingClassMatchContext, glyphs: []const GlyphId, glyph_index: usize) bool {
-        return matchSkipsGlyph(self.lookup_flag, self.options, glyphs, glyph_index);
+        return runtime.matching.matchSkipsGlyph(self.lookup_flag, self.options, glyphs, glyph_index);
     }
 };
 
@@ -3426,7 +3246,7 @@ fn collectChainingCoveragePositioningLookupImpl(comptime use_glyph_digest: bool,
     while (pos < glyphs.len) {
         var next_pos = pos + 1;
         defer pos = next_pos;
-        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
+        if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
         if (use_glyph_digest and !accelerator.coverage_digest.mayHave(glyphs[pos])) continue;
         const grouped_subtables = accelerator_core.glyph_groups.find(accelerator.chaining_groups, accelerator.chaining_group_slots, glyphs[pos]) orelse continue;
         const second_glyph_index = nextUnignoredGlyph(glyphs, pos + 1, lookup_flag, options);
@@ -3450,7 +3270,7 @@ fn collectChainingCoveragePositioningLookupImpl(comptime use_glyph_digest: bool,
 }
 
 fn collectNestedChainingCoveragePositioningAt(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: *const LookupAccelerator) (GposError || std.mem.Allocator.Error)!bool {
-    if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return false;
+    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return false;
     if (chainingLookupUsesGlyphDigest(glyphs.len) and
         !accelerator.coverage_digest.mayHave(glyphs[pos])) return false;
     const grouped_subtables = accelerator_core.glyph_groups.find(accelerator.chaining_groups, accelerator.chaining_group_slots, glyphs[pos]) orelse return false;
@@ -3472,7 +3292,7 @@ fn collectNestedChainingCoveragePositioningAt(table: Table, lookup_offset: usize
 }
 
 fn collectNestedExtensionChainingClassPositioningAt(table: Table, subtable_count: u16, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, accelerator: *const LookupAccelerator) (GposError || std.mem.Allocator.Error)!bool {
-    if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return false;
+    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return false;
     var subtable_i: usize = 0;
     while (subtable_i < subtable_count and subtable_i < accelerator.chaining_class_subtables.len) : (subtable_i += 1) {
         const subtable = accelerator.chaining_class_subtables[subtable_i];
@@ -3487,7 +3307,7 @@ fn collectExtensionChainingClassPositioningLookup(table: Table, subtable_count: 
     while (pos < glyphs.len) {
         var next_pos = pos + 1;
         defer pos = next_pos;
-        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
+        if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
         var subtable_i: usize = 0;
         while (subtable_i < subtable_count and subtable_i < accelerator.chaining_class_subtables.len) : (subtable_i += 1) {
             const subtable = accelerator.chaining_class_subtables[subtable_i];
@@ -3519,7 +3339,7 @@ fn collectAcceleratedChainingClassPositioningAt(table: Table, subtable: Chaining
     var lookahead_count: usize = 0;
     var glyph_i = input_indices[group.max_input_count - 1] + 1;
     while (glyph_i < glyphs.len and lookahead_count < group.max_lookahead_count) : (glyph_i += 1) {
-        if (matchSkipsGlyph(lookup_flag, options, glyphs, glyph_i)) continue;
+        if (runtime.matching.matchSkipsGlyph(lookup_flag, options, glyphs, glyph_i)) continue;
         lookahead_indices[lookahead_count] = glyph_i;
         lookahead_classes[lookahead_count] = try table_core.class_def.value(table, subtable.lookahead_class_def, glyphs[glyph_i]);
         lookahead_count += 1;
@@ -3559,7 +3379,7 @@ fn collectExtensionChainingCoveragePositioningLookup(table: Table, lookup_offset
     while (pos < glyphs.len) {
         var next_pos = pos + 1;
         defer pos = next_pos;
-        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
+        if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
         for (0..subtable_count) |subtable_i| {
             const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
             const extension_subtable = try extensionPositionSubtablePayload(table, subtable_offset, 8);
@@ -3574,7 +3394,7 @@ fn collectExtensionChainingCoveragePositioningLookup(table: Table, lookup_offset
 }
 
 fn collectChainingCoveragePositioningAt(table: Table, subtable: ChainingCoverageSubtable, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!PositionContextResult {
-    if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return .{};
+    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) return .{};
     if (table.assume_validated and subtable.input_count == 1 and subtable.backtrack_count == 0 and subtable.lookahead_count == 1 and subtable.pos_count == 1) {
         return try collectSimpleChainingCoveragePositioningAt(table, subtable, glyphs, pos, adjustments, allocator, lookup_flag, options);
     }
@@ -3855,7 +3675,7 @@ fn ensurePositionRecordMarkFilteringSetsValid(table: Table, records_pos: usize, 
         const lookup_flag = try readU16BadGpos(table, lookup_offset + 2);
         if ((lookup_flag & 0x0010) == 0) continue;
         const subtable_count = try readU16BadGpos(table, lookup_offset + 4);
-        try validateMarkFilteringSetIndex(.{
+        try runtime.matching.validateMarkFilteringSetIndex(.{
             .mark_filtering_sets = options.mark_filtering_sets,
             .active_mark_filtering_set = try readU16BadGpos(table, lookup_offset + 6 + @as(usize, subtable_count) * 2),
         });
@@ -4289,7 +4109,7 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
     var lookup_options = options;
     if ((lookup_flag & 0x0010) != 0) {
         lookup_options.active_mark_filtering_set = try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2);
-        try validateMarkFilteringSetIndex(lookup_options);
+        try runtime.matching.validateMarkFilteringSetIndex(lookup_options);
     }
     lookup_options.context_depth = options.context_depth + 1;
     if (lookup_type == 1) {
@@ -4366,7 +4186,7 @@ fn collectNestedExtensionAdjustment(table: Table, subtable_offset: usize, glyphs
 }
 
 fn collectSingleAdjustmentAt(table: Table, subtable_offset: usize, glyph: GlyphId, target_index: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
-    if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
+    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
     const pos_format = try readU16(table, subtable_offset);
     const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const value_format = try readU16(table, subtable_offset + 4);
@@ -4393,7 +4213,7 @@ fn collectSingleAdjustmentAt(table: Table, subtable_offset: usize, glyph: GlyphI
 }
 
 fn collectSingleAdjustmentAtAccelerated(table: Table, subtables: []const SinglePosSubtable, glyph: GlyphId, target_index: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
-    if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
+    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
     for (subtables) |subtable| {
         switch (subtable.pos_format) {
             1 => {
@@ -4434,7 +4254,7 @@ fn collectMarkToLigatureAdjustmentAt(table: Table, subtable_offset: usize, glyph
     if (pos_format != 1) return error.UnsupportedGpos;
     if (mark_position >= glyphs.len) return false;
     const glyph = glyphs[mark_position];
-    if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
+    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
 
     const mark_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const ligature_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
@@ -4482,8 +4302,8 @@ fn previousCoveredLigatureGlyph(table: Table, mark_coverage_offset: usize, glyph
     var i = mark_position;
     while (i > 0) {
         i -= 1;
-        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[i])) continue;
-        if (markAttachmentSearchSkipsGlyph(options, i)) continue;
+        if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[i])) continue;
+        if (runtime.matching.markAttachmentSearchSkipsGlyph(options, i)) continue;
 
         // MarkLigPos attaches marks to the nearest previous participating
         // ligature. Earlier marks in the same cluster must be transparent for
@@ -4525,8 +4345,8 @@ fn ligatureComponentIndexForMark(table: Table, mark_coverage_offset: usize, glyp
     var covered_marks_before_target: usize = 0;
     var pos = ligature_position + 1;
     while (pos < mark_position) : (pos += 1) {
-        if (lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
-        if (markAttachmentSearchSkipsGlyph(options, pos)) continue;
+        if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyphs[pos])) continue;
+        if (runtime.matching.markAttachmentSearchSkipsGlyph(options, pos)) continue;
         // OpenType engines normally know the original GSUB ligature component
         // for each remaining mark. When the caller does not provide that
         // metadata, use the mark's order within the post-ligature covered mark
@@ -4644,7 +4464,7 @@ fn collectMarkToMarkAdjustmentAt(table: Table, subtable_offset: usize, glyphs: [
     if (pos_format != 1) return error.UnsupportedGpos;
     if (mark_1_position >= glyphs.len) return false;
     const glyph = glyphs[mark_1_position];
-    if (lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
+    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
 
     const mark_1_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
     const mark_2_coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 4));
@@ -9411,6 +9231,7 @@ test {
     _ = @import("gpos/tests/accelerator/root.zig");
     _ = @import("gpos/tests/feature/root.zig");
     _ = @import("gpos/tests/positioning/root.zig");
+    _ = @import("gpos/tests/runtime/root.zig");
     _ = @import("gpos/tests/table/root.zig");
 }
 

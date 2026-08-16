@@ -174,6 +174,34 @@ test "core font inspection is reachable through the public metadata domain" {
     try std.testing.expectEqual(max_profile.glyph_count, locations.len);
 }
 
+test "metric inspection exposes table and presentation metrics" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    const inspection = cangjie.font.metadata.metrics.inspect(&face);
+
+    const header = try inspection.horizontalHeader();
+    try std.testing.expectEqual(@as(u16, 2), header.long_metric_count);
+    try std.testing.expect((try inspection.verticalHeader()) == null);
+
+    const metric = try inspection.horizontal(1);
+    const table = try inspection.horizontalTable(allocator);
+    defer allocator.free(table);
+    try std.testing.expectEqual(@as(usize, 2), table.len);
+    try std.testing.expectEqual(metric, table[1]);
+    try std.testing.expect((try inspection.vertical(1)) == null);
+    try std.testing.expect((try inspection.verticalTable(allocator)) == null);
+
+    const decoration = try inspection.decoration();
+    try std.testing.expect(decoration.underline_thickness > 0);
+    try std.testing.expect((try inspection.deviceWidths(allocator)) == null);
+    try std.testing.expect((try inspection.linearThresholds(allocator)) == null);
+    try std.testing.expect((try inspection.verticalOrigins(allocator)) == null);
+}
+
 test "concrete engine remains valid after a value move" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalTtf(allocator);

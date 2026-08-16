@@ -2,4 +2,5 @@
 
 test {
     _ = @import("borrowed.zig");
+    _ = @import("contracts.zig");
 }

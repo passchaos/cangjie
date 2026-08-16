@@ -7,4 +7,5 @@ test {
     _ = @import("metadata.zig");
     _ = @import("mutation.zig");
     _ = @import("options.zig");
+    _ = @import("prefilter/root.zig");
 }

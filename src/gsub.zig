@@ -3,13 +3,13 @@ const accelerator_root = @import("gsub/accelerator/root.zig");
 const accelerator_model = accelerator_root.model;
 const cluster_safety = @import("shaping/cluster_safety.zig");
 const feature_domain = @import("gsub/feature/root.zig");
-const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
 const ligature_provenance = @import("ligature_provenance.zig");
 const class_context = @import("opentype/class_context.zig");
 pub const runtime = @import("gsub/runtime/root.zig");
 const runtime_filtering = @import("gsub/runtime/filtering.zig");
 const runtime_mutation = @import("gsub/runtime/mutation.zig");
+const runtime_prefilter = @import("gsub/runtime/prefilter/root.zig");
 const table_core = @import("gsub/table/root.zig");
 const validation = @import("gsub/validation/root.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
@@ -108,67 +108,6 @@ fn chainingClassRuleBacktrackCount(rule: class_context.Rule) u16 {
 
 const empty_class_def_offset = table_core.class_def.empty_offset;
 
-const max_run_digest_cache_entries = 16;
-
-const RunDigestCache = struct {
-    const Entry = struct {
-        lookup_flag: u16,
-        active_mark_filtering_set: ?u16,
-        active_source_feature: ?u32,
-        active_source_feature_mask: u32,
-        digest: GlyphDigest,
-    };
-
-    entries: [max_run_digest_cache_entries]Entry = undefined,
-    len: usize = 0,
-    generation: usize = 0,
-
-    fn init() RunDigestCache {
-        // `get` only reads entries below `len`, and every such entry is
-        // assigned immediately before `len` advances. Initializing only this
-        // small header avoids clearing 16 large digest entries for every
-        // shaped run while preserving the same mutation-generation semantics.
-        var cache: RunDigestCache = undefined;
-        cache.len = 0;
-        cache.generation = 0;
-        return cache;
-    }
-
-    fn get(self: *RunDigestCache, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GlyphDigest {
-        const generation = if (options.glyph_mutation_generation) |value| value.* else 0;
-        if (generation != self.generation) {
-            // A GSUB replacement may introduce a glyph covered by a later
-            // lookup. Drop all summaries at once rather than trying to update
-            // approximate sets through cardinality-changing nested lookups.
-            self.len = 0;
-            self.generation = generation;
-        }
-
-        for (self.entries[0..self.len]) |entry| {
-            if (entry.lookup_flag == lookup_flag and
-                entry.active_mark_filtering_set == options.active_mark_filtering_set and
-                entry.active_source_feature == options.active_source_feature and
-                entry.active_source_feature_mask == options.active_source_feature_mask)
-            {
-                return entry.digest;
-            }
-        }
-
-        const digest = glyphRunDigest(glyphs, lookup_flag, options);
-        if (self.len < self.entries.len) {
-            self.entries[self.len] = .{
-                .lookup_flag = lookup_flag,
-                .active_mark_filtering_set = options.active_mark_filtering_set,
-                .active_source_feature = options.active_source_feature,
-                .active_source_feature_mask = options.active_source_feature_mask,
-                .digest = digest,
-            };
-            self.len += 1;
-        }
-        return digest;
-    }
-};
-
 const FeatureApplication = feature.Application;
 const FeatureLookupPlanEntry = feature.LookupPlanEntry;
 const MergedFeatureLookup = feature.MergedLookup;
@@ -244,7 +183,7 @@ pub fn applyWithOptions(data: []const u8, offset: usize, length: usize, glyphs: 
     }
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
-    var run_digest_cache = RunDigestCache.init();
+    var run_digest_cache = runtime_prefilter.Cache.init();
     if (shaping_options.selected_lookups) |selected_lookups| {
         for (selected_lookups) |lookup_index| {
             if (lookup_index >= lookup_count) continue;
@@ -319,7 +258,7 @@ pub noinline fn applyCachedLookupSelectionWithOptionsAfterMetadataProof(
         .length = length,
         .assume_validated = true,
     };
-    var run_digest_cache = RunDigestCache.init();
+    var run_digest_cache = runtime_prefilter.Cache.init();
     for (selected_lookups) |lookup_index| {
         const accelerator = accelerators[lookup_index];
         try applyLookupWithIndex(
@@ -444,7 +383,7 @@ fn applySelectedSourceFeatureWithOptions(
     if (try isEmptyGsubTopology(table)) return;
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
-    var run_digest_cache = RunDigestCache.init();
+    var run_digest_cache = runtime_prefilter.Cache.init();
     try applyLookupIndices(
         table,
         lookup_list_offset,
@@ -593,7 +532,7 @@ fn applyFeatureSequenceWithOptions(
     const major = try readU16(table, 0);
     if (major != 1) return error.UnsupportedGsub;
     if (try isEmptyGsubTopology(table)) return;
-    var run_digest_cache = RunDigestCache.init();
+    var run_digest_cache = runtime_prefilter.Cache.init();
 
     // Preserve arbitrary LangSys-required features even when a higher-level
     // script plan names only the well-known stages it needs to interleave.
@@ -840,7 +779,7 @@ fn applyFeatureLookupPlanWithOptionsAfterMetadataProof(
 
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
-    var run_digest_cache = RunDigestCache.init();
+    var run_digest_cache = runtime_prefilter.Cache.init();
     for (plan.entries) |entry| {
         var selected_options = shaping_options;
         selected_options.active_source_feature = if (entry.application.source_scoped) entry.application.tag else null;
@@ -906,7 +845,7 @@ fn applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof(
     const lookup_list_offset = try checkedRequiredLookupListOffset(table);
     const lookup_count = try readU16(table, lookup_list_offset);
     if (plan.lookups.len != plan.lookup_offsets.len) return error.BadGsub;
-    var run_digest_cache = RunDigestCache.init();
+    var run_digest_cache = runtime_prefilter.Cache.init();
     for (plan.lookups, plan.lookup_offsets) |lookup, lookup_offset| {
         if (lookup.lookup >= lookup_count) return error.BadGsub;
         var selected_options = shaping_options;
@@ -968,7 +907,7 @@ fn applySelectedFeatureFromPlan(
     glyphs: *std.ArrayList(GlyphId),
     allocator: std.mem.Allocator,
     options: LookupOptions,
-    run_digest_cache: ?*RunDigestCache,
+    run_digest_cache: ?*runtime_prefilter.Cache,
 ) (GsubError || std.mem.Allocator.Error)!void {
     if (borrowedSelectedFeatureLookups(
         table,
@@ -1062,7 +1001,7 @@ fn applyLookupIndices(
     glyphs: *std.ArrayList(GlyphId),
     allocator: std.mem.Allocator,
     options: LookupOptions,
-    run_digest_cache: ?*RunDigestCache,
+    run_digest_cache: ?*runtime_prefilter.Cache,
 ) (GsubError || std.mem.Allocator.Error)!void {
     for (selected_lookups) |lookup_index| {
         if (lookup_index >= lookup_count) return error.BadGsub;
@@ -1080,7 +1019,7 @@ fn lookupOffsetsForIndices(table: Table, lookup_list_offset: usize, selected_loo
     return lookup_offsets;
 }
 
-fn applyLookupPlanEntry(table: Table, lookup_count: u16, entry: FeatureLookupPlanEntry, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*RunDigestCache) (GsubError || std.mem.Allocator.Error)!void {
+fn applyLookupPlanEntry(table: Table, lookup_count: u16, entry: FeatureLookupPlanEntry, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*runtime_prefilter.Cache) (GsubError || std.mem.Allocator.Error)!void {
     if (entry.lookup_offsets.len != entry.lookups.len) return error.BadGsub;
     for (entry.lookups, entry.lookup_offsets) |lookup_index, lookup_offset| {
         if (lookup_index >= lookup_count) return error.BadGsub;
@@ -1261,7 +1200,7 @@ fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphI
     try applyLookupWithIndex(table, lookup_offset, null, glyphs, allocator, options, null);
 }
 
-fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*RunDigestCache) (GsubError || std.mem.Allocator.Error)!void {
+fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*runtime_prefilter.Cache) (GsubError || std.mem.Allocator.Error)!void {
     // The cached Font path overwhelmingly dispatches predecoded ligature and
     // chaining lookups. Keep those cases outside the generic function below:
     // its support for every lookup kind, nested contextual mutation, and
@@ -1296,7 +1235,7 @@ fn applyValidatedAcceleratedLookup(
     glyphs: *std.ArrayList(GlyphId),
     allocator: std.mem.Allocator,
     options: LookupOptions,
-    run_digest_cache: ?*RunDigestCache,
+    run_digest_cache: ?*runtime_prefilter.Cache,
 ) (GsubError || std.mem.Allocator.Error)!bool {
     const accelerator =
         runtime.dispatch.any(lookup_index, options) orelse return false;
@@ -1356,7 +1295,7 @@ noinline fn applyValidatedAcceleratedLookupPrepared(
     glyphs: *std.ArrayList(GlyphId),
     allocator: std.mem.Allocator,
     lookup_options: LookupOptions,
-    run_digest_cache: ?*RunDigestCache,
+    run_digest_cache: ?*runtime_prefilter.Cache,
     accelerator: *const LookupAccelerator,
     lookup_start: i128,
     glyph_count_before: usize,
@@ -1365,7 +1304,7 @@ noinline fn applyValidatedAcceleratedLookupPrepared(
         4 => {
             if (accelerator.subtable_count != 1 or accelerator.ligature_subst.sets.len == 0) return false;
             if (run_digest_cache) |cache| {
-                const run_digest = cache.get(glyphs.items, accelerator.lookup_flag, lookup_options);
+                const run_digest = cache.digestForRun(glyphs.items, accelerator.lookup_flag, lookup_options);
                 if (run_digest.isEmpty() or
                     !accelerator.ligature_subst.first_component_digest.mayIntersect(run_digest))
                 {
@@ -1437,9 +1376,9 @@ noinline fn applyValidatedAcceleratedLookupPrepared(
         6 => {
             if (!accelerator.chaining_coverage_only) return false;
             const run_digest = if (run_digest_cache) |cache|
-                cache.get(glyphs.items, accelerator.lookup_flag, lookup_options)
+                cache.digestForRun(glyphs.items, accelerator.lookup_flag, lookup_options)
             else
-                glyphRunDigest(glyphs.items, accelerator.lookup_flag, lookup_options);
+                runtime_prefilter.digest(glyphs.items, accelerator.lookup_flag, lookup_options);
             if (run_digest.isEmpty() or !accelerator.chaining_input_digest.mayIntersect(run_digest)) {
                 recordAcceleratedGsubLookupProfile(lookup_options, lookup_index, accelerator.lookup_type, lookup_start, glyph_count_before, glyphs.items.len);
                 return true;
@@ -1468,7 +1407,7 @@ fn recordAcceleratedGsubLookupProfile(options: LookupOptions, lookup_index: ?u16
     profile.recordGsubLookupGlyphs(lookup_index, glyph_count_before, glyph_count_after, 0, 0, glyph_count_before, 0, &.{}, &.{});
 }
 
-noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*RunDigestCache) (GsubError || std.mem.Allocator.Error)!void {
+noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*runtime_prefilter.Cache) (GsubError || std.mem.Allocator.Error)!void {
     const profiling = options.shape_profile != null;
     const lookup_start = shapeProfileNow(options.shape_profile, options.profile_io);
     const glyph_count_before = if (profiling) glyphs.items.len else 0;
@@ -1669,15 +1608,15 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
             lookup_options,
         )) |accelerator| {
             const run_digest = if (run_digest_cache) |cache|
-                cache.get(glyphs.items, lookup_flag, lookup_options)
+                cache.digestForRun(glyphs.items, lookup_flag, lookup_options)
             else
-                glyphRunDigest(glyphs.items, lookup_flag, lookup_options);
+                runtime_prefilter.digest(glyphs.items, lookup_flag, lookup_options);
             if (run_digest.isEmpty() or !accelerator.chaining_input_digest.mayIntersect(run_digest)) return;
             try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, accelerator);
             return;
         }
         if (try accelerator_root.build.chaining_coverage.lookupUsesCoverageOnly(table, lookup_offset, subtable_count, false)) {
-            if (!try chainingCoverageLookupMayMatch(table, lookup_offset, subtable_count, glyphs.items, lookup_flag, lookup_options)) return;
+            if (!try runtime_prefilter.chainingCoverageLookupMayMatch(table, lookup_offset, subtable_count, glyphs.items, lookup_flag, lookup_options)) return;
             try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, null);
             return;
         }
@@ -1694,7 +1633,7 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
             lookup_options,
         )) |accelerator| {
             if (run_digest_cache) |cache| {
-                const run_digest = cache.get(glyphs.items, lookup_flag, lookup_options);
+                const run_digest = cache.digestForRun(glyphs.items, lookup_flag, lookup_options);
                 if (run_digest.isEmpty() or
                     !accelerator.first_component_digest.mayIntersect(run_digest))
                 {
@@ -2742,7 +2681,7 @@ noinline fn applyLigatureSubstitutionRequiredSecondPrefiltered(
     @branchHint(.cold);
     const second_components = requiredLigatureSecondComponents(accelerator);
     if (second_components.len == 0 or
-        !runHasAnyGlyph(glyphs.items, second_components))
+        !runtime_prefilter.hasAnyGlyph(glyphs.items, second_components))
     {
         return;
     }
@@ -3386,69 +3325,8 @@ fn applyChainingContextSubstitution(table: Table, subtable_offset: usize, glyphs
     }
 }
 
-fn chainingCoverageLookupMayMatch(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GsubError!bool {
-    if (glyphs.len == 0) return false;
-    // Arabic shaping often reaches this path one short word at a time. For
-    // those tiny runs the exact scan is cheaper than building coverage digests;
-    // reserve the approximate filter for longer runs where it can amortize.
-    if (glyphs.len < 64) return try chainingCoverageLookupMayMatchByScan(table, lookup_offset, subtable_count, glyphs, lookup_flag, options);
-    const run_digest = glyphRunDigest(glyphs, lookup_flag, options);
-    if (run_digest.isEmpty()) return false;
-    for (0..subtable_count) |subtable_i| {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-        const coverage_offset = try accelerator_root.build.chaining_coverage.parser.firstInputCoverage(table, subtable_offset) orelse continue;
-        const coverage_digest = try table_core.coverage.digest(table, coverage_offset);
-        if (coverage_digest.mayIntersect(run_digest)) return true;
-    }
-    return false;
-}
-
-fn chainingCoverageLookupMayMatchByScan(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GsubError!bool {
-    for (0..subtable_count) |subtable_i| {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-        const coverage_offset = try accelerator_root.build.chaining_coverage.parser.firstInputCoverage(table, subtable_offset) orelse continue;
-        for (glyphs, 0..) |glyph, glyph_index| {
-            if (!runtime_filtering.sourceFeatureAllowsGlyph(options, glyph_index)) continue;
-            if (runtime_filtering.lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
-            if (try table_core.coverage.index(table, coverage_offset, glyph) != null) return true;
-        }
-    }
-    return false;
-}
-
-fn glyphRunDigest(glyphs: []const GlyphId, lookup_flag: u16, options: LookupOptions) GlyphDigest {
-    var digest = GlyphDigest.empty();
-    for (glyphs, 0..) |glyph, glyph_index| {
-        if (!runtime_filtering.sourceFeatureAllowsGlyph(options, glyph_index)) continue;
-        if (runtime_filtering.lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
-        digest.add(glyph);
-    }
-    return digest;
-}
-
-fn runHasAnyGlyph(
-    glyphs: []const GlyphId,
-    candidates: []const GlyphId,
-) bool {
-    // This is only a necessary-condition proof. Search every glyph id: lookup
-    // flags, source feature scope, and syllable bounds can make an occurrence
-    // unusable (a harmless false positive), but filtering here could hide a
-    // valid non-leading ligature component and create a false negative.
-    for (glyphs) |glyph| {
-        if (std.sort.binarySearch(GlyphId, candidates, glyph, glyphIdOrder) != null) return true;
-    }
-    return false;
-}
-
-fn glyphIdOrder(target: GlyphId, item: GlyphId) std.math.Order {
-    return std.math.order(target, item);
-}
-
 test "GSUB required ligature components scan exact run glyphs" {
     const candidates = [_]GlyphId{ 2, 7, 11 };
-    try std.testing.expect(runHasAnyGlyph(&.{ 1, 7 }, &candidates));
-    try std.testing.expect(!runHasAnyGlyph(&.{ 1, 8 }, &candidates));
-
     const accelerator = LigatureSubstAccelerator{
         .components = &.{ 20, 21, 2, 7, 11 },
         .required_second_start = 2,
@@ -3479,13 +3357,13 @@ test "GSUB run digest cache reuses no-op runs and invalidates on substitution" {
 
     var generation: usize = 0;
     const options = LookupOptions{ .glyph_mutation_generation = &generation };
-    var cache = RunDigestCache{};
+    var cache = runtime_prefilter.Cache{};
 
-    const first = cache.get(glyphs.items, 0, options);
+    const first = cache.digestForRun(glyphs.items, 0, options);
     try std.testing.expect(first.mayHave(1));
 
     // Consecutive no-op contextual lookups reuse the old summary.
-    const second = cache.get(glyphs.items, 0, options);
+    const second = cache.digestForRun(glyphs.items, 0, options);
     try std.testing.expect(second.mayHave(1));
     try std.testing.expectEqual(@as(usize, 1), cache.len);
 
@@ -3500,7 +3378,7 @@ test "GSUB run digest cache reuses no-op runs and invalidates on substitution" {
         0,
         options,
     ));
-    const after_substitution = cache.get(glyphs.items, 0, options);
+    const after_substitution = cache.digestForRun(glyphs.items, 0, options);
     try std.testing.expect(after_substitution.mayHave(2));
     try std.testing.expect(!after_substitution.mayHave(1));
     try std.testing.expectEqual(generation, cache.generation);
@@ -3619,7 +3497,7 @@ test "GSUB ligature run digest invalidates after an earlier ligature" {
         .glyph_mutation_generation = &generation,
         .assume_validated = true,
     };
-    var cache = RunDigestCache.init();
+    var cache = runtime_prefilter.Cache.init();
     const table = Table{
         .data = &bytes,
         .offset = 0,
@@ -3637,7 +3515,7 @@ test "GSUB ligature run digest invalidates after an earlier ligature" {
 
     // The second ligature advances the epoch after its prefilter read. A later
     // lookup must likewise observe the final glyph rather than retain {5,3}.
-    const final_digest = cache.get(glyphs.items, 0, options);
+    const final_digest = cache.digestForRun(glyphs.items, 0, options);
     try std.testing.expect(final_digest.mayHave(9));
     try std.testing.expect(!final_digest.mayHave(5));
     try std.testing.expectEqual(generation, cache.generation);

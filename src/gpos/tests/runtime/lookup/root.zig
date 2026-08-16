@@ -3,4 +3,5 @@
 test {
     _ = @import("cursive.zig");
     _ = @import("marks/root.zig");
+    _ = @import("single.zig");
 }

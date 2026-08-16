@@ -2,3 +2,4 @@
 
 pub const cursive = @import("cursive.zig");
 pub const marks = @import("marks/root.zig");
+pub const single = @import("single.zig");

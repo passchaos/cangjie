@@ -42,7 +42,6 @@ const PairPosSubtableAccelerator = accelerator_core.model.PairPositionSubtable;
 const PairPosRecord = accelerator_core.model.PairPositionRecord;
 const PairClassEntry = accelerator_core.model.PairClassEntry;
 const NativeCoverage = accelerator_core.coverage.Owned;
-const SinglePosSubtable = accelerator_core.model.SinglePositionSubtable;
 const appendAdjustment = runtime_output.adjustments.append;
 const appendAdjustmentEx = runtime_output.adjustments.appendWithFlags;
 const findAdjustment = runtime_output.adjustments.find;
@@ -78,6 +77,13 @@ const collectMarkToLigatureAdjustmentAt =
     runtime_lookup.marks.ligature.collectAt;
 const collectMarkToMarkAdjustment = runtime_lookup.marks.mark.collect;
 const collectMarkToMarkAdjustmentAt = runtime_lookup.marks.mark.collectAt;
+const collectSingleAdjustmentLookup = runtime_lookup.single.collectLookup;
+const collectSingleAdjustmentSubtable = runtime_lookup.single.collectSubtable;
+const collectSingleAdjustment = runtime_lookup.single.collect;
+const collectSingleAdjustmentAt = runtime_lookup.single.collectAt;
+const collectSingleAdjustmentAtAccelerated =
+    runtime_lookup.single.collectAtAccelerated;
+const SinglePosSubtable = runtime_lookup.single.Parsed;
 
 const max_run_digest_cache_entries = 16;
 
@@ -1436,89 +1442,6 @@ fn appendAcceleratedPairXAdvance(
         .{ .index = first_index, .x_advance = x_advance },
         true,
     );
-}
-
-fn collectSingleAdjustmentLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    // Lookup subtables are tried in order as alternatives for each glyph. Track
-    // which input positions have already matched so overlapping SinglePos
-    // subtables do not accumulate deltas in the same lookup.
-    if (glyphs.len == 0) return;
-    var matched_stack: [stack_matched_capacity]bool = undefined;
-    const matched_scratch = try BoolScratch.init(allocator, glyphs.len, &matched_stack);
-    defer matched_scratch.deinit(allocator);
-    const matched = matched_scratch.items;
-    @memset(matched, false);
-
-    for (0..subtable_count) |subtable_i| {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-        try collectSingleAdjustmentSubtable(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, options, matched);
-    }
-}
-
-fn collectSingleAdjustmentSubtable(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions, matched: []bool) (GposError || std.mem.Allocator.Error)!void {
-    const pos_format = try readU16(table, subtable_offset);
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const value_format = try readU16(table, subtable_offset + 4);
-    switch (pos_format) {
-        1 => {
-            const value = try positioning.value_record.read(table, subtable_offset + 6, value_format, subtable_offset);
-            for (glyphs, 0..) |glyph, i| {
-                if (matched[i]) continue;
-                if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
-                if (try table_core.coverage.index(table, coverage_offset, glyph) != null) {
-                    try appendAdjustment(adjustments, allocator, i, value, false);
-                    matched[i] = true;
-                }
-            }
-        },
-        2 => {
-            const value_count = try readU16(table, subtable_offset + 6);
-            const value_size = try positioning.value_record.size(value_format);
-            for (glyphs, 0..) |glyph, i| {
-                if (matched[i]) continue;
-                if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
-                if (try table_core.coverage.index(table, coverage_offset, glyph)) |coverage| {
-                    if (coverage < value_count) {
-                        const value = try positioning.value_record.read(table, subtable_offset + 8 + coverage * value_size, value_format, subtable_offset);
-                        try appendAdjustment(adjustments, allocator, i, value, false);
-                        matched[i] = true;
-                    }
-                }
-            }
-        },
-        else => return error.UnsupportedGpos,
-    }
-}
-
-fn collectSingleAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    const pos_format = try readU16(table, subtable_offset);
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const value_format = try readU16(table, subtable_offset + 4);
-    switch (pos_format) {
-        1 => {
-            const value = try positioning.value_record.read(table, subtable_offset + 6, value_format, subtable_offset);
-            for (glyphs, 0..) |glyph, i| {
-                if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
-                if (try table_core.coverage.index(table, coverage_offset, glyph) != null) {
-                    try appendAdjustment(adjustments, allocator, i, value, false);
-                }
-            }
-        },
-        2 => {
-            const value_count = try readU16(table, subtable_offset + 6);
-            const value_size = try positioning.value_record.size(value_format);
-            for (glyphs, 0..) |glyph, i| {
-                if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) continue;
-                if (try table_core.coverage.index(table, coverage_offset, glyph)) |coverage| {
-                    if (coverage < value_count) {
-                        const value = try positioning.value_record.read(table, subtable_offset + 8 + coverage * value_size, value_format, subtable_offset);
-                        try appendAdjustment(adjustments, allocator, i, value, false);
-                    }
-                }
-            }
-        },
-        else => return error.UnsupportedGpos,
-    }
 }
 
 fn shapeProfileNow(profile: ?*shape_profile_mod.ShapeStageProfile, io: ?std.Io) i128 {
@@ -3056,55 +2979,6 @@ fn collectNestedExtensionAdjustment(table: Table, subtable_offset: usize, glyphs
         7 => return try collectContextAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
         8 => return try collectChainingContextAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
         else => {},
-    }
-    return false;
-}
-
-fn collectSingleAdjustmentAt(table: Table, subtable_offset: usize, glyph: GlyphId, target_index: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
-    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
-    const pos_format = try readU16(table, subtable_offset);
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16(table, subtable_offset + 2));
-    const value_format = try readU16(table, subtable_offset + 4);
-    switch (pos_format) {
-        1 => {
-            if (try table_core.coverage.index(table, coverage_offset, glyph) != null) {
-                const value = try positioning.value_record.read(table, subtable_offset + 6, value_format, subtable_offset);
-                try appendAdjustment(adjustments, allocator, target_index, value, false);
-                return true;
-            }
-            return false;
-        },
-        2 => {
-            const coverage = try table_core.coverage.index(table, coverage_offset, glyph) orelse return false;
-            const value_count = try readU16(table, subtable_offset + 6);
-            if (coverage >= value_count) return false;
-            const value_size = try positioning.value_record.size(value_format);
-            const value = try positioning.value_record.read(table, subtable_offset + 8 + coverage * value_size, value_format, subtable_offset);
-            try appendAdjustment(adjustments, allocator, target_index, value, false);
-            return true;
-        },
-        else => return error.UnsupportedGpos,
-    }
-}
-
-fn collectSingleAdjustmentAtAccelerated(table: Table, subtables: []const SinglePosSubtable, glyph: GlyphId, target_index: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
-    if (runtime.matching.lookupIgnoresGlyph(lookup_flag, options, glyph)) return false;
-    for (subtables) |subtable| {
-        switch (subtable.pos_format) {
-            1 => {
-                if (try table_core.coverage.index(table, subtable.coverage_offset, glyph) == null) continue;
-                try appendAdjustment(adjustments, allocator, target_index, subtable.value, false);
-                return true;
-            },
-            2 => {
-                const coverage = try table_core.coverage.index(table, subtable.coverage_offset, glyph) orelse continue;
-                if (coverage >= subtable.value_count) continue;
-                const value = try positioning.value_record.read(table, subtable.values_pos + coverage * subtable.value_size, subtable.value_format, subtable.subtable_offset);
-                try appendAdjustment(adjustments, allocator, target_index, value, false);
-                return true;
-            },
-            else => return error.UnsupportedGpos,
-        }
     }
     return false;
 }

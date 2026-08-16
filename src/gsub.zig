@@ -1229,329 +1229,16 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
 }
 
 noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*runtime_prefilter.Cache) (GsubError || std.mem.Allocator.Error)!void {
-    const profiling = options.shape_profile != null;
-    const lookup_start = lookup_profile.now(
-        options.shape_profile,
-        options.profile_io,
-    );
-    const glyph_count_before = if (profiling) glyphs.items.len else 0;
-    const glyph_hash_before = if (profiling) lookup_profile.glyphRunHash(glyphs.items) else 0;
-    const glyphs_before = if (profiling) try allocator.dupe(GlyphId, glyphs.items) else &.{};
-    defer if (profiling) allocator.free(glyphs_before);
-    defer {
-        if (options.shape_profile) |profile| {
-            const first_diff = lookup_profile.firstDifferentGlyphIndex(glyphs_before, glyphs.items);
-            const window_start = first_diff -| 2;
-            const before_window = glyphs_before[window_start..@min(glyphs_before.len, window_start + lookup_profile.Profile.lookup_window_capacity)];
-            const after_window = glyphs.items[window_start..@min(glyphs.items.len, window_start + lookup_profile.Profile.lookup_window_capacity)];
-            profile.recordGsubLookupTime(
-                lookup_index,
-                lookup_profile.elapsed(lookup_start, options.profile_io),
-            );
-            profile.recordGsubLookupGlyphs(lookup_index, glyph_count_before, glyphs.items.len, glyph_hash_before, lookup_profile.glyphRunHash(glyphs.items), first_diff, window_start, before_window, after_window);
-        }
-    }
-    // Header validation remains coupled to ExtensionSubst payload preflight;
-    // dispatch itself only parses fixed fields or trusts an exact sidecar.
-    _ = try validation.lookup.validateHeader(
+    return lookup_execution.generic.apply(
         ContextualRecordExecutor,
         table,
         lookup_offset,
-    );
-    const dispatch = try runtime.dispatch.header(
-        table,
-        lookup_offset,
         lookup_index,
+        glyphs,
+        allocator,
         options,
+        run_digest_cache,
     );
-    const lookup_type = dispatch.lookup_type;
-    const lookup_flag = dispatch.lookup_flag;
-    const subtable_count = dispatch.subtable_count;
-    lookup_profile.recordKind(options.shape_profile, lookup_type);
-    // A GSUB lookup is an ordered list of alternative subtables and must apply
-    // as one unit. Validate every supported direct subtable before touching the
-    // glyph run; otherwise a malformed later subtable can leak substitutions
-    // already made by an earlier subtable in the same lookup.
-    if (!table.assume_validated) {
-        try validation.lookup.validateSubtables(
-            ContextualRecordExecutor,
-            table,
-            lookup_offset,
-            lookup_type,
-            subtable_count,
-            .strict,
-        );
-    }
-    var lookup_options = options;
-    if ((lookup_flag & 0x0010) != 0) {
-        // UseMarkFilteringSet stores its set index after the variable-length
-        // SubTable offset array. The high byte remains reserved for the older
-        // MarkAttachmentType mechanism when bit 4 is clear.
-        lookup_options.active_mark_filtering_set = dispatch.mark_filtering_set;
-        try runtime_filtering.validateMarkFilteringSetIndex(lookup_options);
-    }
-    lookup_options.match_source_syllable =
-        runtime.dispatch.matchesSourceSyllable(lookup_index, options);
-    if (lookup_type == 1) {
-        if (runtime.dispatch.singleEntries(
-            lookup_index,
-            lookup_options,
-        )) |entries| {
-            direct_single.entries(entries, glyphs, lookup_flag, lookup_options);
-            return;
-        }
-        try direct_single.lookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
-        return;
-    }
-    if (lookup_type == 2) {
-        if (runtime.dispatch.multiple(
-            lookup_index,
-            lookup_options,
-        )) |accelerator| {
-            try direct_multiple.accelerated(table, accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
-            return;
-        }
-        try direct_multiple.lookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
-        return;
-    }
-    if (lookup_type == 3) {
-        try direct_alternate.lookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
-        return;
-    }
-    if (lookup_type == 7) {
-        // ExtensionSubst is only an addressing wrapper, but malformed wrapped
-        // payloads must be proved before dispatch. `validateHeader` above owns
-        // that lookup-level atomic preflight; do not repeat it on this branch.
-        const wrapped_type = if (runtime.dispatch.extensionType(
-            lookup_index,
-            lookup_options,
-        )) |accelerator|
-            accelerator.extension_lookup_type orelse 0
-        else
-            try accelerator_root.build.lookup.extension.commonType(
-                table,
-                lookup_offset,
-                subtable_count,
-            ) orelse 0;
-        switch (wrapped_type) {
-            1 => {
-                try direct_single.extensionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
-                return;
-            },
-            2 => {
-                try direct_multiple.extensionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
-                return;
-            },
-            3 => {
-                try direct_alternate.extensionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
-                return;
-            },
-            5 => {
-                if (runtime.dispatch.contextClass(
-                    lookup_index,
-                    lookup_options,
-                )) |accelerator| {
-                    try contextual_context.acceleratedClassLookup(
-                        ContextualRecordExecutor,
-                        table,
-                        subtable_count,
-                        glyphs,
-                        allocator,
-                        lookup_flag,
-                        lookup_options,
-                        accelerator,
-                    );
-                } else {
-                    try contextual_context.extensionLookup(
-                        ContextualRecordExecutor,
-                        table,
-                        lookup_offset,
-                        subtable_count,
-                        glyphs,
-                        allocator,
-                        lookup_flag,
-                        lookup_options,
-                    );
-                }
-                return;
-            },
-            6 => {
-                if (runtime.dispatch.chainingClass(
-                    lookup_index,
-                    lookup_options,
-                )) |accelerator| {
-                    try contextual_chaining_class.acceleratedLookup(
-                        ContextualRecordExecutor,
-                        table,
-                        subtable_count,
-                        glyphs,
-                        allocator,
-                        lookup_flag,
-                        lookup_options,
-                        accelerator,
-                    );
-                } else if (runtime.dispatch.chainingCoverage(
-                    lookup_index,
-                    lookup_options,
-                )) |accelerator| {
-                    try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, accelerator);
-                } else {
-                    try applyExtensionChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options);
-                }
-                return;
-            },
-            8 => {
-                try direct_reverse.extensionLookup(
-                    table,
-                    lookup_offset,
-                    subtable_count,
-                    glyphs,
-                    lookup_flag,
-                    lookup_options,
-                    runtime.dispatch.reverseChaining(
-                        lookup_index,
-                        lookup_options,
-                    ),
-                );
-                return;
-            },
-            else => {},
-        }
-    }
-    if (lookup_type == 5) {
-        if (runtime.dispatch.contextClass(
-            lookup_index,
-            lookup_options,
-        )) |accelerator| {
-            try contextual_context.acceleratedClassLookup(
-                ContextualRecordExecutor,
-                table,
-                subtable_count,
-                glyphs,
-                allocator,
-                lookup_flag,
-                lookup_options,
-                accelerator,
-            );
-            return;
-        }
-        if (runtime.dispatch.contextCoverage(
-            lookup_index,
-            lookup_options,
-        )) |accelerator| {
-            try contextual_context.acceleratedCoverageLookup(
-                ContextualRecordExecutor,
-                table,
-                glyphs,
-                allocator,
-                lookup_flag,
-                lookup_options,
-                accelerator,
-            );
-            return;
-        }
-        try contextual_context.lookup(
-            ContextualRecordExecutor,
-            table,
-            lookup_offset,
-            subtable_count,
-            glyphs,
-            allocator,
-            lookup_flag,
-            lookup_options,
-        );
-        return;
-    }
-    if (lookup_type == 6) {
-        if (runtime.dispatch.chainingClass(
-            lookup_index,
-            lookup_options,
-        )) |accelerator| {
-            try contextual_chaining_class.acceleratedLookup(
-                ContextualRecordExecutor,
-                table,
-                subtable_count,
-                glyphs,
-                allocator,
-                lookup_flag,
-                lookup_options,
-                accelerator,
-            );
-            return;
-        }
-        if (runtime.dispatch.chainingCoverage(
-            lookup_index,
-            lookup_options,
-        )) |accelerator| {
-            const run_digest = if (run_digest_cache) |cache|
-                cache.digestForRun(glyphs.items, lookup_flag, lookup_options)
-            else
-                runtime_prefilter.digest(glyphs.items, lookup_flag, lookup_options);
-            if (run_digest.isEmpty() or !accelerator.chaining_input_digest.mayIntersect(run_digest)) return;
-            try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, accelerator);
-            return;
-        }
-        if (try accelerator_root.build.chaining_coverage.lookupUsesCoverageOnly(table, lookup_offset, subtable_count, false)) {
-            if (!try runtime_prefilter.chainingCoverageLookupMayMatch(table, lookup_offset, subtable_count, glyphs.items, lookup_flag, lookup_options)) return;
-            try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, null);
-            return;
-        }
-        // Mixed glyph/class/coverage lookups still require position-major
-        // dispatch: subtables are ordered alternatives for one candidate, not
-        // independent whole-run passes. The generic dispatcher preserves that
-        // ordering without requiring a format-specific accelerator.
-        try applyChainingContextSubstitutionLookup(table, lookup_offset, subtable_count, glyphs, allocator, lookup_flag, lookup_options, null);
-        return;
-    }
-    if (lookup_type == 4 and subtable_count == 1) {
-        if (runtime.dispatch.ligature(
-            lookup_index,
-            lookup_options,
-        )) |accelerator| {
-            if (run_digest_cache) |cache| {
-                const run_digest = cache.digestForRun(glyphs.items, lookup_flag, lookup_options);
-                if (run_digest.isEmpty() or
-                    !accelerator.first_component_digest.mayIntersect(run_digest))
-                {
-                    return;
-                }
-            }
-            if (accelerator.prefilter_second) {
-                try direct_ligature.acceleratedPrefiltered(accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
-            } else if (accelerator.required_second_len != 0) {
-                @branchHint(.unlikely);
-                try direct_ligature.acceleratedRequiredSecond(accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
-            } else {
-                try direct_ligature.accelerated(accelerator.*, glyphs, allocator, lookup_flag, lookup_options);
-            }
-            return;
-        }
-    }
-
-    for (0..subtable_count) |i| {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
-        switch (lookup_type) {
-            1 => {}, // SingleSubst needs whole-lookup ordering; handled below.
-            2 => {}, // MultipleSubst needs per-position subtable ordering; handled above.
-            3 => {}, // AlternateSubst needs whole-lookup ordering; handled above.
-            4 => try direct_ligature.subtable(table, subtable_offset, glyphs, allocator, lookup_flag, lookup_options),
-            5 => unreachable, // ContextSubst needs position-major subtable ordering.
-            6 => unreachable, // ChainingContextSubst is handled position-major above.
-            7 => try applyExtensionSubstitution(table, subtable_offset, glyphs, allocator, lookup_flag, lookup_options),
-            8 => {}, // ReverseChainSingleSubst needs whole-lookup ordering; handled below.
-            else => {},
-        }
-    }
-    if (lookup_type == 8) {
-        try direct_reverse.lookup(
-            table,
-            lookup_offset,
-            subtable_count,
-            glyphs,
-            lookup_flag,
-            lookup_options,
-        );
-    }
 }
 
 fn optionsWithRunDigestGeneration(options: LookupOptions, generation: *usize) LookupOptions {
@@ -2121,6 +1808,44 @@ fn applyChainingContextSubstitutionAt(table: Table, subtable_offset: usize, pars
 }
 
 const ContextualRecordExecutor = struct {
+    pub fn applyExtensionSubtable(
+        table: Table,
+        subtable_offset: usize,
+        glyphs: *std.ArrayList(GlyphId),
+        allocator: std.mem.Allocator,
+        lookup_flag: u16,
+        options: LookupOptions,
+    ) (GsubError || std.mem.Allocator.Error)!void {
+        return applyExtensionSubstitution(
+            table,
+            subtable_offset,
+            glyphs,
+            allocator,
+            lookup_flag,
+            options,
+        );
+    }
+
+    pub fn applyExtensionChainingLookup(
+        table: Table,
+        lookup_offset: usize,
+        subtable_count: u16,
+        glyphs: *std.ArrayList(GlyphId),
+        allocator: std.mem.Allocator,
+        lookup_flag: u16,
+        options: LookupOptions,
+    ) (GsubError || std.mem.Allocator.Error)!void {
+        return applyExtensionChainingContextSubstitutionLookup(
+            table,
+            lookup_offset,
+            subtable_count,
+            glyphs,
+            allocator,
+            lookup_flag,
+            options,
+        );
+    }
+
     pub fn applyChainingLookup(
         table: Table,
         lookup_offset: usize,
@@ -2129,7 +1854,7 @@ const ContextualRecordExecutor = struct {
         allocator: std.mem.Allocator,
         lookup_flag: u16,
         options: LookupOptions,
-        accelerator: *const LookupAccelerator,
+        accelerator: ?*const LookupAccelerator,
     ) (GsubError || std.mem.Allocator.Error)!void {
         return applyChainingContextSubstitutionLookup(
             table,

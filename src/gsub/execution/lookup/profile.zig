@@ -11,6 +11,79 @@ const shape_profile = @import("../../../shape_profile.zig");
 
 pub const Profile = shape_profile.ShapeStageProfile;
 
+/// Detailed defensive-path trace retaining the pre-lookup glyph window.
+///
+/// Validated accelerated execution uses `recordAccelerated` instead because
+/// copying the complete run would defeat the purpose of its fast path.
+pub const Detailed = struct {
+    active: ?*Profile,
+    io: ?std.Io,
+    lookup_index: ?u16,
+    started: i128,
+    glyph_count_before: usize,
+    hash_before: u64,
+    glyphs_before: []const GlyphId,
+
+    pub fn begin(
+        allocator: std.mem.Allocator,
+        run: Options,
+        lookup_index: ?u16,
+        glyphs: []const GlyphId,
+    ) std.mem.Allocator.Error!Detailed {
+        const active = run.shape_profile;
+        return .{
+            .active = active,
+            .io = run.profile_io,
+            .lookup_index = lookup_index,
+            .started = now(active, run.profile_io),
+            .glyph_count_before = if (active != null) glyphs.len else 0,
+            .hash_before = if (active != null) glyphRunHash(glyphs) else 0,
+            .glyphs_before = if (active != null)
+                try allocator.dupe(GlyphId, glyphs)
+            else
+                &.{},
+        };
+    }
+
+    pub fn finish(
+        self: Detailed,
+        allocator: std.mem.Allocator,
+        glyphs_after: []const GlyphId,
+    ) void {
+        const active = self.active orelse return;
+        defer allocator.free(self.glyphs_before);
+
+        const first_diff = firstDifferentGlyphIndex(
+            self.glyphs_before,
+            glyphs_after,
+        );
+        const window_start = first_diff -| 2;
+        const before_window = self.glyphs_before[window_start..@min(
+            self.glyphs_before.len,
+            window_start + Profile.lookup_window_capacity,
+        )];
+        const after_window = glyphs_after[window_start..@min(
+            glyphs_after.len,
+            window_start + Profile.lookup_window_capacity,
+        )];
+        active.recordGsubLookupTime(
+            self.lookup_index,
+            elapsed(self.started, self.io),
+        );
+        active.recordGsubLookupGlyphs(
+            self.lookup_index,
+            self.glyph_count_before,
+            glyphs_after.len,
+            self.hash_before,
+            glyphRunHash(glyphs_after),
+            first_diff,
+            window_start,
+            before_window,
+            after_window,
+        );
+    }
+};
+
 pub fn now(profile: ?*Profile, io: ?std.Io) i128 {
     return if (profile != null)
         std.Io.Clock.now(.awake, io.?).nanoseconds

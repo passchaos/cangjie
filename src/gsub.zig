@@ -2,7 +2,7 @@ const std = @import("std");
 const accelerator_root = @import("gsub/accelerator/root.zig");
 const accelerator_model = accelerator_root.model;
 const cluster_safety = @import("shaping/cluster_safety.zig");
-const feature_model = @import("gsub/feature/root.zig");
+const feature_domain = @import("gsub/feature/root.zig");
 const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
 const ligature_provenance = @import("ligature_provenance.zig");
@@ -20,14 +20,14 @@ const shape_profile_mod = @import("shape_profile.zig");
 /// use this domain for explicit feature stages, source masks, and cached plan
 /// ownership instead of depending on a growing flat list of GSUB declarations.
 pub const feature = struct {
-    pub const Application = feature_model.Application;
-    pub const LookupPlanEntry = feature_model.LookupPlanEntry;
-    pub const MergedLookup = feature_model.MergedLookup;
-    pub const MergedLookupPlan = feature_model.MergedLookupPlan;
-    pub const LookupPlan = feature_model.LookupPlan;
-    pub const source_mask_marker = feature_model.source_mask_marker;
-    pub const sourceMaskForTag = feature_model.sourceMaskForTag;
-    pub const random_value = feature_model.random_value;
+    pub const Application = feature_domain.Application;
+    pub const LookupPlanEntry = feature_domain.LookupPlanEntry;
+    pub const MergedLookup = feature_domain.MergedLookup;
+    pub const MergedLookupPlan = feature_domain.MergedLookupPlan;
+    pub const LookupPlan = feature_domain.LookupPlan;
+    pub const source_mask_marker = feature_domain.source_mask_marker;
+    pub const sourceMaskForTag = feature_domain.sourceMaskForTag;
+    pub const random_value = feature_domain.random_value;
 
     pub const selectedLookupIndices = selectedFeatureLookupIndicesForOptions;
     pub const applySelectedSource = applySelectedSourceFeatureWithOptions;
@@ -1168,14 +1168,21 @@ fn selectedFeatureLookupsFromPlanOwned(
 ) (GsubError || std.mem.Allocator.Error)![]u16 {
     var selected_lookups = std.ArrayList(u16).empty;
     errdefer selected_lookups.deinit(allocator);
-    const feature_variation_index = try featureVariationIndexForCoords(table, options.normalized_variation_coords);
+    const feature_variation_index = try feature_domain.variations.matchingRecord(
+        table,
+        options.normalized_variation_coords,
+    );
     for (feature_indices) |selection| {
         if (selection.index >= feature_count) continue;
         const feature_record = feature_list_offset + 2 + @as(usize, selection.index) * 6;
         if (try readU32(table, feature_record) != feature_tag) continue;
         const default_feature_offset = feature_list_offset + try readU16(table, feature_record + 4);
         const feature_offset = if (feature_variation_index) |variation_index|
-            try substitutedFeatureOffset(table, variation_index, selection.index) orelse default_feature_offset
+            try feature_domain.variations.substitutedFeatureOffset(
+                table,
+                variation_index,
+                selection.index,
+            ) orelse default_feature_offset
         else
             default_feature_offset;
         const lookup_index_count = try readU16(table, feature_offset + 2);
@@ -1192,77 +1199,6 @@ fn selectedFeatureLookupsFromPlanOwned(
     }
     sortUniqueLookupIndices(&selected_lookups);
     return try selected_lookups.toOwnedSlice(allocator);
-}
-
-fn featureVariationIndexForCoords(table: Table, normalized_variation_coords: []const f32) GsubError!?usize {
-    if (normalized_variation_coords.len == 0) return null;
-    if (try readU16(table, 0) != 1) return null;
-    const minor = try readU16(table, 2);
-    if (minor < 1) return null;
-    const feature_variations_offset = try readU32(table, 10);
-    if (feature_variations_offset == 0) return null;
-    if (feature_variations_offset > table.length or table.length - feature_variations_offset < 8) return error.BadGsub;
-    const major = try readU16(table, feature_variations_offset);
-    if (major != 1) return error.UnsupportedGsub;
-    const record_count = try readU32(table, feature_variations_offset + 4);
-    const records_start = feature_variations_offset + 8;
-    if (record_count > (table.length - records_start) / 8) return error.BadGsub;
-    for (0..record_count) |record_index| {
-        const record = records_start + record_index * 8;
-        const condition_set_relative = try readU32(table, record);
-        if (condition_set_relative == 0) return record_index;
-        const condition_set = try checkedRequiredSubtableOffset32(table, feature_variations_offset, condition_set_relative);
-        if (try conditionSetMatches(table, condition_set, normalized_variation_coords)) return record_index;
-    }
-    return null;
-}
-
-fn substitutedFeatureOffset(table: Table, variation_index: usize, feature_index: u16) GsubError!?usize {
-    const feature_variations_offset = try readU32(table, 10);
-    if (feature_variations_offset == 0) return null;
-    const record_count = try readU32(table, feature_variations_offset + 4);
-    if (variation_index >= record_count) return error.BadGsub;
-    const record = feature_variations_offset + 8 + variation_index * 8;
-    const substitution_relative = try readU32(table, record + 4);
-    if (substitution_relative == 0) return null;
-    const substitution = try checkedRequiredSubtableOffset32(table, feature_variations_offset, substitution_relative);
-    if (try readU16(table, substitution) != 1) return error.UnsupportedGsub;
-    const substitution_count = try readU16(table, substitution + 4);
-    if (substitution_count > (table.length - (substitution + 6)) / 6) return error.BadGsub;
-    for (0..substitution_count) |index| {
-        const sub_record = substitution + 6 + index * 6;
-        if (try readU16(table, sub_record) != feature_index) continue;
-        const feature_relative = try readU32(table, sub_record + 2);
-        return try checkedRequiredSubtableOffset32(table, substitution, feature_relative);
-    }
-    return null;
-}
-
-fn conditionSetMatches(table: Table, condition_set: usize, normalized_variation_coords: []const f32) GsubError!bool {
-    if (condition_set > table.length or table.length - condition_set < 2) return error.BadGsub;
-    const condition_count = try readU16(table, condition_set);
-    if (condition_count > (table.length - (condition_set + 2)) / 4) return error.BadGsub;
-    for (0..condition_count) |index| {
-        const condition_relative = try readU32(table, condition_set + 2 + index * 4);
-        const condition = try checkedRequiredSubtableOffset32(table, condition_set, condition_relative);
-        if (!try conditionMatches(table, condition, normalized_variation_coords)) return false;
-    }
-    return true;
-}
-
-fn conditionMatches(table: Table, condition: usize, normalized_variation_coords: []const f32) GsubError!bool {
-    if (condition > table.length or table.length - condition < 8) return error.BadGsub;
-    const format = try readU16(table, condition);
-    if (format != 1) return false;
-    const axis_index = try readU16(table, condition + 2);
-    const min_value = try readF2Dot14(table, condition + 4);
-    const max_value = try readF2Dot14(table, condition + 6);
-    const coord = if (axis_index < normalized_variation_coords.len) normalized_variation_coords[axis_index] else 0;
-    return coord >= min_value and coord <= max_value;
-}
-
-fn checkedRequiredSubtableOffset32(table: Table, base_offset: usize, relative_offset: u32) GsubError!usize {
-    return table_core.offset.required32(table, base_offset, relative_offset);
 }
 
 fn applyLookupIndices(
@@ -2818,7 +2754,10 @@ fn selectedLookupRecords(table: Table, allocator: std.mem.Allocator, options: Lo
 
     const feature_count = try readU16(table, feature_list_offset);
     if (!table.assume_validated) try validateFeatureRecordOrder(table, feature_list_offset, feature_count);
-    const feature_variation_index = try featureVariationIndexForCoords(table, options.normalized_variation_coords);
+    const feature_variation_index = try feature_domain.variations.matchingRecord(
+        table,
+        options.normalized_variation_coords,
+    );
     var active_langsys_has_vert = false;
     for (feature_indices.items) |selection| {
         const feature_index = selection.index;
@@ -2893,7 +2832,11 @@ fn appendFeatureRecordLookups(
 ) (GsubError || std.mem.Allocator.Error)!void {
     const default_feature_offset = feature_list_offset + try readU16(table, feature_record + 4);
     const feature_offset = if (feature_variation_index) |variation_index|
-        try substitutedFeatureOffset(table, variation_index, feature_index) orelse default_feature_offset
+        try feature_domain.variations.substitutedFeatureOffset(
+            table,
+            variation_index,
+            feature_index,
+        ) orelse default_feature_offset
     else
         default_feature_offset;
     const lookup_index_count = try readU16(table, feature_offset + 2);
@@ -9008,10 +8951,6 @@ fn readU16(table: Table, relative: usize) GsubError!u16 {
 
 fn readI16(table: Table, relative: usize) GsubError!i16 {
     return table.readI16(relative);
-}
-
-fn readF2Dot14(table: Table, relative: usize) GsubError!f32 {
-    return table.readF2Dot14(relative);
 }
 
 fn readU32(table: Table, relative: usize) GsubError!u32 {

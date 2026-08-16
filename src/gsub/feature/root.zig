@@ -1,6 +1,7 @@
 //! GSUB feature planning surface.
 
 pub const model = @import("model.zig");
+pub const variations = @import("variations.zig");
 
 pub const Application = model.Application;
 pub const LookupPlanEntry = model.LookupPlanEntry;

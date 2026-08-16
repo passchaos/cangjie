@@ -29,3 +29,14 @@ pub const ApplyRecordsFn = fn (
     std.mem.Allocator,
     Options,
 ) Error!void;
+
+/// Static bridge to one nested lookup named by a PosLookupRecord.
+pub const ApplyNestedFn = fn (
+    View,
+    []const GlyphId,
+    usize,
+    u16,
+    *std.ArrayList(Adjustment),
+    std.mem.Allocator,
+    Options,
+) Error!void;

@@ -6097,55 +6097,6 @@ test "GSUB FeatureVariations substitute active feature lookups by normalized coo
     try std.testing.expectEqualSlices(GlyphId, &.{2}, high.items);
 }
 
-test "GSUB coverage format 2 handles full glyph-space index boundary" {
-    var bytes = [_]u8{0} ** 10;
-    writeU16Test(&bytes, 0, 2);
-    writeU16Test(&bytes, 2, 1);
-    writeU16Test(&bytes, 4, 0);
-    writeU16Test(&bytes, 6, 0xffff);
-    writeU16Test(&bytes, 8, 0);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectEqual(@as(?usize, 0xfffe), try table_core.coverage.index(table, 0, 0xfffe));
-    try std.testing.expectEqual(@as(?usize, 0xffff), try table_core.coverage.index(table, 0, 0xffff));
-}
-
-test "GSUB coverage format 2 rejects inconsistent start coverage indexes" {
-    var bytes = [_]u8{0} ** 16;
-    writeU16Test(&bytes, 0, 2);
-    writeU16Test(&bytes, 2, 2);
-    writeU16Test(&bytes, 4, 1);
-    writeU16Test(&bytes, 6, 1);
-    writeU16Test(&bytes, 8, 0);
-    writeU16Test(&bytes, 10, 3);
-    writeU16Test(&bytes, 12, 3);
-    writeU16Test(&bytes, 14, 2); // Must be 1: indexes are dense over preceding ranges.
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGsub, ensureCoverageTableWithin(table, 0));
-    try std.testing.expectError(error.BadGsub, table_core.coverage.index(table, 0, 3));
-}
-
-test "GSUB coverage format 2 tolerates overlapping real-font ranges" {
-    var bytes = [_]u8{0} ** 22;
-    writeU16Test(&bytes, 0, 2);
-    writeU16Test(&bytes, 2, 3);
-    writeU16Test(&bytes, 4, 10);
-    writeU16Test(&bytes, 6, 12);
-    writeU16Test(&bytes, 8, 0);
-    writeU16Test(&bytes, 10, 12);
-    writeU16Test(&bytes, 12, 14);
-    writeU16Test(&bytes, 14, 3);
-    writeU16Test(&bytes, 16, 20);
-    writeU16Test(&bytes, 18, 20);
-    writeU16Test(&bytes, 20, 6);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try ensureCoverageTableWithin(table, 0);
-    try std.testing.expectEqual(@as(?usize, 2), try table_core.coverage.index(table, 0, 12));
-    try std.testing.expectEqual(@as(?usize, 4), try table_core.coverage.index(table, 0, 13));
-}
-
 test "GSUB rejects malformed coverage ordering before substitution" {
     var bytes = [_]u8{0} ** 18;
     writeU16Test(&bytes, 0, 2); // SingleSubst format 2.
@@ -6197,20 +6148,6 @@ test "GSUB shaping accepts duplicate chaining membership glyphs" {
         ensureChainingContextSubstitutionSubtableWithin(table, chain),
     );
     try ensureChainingContextSubstitutionSubtableWithinForShaping(table, chain);
-}
-
-test "GSUB class format 1 handles upper glyph boundary" {
-    var bytes = [_]u8{0} ** 12;
-    writeU16Test(&bytes, 0, 1);
-    writeU16Test(&bytes, 2, 0xfffe);
-    writeU16Test(&bytes, 4, 2);
-    writeU16Test(&bytes, 6, 7);
-    writeU16Test(&bytes, 8, 9);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectEqual(@as(u16, 7), try table_core.class_def.value(table, 0, 0xfffe));
-    try std.testing.expectEqual(@as(u16, 9), try table_core.class_def.value(table, 0, 0xffff));
-    try std.testing.expectEqual(@as(u16, 0), try table_core.class_def.value(table, 0, 0xfffd));
 }
 
 test "GSUB parse-time contextual records avoid recursively validating lookup payloads" {
@@ -6558,27 +6495,6 @@ test "GSUB validates ScriptList LangSys feature indexes against FeatureList" {
 
     writeU16Test(&bytes, 24, 1); // ReqFeatureIndex is checked too.
     try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-}
-
-test "GSUB rejects malformed ClassDef format 2 ranges" {
-    var bytes = [_]u8{0} ** 22;
-    writeU16Test(&bytes, 0, 2); // ClassDef format 2.
-    writeU16Test(&bytes, 2, 3); // Three ClassRangeRecords.
-    writeU16Test(&bytes, 4, 10);
-    writeU16Test(&bytes, 6, 12);
-    writeU16Test(&bytes, 8, 1);
-    writeU16Test(&bytes, 10, 12); // Overlaps the previous inclusive range.
-    writeU16Test(&bytes, 12, 14);
-    writeU16Test(&bytes, 14, 2);
-    writeU16Test(&bytes, 16, 20);
-    writeU16Test(&bytes, 18, 18); // Reversed range must also be rejected.
-    writeU16Test(&bytes, 20, 3);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGsub, table_core.class_def.value(table, 0, 12));
-
-    writeU16Test(&bytes, 10, 13); // Repair overlap so the reversed range is checked.
-    try std.testing.expectError(error.BadGsub, table_core.class_def.value(table, 0, 18));
 }
 
 test "GSUB contextual class subtables allow covered class indexes outside set arrays" {

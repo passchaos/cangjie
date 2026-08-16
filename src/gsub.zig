@@ -5239,7 +5239,7 @@ fn ensureSubstitutionSubtableVariableDataWithin(table: Table, subtable_offset: u
         ),
         5 => try ensureContextSubstitutionSubtableWithin(table, subtable_offset),
         6 => try ensureChainingContextSubstitutionSubtableWithin(table, subtable_offset),
-        8 => try ensureReverseChainingSingleSubstitutionSubtableWithin(table, subtable_offset),
+        8 => try validation.reverse.validate(table, subtable_offset),
         else => {},
     }
 }
@@ -5472,50 +5472,24 @@ fn ensureChainingCoverageSubstitutionSubtableWithin(table: Table, subtable_offse
     try ensureSubstitutionRecordsWithin(table, cursor, subst_count, input_count);
 }
 
-fn ensureReverseChainingSingleSubstitutionSubtableWithin(table: Table, subtable_offset: usize) GsubError!void {
-    const subst_format = try readU16BadGsub(table, subtable_offset);
-    if (subst_format != 1) return error.UnsupportedGsub;
-    const coverage_offset = try checkedRequiredCoverageOffset(table, subtable_offset, try readU16BadGsub(table, subtable_offset + 2));
-    try ensureCoverageTableWithin(table, coverage_offset);
-
-    var cursor = subtable_offset + 4;
-    const backtrack_count = try readU16BadGsub(table, cursor);
-    cursor += 2;
-    try ensureCoverageOffsetArrayWithin(table, subtable_offset, cursor, backtrack_count);
-    cursor += @as(usize, backtrack_count) * 2;
-
-    const lookahead_count = try readU16BadGsub(table, cursor);
-    cursor += 2;
-    try ensureCoverageOffsetArrayWithin(table, subtable_offset, cursor, lookahead_count);
-    cursor += @as(usize, lookahead_count) * 2;
-
-    const glyph_count = try readU16BadGsub(table, cursor);
-    cursor += 2;
-    try ensureCoverageIndicesWithin(table, coverage_offset, glyph_count);
-    try ensureBytesWithin(table, cursor, @as(usize, glyph_count) * 2);
-    for (0..glyph_count) |glyph_i| {
-        try ensureGlyphIdWithinMaxp(table, try readU16BadGsub(table, cursor + glyph_i * 2));
-    }
-}
-
 fn ensureCoverageOffsetArrayWithin(table: Table, base_offset: usize, offsets_pos: usize, count: u16) GsubError!void {
-    try ensureBytesWithin(table, offsets_pos, @as(usize, count) * 2);
-    for (0..count) |i| {
-        const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16BadGsub(table, offsets_pos + i * 2));
-        try ensureCoverageTableWithin(table, coverage_offset);
-    }
+    return validation.coverage_array.validate(
+        table,
+        base_offset,
+        offsets_pos,
+        count,
+        .indexed,
+    );
 }
 
 fn ensureCoverageOffsetArrayWithinForShaping(table: Table, base_offset: usize, offsets_pos: usize, count: u16) GsubError!void {
-    try ensureBytesWithin(table, offsets_pos, @as(usize, count) * 2);
-    for (0..count) |i| {
-        const coverage_offset = try checkedRequiredCoverageOffset(table, base_offset, try readU16BadGsub(table, offsets_pos + i * 2));
-        try ensureCoverageTableWithinForMembership(table, coverage_offset);
-    }
-}
-
-fn ensureCoverageIndicesWithin(table: Table, coverage_offset: usize, target_count: usize) GsubError!void {
-    return table_core.coverage.validateIndices(table, coverage_offset, target_count);
+    return validation.coverage_array.validate(
+        table,
+        base_offset,
+        offsets_pos,
+        count,
+        .membership,
+    );
 }
 
 fn ensureClassDefTableWithin(table: Table, class_def_offset: usize) GsubError!void {
@@ -5531,19 +5505,10 @@ fn ensureCoverageTableWithin(table: Table, coverage_offset: usize) GsubError!voi
     return table_core.coverage.validate(table, coverage_offset, .indexed);
 }
 
-fn ensureCoverageTableWithinForMembership(table: Table, coverage_offset: usize) GsubError!void {
-    return table_core.coverage.validate(table, coverage_offset, .membership);
-}
-
 fn ensureGlyphIdWithinMaxp(table: Table, glyph_id: usize) GsubError!void {
     if (table.glyph_count) |glyph_count| {
         if (glyph_id >= glyph_count) return error.BadGsub;
     }
-}
-
-fn ensureGlyphRangeWithinMaxp(table: Table, start_glyph: u16, end_glyph: u16) GsubError!void {
-    try ensureGlyphIdWithinMaxp(table, start_glyph);
-    try ensureGlyphIdWithinMaxp(table, end_glyph);
 }
 
 fn checkedSubtableOffset(table: Table, base_offset: usize, relative_offset: u32) GsubError!usize {

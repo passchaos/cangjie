@@ -115,6 +115,69 @@ test "ligature shaping mode skips missing authored children only" {
     try validation.direct.ligature.validate(view, 0, .shaping);
 }
 
+test "coverage arrays distinguish indexed and membership duplicate policy" {
+    var bytes = [_]u8{0} ** 14;
+    writeU16(&bytes, 0, 6);
+    writeCoverage1List(&bytes, 6, &.{ 2, 2 });
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .glyph_count = 4,
+    };
+
+    try std.testing.expectError(
+        error.BadGsub,
+        validation.coverage_array.validate(view, 0, 0, 1, .indexed),
+    );
+    try validation.coverage_array.validate(view, 0, 0, 1, .membership);
+
+    writeU16(&bytes, 0, 0);
+    try std.testing.expectError(
+        error.BadGsub,
+        validation.coverage_array.validate(view, 0, 0, 1, .membership),
+    );
+}
+
+test "reverse validation checks context offsets cardinality and substitutes" {
+    var bytes = [_]u8{0} ** 40;
+    writeU16(&bytes, 0, 1);
+    writeU16(&bytes, 2, 26);
+    writeU16(&bytes, 4, 1);
+    writeU16(&bytes, 6, 34);
+    writeU16(&bytes, 8, 0);
+    writeU16(&bytes, 10, 1);
+    writeU16(&bytes, 12, 3);
+    writeCoverage1List(&bytes, 26, &.{ 2, 3 });
+    writeCoverage1(&bytes, 34, 1);
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .glyph_count = 4,
+    };
+    try std.testing.expectError(
+        error.BadGsub,
+        validation.reverse.validate(view, 0),
+    );
+
+    writeU16(&bytes, 28, 1);
+    writeU16(&bytes, 12, 4);
+    try std.testing.expectError(
+        error.BadGsub,
+        validation.reverse.validate(view, 0),
+    );
+
+    writeU16(&bytes, 12, 3);
+    try validation.reverse.validate(view, 0);
+
+    writeU16(&bytes, 6, 0);
+    try std.testing.expectError(
+        error.BadGsub,
+        validation.reverse.validate(view, 0),
+    );
+}
+
 fn writeCoverage1(bytes: []u8, offset: usize, glyph: u16) void {
     writeCoverage1List(bytes, offset, &.{glyph});
 }

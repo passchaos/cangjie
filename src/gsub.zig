@@ -1,7 +1,6 @@
 const std = @import("std");
 const accelerator_root = @import("gsub/accelerator/root.zig");
 const accelerator_model = accelerator_root.model;
-const bin = @import("binary.zig");
 const cluster_safety = @import("shaping/cluster_safety.zig");
 const feature_model = @import("gsub/feature/root.zig");
 const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
@@ -10,6 +9,7 @@ const ligature_provenance = @import("ligature_provenance.zig");
 const class_context = @import("opentype/class_context.zig");
 const ot_layout = @import("opentype/layout.zig");
 pub const runtime = @import("gsub/runtime/root.zig");
+const table_core = @import("gsub/table/root.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const unicode = @import("unicode.zig");
@@ -65,23 +65,7 @@ pub const GsubError = error{
     EndOfStream,
 };
 
-const Table = struct {
-    data: []const u8,
-    offset: usize,
-    length: usize,
-    assume_validated: bool = false,
-    /// Optional maxp.numGlyphs bound supplied by Font.parse. Runtime GSUB
-    /// application historically validates only table structure because callers
-    /// may use detached GSUB data; parse-time validation attaches this bound so
-    /// every supported glyph reference can be proven to name a real glyph.
-    glyph_count: ?u16 = null,
-    /// Shaping follows HarfBuzz's full 16-bit SingleSubst format-1 graph: one
-    /// lookup may emit a transient ID above maxp and a later lookup may map it
-    /// back into the font. Detached strict validation leaves this false; the
-    /// font shaping validator enables it and validates the eventual run before
-    /// metrics or outlines consume the result.
-    allow_transient_single_delta: bool = false,
-};
+const Table = table_core.View;
 
 const FeatureSelection = struct {
     index: u16,
@@ -1279,8 +1263,7 @@ fn conditionMatches(table: Table, condition: usize, normalized_variation_coords:
 }
 
 fn checkedRequiredSubtableOffset32(table: Table, base_offset: usize, relative_offset: u32) GsubError!usize {
-    if (relative_offset == 0) return error.BadGsub;
-    return checkedSubtableOffset(table, base_offset, relative_offset);
+    return table_core.offset.required32(table, base_offset, relative_offset);
 }
 
 fn applyLookupIndices(
@@ -8370,117 +8353,74 @@ fn ensureGlyphRangeWithinMaxp(table: Table, start_glyph: u16, end_glyph: u16) Gs
 }
 
 fn checkedSubtableOffset(table: Table, base_offset: usize, relative_offset: u32) GsubError!usize {
-    if (relative_offset > std.math.maxInt(usize) - base_offset) return error.BadGsub;
-    const absolute = base_offset + @as(usize, @intCast(relative_offset));
-    if (absolute > table.length) return error.BadGsub;
-    return absolute;
+    return (try table_core.offset.optional32(table, base_offset, relative_offset)) orelse base_offset;
 }
 
 fn checkedRequiredSubtableOffset(table: Table, base_offset: usize, relative_offset: u16) GsubError!usize {
-    if (relative_offset == 0) return error.BadGsub;
-    return checkedSubtableOffset(table, base_offset, @as(u32, relative_offset));
+    return table_core.offset.required16(table, base_offset, relative_offset);
 }
 
 fn checkedExtensionSubtablePayloadOffset(table: Table, extension_offset: usize, relative_offset: u32) GsubError!usize {
-    // ExtensionSubst.ExtensionOffset is a required Offset32 to a wrapped lookup
-    // subtable, not a generic byte pointer. Keep it past the fixed 8-byte
-    // wrapper header so malformed fonts cannot reinterpret extension format,
-    // type, or offset words as a plausible nested subtable.
-    if (relative_offset < 8) return error.BadGsub;
-    return checkedSubtableOffset(table, extension_offset, relative_offset);
+    return table_core.offset.extensionPayload(table, extension_offset, relative_offset);
 }
 
 fn isEmptyGsubTopology(table: Table) GsubError!bool {
     const script_list = try readU16BadGsub(table, 4);
     const feature_list = try readU16BadGsub(table, 6);
     const lookup_list = try readU16BadGsub(table, 8);
-    if (script_list == 0 and feature_list == 0 and lookup_list == 0) return true;
-    // Only the all-null triple denotes HarfBuzz's empty table. A partial
-    // topology would make activation and lookup navigation disagree and stays
-    // subject to the required-offset checks below.
-    return false;
+    return script_list == 0 and feature_list == 0 and lookup_list == 0;
 }
 
 fn checkedRequiredScriptListOffset(table: Table) GsubError!usize {
-    // ScriptList is a required top-level OpenType Layout table. An offset of
-    // zero aliases the GSUB version/header bytes as a ScriptList and makes
-    // script selection depend on unrelated metadata rather than declared
-    // layout topology.
     return checkedRequiredSubtableOffset(table, 0, try readU16BadGsub(table, 4));
 }
 
 fn checkedRequiredFeatureListOffset(table: Table) GsubError!usize {
-    // FeatureList is likewise mandatory even when it contains zero features.
-    // Treating null as "no features" would let malformed fonts fall through to
-    // the all-lookup fallback and apply substitutions outside the activation
-    // graph advertised by the table.
     return checkedRequiredSubtableOffset(table, 0, try readU16BadGsub(table, 6));
 }
 
 fn checkedRequiredLookupListOffset(table: Table) GsubError!usize {
-    // LookupList is the one mandatory top-level navigation table used by both
-    // validation and shaping. Offset zero aliases the GSUB header as
-    // LookupList.LookupCount, which can make a table with no real lookups
-    // appear valid or let later code derive lookup headers from version fields.
     return checkedRequiredSubtableOffset(table, 0, try readU16BadGsub(table, 8));
 }
 
 fn checkedRequiredLookupOffset(table: Table, lookup_list_offset: usize, relative_offset: u16) GsubError!usize {
-    // Each LookupList entry is a mandatory child pointer. Offset zero aliases
-    // the LookupList header as a Lookup table, allowing LookupCount and offset
-    // slots to masquerade as LookupType/LookupFlag/SubTable data.
     return checkedRequiredSubtableOffset(table, lookup_list_offset, relative_offset);
 }
 
 fn checkedRequiredCoverageOffset(table: Table, base_offset: usize, relative_offset: u16) GsubError!usize {
-    // Coverage offsets are mandatory in GSUB subtables and coverage arrays.
-    // Treating zero as "relative to the parent" aliases the parent header as a
-    // Coverage table, which can silently disable substitutions or redirect
-    // coverage-indexed arrays through unrelated metadata.
     return checkedRequiredSubtableOffset(table, base_offset, relative_offset);
 }
 
 fn checkedRequiredClassDefOffset(table: Table, base_offset: usize, relative_offset: u16) GsubError!usize {
-    // Class-based GSUB formats use ClassDef offsets as required child tables.
-    // A null offset would classify glyphs by reinterpreting the surrounding
-    // substitution header as ClassDef data, changing matching behavior based on
-    // unrelated lookup metadata instead of the font's declared class domain.
     return checkedRequiredSubtableOffset(table, base_offset, relative_offset);
 }
 
 fn checkedOptionalClassDefOffset(table: Table, base_offset: usize, relative_offset: u16) GsubError!usize {
-    if (relative_offset == 0) return empty_class_def_offset;
-    return checkedSubtableOffset(table, base_offset, relative_offset);
+    return (try table_core.offset.optional16(table, base_offset, relative_offset)) orelse empty_class_def_offset;
 }
 
 fn ensureBytesWithin(table: Table, offset: usize, len: usize) GsubError!void {
-    if (offset > table.length or len > table.length - offset) return error.BadGsub;
+    return table.ensure(offset, len);
 }
 
 fn readU16BadGsub(table: Table, relative: usize) GsubError!u16 {
-    return readU16(table, relative) catch |err| {
-        return switch (err) {
-            error.EndOfStream => error.BadGsub,
-            else => err,
-        };
+    return readU16(table, relative) catch |err| switch (err) {
+        error.EndOfStream => error.BadGsub,
+        else => err,
     };
 }
 
 fn readI16BadGsub(table: Table, relative: usize) GsubError!i16 {
-    return readI16(table, relative) catch |err| {
-        return switch (err) {
-            error.EndOfStream => error.BadGsub,
-            else => err,
-        };
+    return readI16(table, relative) catch |err| switch (err) {
+        error.EndOfStream => error.BadGsub,
+        else => err,
     };
 }
 
 fn readU32BadGsub(table: Table, relative: usize) GsubError!u32 {
-    return readU32(table, relative) catch |err| {
-        return switch (err) {
-            error.EndOfStream => error.BadGsub,
-            else => err,
-        };
+    return readU32(table, relative) catch |err| switch (err) {
+        error.EndOfStream => error.BadGsub,
+        else => err,
     };
 }
 
@@ -9372,28 +9312,19 @@ fn validateClassDefFormat2Ranges(table: Table, class_def_offset: usize, range_co
 }
 
 fn readU16(table: Table, relative: usize) GsubError!u16 {
-    if (relative + 2 > table.length) return error.EndOfStream;
-    return bin.readU16At(table.data, table.offset + relative) catch |err| switch (err) {
-        error.EndOfStream => error.EndOfStream,
-    };
+    return table.readU16(relative);
 }
 
 fn readI16(table: Table, relative: usize) GsubError!i16 {
-    if (relative + 2 > table.length) return error.EndOfStream;
-    return bin.readI16At(table.data, table.offset + relative) catch |err| switch (err) {
-        error.EndOfStream => error.EndOfStream,
-    };
+    return table.readI16(relative);
 }
 
 fn readF2Dot14(table: Table, relative: usize) GsubError!f32 {
-    return @as(f32, @floatFromInt(try readI16(table, relative))) / 16384.0;
+    return table.readF2Dot14(relative);
 }
 
 fn readU32(table: Table, relative: usize) GsubError!u32 {
-    if (relative + 4 > table.length) return error.EndOfStream;
-    return bin.readU32At(table.data, table.offset + relative) catch |err| switch (err) {
-        error.EndOfStream => error.EndOfStream,
-    };
+    return table.readU32(relative);
 }
 
 test "GSUB rejects ExtensionSubst payload offsets outside the table during shaping" {
@@ -15255,6 +15186,7 @@ test {
     _ = @import("gsub/tests/accelerator/root.zig");
     _ = @import("gsub/tests/feature/root.zig");
     _ = @import("gsub/tests/runtime/root.zig");
+    _ = @import("gsub/tests/table/root.zig");
 }
 
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {

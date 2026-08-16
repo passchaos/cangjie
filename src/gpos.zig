@@ -3,6 +3,7 @@ const accelerator_core = @import("gpos/accelerator/root.zig");
 const feature_core = @import("gpos/feature/root.zig");
 const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
+const positioning = @import("gpos/positioning/root.zig");
 const table_core = @import("gpos/table/root.zig");
 const class_context = @import("opentype/class_context.zig");
 const metric_variation = @import("opentype/metric_variation.zig");
@@ -20,39 +21,8 @@ pub const GposError = error{
     EndOfStream,
 };
 
-pub const Adjustment = struct {
-    index: usize,
-    x_advance: i16 = 0,
-    x_placement: i16 = 0,
-    y_placement: i16 = 0,
-    y_advance: i16 = 0,
-    /// Parent cross-axis placement captured when a mark lookup applies.
-    ///
-    /// HarfBuzz resolves this part immediately so lookup order affects stacked
-    /// marks, while the main-axis parent placement remains deferred until
-    /// final attachment propagation. Keep it wider than the OpenType value
-    /// fields so a valid cursive chain cannot truncate the accumulated offset.
-    attachment_cross_offset: i32 = 0,
-    pair_positioned: bool = false,
-    attachment_type: AttachmentType = .none,
-    attachment_parent_index: ?usize = null,
-    x_advance_absolute: bool = false,
-    y_advance_absolute: bool = false,
-
-    pub fn markAttachment(self: Adjustment) bool {
-        return self.attachment_type == .mark;
-    }
-
-    pub fn attachmentParentIndex(self: Adjustment) ?usize {
-        return self.attachment_parent_index;
-    }
-};
-
-pub const AttachmentType = enum {
-    none,
-    mark,
-    cursive,
-};
+pub const Adjustment = positioning.Adjustment;
+pub const AttachmentType = positioning.AttachmentType;
 
 const PositionContextResult = struct {
     matched: bool = false,
@@ -126,82 +96,13 @@ pub const VariationStore = struct {
     store_offset: usize,
 };
 
-pub const LookupAccelerator = struct {
-    /// Dispatch fields decoded once from the validated Lookup table. Runtime
-    /// use is guarded by the lookup offset so mismatched cache entries fall
-    /// back to normal bounds-checked parsing.
-    lookup_offset: usize = 0,
-    lookup_type: u16 = 0,
-    lookup_flag: u16 = 0,
-    subtable_count: u16 = 0,
-    mark_filtering_set: ?u16 = null,
-    extension_lookup_type: ?u16 = null,
-    coverage_digest: GlyphDigest = .{},
-    coverage_groups: []const ChainingSubtableGroup = &.{},
-    coverage_group_slots: []const u16 = &.{},
-    single_pos_subtables: []const SinglePosSubtable = &.{},
-    pair_pos_subtables: []const PairPosSubtableAccelerator = &.{},
-    pair_pos_records: []const PairPosRecord = &.{},
-    pair_pos_coverage_classes: []const PairClassEntry = &.{},
-    pair_pos_class_entries: []const PairClassEntry = &.{},
-    pair_pos_class_matrix: []const i16 = &.{},
-    pair_pos_extension: bool = false,
-    cursive_subtables: []const CursivePositionSubtable = &.{},
-    mark_to_base_subtables: []const MarkToBaseSubtable = &.{},
-    chaining_coverage_only: bool = false,
-    chaining_subtables: []const ChainingCoverageSubtable = &.{},
-    chaining_groups: []const ChainingSubtableGroup = &.{},
-    chaining_group_slots: []const u16 = &.{},
-    chaining_class_subtables: []const ChainingClassSubtableAccelerator = &.{},
-};
-
-const PairPosAcceleratorKind = enum(u8) {
-    generic,
-    format_1_x_advance,
-    format_2_x_advance,
-    format_2_dense_x_advance,
-};
-
-const PairPosSubtableAccelerator = struct {
-    kind: PairPosAcceleratorKind = .generic,
-    // Format 1 uses these as the global record slice. Dense format 2 has no
-    // PairPosRecord slice, so it reuses the same otherwise-idle words for the
-    // ClassDef1-coverage and ClassDef2 base glyphs without widening the hot
-    // LookupAccelerator sidecar.
-    record_start: usize = 0,
-    record_len: usize = 0,
-    coverage_start: usize = 0,
-    coverage_len: usize = 0,
-    class_2_start: usize = 0,
-    class_2_len: usize = 0,
-    class_1_count: u16 = 0,
-    class_2_count: u16 = 0,
-    matrix_start: usize = 0,
-};
-
-const PairPosRecord = struct {
-    first: GlyphId,
-    second: GlyphId,
-    x_advance: i16,
-};
-
-const PairClassEntry = struct {
-    glyph: GlyphId,
-    class: u16,
-};
-
+pub const LookupAccelerator = accelerator_core.model.Lookup;
+const PairPosAcceleratorKind = accelerator_core.model.PairPositionKind;
+const PairPosSubtableAccelerator = accelerator_core.model.PairPositionSubtable;
+const PairPosRecord = accelerator_core.model.PairPositionRecord;
+const PairClassEntry = accelerator_core.model.PairClassEntry;
 const NativeCoverage = accelerator_core.coverage.Owned;
-
-const SinglePosSubtable = struct {
-    subtable_offset: usize = 0,
-    pos_format: u16 = 0,
-    coverage_offset: usize = 0,
-    value_format: u16 = 0,
-    value_count: u16 = 0,
-    value_size: usize = 0,
-    values_pos: usize = 0,
-    value: Adjustment = .{ .index = 0 },
-};
+const SinglePosSubtable = accelerator_core.model.SinglePositionSubtable;
 
 const max_run_digest_cache_entries = 16;
 
@@ -245,42 +146,10 @@ const RunDigestCache = struct {
     }
 };
 
-const ChainingCoverageSubtable = struct {
-    const max_fast_records = 4;
-
-    subtable_offset: usize = 0,
-    backtrack_offsets_pos: usize = 0,
-    backtrack_count: u16 = 0,
-    backtrack_coverages: []const NativeCoverage = &.{},
-    input_offsets_pos: usize = 0,
-    input_count: u16 = 0,
-    input_coverages: []const NativeCoverage = &.{},
-    second_input_digest: GlyphDigest = .{},
-    lookahead_offsets_pos: usize = 0,
-    lookahead_count: u16 = 0,
-    lookahead_coverages: []const NativeCoverage = &.{},
-    records_pos: usize = 0,
-    pos_count: u16 = 0,
-    fast_record_count: u16 = 0,
-    fast_records: [max_fast_records]FastSinglePosRecord = [_]FastSinglePosRecord{.{}} ** max_fast_records,
-};
-
-const FastSinglePosRecord = struct {
-    sequence_index: u16 = 0,
-    lookup_index: u16 = 0,
-    lookup_flag: u16 = 0,
-};
-
-const ChainingClassSubtableAccelerator = struct {
-    subtable_offset: usize = 0,
-    coverage_offset: usize = 0,
-    input_class_def: usize = 0,
-    lookahead_class_def: usize = 0,
-    uniform_input_count: u16 = 0,
-    rules: []const class_context.Rule = &.{},
-    classes: []const u16 = &.{},
-    groups: []const class_context.RuleGroup = &.{},
-};
+const ChainingCoverageSubtable = accelerator_core.model.ChainingCoverageSubtable;
+const FastSinglePosRecord = accelerator_core.model.FastSinglePositionRecord;
+const ChainingClassSubtableAccelerator =
+    accelerator_core.model.ChainingClassSubtable;
 
 const ChainingSubtableGroup = accelerator_core.glyph_groups.Group;
 const ChainingSubtablePair = accelerator_core.glyph_groups.Pair;
@@ -416,46 +285,22 @@ pub fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, a
 }
 
 pub fn deinitLookupAccelerators(allocator: std.mem.Allocator, accelerators: []LookupAccelerator) void {
-    deinitLookupAcceleratorContents(allocator, accelerators);
-    allocator.free(accelerators);
+    accelerator_core.model.deinitLookups(accelerators, allocator);
 }
 
 fn deinitLookupAcceleratorContents(allocator: std.mem.Allocator, accelerators: []LookupAccelerator) void {
-    for (accelerators) |accelerator| {
-        accelerator_core.glyph_groups.deinitGroups(
-            accelerator.coverage_groups,
-            allocator,
-        );
-        allocator.free(accelerator.coverage_group_slots);
-        allocator.free(accelerator.single_pos_subtables);
-        allocator.free(accelerator.pair_pos_subtables);
-        allocator.free(accelerator.pair_pos_records);
-        allocator.free(accelerator.pair_pos_coverage_classes);
-        allocator.free(accelerator.pair_pos_class_entries);
-        allocator.free(accelerator.pair_pos_class_matrix);
-        deinitCursivePositionSubtables(allocator, accelerator.cursive_subtables);
-        deinitMarkToBaseSubtables(allocator, accelerator.mark_to_base_subtables);
-        accelerator_core.glyph_groups.deinitGroups(
-            accelerator.chaining_groups,
-            allocator,
-        );
-        allocator.free(accelerator.chaining_group_slots);
-        deinitChainingCoverageSubtables(allocator, accelerator.chaining_subtables);
-        deinitChainingClassSubtableAccelerators(allocator, accelerator.chaining_class_subtables);
-    }
+    accelerator_core.model.deinitLookupContents(accelerators, allocator);
 }
 
 fn deinitChainingClassSubtableAccelerators(allocator: std.mem.Allocator, subtables: []const ChainingClassSubtableAccelerator) void {
-    deinitChainingClassSubtableAcceleratorContents(allocator, subtables);
-    allocator.free(subtables);
+    accelerator_core.model.deinitChainingClassSubtables(subtables, allocator);
 }
 
 fn deinitChainingClassSubtableAcceleratorContents(allocator: std.mem.Allocator, subtables: []const ChainingClassSubtableAccelerator) void {
-    for (subtables) |subtable| {
-        allocator.free(subtable.rules);
-        allocator.free(subtable.classes);
-        allocator.free(subtable.groups);
-    }
+    accelerator_core.model.deinitChainingClassSubtableContents(
+        subtables,
+        allocator,
+    );
 }
 
 fn buildLookupAccelerator(table: Table, lookup_offset: usize, allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)!LookupAccelerator {
@@ -2710,12 +2555,7 @@ fn collectCursiveAdjustment(table: Table, subtable_offset: usize, glyphs: []cons
     try collectCursiveAdjustmentParsed(table, parsed, glyphs, adjustments, allocator, lookup_flag, options);
 }
 
-const CursivePositionSubtable = struct {
-    subtable_offset: usize,
-    coverage_offset: usize,
-    entry_exit_count: u16,
-    coverage: ?NativeCoverage = null,
-};
+const CursivePositionSubtable = accelerator_core.model.CursivePositionSubtable;
 
 fn parseCursivePositionSubtable(table: Table, subtable_offset: usize) GposError!CursivePositionSubtable {
     const pos_format = try readU16(table, subtable_offset);
@@ -2735,10 +2575,7 @@ fn buildCursivePositionSubtable(table: Table, subtable_offset: usize, allocator:
 }
 
 fn deinitCursivePositionSubtables(allocator: std.mem.Allocator, subtables: []const CursivePositionSubtable) void {
-    for (subtables) |subtable| {
-        if (subtable.coverage) |coverage| coverage.deinit(allocator);
-    }
-    allocator.free(subtables);
+    accelerator_core.model.deinitCursiveSubtables(subtables, allocator);
 }
 
 fn collectCursiveAdjustmentParsed(table: Table, parsed: CursivePositionSubtable, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -2945,15 +2782,7 @@ fn previousCoveredCursiveGlyph(table: Table, coverage_offset: usize, glyphs: []c
     return null;
 }
 
-const MarkToBaseSubtable = struct {
-    mark_coverage_offset: usize = 0,
-    base_coverage_offset: usize = 0,
-    class_count: u16 = 0,
-    mark_array_offset: usize = 0,
-    base_array_offset: usize = 0,
-    mark_coverage: ?NativeCoverage = null,
-    base_coverage: ?NativeCoverage = null,
-};
+const MarkToBaseSubtable = accelerator_core.model.MarkToBaseSubtable;
 
 const MarkBaseSearchState = struct {
     last_candidate: ?usize = null,
@@ -2997,29 +2826,22 @@ fn buildChainingCoverageSubtable(table: Table, subtable_offset: usize, allocator
     return subtable;
 }
 
-fn deinitMarkToBaseSubtableContents(allocator: std.mem.Allocator, subtables: []const MarkToBaseSubtable) void {
-    for (subtables) |subtable| {
-        if (subtable.mark_coverage) |coverage| coverage.deinit(allocator);
-        if (subtable.base_coverage) |coverage| coverage.deinit(allocator);
-    }
-}
-
 fn deinitMarkToBaseSubtables(allocator: std.mem.Allocator, subtables: []const MarkToBaseSubtable) void {
-    deinitMarkToBaseSubtableContents(allocator, subtables);
-    allocator.free(subtables);
+    accelerator_core.model.deinitMarkToBaseSubtables(subtables, allocator);
 }
 
 fn deinitChainingCoverageSubtables(allocator: std.mem.Allocator, subtables: []const ChainingCoverageSubtable) void {
-    for (subtables) |subtable| {
-        deinitChainingCoverageSubtableContents(allocator, subtable);
-    }
-    allocator.free(subtables);
+    accelerator_core.model.deinitChainingCoverageSubtables(
+        subtables,
+        allocator,
+    );
 }
 
 fn deinitChainingCoverageSubtableContents(allocator: std.mem.Allocator, subtable: ChainingCoverageSubtable) void {
-    NativeCoverage.deinitSequence(subtable.backtrack_coverages, allocator);
-    NativeCoverage.deinitSequence(subtable.input_coverages, allocator);
-    NativeCoverage.deinitSequence(subtable.lookahead_coverages, allocator);
+    accelerator_core.model.deinitChainingCoverageSubtableContents(
+        subtable,
+        allocator,
+    );
 }
 
 test "GPOS native Coverage preserves format 1 and 2 indexes" {
@@ -10126,6 +9948,7 @@ test "GPOS public adjustment collection validates ligature component source orde
 test {
     _ = @import("gpos/tests/accelerator/root.zig");
     _ = @import("gpos/tests/feature/root.zig");
+    _ = @import("gpos/tests/positioning/root.zig");
     _ = @import("gpos/tests/table/root.zig");
 }
 

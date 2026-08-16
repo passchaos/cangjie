@@ -971,60 +971,6 @@ fn readAnchor(table: Table, anchor_offset: usize, options: LookupOptions) GposEr
     });
 }
 
-test "GPOS chaining group slots preserve hits and misses" {
-    const allocator = std.testing.allocator;
-    var groups: [accelerator_core.glyph_groups.min_groups_for_hash]ChainingSubtableGroup = undefined;
-    var group_indices: [accelerator_core.glyph_groups.min_groups_for_hash][1]u16 = undefined;
-    for (&groups, 0..) |*group, i| {
-        group_indices[i][0] = @intCast(i);
-        group.* = .{
-            .glyph = @intCast(13 + i * 19),
-            .subtable_indices = &group_indices[i],
-        };
-    }
-    const slots = try accelerator_core.glyph_groups.buildSlots(&groups, allocator);
-    defer allocator.free(slots);
-    for (groups, 0..) |group, i| {
-        const indices = accelerator_core.glyph_groups.find(&groups, slots, group.glyph) orelse return error.TestUnexpectedResult;
-        try std.testing.expectEqualSlices(u16, &.{@intCast(i)}, indices);
-    }
-    try std.testing.expect(accelerator_core.glyph_groups.find(&groups, slots, 12) == null);
-
-    const small_groups =
-        groups[0 .. accelerator_core.glyph_groups.min_groups_for_hash - 1];
-    const small_slots = try accelerator_core.glyph_groups.buildSlots(small_groups, allocator);
-    defer allocator.free(small_slots);
-    try std.testing.expectEqual(@as(usize, 0), small_slots.len);
-    const fallback = accelerator_core.glyph_groups.find(small_groups, small_slots, small_groups[3].glyph) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualSlices(u16, &group_indices[3], fallback);
-}
-
-test "GPOS chaining glyph digest activates only for amortized runs" {
-    var digest = GlyphDigest.empty();
-    digest.add(20);
-    const definite_miss: GlyphId = 21;
-    try std.testing.expect(!digest.mayHave(definite_miss));
-    try std.testing.expect(!chaining_runtime.coverage.lookup.usesGlyphDigest(15));
-    try std.testing.expect(chaining_runtime.coverage.lookup.usesGlyphDigest(16));
-
-    // A digest is approximate: exact group lookup remains authoritative for
-    // survivors, while a definite miss can bypass it on an amortized run.
-    var collision: ?GlyphId = null;
-    var glyph: usize = 0;
-    while (glyph <= std.math.maxInt(GlyphId)) : (glyph += 1) {
-        const candidate: GlyphId = @intCast(glyph);
-        if (candidate != 20 and digest.mayHave(candidate)) {
-            collision = candidate;
-            break;
-        }
-    }
-    try std.testing.expect(collision != null);
-    const groups = [_]ChainingSubtableGroup{
-        .{ .glyph = 20, .subtable_indices = &.{0} },
-    };
-    try std.testing.expect(accelerator_core.glyph_groups.find(&groups, &.{}, collision.?) == null);
-}
-
 test "GPOS rejects ExtensionPos payload offsets outside the table during shaping" {
     var bytes = [_]u8{0} ** 8;
     writeU16Test(&bytes, 0, 1); // ExtensionPos format 1.

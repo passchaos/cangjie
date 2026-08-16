@@ -2,5 +2,6 @@
 
 test {
     _ = @import("execute.zig");
+    _ = @import("lookup.zig");
     _ = @import("matching.zig");
 }

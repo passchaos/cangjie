@@ -32,6 +32,50 @@ test "glyph groups preserve candidate ordering and exact lookup" {
     );
 }
 
+test "glyph group hash slots preserve hits misses and binary fallback" {
+    const allocator = std.testing.allocator;
+    const group_count = accelerator.glyph_groups.min_groups_for_hash;
+    var groups: [group_count]accelerator.glyph_groups.Group = undefined;
+    var group_indices: [group_count][1]u16 = undefined;
+    for (&groups, 0..) |*group, index| {
+        group_indices[index][0] = @intCast(index);
+        group.* = .{
+            .glyph = @intCast(13 + index * 19),
+            .subtable_indices = &group_indices[index],
+        };
+    }
+    const slots =
+        try accelerator.glyph_groups.buildSlots(&groups, allocator);
+    defer allocator.free(slots);
+    for (groups, 0..) |group, index| {
+        const candidates = accelerator.glyph_groups.find(
+            &groups,
+            slots,
+            group.glyph,
+        ) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualSlices(
+            u16,
+            &.{@intCast(index)},
+            candidates,
+        );
+    }
+    try std.testing.expect(
+        accelerator.glyph_groups.find(&groups, slots, 12) == null,
+    );
+
+    const small_groups = groups[0 .. group_count - 1];
+    const small_slots =
+        try accelerator.glyph_groups.buildSlots(small_groups, allocator);
+    defer allocator.free(small_slots);
+    try std.testing.expectEqual(@as(usize, 0), small_slots.len);
+    const fallback = accelerator.glyph_groups.find(
+        small_groups,
+        small_slots,
+        small_groups[3].glyph,
+    ) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(u16, &group_indices[3], fallback);
+}
+
 test "Coverage pairs expand ranges and reject malformed ordering" {
     var bytes = [_]u8{0} ** 16;
     writeU16(&bytes, 0, 2);

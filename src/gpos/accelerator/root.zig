@@ -1,5 +1,6 @@
 //! GPOS lookup accelerator primitives.
 
+pub const build = @import("build/root.zig");
 pub const coverage = @import("coverage.zig");
 pub const glyph_groups = @import("glyph_groups.zig");
 pub const model = @import("model.zig");

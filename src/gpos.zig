@@ -39,16 +39,13 @@ const appendAdjustmentEx = runtime_output.adjustments.appendWithFlags;
 const findAdjustment = runtime_output.adjustments.find;
 const markUnsafePositioningPair = runtime_output.safety.markPair;
 const markUnsafePairApplication = runtime_output.safety.markPairApplication;
-const context_runtime = runtime_lookup.contextual.context;
 const chaining_runtime = runtime_lookup.contextual.chaining;
 const extension_runtime = runtime_lookup.extension;
 const collectCursiveAdjustment = runtime_lookup.cursive.collect;
 const collectCursiveAdjustmentParsed = runtime_lookup.cursive.collectParsed;
-const collectCursiveAdjustmentAt = runtime_lookup.cursive.collectAt;
 const collectMarkToBaseAdjustment = runtime_lookup.marks.base.collect;
 const collectMarkToBaseAdjustmentParsed =
     runtime_lookup.marks.base.collectParsed;
-const collectMarkToBaseAdjustmentAt = runtime_lookup.marks.base.collectAt;
 const MarkToBaseSubtable = runtime_lookup.marks.base.Parsed;
 const appendMarkAttachmentAdjustment = runtime_lookup.marks.output.append;
 const previousUnignoredCoveredGlyph =
@@ -60,23 +57,16 @@ const isMultipleSubstContinuationForMarkSearch =
     runtime_lookup.marks.search.isMultipleSubstContinuation;
 const collectMarkToLigatureAdjustment =
     runtime_lookup.marks.ligature.collect;
-const collectMarkToLigatureAdjustmentAt =
-    runtime_lookup.marks.ligature.collectAt;
 const collectMarkToMarkAdjustment = runtime_lookup.marks.mark.collect;
-const collectMarkToMarkAdjustmentAt = runtime_lookup.marks.mark.collectAt;
 const collectSingleAdjustmentLookup = runtime_lookup.single.collectLookup;
 const collectSingleAdjustmentSubtable = runtime_lookup.single.collectSubtable;
 const collectSingleAdjustment = runtime_lookup.single.collect;
-const collectSingleAdjustmentAt = runtime_lookup.single.collectAt;
-const collectSingleAdjustmentAtAccelerated =
-    runtime_lookup.single.collectAtAccelerated;
 const SinglePosSubtable = runtime_lookup.single.Parsed;
 const collectPairAdjustmentLookup =
     runtime_lookup.pair.generic.collectLookup;
 const collectExtensionPairAdjustmentLookup =
     runtime_lookup.pair.generic.collectExtensionLookup;
 const collectPairAdjustment = runtime_lookup.pair.generic.collect;
-const collectPairAdjustmentAt = runtime_lookup.pair.generic.collectAt;
 const collectPairAdjustmentAtParsed =
     runtime_lookup.pair.generic.collectAtParsed;
 const advanceAfterPairPosition =
@@ -91,10 +81,6 @@ const deinitLookupAcceleratorContents =
     accelerator_core.build.lookup.deinitContents;
 
 const RunDigestCache = runtime_lookup.prefilter.DigestCache;
-const max_context_preflight_depth = validation.lookup.max_context_depth;
-const ensurePositionRecordsWithin = validation.lookup.records;
-const ensurePositionRecordMarkFilteringSetsValid =
-    validation.lookup.recordMarkFilteringSets;
 const ensurePositionLookupHeaderAndExtensionPayloadsWithin =
     validation.lookup.headerAndExtensions;
 const ensurePositionLookupSubtablesWithin =
@@ -452,7 +438,7 @@ noinline fn collectLookupWithIndexPrepared(
                 8 => {
                     if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
                         if (accelerator.chaining_class_subtables.len != 0) {
-                            try chaining_runtime.class_accelerated.lookup.collect(table, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options, accelerator, collectNestedAdjustment);
+                            try chaining_runtime.class_accelerated.lookup.collect(table, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options, accelerator, runtime_lookup.nested.apply);
                             return;
                         }
                     }
@@ -469,15 +455,15 @@ noinline fn collectLookupWithIndexPrepared(
             allocator,
             lookup_flag,
             lookup_options,
-            collectContextAdjustmentForExtension,
-            collectChainingContextAdjustment,
+            runtime_lookup.nested.contextCollect,
+            runtime_lookup.nested.chainingCollect,
         );
         return;
     }
     if (lookup_type == 8) {
         if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
             if (accelerator.chaining_coverage_only) {
-                try chaining_runtime.coverage.lookup.collect(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options, accelerator, collectPositionRecordsMapped, collectNestedAdjustment);
+                try chaining_runtime.coverage.lookup.collect(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options, accelerator, runtime_lookup.nested.records, runtime_lookup.nested.apply);
                 return;
             }
         }
@@ -505,8 +491,16 @@ noinline fn collectLookupWithIndexPrepared(
             },
             5 => if (runtime.matching.runMayHaveMarkAttachments(glyphs, lookup_options)) try collectMarkToLigatureAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             6 => if (runtime.matching.runMayHaveMarkAttachments(glyphs, lookup_options)) try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
-            7 => try context_runtime.collect(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options, collectPositionRecordsMapped),
-            8 => try collectChainingContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
+            7 => try runtime_lookup.nested.contextCollect(
+                table,
+                subtable_offset,
+                glyphs,
+                adjustments,
+                allocator,
+                lookup_flag,
+                lookup_options,
+            ),
+            8 => try runtime_lookup.nested.chainingCollect(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             9 => try extension_runtime.wrapper.collect(
                 table,
                 subtable_offset,
@@ -515,8 +509,8 @@ noinline fn collectLookupWithIndexPrepared(
                 allocator,
                 lookup_flag,
                 lookup_options,
-                collectContextAdjustmentForExtension,
-                collectChainingContextAdjustment,
+                runtime_lookup.nested.contextCollect,
+                runtime_lookup.nested.chainingCollect,
             ),
             else => {},
         }
@@ -531,108 +525,8 @@ fn shapeProfileElapsed(start: i128, io: ?std.Io) i128 {
     return std.Io.Clock.now(.awake, io.?).nanoseconds - start;
 }
 
-fn collectContextAdjustmentForExtension(
-    table: Table,
-    subtable_offset: usize,
-    glyphs: []const GlyphId,
-    adjustments: *std.ArrayList(Adjustment),
-    allocator: std.mem.Allocator,
-    lookup_flag: u16,
-    options: LookupOptions,
-) (GposError || std.mem.Allocator.Error)!void {
-    return context_runtime.collect(
-        table,
-        subtable_offset,
-        glyphs,
-        adjustments,
-        allocator,
-        lookup_flag,
-        options,
-        collectPositionRecordsMapped,
-    );
-}
-
-fn collectChainingContextAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    switch (try positioning.lookup.contextual.parseChaining(table, subtable_offset)) {
-        .glyph => |subtable| try chaining_runtime.glyph.collect(table, subtable, glyphs, adjustments, allocator, lookup_flag, options, collectPositionRecordsMapped),
-        .class => |subtable| try chaining_runtime.class.collect(table, subtable, glyphs, adjustments, allocator, lookup_flag, options, collectPositionRecordsMapped),
-        .coverage => |parsed| {
-            if (parsed.records.input_count == 0) return;
-            try chaining_runtime.coverage.execute.collect(
-                table,
-                chaining_runtime.coverage.execute.fromParsed(parsed),
-                glyphs,
-                adjustments,
-                allocator,
-                lookup_flag,
-                options,
-                collectPositionRecordsMapped,
-                collectNestedAdjustment,
-            );
-        },
-    }
-}
-
-fn collectChainingContextAdjustmentAt(table: Table, subtable_offset: usize, glyphs: []const GlyphId, pos: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
-    if (pos >= glyphs.len) return false;
-    switch (try positioning.lookup.contextual.parseChaining(table, subtable_offset)) {
-        .glyph => |subtable| return try chaining_runtime.glyph.collectAt(table, subtable, glyphs, pos, adjustments, allocator, lookup_flag, options, collectPositionRecordsMapped),
-        .class => |subtable| return try chaining_runtime.class.collectAt(table, subtable, glyphs, pos, adjustments, allocator, lookup_flag, options, collectPositionRecordsMapped),
-        .coverage => |parsed| {
-            if (parsed.records.input_count == 0) return false;
-            return (try chaining_runtime.coverage.execute.collectAt(false, table, chaining_runtime.coverage.execute.fromParsed(parsed), glyphs, pos, adjustments, allocator, lookup_flag, options, collectPositionRecordsMapped, collectNestedAdjustment)).matched;
-        },
-    }
-}
-
-fn collectContextAdjustmentAtForExtension(
-    table: Table,
-    subtable_offset: usize,
-    glyphs: []const GlyphId,
-    target_index: usize,
-    adjustments: *std.ArrayList(Adjustment),
-    allocator: std.mem.Allocator,
-    lookup_flag: u16,
-    options: LookupOptions,
-) (GposError || std.mem.Allocator.Error)!bool {
-    return context_runtime.collectAt(
-        table,
-        subtable_offset,
-        glyphs,
-        target_index,
-        adjustments,
-        allocator,
-        lookup_flag,
-        options,
-        collectPositionRecordsMapped,
-    );
-}
-
-fn collectPositionRecordsMapped(table: Table, records_pos: usize, record_count: usize, input_indices: []const usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    if (!table.assume_validated) {
-        try ensurePositionRecordsWithin(table, records_pos, record_count, input_indices.len);
-        try ensurePositionRecordMarkFilteringSetsValid(table, records_pos, record_count, options);
-    }
-
-    // Context positioning records name a glyph in the matched input sequence
-    // and a lookup-list index. Nested lookups own their own LookupFlag, so a
-    // mark/base/ligature ignored by that nested flag must not receive deltas.
-    for (0..record_count) |record_i| {
-        const record_offset = records_pos + record_i * 4;
-        const sequence_index = try readU16(table, record_offset);
-        const lookup_index = try readU16(table, record_offset + 2);
-        if (sequence_index >= input_indices.len) return error.BadGpos;
-        const target_index = input_indices[sequence_index];
-        try collectNestedAdjustment(table, glyphs, target_index, lookup_index, adjustments, allocator, options);
-    }
-}
-
 fn checkedRequiredPositionOffset(table: Table, base_offset: usize, relative_offset: u16) GposError!usize {
     return table_core.offset.required16(table, base_offset, relative_offset);
-}
-
-fn checkedExtensionPositionPayloadOffset(table: Table, extension_offset: usize, relative_offset: u32) GposError!usize {
-    return table_core.offset.extensionPayload(table, extension_offset, relative_offset);
 }
 
 fn checkedRequiredScriptListOffset(table: Table) GposError!usize {
@@ -664,22 +558,6 @@ fn checkedRequiredLookupOffset(table: Table, lookup_list_offset: usize, relative
     return checkedRequiredPositionOffset(table, lookup_list_offset, relative_offset);
 }
 
-fn checkedRequiredCoverageOffset(table: Table, base_offset: usize, relative_offset: u16) GposError!usize {
-    // Coverage offsets are mandatory in GPOS subtables and contextual coverage
-    // arrays. A null coverage pointer aliases the parent header as Coverage
-    // format/count data, which can make malformed positioning silently vanish
-    // or bind value records to unrelated layout metadata.
-    return checkedRequiredPositionOffset(table, base_offset, relative_offset);
-}
-
-fn checkedRequiredClassDefOffset(table: Table, base_offset: usize, relative_offset: u16) GposError!usize {
-    // Class-based GPOS subtables use ClassDef offsets as required child tables.
-    // A zero offset aliases the subtable header as class data; that can steer
-    // PairPos matrices or contextual rule sets from value-format and coverage
-    // metadata rather than from an explicit class definition.
-    return checkedRequiredPositionOffset(table, base_offset, relative_offset);
-}
-
 fn ensureBytesWithin(table: Table, offset: usize, len: usize) GposError!void {
     return table.ensure(offset, len);
 }
@@ -700,73 +578,6 @@ fn readU32BadGpos(table: Table, relative: usize) GposError!u32 {
             else => err,
         };
     };
-}
-
-fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: usize, lookup_index: u16, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    if (options.context_depth > max_context_preflight_depth) return error.UnsupportedGpos;
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16(table, lookup_list_offset);
-    if (lookup_index >= lookup_count) return error.BadGpos;
-    const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
-    const lookup_type = try readU16(table, lookup_offset);
-    const lookup_flag = try readU16(table, lookup_offset + 2);
-    const subtable_count = try readU16(table, lookup_offset + 4);
-    var lookup_options = options;
-    if ((lookup_flag & 0x0010) != 0) {
-        lookup_options.active_mark_filtering_set = try readU16(table, lookup_offset + 6 + @as(usize, subtable_count) * 2);
-        try runtime.matching.validateMarkFilteringSetIndex(lookup_options);
-    }
-    lookup_options.context_depth = options.context_depth + 1;
-    if (lookup_type == 1) {
-        if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
-            if (accelerator.single_pos_subtables.len != 0) {
-                if (try collectSingleAdjustmentAtAccelerated(table, accelerator.single_pos_subtables, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, lookup_options)) return;
-                return;
-            }
-        }
-    }
-    if (lookup_type == 8) {
-        if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
-            if (accelerator.chaining_coverage_only) {
-                _ = try chaining_runtime.coverage.lookup.collectNestedAt(table, lookup_offset, subtable_count, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, accelerator, collectPositionRecordsMapped, collectNestedAdjustment);
-                return;
-            }
-        }
-    }
-    if (lookup_type == 9) {
-        if (runtime.dispatch.acceleratorWithCoverage(lookup_index, lookup_options)) |accelerator| {
-            if (accelerator.chaining_class_subtables.len != 0) {
-                _ = try chaining_runtime.class_accelerated.lookup.collectNestedAt(table, subtable_count, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, accelerator, collectNestedAdjustment);
-                return;
-            }
-        }
-    }
-    for (0..subtable_count) |i| {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + i * 2);
-        switch (lookup_type) {
-            1 => if (try collectSingleAdjustmentAt(table, subtable_offset, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
-            2 => if (try collectPairAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
-            3 => _ = try collectCursiveAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
-            4 => _ = try collectMarkToBaseAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, &.{}),
-            5 => _ = try collectMarkToLigatureAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
-            6 => _ = try collectMarkToMarkAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
-            7 => if (try context_runtime.collectAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, collectPositionRecordsMapped)) return,
-            8 => if (try collectChainingContextAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
-            9 => if (try extension_runtime.nested.collectAt(
-                table,
-                subtable_offset,
-                glyphs,
-                target_index,
-                adjustments,
-                allocator,
-                lookup_flag,
-                lookup_options,
-                collectContextAdjustmentAtForExtension,
-                collectChainingContextAdjustmentAt,
-            )) return,
-            else => {},
-        }
-    }
 }
 
 test "GPOS rejects reserved LookupFlag bits" {
@@ -1448,12 +1259,12 @@ test "GPOS class-based positioning rejects null ClassDef offsets" {
 
     table = .{ .data = &context_bytes, .offset = 0, .length = context_bytes.len };
     try std.testing.expectError(error.BadGpos, ensureContextPositionSubtableWithin(table, 0, 0));
-    try std.testing.expectError(error.BadGpos, context_runtime.collect(table, 0, &.{5}, &adjustments, allocator, 0, .{}, collectPositionRecordsMapped));
+    try std.testing.expectError(error.BadGpos, runtime_lookup.nested.contextCollect(table, 0, &.{5}, &adjustments, allocator, 0, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 
     writeU16Test(&context_bytes, 4, 18);
     try ensureContextPositionSubtableWithin(table, 0, 0);
-    try context_runtime.collect(table, 0, &.{5}, &adjustments, allocator, 0, .{}, collectPositionRecordsMapped);
+    try runtime_lookup.nested.contextCollect(table, 0, &.{5}, &adjustments, allocator, 0, .{});
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 
     var chaining_bytes = [_]u8{0} ** 46;
@@ -1487,7 +1298,7 @@ test "GPOS class-based positioning rejects null ClassDef offsets" {
 
     writeU16Test(&chaining_bytes, 6, 0);
     try std.testing.expectError(error.BadGpos, ensureChainingContextPositionSubtableWithin(table, 0, 0));
-    try std.testing.expectError(error.BadGpos, collectChainingContextAdjustment(table, 0, &.{5}, &adjustments, allocator, 0, .{}));
+    try std.testing.expectError(error.BadGpos, runtime_lookup.nested.chainingCollect(table, 0, &.{5}, &adjustments, allocator, 0, .{}));
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
     writeU16Test(&chaining_bytes, 6, 30);
 
@@ -1496,7 +1307,7 @@ test "GPOS class-based positioning rejects null ClassDef offsets" {
     writeU16Test(&chaining_bytes, 8, 38);
 
     try ensureChainingContextPositionSubtableWithin(table, 0, 0);
-    try collectChainingContextAdjustment(table, 0, &.{5}, &adjustments, allocator, 0, .{});
+    try runtime_lookup.nested.chainingCollect(table, 0, &.{5}, &adjustments, allocator, 0, .{});
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
 
@@ -2786,7 +2597,7 @@ test "GPOS accelerates nested extension chaining class positioning" {
 
     var adjustments = std.ArrayList(Adjustment).empty;
     defer adjustments.deinit(allocator);
-    try collectNestedAdjustment(.{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true }, &glyphs, 0, 0, &adjustments, allocator, .{
+    try runtime_lookup.nested.apply(.{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true }, &glyphs, 0, 0, &adjustments, allocator, .{
         .lookup_accelerators = accelerators,
         .assume_validated = true,
     });

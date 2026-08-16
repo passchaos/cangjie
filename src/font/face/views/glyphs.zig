@@ -20,7 +20,7 @@ pub const View = struct {
         self: View,
         codepoint: u21,
         selector: u21,
-    ) font_mod.FontError!?glyph_mod.GlyphId {
+    ) font_mod.FontError!glyph_mod.GlyphId {
         return self.implementation.glyphIndexWithVariation(
             codepoint,
             selector,

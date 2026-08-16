@@ -126,6 +126,12 @@ test "concrete face views cover the normal application workflow" {
     try std.testing.expect(
         (try face.glyphs().variationKind('A', 0xFE0F)) == null,
     );
+    // Rendering lookup degrades an unsupported selector to the base cmap,
+    // while variationKind above remains the explicit availability probe.
+    try std.testing.expectEqual(
+        try face.glyphs().index('A'),
+        try face.glyphs().indexForVariation('A', 0xFE0F),
+    );
     const metrics = try face.metrics().horizontal(1);
     try std.testing.expect(metrics.advance_width > 0);
 

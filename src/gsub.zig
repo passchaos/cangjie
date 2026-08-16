@@ -8,6 +8,9 @@ const direct_ligature = @import("gsub/execution/direct/ligature/root.zig");
 const direct_multiple = @import("gsub/execution/direct/multiple/root.zig");
 const direct_reverse = @import("gsub/execution/direct/reverse/root.zig");
 const direct_single = @import("gsub/execution/direct/single/root.zig");
+const contextual_model = @import("gsub/execution/contextual/model.zig");
+const contextual_records =
+    @import("gsub/execution/contextual/records/root.zig");
 const context_traversal =
     @import("gsub/execution/support/context_traversal.zig");
 const GlyphId = @import("glyph.zig").GlyphId;
@@ -80,7 +83,6 @@ const FeatureSelection = feature_domain.selection.Item;
 const LookupOptions = runtime.Options;
 
 const LookupAccelerator = acceleration.Lookup;
-const SingleSubstAccelerator = accelerator_model.SingleSubstitution;
 const ContextClassSubtableAccelerator = accelerator_model.ContextClassSubtable;
 const ContextCoverageSubtable = accelerator_model.ContextCoverageSubtable;
 const ChainingCoverageSubtable = accelerator_model.ChainingCoverageSubtable;
@@ -113,6 +115,11 @@ const FeatureLookupPlan = feature.LookupPlan;
 const sourceFeatureMaskForTag = feature.sourceMaskForTag;
 
 const SelectedLookup = feature_domain.run_selection.SelectedLookup;
+
+const ContextApplyResult = contextual_model.ApplyResult;
+const NestedGlyphChange = contextual_model.Change;
+const contextNextPosAfterMutation =
+    contextual_model.nextPositionAfterMutation;
 
 const collectForwardUnignoredGlyphs = context_traversal.collectForward;
 const collectForwardUnignoredGlyphPrefix =
@@ -3177,34 +3184,6 @@ fn applyChainingRuleSet(table: Table, chain_set_offset: usize, glyphs: *std.Arra
     return .{};
 }
 
-const NestedGlyphChange = struct {
-    /// Number of matched input glyphs replaced by the nested lookup, counting
-    /// the target glyph. Non-ligature substitutions replace a contiguous target
-    /// run; ligatures additionally fill `component_offsets` because LookupFlag
-    /// ignored glyphs may remain physically between matched components.
-    removed_len: usize = 1,
-    inserted_len: usize = 1,
-    component_offsets: ?[direct_ligature.max_components]usize = null,
-    component_count: usize = 0,
-};
-
-const ContextApplyResult = struct {
-    matched: bool = false,
-    next_pos: usize = 0,
-};
-
-fn contextNextPosAfterMutation(original_next: usize, match_start: usize, glyph_count_before: usize, glyph_count_after: usize) usize {
-    if (glyph_count_after >= glyph_count_before) {
-        return original_next + (glyph_count_after - glyph_count_before);
-    }
-
-    // HarfBuzz resumes a contextual lookup at the adjusted end of the match.
-    // A nested ligature or deletion shifts that end left, but it cannot rewind
-    // before the position immediately after the current match start. This is
-    // essential when adjacent candidates move into the just-consumed range.
-    return @max(match_start + 1, original_next -| (glyph_count_before - glyph_count_after));
-}
-
 fn markUnsafeContextMatch(
     allocator: std.mem.Allocator,
     options: LookupOptions,
@@ -3237,307 +3216,66 @@ fn markUnsafeChainingMatch(
     );
 }
 
-fn applySubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId), records_offset: usize, record_count: usize, input_indices: []const usize, allocator: std.mem.Allocator, options: LookupOptions) (GsubError || std.mem.Allocator.Error)!void {
-    if (!table.assume_validated) {
-        try ensureSubstitutionRecordsWithin(table, records_offset, record_count, input_indices.len);
-        try ensureSubstitutionRecordMarkFilteringSetsValid(table, records_offset, record_count, options);
-    }
-    if (try applySingleSubstitutionRecordsMappedFast(table, glyphs, records_offset, record_count, input_indices, options)) return;
-
-    // SequenceLookupRecord indexes address a mutable match-position array. It
-    // starts with the input sequence, but OpenType implementations extend it
-    // when a nested MultipleSubst grows the buffer: the inserted positions are
-    // spliced immediately after the current SequenceIndex. Consequently, a
-    // later index that was outside the original input count can become valid,
-    // and an originally valid later index can name a newly inserted glyph.
-    //
-    // Each entry stores its current physical glyph-buffer index. The parallel
-    // live map preserves deletion semantics: a repeated record for a deleted
-    // position must not accidentally target the glyph that shifted into that
-    // physical slot.
-    var mapped_buf: [64]usize = undefined;
-    var mapped_live_buf: [64]bool = undefined;
-    if (input_indices.len > mapped_buf.len) return error.UnsupportedGsub;
-    @memcpy(mapped_buf[0..input_indices.len], input_indices);
-    var mapped_len = input_indices.len;
-    @memset(mapped_live_buf[0..mapped_len], true);
-
-    for (0..record_count) |subst_i| {
-        const record_offset = records_offset + subst_i * 4;
-        const sequence_index = try readU16(table, record_offset);
-        const lookup_index = try readU16(table, record_offset + 2);
-        if (sequence_index >= mapped_len) continue;
-        if (!mapped_live_buf[sequence_index]) continue;
-        const target_index = mapped_buf[sequence_index];
-        if (target_index >= glyphs.items.len) continue;
-        const change = try applyNestedGlyphLookup(table, glyphs, target_index, lookup_index, allocator, options);
-        if (change.removed_len == change.inserted_len) continue;
-        if (change.component_offsets) |component_offsets| {
-            for (mapped_buf[0..mapped_len], 0..) |*mapped_index, mapped_i| {
-                if (!mapped_live_buf[mapped_i]) continue;
-                if (mapped_index.* <= target_index) continue;
-                const relative_index = mapped_index.* - target_index;
-                var removed_before: usize = 0;
-                var consumed_component = false;
-                for (component_offsets[1..change.component_count]) |component_offset| {
-                    if (relative_index == component_offset) {
-                        consumed_component = true;
-                        break;
-                    }
-                    if (component_offset < relative_index) removed_before += 1;
-                }
-                if (consumed_component) {
-                    mapped_index.* = target_index;
-                } else {
-                    mapped_index.* -= removed_before;
-                }
-            }
-
-            // HarfBuzz removes the length delta's worth of logical positions
-            // immediately after the lookup's SequenceIndex, even when the
-            // nested ligature used a different LookupFlag and physically
-            // consumed a later component around an ignored glyph. Compact the
-            // mapped sequence the same way after resolving physical indices.
-            // This makes the next SequenceIndex name the old later component,
-            // which may now be the replacement ligature.
-            const remove_count = @min(
-                change.removed_len - change.inserted_len,
-                mapped_len -| (@as(usize, sequence_index) + 1),
-            );
-            if (remove_count != 0) {
-                const remove_start = @as(usize, sequence_index) + 1;
-                const remove_end = remove_start + remove_count;
-                std.mem.copyForwards(
-                    usize,
-                    mapped_buf[remove_start .. mapped_len - remove_count],
-                    mapped_buf[remove_end..mapped_len],
-                );
-                std.mem.copyForwards(
-                    bool,
-                    mapped_live_buf[remove_start .. mapped_len - remove_count],
-                    mapped_live_buf[remove_end..mapped_len],
-                );
-                mapped_len -= remove_count;
-            }
-            continue;
-        }
-        if (change.inserted_len > change.removed_len) {
-            const added = change.inserted_len - change.removed_len;
-            // First account for the physical insertion in every existing match
-            // position. Then extend the logical match-position array in the
-            // same place as HarfBuzz's apply_lookup(): immediately after the
-            // SequenceIndex whose nested lookup caused the growth.
-            for (mapped_buf[0..mapped_len], 0..) |*mapped_index, mapped_i| {
-                if (!mapped_live_buf[mapped_i]) continue;
-                if (mapped_index.* < target_index) continue;
-                if (mapped_index.* < target_index + change.removed_len) {
-                    mapped_index.* = target_index;
-                } else {
-                    mapped_index.* += added;
-                }
-            }
-
-            const insert_at = @as(usize, sequence_index) + 1;
-            if (mapped_len + added > mapped_buf.len) return error.UnsupportedGsub;
-            std.mem.copyBackwards(
-                usize,
-                mapped_buf[insert_at + added .. mapped_len + added],
-                mapped_buf[insert_at..mapped_len],
-            );
-            std.mem.copyBackwards(
-                bool,
-                mapped_live_buf[insert_at + added .. mapped_len + added],
-                mapped_live_buf[insert_at..mapped_len],
-            );
-            for (0..added) |added_i| {
-                mapped_buf[insert_at + added_i] = target_index + 1 + added_i;
-                mapped_live_buf[insert_at + added_i] = true;
-            }
-            mapped_len += added;
-            continue;
-        }
-        for (mapped_buf[0..mapped_len], 0..) |*mapped_index, mapped_i| {
-            if (!mapped_live_buf[mapped_i]) continue;
-            if (mapped_index.* < target_index) continue;
-            if (mapped_index.* < target_index + change.removed_len) {
-                // A non-ligature nested lookup consumed this input glyph. If
-                // it produced replacements, later records for the same
-                // sequence index operate on the first replacement. If it was a
-                // deletion, there is no surviving glyph to target.
-                if (change.inserted_len == 0) {
-                    mapped_live_buf[mapped_i] = false;
-                } else {
-                    mapped_index.* = target_index;
-                }
-            } else {
-                if (change.removed_len > change.inserted_len) {
-                    mapped_index.* -= change.removed_len - change.inserted_len;
-                }
-            }
-        }
-    }
-}
-
-const max_fast_single_records = 64;
-
-fn applySingleSubstitutionRecordsMappedFast(table: Table, glyphs: *std.ArrayList(GlyphId), records_offset: usize, record_count: usize, input_indices: []const usize, options: LookupOptions) GsubError!bool {
-    if (record_count == 0) return true;
-    if (record_count > max_fast_single_records) return false;
-    if (try applyAcceleratedSingleSubstitutionRecordsMapped(table, glyphs, records_offset, record_count, input_indices, options)) return true;
-
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16(table, lookup_list_offset);
-    var target_indices: [max_fast_single_records]usize = undefined;
-    var lookup_offsets: [max_fast_single_records]usize = undefined;
-    var lookup_flags: [max_fast_single_records]u16 = undefined;
-    var subtable_counts: [max_fast_single_records]u16 = undefined;
-    var lookup_indices: [max_fast_single_records]u16 = undefined;
-    var single_accelerators: [max_fast_single_records]SingleSubstAccelerator = undefined;
-
-    for (0..record_count) |record_i| {
-        const record_offset = records_offset + record_i * 4;
-        const sequence_index = try readU16(table, record_offset);
-        const lookup_index = try readU16(table, record_offset + 2);
-        if (sequence_index >= input_indices.len) return false;
-        if (lookup_index >= lookup_count) return error.BadGsub;
-        var single_accelerator = SingleSubstAccelerator{};
-        var lookup_offset: usize = 0;
-        var lookup_flag: u16 = 0;
-        var subtable_count: u16 = 0;
-        var cached = false;
-        if (options.lookup_accelerators) |accelerators| {
-            if (lookup_index < accelerators.len and accelerators[lookup_index].single_subst.enabled) {
-                single_accelerator = accelerators[lookup_index].single_subst;
-                cached = true;
-            }
-        }
-        for (lookup_indices[0..record_i], 0..) |existing_index, existing_i| {
-            if (existing_index != lookup_index) continue;
-            lookup_offset = lookup_offsets[existing_i];
-            lookup_flag = lookup_flags[existing_i];
-            subtable_count = subtable_counts[existing_i];
-            single_accelerator = single_accelerators[existing_i];
-            cached = true;
-            break;
-        }
-        if (!cached or !single_accelerator.enabled) {
-            lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16(table, lookup_list_offset + 2 + @as(usize, lookup_index) * 2));
-            if (try readU16(table, lookup_offset) != 1) return false;
-            lookup_flag = try readU16(table, lookup_offset + 2);
-            subtable_count = try readU16(table, lookup_offset + 4);
-        }
-        lookup_indices[record_i] = lookup_index;
-        target_indices[record_i] = input_indices[sequence_index];
-        lookup_offsets[record_i] = lookup_offset;
-        lookup_flags[record_i] = lookup_flag;
-        subtable_counts[record_i] = subtable_count;
-        single_accelerators[record_i] = single_accelerator;
+const ContextualRecordExecutor = struct {
+    pub fn applyNested(
+        table: Table,
+        glyphs: *std.ArrayList(GlyphId),
+        glyph_index: usize,
+        lookup_index: u16,
+        allocator: std.mem.Allocator,
+        options: LookupOptions,
+    ) (GsubError || std.mem.Allocator.Error)!NestedGlyphChange {
+        return applyNestedGlyphLookup(
+            table,
+            glyphs,
+            glyph_index,
+            lookup_index,
+            allocator,
+            options,
+        );
     }
 
-    for (0..record_count) |record_i| {
-        if (target_indices[record_i] >= glyphs.items.len) continue;
-        if (single_accelerators[record_i].enabled) {
-            _ = try direct_single.acceleratedAt(table, single_accelerators[record_i], glyphs, target_indices[record_i], options);
-            continue;
-        }
-        var lookup_options = options;
-        if ((lookup_flags[record_i] & 0x0010) != 0) {
-            lookup_options.active_mark_filtering_set = try readU16(table, lookup_offsets[record_i] + 6 + @as(usize, subtable_counts[record_i]) * 2);
-            try runtime_filtering.validateMarkFilteringSetIndex(lookup_options);
-        }
-        for (0..subtable_counts[record_i]) |subtable_i| {
-            const subtable_offset = lookup_offsets[record_i] + try readU16(table, lookup_offsets[record_i] + 6 + subtable_i * 2);
-            if (try direct_single.at(table, subtable_offset, glyphs, target_indices[record_i], lookup_flags[record_i], lookup_options)) break;
-        }
-    }
-    return true;
-}
-
-fn applyAcceleratedSingleSubstitutionRecordsMapped(table: Table, glyphs: *std.ArrayList(GlyphId), records_offset: usize, record_count: usize, input_indices: []const usize, options: LookupOptions) GsubError!bool {
-    const accelerators = options.lookup_accelerators orelse return false;
-    var target_indices: [max_fast_single_records]usize = undefined;
-    var single_accelerators: [max_fast_single_records]SingleSubstAccelerator = undefined;
-
-    for (0..record_count) |record_i| {
-        const record_offset = records_offset + record_i * 4;
-        const sequence_index = try readU16(table, record_offset);
-        const lookup_index = try readU16(table, record_offset + 2);
-        if (sequence_index >= input_indices.len) return false;
-        if (lookup_index >= accelerators.len) return error.BadGsub;
-        const single_accelerator = accelerators[lookup_index].single_subst;
-        if (!single_accelerator.enabled) return false;
-        target_indices[record_i] = input_indices[sequence_index];
-        single_accelerators[record_i] = single_accelerator;
-    }
-
-    for (0..record_count) |record_i| {
-        if (target_indices[record_i] >= glyphs.items.len) continue;
-        _ = try direct_single.acceleratedAt(table, single_accelerators[record_i], glyphs, target_indices[record_i], options);
-    }
-    return true;
-}
-
-fn ensureSubstitutionRecordListWithin(table: Table, records_offset: usize, record_count: usize) GsubError!void {
-    // Contextual lookup records are applied eagerly and may mutate the glyph
-    // stream. Reject a truncated record array before the first nested lookup so
-    // malformed fonts cannot leave the caller with a partially substituted run.
-    if (records_offset > table.length) return error.BadGsub;
-    if (record_count > (table.length - records_offset) / 4) return error.BadGsub;
-}
-
-fn ensureSubstitutionRecordsWithin(table: Table, records_offset: usize, record_count: usize, input_count: usize) GsubError!void {
-    try ensureSubstitutionRecordListWithin(table, records_offset, record_count);
-    try ensureSubstitutionRecordReferencesWithin(table, records_offset, record_count, input_count);
-}
-
-fn ensureSubstitutionRecordReferencesWithin(table: Table, records_offset: usize, record_count: usize, input_count: usize) GsubError!void {
-    // A complete SequenceLookupRecord array is not enough for atomic
-    // contextual application: each record must target a glyph inside the
-    // already-matched input sequence and must name a real lookup. Preflight
-    // both fields before the first nested lookup mutates `glyphs`, otherwise a
-    // malformed later record could either be silently skipped or leave earlier
-    // substitutions visible to the caller.
-    _ = input_count;
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    const lookup_count = try readU16BadGsub(table, lookup_list_offset);
-    for (0..record_count) |record_i| {
-        const record_offset = records_offset + record_i * 4;
-        // HarfBuzz safely ignores an out-of-range SequenceIndex while applying
-        // the remaining records in design order. Such records occur in shipped
-        // fonts (including TestShapeLana.ttf), so validate their lookup target
-        // but do not reject the entire font.
-        const lookup_index = try readU16BadGsub(table, record_offset + 2);
-        if (lookup_index >= lookup_count) return error.BadGsub;
-        const lookup_offset_pos = lookup_list_offset + 2 + @as(usize, lookup_index) * 2;
-        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGsub(table, lookup_offset_pos));
+    pub fn validateNested(
+        table: Table,
+        lookup_offset: usize,
+    ) GsubError!void {
         if (table.glyph_count != null) {
-            // Font-load validation already walks every LookupList entry as a
-            // top-level lookup. Contextual records may reference the same
-            // extension/chaining lookups thousands of times in complex fonts;
-            // validating only the fixed header here preserves reference bounds
-            // while avoiding recursive revalidation of the referenced payload.
             _ = try ensureLookupFixedHeaderWithin(table, lookup_offset);
         } else {
             try ensureLookupHeaderWithin(table, lookup_offset);
         }
     }
+};
+
+fn applySubstitutionRecordsMapped(
+    table: Table,
+    glyphs: *std.ArrayList(GlyphId),
+    records_offset: usize,
+    record_count: usize,
+    input_indices: []const usize,
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GsubError || std.mem.Allocator.Error)!void {
+    return contextual_records.apply(
+        ContextualRecordExecutor,
+        table,
+        glyphs,
+        records_offset,
+        record_count,
+        input_indices,
+        allocator,
+        options,
+    );
 }
 
-fn ensureSubstitutionRecordMarkFilteringSetsValid(table: Table, records_offset: usize, record_count: usize, options: LookupOptions) GsubError!void {
-    const lookup_list_offset = try checkedRequiredLookupListOffset(table);
-    for (0..record_count) |record_i| {
-        const record_offset = records_offset + record_i * 4;
-        const lookup_index = try readU16BadGsub(table, record_offset + 2);
-        const lookup_offset_pos = lookup_list_offset + 2 + @as(usize, lookup_index) * 2;
-        const lookup_offset = try checkedRequiredLookupOffset(table, lookup_list_offset, try readU16BadGsub(table, lookup_offset_pos));
-        const lookup_flag = try readU16BadGsub(table, lookup_offset + 2);
-        if ((lookup_flag & 0x0010) == 0) continue;
-        const subtable_count = try readU16BadGsub(table, lookup_offset + 4);
-        try runtime_filtering.validateMarkFilteringSetIndex(.{
-            .mark_filtering_sets = options.mark_filtering_sets,
-            .active_mark_filtering_set = try readU16BadGsub(table, lookup_offset + 6 + @as(usize, subtable_count) * 2),
-        });
-    }
+fn ensureSubstitutionRecordsWithin(table: Table, records_offset: usize, record_count: usize, input_count: usize) GsubError!void {
+    _ = input_count;
+    return contextual_records.validateReferences(
+        ContextualRecordExecutor,
+        table,
+        records_offset,
+        record_count,
+    );
 }
 
 fn ensureExtensionSubstitutionLookupPayloadsWithin(table: Table, lookup_offset: usize, subtable_count: u16) GsubError!void {

@@ -41,6 +41,7 @@ const markUnsafePositioningPair = runtime_output.safety.markPair;
 const markUnsafePairApplication = runtime_output.safety.markPairApplication;
 const context_runtime = runtime_lookup.contextual.context;
 const chaining_runtime = runtime_lookup.contextual.chaining;
+const extension_runtime = runtime_lookup.extension;
 const collectCursiveAdjustment = runtime_lookup.cursive.collect;
 const collectCursiveAdjustmentParsed = runtime_lookup.cursive.collectParsed;
 const collectCursiveAdjustmentAt = runtime_lookup.cursive.collectAt;
@@ -410,7 +411,16 @@ noinline fn collectLookupWithIndexPrepared(
         if (wrapped_type) |resolved_type| {
             switch (resolved_type) {
                 1 => {
-                    try collectExtensionSingleAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
+                    try extension_runtime.lookup.collectSingle(
+                        table,
+                        lookup_offset,
+                        subtable_count,
+                        glyphs,
+                        adjustments,
+                        allocator,
+                        lookup_flag,
+                        lookup_options,
+                    );
                     return;
                 },
                 2 => {
@@ -450,7 +460,18 @@ noinline fn collectLookupWithIndexPrepared(
                 else => {},
             }
         }
-        try collectExtensionAdjustmentLookup(table, lookup_offset, subtable_count, glyphs, adjustments, allocator, lookup_flag, lookup_options);
+        try extension_runtime.lookup.collectMixed(
+            table,
+            lookup_offset,
+            subtable_count,
+            glyphs,
+            adjustments,
+            allocator,
+            lookup_flag,
+            lookup_options,
+            collectContextAdjustmentForExtension,
+            collectChainingContextAdjustment,
+        );
         return;
     }
     if (lookup_type == 8) {
@@ -486,107 +507,17 @@ noinline fn collectLookupWithIndexPrepared(
             6 => if (runtime.matching.runMayHaveMarkAttachments(glyphs, lookup_options)) try collectMarkToMarkAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
             7 => try context_runtime.collect(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options, collectPositionRecordsMapped),
             8 => try collectChainingContextAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
-            9 => try collectExtensionAdjustment(table, subtable_offset, glyphs, adjustments, allocator, lookup_flag, lookup_options),
-            else => {},
-        }
-    }
-}
-
-const stack_matched_capacity = 128;
-
-const BoolScratch = struct {
-    items: []bool,
-    heap: ?[]bool = null,
-
-    fn init(allocator: std.mem.Allocator, len: usize, stack: *[stack_matched_capacity]bool) (GposError || std.mem.Allocator.Error)!BoolScratch {
-        const items = if (len <= stack.len)
-            stack[0..len]
-        else {
-            const heap = try allocator.alloc(bool, len);
-            return .{ .items = heap, .heap = heap };
-        };
-        return .{ .items = items };
-    }
-
-    fn deinit(self: BoolScratch, allocator: std.mem.Allocator) void {
-        if (self.heap) |heap| allocator.free(heap);
-    }
-};
-
-fn collectExtensionSingleAdjustmentLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    // Preserve SinglePos lookup ordering through ExtensionPos. Without a
-    // lookup-level matched set, overlapping wrapped subtables would stack their
-    // deltas even though OpenType treats subtables in one lookup as ordered
-    // alternatives for each original glyph position.
-    if (glyphs.len == 0) return;
-    var matched_stack: [stack_matched_capacity]bool = undefined;
-    const matched_scratch = try BoolScratch.init(allocator, glyphs.len, &matched_stack);
-    defer matched_scratch.deinit(allocator);
-    const matched = matched_scratch.items;
-    @memset(matched, false);
-
-    for (0..subtable_count) |subtable_i| {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-        const extension_subtable = try positioning.lookup.dispatch.extensionPayload(table, subtable_offset, 1);
-        try collectSingleAdjustmentSubtable(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options, matched);
-    }
-}
-
-fn collectExtensionAdjustmentLookup(table: Table, lookup_offset: usize, subtable_count: u16, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    // Mixed ExtensionPos lookups are uncommon, but preserving ordering for each
-    // wrapped positioning kind still matters. In particular, two wrapped
-    // PairPos subtables remain alternatives for the same first glyph even when
-    // another wrapped type prevents the homogeneous fast path above.
-    var single_matched_stack: [stack_matched_capacity]bool = undefined;
-    const single_matched_scratch = try BoolScratch.init(allocator, glyphs.len, &single_matched_stack);
-    defer single_matched_scratch.deinit(allocator);
-    const single_matched = single_matched_scratch.items;
-    @memset(single_matched, false);
-
-    var pair_matched_stack: [stack_matched_capacity]bool = undefined;
-    const pair_matched_scratch = try BoolScratch.init(allocator, glyphs.len, &pair_matched_stack);
-    defer pair_matched_scratch.deinit(allocator);
-    const pair_matched = pair_matched_scratch.items;
-    @memset(pair_matched, false);
-
-    var pair_consumes_second_stack: [stack_matched_capacity]bool = undefined;
-    const pair_consumes_second_scratch = try BoolScratch.init(allocator, glyphs.len, &pair_consumes_second_stack);
-    defer pair_consumes_second_scratch.deinit(allocator);
-    const pair_consumes_second = pair_consumes_second_scratch.items;
-    @memset(pair_consumes_second, false);
-
-    for (0..subtable_count) |subtable_i| {
-        const subtable_offset = lookup_offset + try readU16(table, lookup_offset + 6 + subtable_i * 2);
-        const pos_format = try readU16(table, subtable_offset);
-        if (pos_format != 1) return error.UnsupportedGpos;
-        const extension_lookup_type = try readU16(table, subtable_offset + 2);
-        if (extension_lookup_type == 9) return error.UnsupportedGpos;
-        const extension_subtable = try checkedExtensionPositionPayloadOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
-
-        switch (extension_lookup_type) {
-            1 => try collectSingleAdjustmentSubtable(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options, single_matched),
-            2 => {
-                if (glyphs.len < 2) continue;
-                var first_index: usize = 0;
-                const parsed = try positioning.lookup.pair.parse(table, extension_subtable);
-                while (first_index + 1 < glyphs.len) {
-                    var matched_value_2 = pair_matched[first_index] and pair_consumes_second[first_index];
-                    if (!pair_matched[first_index] and
-                        try collectPairAdjustmentAtParsed(table, parsed, glyphs, first_index, adjustments, allocator, lookup_flag, options))
-                    {
-                        pair_matched[first_index] = true;
-                        matched_value_2 = parsed.value_format_2 != 0;
-                        pair_consumes_second[first_index] = matched_value_2;
-                    }
-                    first_index = advanceAfterPairPosition(glyphs, first_index, lookup_flag, options, matched_value_2);
-                }
-            },
-            3 => try collectCursiveAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
-            4 => try collectMarkToBaseAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
-            5 => try collectMarkToLigatureAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
-            6 => try collectMarkToMarkAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
-            7 => try context_runtime.collect(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options, collectPositionRecordsMapped),
-            8 => try collectChainingContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
+            9 => try extension_runtime.wrapper.collect(
+                table,
+                subtable_offset,
+                glyphs,
+                adjustments,
+                allocator,
+                lookup_flag,
+                lookup_options,
+                collectContextAdjustmentForExtension,
+                collectChainingContextAdjustment,
+            ),
             else => {},
         }
     }
@@ -600,25 +531,25 @@ fn shapeProfileElapsed(start: i128, io: ?std.Io) i128 {
     return std.Io.Clock.now(.awake, io.?).nanoseconds - start;
 }
 
-fn collectExtensionAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
-    const pos_format = try readU16(table, subtable_offset);
-    if (pos_format != 1) return error.UnsupportedGpos;
-    const extension_lookup_type = try readU16(table, subtable_offset + 2);
-    if (extension_lookup_type == 9) return error.UnsupportedGpos;
-    const extension_subtable = try checkedExtensionPositionPayloadOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
-    // The extension wrapper extends addressing only; LookupFlag still belongs
-    // to the outer lookup and must filter glyph classes in the delegated body.
-    switch (extension_lookup_type) {
-        1 => try collectSingleAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
-        2 => try collectPairAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
-        3 => try collectCursiveAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
-        4 => try collectMarkToBaseAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
-        5 => try collectMarkToLigatureAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
-        6 => try collectMarkToMarkAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
-        7 => try context_runtime.collect(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options, collectPositionRecordsMapped),
-        8 => try collectChainingContextAdjustment(table, extension_subtable, glyphs, adjustments, allocator, lookup_flag, options),
-        else => {},
-    }
+fn collectContextAdjustmentForExtension(
+    table: Table,
+    subtable_offset: usize,
+    glyphs: []const GlyphId,
+    adjustments: *std.ArrayList(Adjustment),
+    allocator: std.mem.Allocator,
+    lookup_flag: u16,
+    options: LookupOptions,
+) (GposError || std.mem.Allocator.Error)!void {
+    return context_runtime.collect(
+        table,
+        subtable_offset,
+        glyphs,
+        adjustments,
+        allocator,
+        lookup_flag,
+        options,
+        collectPositionRecordsMapped,
+    );
 }
 
 fn collectChainingContextAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -652,6 +583,29 @@ fn collectChainingContextAdjustmentAt(table: Table, subtable_offset: usize, glyp
             return (try chaining_runtime.coverage.execute.collectAt(false, table, chaining_runtime.coverage.execute.fromParsed(parsed), glyphs, pos, adjustments, allocator, lookup_flag, options, collectPositionRecordsMapped, collectNestedAdjustment)).matched;
         },
     }
+}
+
+fn collectContextAdjustmentAtForExtension(
+    table: Table,
+    subtable_offset: usize,
+    glyphs: []const GlyphId,
+    target_index: usize,
+    adjustments: *std.ArrayList(Adjustment),
+    allocator: std.mem.Allocator,
+    lookup_flag: u16,
+    options: LookupOptions,
+) (GposError || std.mem.Allocator.Error)!bool {
+    return context_runtime.collectAt(
+        table,
+        subtable_offset,
+        glyphs,
+        target_index,
+        adjustments,
+        allocator,
+        lookup_flag,
+        options,
+        collectPositionRecordsMapped,
+    );
 }
 
 fn collectPositionRecordsMapped(table: Table, records_pos: usize, record_count: usize, input_indices: []const usize, glyphs: []const GlyphId, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)!void {
@@ -798,79 +752,21 @@ fn collectNestedAdjustment(table: Table, glyphs: []const GlyphId, target_index: 
             6 => _ = try collectMarkToMarkAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options),
             7 => if (try context_runtime.collectAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options, collectPositionRecordsMapped)) return,
             8 => if (try collectChainingContextAdjustmentAt(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
-            9 => if (try collectNestedExtensionAdjustment(table, subtable_offset, glyphs, target_index, adjustments, allocator, lookup_flag, lookup_options)) return,
+            9 => if (try extension_runtime.nested.collectAt(
+                table,
+                subtable_offset,
+                glyphs,
+                target_index,
+                adjustments,
+                allocator,
+                lookup_flag,
+                lookup_options,
+                collectContextAdjustmentAtForExtension,
+                collectChainingContextAdjustmentAt,
+            )) return,
             else => {},
         }
     }
-}
-
-fn collectNestedExtensionAdjustment(table: Table, subtable_offset: usize, glyphs: []const GlyphId, target_index: usize, adjustments: *std.ArrayList(Adjustment), allocator: std.mem.Allocator, lookup_flag: u16, options: LookupOptions) (GposError || std.mem.Allocator.Error)!bool {
-    const pos_format = try readU16(table, subtable_offset);
-    if (pos_format != 1) return error.UnsupportedGpos;
-    const extension_lookup_type = try readU16(table, subtable_offset + 2);
-    if (extension_lookup_type == 9) return error.UnsupportedGpos;
-    const extension_subtable = try checkedExtensionPositionPayloadOffset(table, subtable_offset, try readU32(table, subtable_offset + 4));
-
-    // PosLookupRecord names one glyph in an already-matched input sequence.
-    // ExtensionPos only widens the subtable address, so keep using the
-    // contextual target index when delegating to the wrapped lookup body.
-    switch (extension_lookup_type) {
-        // SinglePos subtables inside one lookup are ordered alternatives for a
-        // target glyph. Returning the match status here lets the parent lookup
-        // stop after the first matching ExtensionPos(SinglePos) wrapper,
-        // matching the top-level lookup-level SinglePos collector.
-        1 => return try collectSingleAdjustmentAt(table, extension_subtable, glyphs[target_index], target_index, adjustments, allocator, lookup_flag, options),
-        // PairPos subtables are ordered alternatives even when the PairPos is
-        // reached through ExtensionPos from a PosLookupRecord. Return the
-        // wrapped pair match so the containing nested lookup can stop before a
-        // later ExtensionPos(PairPos) subtable cascades onto the same pair.
-        2 => return try collectPairAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
-        3 => _ = try collectCursiveAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
-        4 => _ = try collectMarkToBaseAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options, &.{}),
-        5 => _ = try collectMarkToLigatureAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
-        6 => _ = try collectMarkToMarkAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
-        7 => return try context_runtime.collectAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options, collectPositionRecordsMapped),
-        8 => return try collectChainingContextAdjustmentAt(table, extension_subtable, glyphs, target_index, adjustments, allocator, lookup_flag, options),
-        else => {},
-    }
-    return false;
-}
-
-test "GPOS rejects ExtensionPos payload offsets outside the table during shaping" {
-    var bytes = [_]u8{0} ** 8;
-    writeU16Test(&bytes, 0, 1); // ExtensionPos format 1.
-    writeU16Test(&bytes, 2, 1); // Wrapped SinglePos.
-    writeU32Test(&bytes, 4, 0xffff_fffe); // Far beyond this table.
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    var adjustments = std.ArrayList(Adjustment).empty;
-    defer adjustments.deinit(std.testing.allocator);
-
-    // This calls the shaping collectors directly, bypassing load-time preflight,
-    // so malformed ExtensionPos addresses must be checked at the point where
-    // the wrapper is followed rather than leaking as EndOfStream/traps.
-    try std.testing.expectError(error.BadGpos, positioning.lookup.dispatch.extensionPayload(table, 0, 1));
-    try std.testing.expectError(error.BadGpos, collectExtensionAdjustment(table, 0, &.{5}, &adjustments, std.testing.allocator, 0, .{}));
-    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
-}
-
-test "GPOS rejects ExtensionPos payload offsets that alias the wrapper header" {
-    var bytes = [_]u8{0} ** 8;
-    writeU16Test(&bytes, 0, 1); // ExtensionPos format 1.
-    writeU16Test(&bytes, 2, 1); // Wrapped SinglePos.
-    writeU32Test(&bytes, 4, 4); // Points into the ExtensionOffset field itself.
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    var adjustments = std.ArrayList(Adjustment).empty;
-    defer adjustments.deinit(std.testing.allocator);
-
-    // In-range ExtensionOffset values still have to name child subtable data,
-    // not the wrapper's own format/type/offset words.
-    try std.testing.expectError(error.BadGpos, positioning.lookup.dispatch.extensionPayload(table, 0, 1));
-    try std.testing.expectError(error.BadGpos, positioning.lookup.dispatch.validateExtensionWrapper(table, 0));
-    try std.testing.expectError(error.BadGpos, collectExtensionAdjustment(table, 0, &.{5}, &adjustments, std.testing.allocator, 0, .{}));
-    try std.testing.expectError(error.BadGpos, collectNestedExtensionAdjustment(table, 0, &.{5}, 0, &adjustments, std.testing.allocator, 0, .{}));
-    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
 
 test "GPOS rejects reserved LookupFlag bits" {
@@ -3527,39 +3423,6 @@ test "GPOS mixed ExtensionPos PairPos alternatives respect mark filtering" {
     // ordered alternatives for glyph 10, and mark filtering keeps glyph 12
     // transparent when searching for the second glyph of the pair.
     try std.testing.expectEqual(@as(i16, -30), adjustments.items[0].x_advance);
-}
-
-test "GPOS extension positioning preserves wrapper lookup flags" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 30;
-
-    writeU16Test(&bytes, 0, 9);
-    writeU16Test(&bytes, 2, 0x0008);
-    writeU16Test(&bytes, 4, 1);
-    writeU16Test(&bytes, 6, 8);
-
-    const extension = 8;
-    writeU16Test(&bytes, extension + 0, 1);
-    writeU16Test(&bytes, extension + 2, 1);
-    writeU32Test(&bytes, extension + 4, 8);
-
-    const single = extension + 8;
-    writeU16Test(&bytes, single + 0, 1);
-    writeU16Test(&bytes, single + 2, 8);
-    writeU16Test(&bytes, single + 4, 0x0001);
-    writeI16Test(&bytes, single + 6, 50);
-    writeCoverage1Test(&bytes, single + 8, 3);
-
-    const glyphs = [_]GlyphId{3};
-    const glyph_classes = [_]u16{ 0, 1, 2, 3 };
-    var adjustments = std.ArrayList(Adjustment).empty;
-    defer adjustments.deinit(allocator);
-
-    try collectLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, &glyphs, &adjustments, allocator, .{
-        .glyph_classes = &glyph_classes,
-    });
-
-    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
 
 fn writeSinglePositionLookup(bytes: []u8, lookup_offset: usize, glyph: GlyphId, lookup_flag: u16, x_placement: i16) void {

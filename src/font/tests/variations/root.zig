@@ -3,5 +3,5 @@
 test {
     _ = @import("avar.zig");
     _ = @import("fvar/root.zig");
-    _ = @import("stat.zig");
+    _ = @import("stat/root.zig");
 }

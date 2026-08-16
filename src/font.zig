@@ -53,6 +53,7 @@ const post_mod = metadata_tables.post;
 const metric_tables = @import("font/tables/metrics/root.zig");
 const variation_tables = @import("font/tables/variations/root.zig");
 const fvar_mod = variation_tables.fvar;
+const stat_mod = variation_tables.stat;
 const colr_v0_mod = color_tables.colr_v0;
 const colr_v1_mod = color_tables.colr_v1;
 const colr_paint = colr_v1_mod.paint;
@@ -273,29 +274,9 @@ pub const VariationSequenceKind = cmap_variation.SequenceKind;
 
 pub const VariationInstance = fvar_mod.Instance;
 
-pub const StatDesignAxis = struct {
-    tag: [4]u8,
-    name_id: u16,
-    ordering: u16,
-};
-
-pub const StatAxisValue = struct {
-    format: u16,
-    flags: u16,
-    name_id: u16,
-    axis_index: ?u16 = null,
-    value: ?f32 = null,
-    linked_value: ?f32 = null,
-    nominal_value: ?f32 = null,
-    range_min_value: ?f32 = null,
-    range_max_value: ?f32 = null,
-    coordinates: []StatAxisValueCoordinate = &.{},
-};
-
-pub const StatAxisValueCoordinate = struct {
-    axis_index: u16,
-    value: f32,
-};
+pub const StatDesignAxis = stat_mod.DesignAxis;
+pub const StatAxisValue = stat_mod.AxisValue;
+pub const StatAxisValueCoordinate = stat_mod.AxisValueCoordinate;
 
 pub const ColorLayer = colr_v0_mod.Layer;
 
@@ -3278,9 +3259,8 @@ pub const Font = struct {
         } else null;
         try sfnt.checksum.validate(self.data, stat);
         if (self.fvar) |fvar| try sfnt.checksum.validate(self.data, fvar);
-        try validateStatTable(allocator, self.data, stat, self.fvar, name_index);
-        const info = try readStatInfo(self.data, stat);
-        return if (info.minor >= 1) try bin.readU16At(self.data, stat.offset + 18) else null;
+        try stat_mod.validate(allocator, self.data, stat, self.fvar, name_index);
+        return try stat_mod.readElidedFallbackNameId(self.data, stat);
     }
 
     pub fn statDesignAxes(self: *const Font, allocator: std.mem.Allocator) FontError![]StatDesignAxis {
@@ -3296,20 +3276,8 @@ pub const Font = struct {
         // axes away from fvar while the cached table record still looks valid.
         try sfnt.checksum.validate(self.data, stat);
         if (self.fvar) |fvar| try sfnt.checksum.validate(self.data, fvar);
-        try validateStatTable(allocator, self.data, stat, self.fvar, name_index);
-        const info = try readStatInfo(self.data, stat);
-
-        const axes = try allocator.alloc(StatDesignAxis, info.design_axis_count);
-        errdefer allocator.free(axes);
-        for (axes, 0..) |*axis, index| {
-            const axis_offset = stat.offset + info.design_axes_offset + index * info.design_axis_size;
-            axis.* = .{
-                .tag = try bin.readTagAt(self.data, axis_offset),
-                .name_id = try bin.readU16At(self.data, axis_offset + 4),
-                .ordering = try bin.readU16At(self.data, axis_offset + 6),
-            };
-        }
-        return axes;
+        try stat_mod.validate(allocator, self.data, stat, self.fvar, name_index);
+        return try stat_mod.readDesignAxes(allocator, self.data, stat);
     }
 
     pub fn statAxisValues(self: *const Font, allocator: std.mem.Allocator) FontError![]StatAxisValue {
@@ -3321,28 +3289,12 @@ pub const Font = struct {
         } else null;
         try sfnt.checksum.validate(self.data, stat);
         if (self.fvar) |fvar| try sfnt.checksum.validate(self.data, fvar);
-        try validateStatTable(allocator, self.data, stat, self.fvar, name_index);
-        const info = try readStatInfo(self.data, stat);
-
-        const values = try allocator.alloc(StatAxisValue, info.axis_value_count);
-        errdefer allocator.free(values);
-        var initialized: usize = 0;
-        errdefer {
-            for (values[0..initialized]) |value| allocator.free(value.coordinates);
-        }
-
-        for (values, 0..) |*value, index| {
-            const entry_offset = stat.offset + info.axis_value_offsets_offset + index * 2;
-            const axis_value_offset = try resolveStatAxisValueOffset(self.data, stat, info.axis_value_offsets_offset, entry_offset);
-            value.* = try readStatAxisValue(allocator, self.data, stat, axis_value_offset);
-            initialized += 1;
-        }
-        return values;
+        try stat_mod.validate(allocator, self.data, stat, self.fvar, name_index);
+        return try stat_mod.readAxisValues(allocator, self.data, stat);
     }
 
     pub fn freeStatAxisValues(_: *const Font, allocator: std.mem.Allocator, values: []StatAxisValue) void {
-        for (values) |value| allocator.free(value.coordinates);
-        allocator.free(values);
+        stat_mod.freeAxisValues(allocator, values);
     }
 
     pub fn colorLayers(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError![]ColorLayer {
@@ -6064,15 +6016,6 @@ fn trackingValueForPointSize(values: []const TrackValueInfo, point_size: f32) f3
     return @floatFromInt(values[values.len - 1].value);
 }
 
-const StatInfo = struct {
-    minor: u16,
-    design_axis_size: usize,
-    design_axis_count: usize,
-    design_axes_offset: usize,
-    axis_value_count: usize,
-    axis_value_offsets_offset: usize,
-};
-
 const VariationNameValidationOptions = struct {
     compat_ttc_face: bool = false,
 };
@@ -6098,7 +6041,7 @@ fn validateVariationNameReferences(allocator: std.mem.Allocator, data: []const u
         };
     }
     if (stat) |stat_table| {
-        validateStatTable(allocator, data, stat_table, fvar, name_index) catch |err| switch (err) {
+        stat_mod.validate(allocator, data, stat_table, fvar, name_index) catch |err| switch (err) {
             // STAT is optional for shaping, and several upstream shaping
             // fixtures carry stale STAT name IDs even though cmap/GSUB/GPOS
             // bytes are usable. Keep public STAT APIs strict; they revalidate
@@ -6108,430 +6051,6 @@ fn validateVariationNameReferences(allocator: std.mem.Allocator, data: []const u
             else => return err,
         };
     }
-}
-
-fn validateStatTable(allocator: std.mem.Allocator, data: []const u8, stat: TableRecord, fvar: ?TableRecord, name_index: ?*const NameIdIndex) FontError!void {
-    const info = try readStatInfo(data, stat);
-    if (info.minor >= 1) try validateNameIdReference(name_index, try bin.readU16At(data, stat.offset + 18));
-
-    for (0..info.design_axis_count) |index| {
-        const stat_axis = stat.offset + info.design_axes_offset + index * info.design_axis_size;
-        const stat_tag = try bin.readTagAt(data, stat_axis);
-        try sfnt.validateTag(stat_tag);
-        try validateStatDesignAxisOrder(data, stat, fvar, info.design_axes_offset, info.design_axis_size, index, &stat_tag);
-        try validateNameIdReference(name_index, try bin.readU16At(data, stat_axis + 4));
-    }
-
-    const axis_values = try allocator.alloc(StatAxisValueSummary, info.axis_value_count);
-    defer allocator.free(axis_values);
-    for (axis_values, 0..) |*axis_value, index| {
-        const entry_offset = stat.offset + info.axis_value_offsets_offset + index * 2;
-        const axis_value_offset = try resolveStatAxisValueOffset(data, stat, info.axis_value_offsets_offset, entry_offset);
-        axis_value.* = try validateStatAxisValue(
-            data,
-            stat,
-            axis_value_offset,
-            info.design_axis_count,
-            info.design_axes_offset,
-            info.design_axis_size,
-            info.axis_value_offsets_offset,
-            info.axis_value_count,
-            name_index,
-        );
-    }
-    try validateStatAxisValueSet(data, stat, axis_values);
-}
-
-fn readStatInfo(data: []const u8, stat: TableRecord) FontError!StatInfo {
-    if (stat.length < 20) return error.BadSfnt;
-    const major = try bin.readU16At(data, stat.offset);
-    const minor = try bin.readU16At(data, stat.offset + 2);
-    if (major != 1 or minor > 2) return error.BadSfnt;
-
-    const design_axis_size: usize = @intCast(try bin.readU16At(data, stat.offset + 4));
-    const design_axis_count: usize = @intCast(try bin.readU16At(data, stat.offset + 6));
-    const design_axes_offset: usize = @intCast(try bin.readU32At(data, stat.offset + 8));
-    const axis_value_count: usize = @intCast(try bin.readU16At(data, stat.offset + 12));
-    const axis_value_offsets_offset: usize = @intCast(try bin.readU32At(data, stat.offset + 14));
-
-    if (design_axis_size < 8) return error.BadSfnt;
-    if (design_axis_count != 0) {
-        if (design_axes_offset < 20 or design_axes_offset > stat.length) return error.BadSfnt;
-        if (design_axis_count > (stat.length - design_axes_offset) / design_axis_size) return error.BadSfnt;
-    } else if (design_axes_offset != 0 and design_axes_offset < 20) {
-        return error.BadSfnt;
-    }
-
-    if (axis_value_count != 0) {
-        if (axis_value_offsets_offset < 20 or axis_value_offsets_offset > stat.length) return error.BadSfnt;
-        if (axis_value_count > (stat.length - axis_value_offsets_offset) / 2) return error.BadSfnt;
-    } else if (axis_value_offsets_offset != 0 and axis_value_offsets_offset < 20) {
-        return error.BadSfnt;
-    }
-
-    return .{
-        .minor = minor,
-        .design_axis_size = design_axis_size,
-        .design_axis_count = design_axis_count,
-        .design_axes_offset = design_axes_offset,
-        .axis_value_count = axis_value_count,
-        .axis_value_offsets_offset = axis_value_offsets_offset,
-    };
-}
-
-fn validateStatDesignAxisOrder(data: []const u8, stat: TableRecord, fvar: ?TableRecord, design_axes_offset: usize, design_axis_size: usize, axis_index: usize, axis_tag: *const [4]u8) FontError!void {
-    const axis_record = stat.offset + design_axes_offset + axis_index * design_axis_size;
-    const axis_ordering = try bin.readU16At(data, axis_record + 6);
-    for (0..axis_index) |previous_index| {
-        const previous_record = stat.offset + design_axes_offset + previous_index * design_axis_size;
-        const previous_tag = try bin.readTagAt(data, previous_record);
-        if (std.mem.eql(u8, axis_tag, &previous_tag) and !try statDuplicateAxisTagsAllowedByFvar(data, fvar, previous_index, axis_index)) return error.BadSfnt;
-        const previous_ordering = try bin.readU16At(data, previous_record + 6);
-        // AxisOrdering is the canonical presentation sort key for STAT axes.
-        // Duplicate ordering values leave style UIs with no deterministic
-        // canonical axis order, even when the axis tags themselves differ.
-        if (axis_ordering == previous_ordering) return error.BadSfnt;
-    }
-}
-
-fn statDuplicateAxisTagsAllowedByFvar(data: []const u8, fvar: ?TableRecord, previous_index: usize, axis_index: usize) FontError!bool {
-    const fvar_table = fvar orelse return false;
-    const info = try fvar_mod.info(data, fvar_table);
-    if (previous_index >= info.axis_count or axis_index >= info.axis_count) return false;
-    const previous_offset = fvar_mod.axisOffset(fvar_table, info, previous_index);
-    const axis_offset = fvar_mod.axisOffset(fvar_table, info, axis_index);
-    const previous_flags = try bin.readU16At(data, previous_offset + 16);
-    const flags = try bin.readU16At(data, axis_offset + 16);
-    return (previous_flags & 0x0001) != 0 or (flags & 0x0001) != 0;
-}
-
-fn resolveStatAxisValueOffset(data: []const u8, stat: TableRecord, axis_value_offsets_offset: usize, entry_offset: usize) FontError!usize {
-    const relative_offset: usize = @intCast(try bin.readU16At(data, entry_offset));
-    if (relative_offset > stat.length - axis_value_offsets_offset) return error.BadSfnt;
-    const axis_value_offset = axis_value_offsets_offset + relative_offset;
-    if (axis_value_offset < 20 or axis_value_offset > stat.length - 4) return error.BadSfnt;
-    return axis_value_offset;
-}
-
-const StatAxisPoint = struct {
-    axis_index: u16,
-    value: i32,
-    flags: u16,
-    name_id: u16,
-    format: u16,
-};
-
-const StatAxisRange = struct {
-    axis_index: u16,
-    nominal: i32,
-    min: i32,
-    max: i32,
-    flags: u16,
-    name_id: u16,
-};
-
-const StatMultiAxis = struct {
-    axis_count: usize,
-};
-
-const StatMultiAxisCoordinate = struct {
-    axis_index: u16,
-    value: i32,
-};
-
-const StatAxisValueKind = union(enum) {
-    point: StatAxisPoint,
-    range: StatAxisRange,
-    multi_axis: StatMultiAxis,
-};
-
-const StatAxisValueSummary = struct {
-    offset: usize,
-    length: usize,
-    kind: StatAxisValueKind,
-};
-
-fn validateStatAxisValue(data: []const u8, stat: TableRecord, axis_value_offset: usize, design_axis_count: usize, design_axes_offset: usize, design_axis_size: usize, axis_value_offsets_offset: usize, axis_value_count: usize, name_index: ?*const NameIdIndex) FontError!StatAxisValueSummary {
-    const absolute = stat.offset + axis_value_offset;
-    if (absolute + 4 > stat.offset + stat.length) return error.BadSfnt;
-    const format = try bin.readU16At(data, absolute);
-
-    // AxisValue offsets are resolved relative to the AxisValue offset array and
-    // should identify real payload, not the DesignAxisRecord array or the
-    // offset array itself. Without these guards a malformed font can
-    // reinterpret metadata as an AxisValue table.
-    const design_axes_end = design_axes_offset + design_axis_count * design_axis_size;
-    if (axis_value_offset >= design_axes_offset and axis_value_offset < design_axes_end) return error.BadSfnt;
-    const offset_array_end = axis_value_offsets_offset + axis_value_count * 2;
-    if (axis_value_offset >= axis_value_offsets_offset and axis_value_offset < offset_array_end) return error.BadSfnt;
-
-    switch (format) {
-        1 => {
-            const length: usize = 12;
-            if (length > stat.length - axis_value_offset) return error.BadSfnt;
-            const axis_index = try bin.readU16At(data, absolute + 2);
-            if (axis_index >= design_axis_count) return error.BadSfnt;
-            const flags = try bin.readU16At(data, absolute + 4);
-            try validateStatAxisValueFlags(flags);
-            const name_id = try bin.readU16At(data, absolute + 6);
-            try validateNameIdReference(name_index, name_id);
-            return .{
-                .offset = axis_value_offset,
-                .length = length,
-                .kind = .{ .point = .{
-                    .axis_index = axis_index,
-                    .value = try bin.readI32At(data, absolute + 8),
-                    .flags = flags,
-                    .name_id = name_id,
-                    .format = format,
-                } },
-            };
-        },
-        2 => {
-            const length: usize = 20;
-            if (length > stat.length - axis_value_offset) return error.BadSfnt;
-            const axis_index = try bin.readU16At(data, absolute + 2);
-            if (axis_index >= design_axis_count) return error.BadSfnt;
-            const flags = try bin.readU16At(data, absolute + 4);
-            try validateStatAxisValueFlags(flags);
-            const name_id = try bin.readU16At(data, absolute + 6);
-            try validateNameIdReference(name_index, name_id);
-            const nominal = try bin.readI32At(data, absolute + 8);
-            const min = try bin.readI32At(data, absolute + 12);
-            const max = try bin.readI32At(data, absolute + 16);
-            if (min > nominal or nominal > max) return error.BadSfnt;
-            return .{
-                .offset = axis_value_offset,
-                .length = length,
-                .kind = .{ .range = .{
-                    .axis_index = axis_index,
-                    .nominal = nominal,
-                    .min = min,
-                    .max = max,
-                    .flags = flags,
-                    .name_id = name_id,
-                } },
-            };
-        },
-        3 => {
-            const length: usize = 16;
-            if (length > stat.length - axis_value_offset) return error.BadSfnt;
-            const axis_index = try bin.readU16At(data, absolute + 2);
-            if (axis_index >= design_axis_count) return error.BadSfnt;
-            const flags = try bin.readU16At(data, absolute + 4);
-            try validateStatAxisValueFlags(flags);
-            const name_id = try bin.readU16At(data, absolute + 6);
-            try validateNameIdReference(name_index, name_id);
-            return .{
-                .offset = axis_value_offset,
-                .length = length,
-                .kind = .{ .point = .{
-                    .axis_index = axis_index,
-                    .value = try bin.readI32At(data, absolute + 8),
-                    .flags = flags,
-                    .name_id = name_id,
-                    .format = format,
-                } },
-            };
-        },
-        4 => {
-            if (axis_value_offset + 8 > stat.length) return error.BadSfnt;
-            const axis_count: usize = @intCast(try bin.readU16At(data, absolute + 2));
-            if (axis_count == 0) return error.BadSfnt;
-            const flags = try bin.readU16At(data, absolute + 4);
-            try validateStatAxisValueFlags(flags);
-            const name_id = try bin.readU16At(data, absolute + 6);
-            try validateNameIdReference(name_index, name_id);
-            if (axis_count > (stat.length - axis_value_offset - 8) / 6) return error.BadSfnt;
-            for (0..axis_count) |axis_record_index| {
-                const axis_record = absolute + 8 + axis_record_index * 6;
-                const axis_index = try bin.readU16At(data, axis_record);
-                if (axis_index >= design_axis_count) return error.BadSfnt;
-                for (0..axis_record_index) |previous_record_index| {
-                    const previous_axis_record = absolute + 8 + previous_record_index * 6;
-                    if (axis_index == try bin.readU16At(data, previous_axis_record)) return error.BadSfnt;
-                }
-            }
-            if (axis_count == 1) {
-                const coordinate = try readStatMultiAxisCoordinate(data, stat, axis_value_offset, 0);
-                // A single-coordinate format 4 AxisValue has no extra
-                // combination specificity over formats 1/2/3. Treating it as
-                // a point for cross-record validation keeps style-name
-                // selection from depending on table order when it duplicates a
-                // point or sits ambiguously inside a single-axis range.
-                return .{
-                    .offset = axis_value_offset,
-                    .length = 8 + axis_count * 6,
-                    .kind = .{ .point = .{
-                        .axis_index = coordinate.axis_index,
-                        .value = coordinate.value,
-                        .flags = flags,
-                        .name_id = name_id,
-                        .format = format,
-                    } },
-                };
-            }
-            return .{
-                .offset = axis_value_offset,
-                .length = 8 + axis_count * 6,
-                .kind = .{ .multi_axis = .{ .axis_count = axis_count } },
-            };
-        },
-        else => return error.BadSfnt,
-    }
-}
-
-fn readStatAxisValue(allocator: std.mem.Allocator, data: []const u8, stat: TableRecord, axis_value_offset: usize) FontError!StatAxisValue {
-    const absolute = stat.offset + axis_value_offset;
-    const format = try bin.readU16At(data, absolute);
-    return switch (format) {
-        1 => .{
-            .format = format,
-            .axis_index = try bin.readU16At(data, absolute + 2),
-            .flags = try bin.readU16At(data, absolute + 4),
-            .name_id = try bin.readU16At(data, absolute + 6),
-            .value = fixed16_16ToF32(try bin.readI32At(data, absolute + 8)),
-        },
-        2 => .{
-            .format = format,
-            .axis_index = try bin.readU16At(data, absolute + 2),
-            .flags = try bin.readU16At(data, absolute + 4),
-            .name_id = try bin.readU16At(data, absolute + 6),
-            .nominal_value = fixed16_16ToF32(try bin.readI32At(data, absolute + 8)),
-            .range_min_value = fixed16_16ToF32(try bin.readI32At(data, absolute + 12)),
-            .range_max_value = fixed16_16ToF32(try bin.readI32At(data, absolute + 16)),
-        },
-        3 => .{
-            .format = format,
-            .axis_index = try bin.readU16At(data, absolute + 2),
-            .flags = try bin.readU16At(data, absolute + 4),
-            .name_id = try bin.readU16At(data, absolute + 6),
-            .value = fixed16_16ToF32(try bin.readI32At(data, absolute + 8)),
-            .linked_value = fixed16_16ToF32(try bin.readI32At(data, absolute + 12)),
-        },
-        4 => value: {
-            const axis_count: usize = @intCast(try bin.readU16At(data, absolute + 2));
-            const coordinates = try allocator.alloc(StatAxisValueCoordinate, axis_count);
-            errdefer allocator.free(coordinates);
-            for (coordinates, 0..) |*coordinate, axis_record_index| {
-                const axis_record = absolute + 8 + axis_record_index * 6;
-                coordinate.* = .{
-                    .axis_index = try bin.readU16At(data, axis_record),
-                    .value = fixed16_16ToF32(try bin.readI32At(data, axis_record + 2)),
-                };
-            }
-            break :value .{
-                .format = format,
-                .flags = try bin.readU16At(data, absolute + 4),
-                .name_id = try bin.readU16At(data, absolute + 6),
-                .coordinates = coordinates,
-            };
-        },
-        else => error.BadSfnt,
-    };
-}
-
-fn validateStatAxisValueFlags(flags: u16) FontError!void {
-    // The STAT table currently defines only OLDER_SIBLING_FONT_ATTRIBUTE and
-    // ELIDABLE_AXIS_VALUE_NAME. Rejecting reserved bits keeps future style
-    // selection from silently treating unknown semantics as ordinary labels.
-    if ((flags & ~@as(u16, 0x0003)) != 0) return error.BadSfnt;
-}
-
-fn validateStatAxisValuePair(data: []const u8, stat: TableRecord, a: StatAxisValueSummary, b: StatAxisValueSummary) FontError!void {
-    const a_end = a.offset + a.length;
-    const b_end = b.offset + b.length;
-    if (a.offset < b_end and b.offset < a_end) return error.BadSfnt;
-
-    switch (a.kind) {
-        .point => |point_a| switch (b.kind) {
-            .point => |point_b| try validateStatAxisPointPair(point_a, point_b),
-            .range => |range_b| try validateStatAxisPointRange(point_a, range_b),
-            .multi_axis => {},
-        },
-        .range => |range_a| switch (b.kind) {
-            .point => |point_b| try validateStatAxisPointRange(point_b, range_a),
-            .range => |range_b| try validateStatAxisRangePair(range_a, range_b),
-            .multi_axis => {},
-        },
-        .multi_axis => |multi_axis_a| switch (b.kind) {
-            .point, .range => {},
-            .multi_axis => |multi_axis_b| _ = try validateStatMultiAxisPair(data, stat, a, multi_axis_a, b, multi_axis_b),
-        },
-    }
-}
-
-fn validateStatAxisValueSet(data: []const u8, stat: TableRecord, axis_values: []const StatAxisValueSummary) FontError!void {
-    for (axis_values, 0..) |axis_value, index| {
-        for (axis_values[0..index]) |previous_axis_value| {
-            try validateStatAxisValuePair(data, stat, previous_axis_value, axis_value);
-        }
-    }
-}
-
-fn validateStatMultiAxisPair(data: []const u8, stat: TableRecord, a: StatAxisValueSummary, multi_axis_a: StatMultiAxis, b: StatAxisValueSummary, multi_axis_b: StatMultiAxis) FontError!bool {
-    if (multi_axis_a.axis_count != multi_axis_b.axis_count) return false;
-
-    // AxisValue format 4 is a compound style label; axisValueRecords are a set
-    // of axis/value coordinates, not a distinct ordered tuple. Reject exact
-    // set duplicates regardless of name IDs or flags so style-name resolution
-    // cannot depend on AxisValue record order. Proper subset/superset matches
-    // remain valid because the later selector can prefer the more-specific set.
-    for (0..multi_axis_a.axis_count) |axis_record_index| {
-        const coordinate = try readStatMultiAxisCoordinate(data, stat, a.offset, axis_record_index);
-        const b_value = try statMultiAxisValueForAxis(data, stat, b.offset, multi_axis_b.axis_count, coordinate.axis_index) orelse return false;
-        if (b_value != coordinate.value) return false;
-    }
-    return true;
-}
-
-fn readStatMultiAxisCoordinate(data: []const u8, stat: TableRecord, axis_value_offset: usize, axis_record_index: usize) FontError!StatMultiAxisCoordinate {
-    const axis_record = stat.offset + axis_value_offset + 8 + axis_record_index * 6;
-    return .{
-        .axis_index = try bin.readU16At(data, axis_record),
-        .value = try bin.readI32At(data, axis_record + 2),
-    };
-}
-
-fn statMultiAxisValueForAxis(data: []const u8, stat: TableRecord, axis_value_offset: usize, axis_count: usize, axis_index: u16) FontError!?i32 {
-    for (0..axis_count) |axis_record_index| {
-        const coordinate = try readStatMultiAxisCoordinate(data, stat, axis_value_offset, axis_record_index);
-        if (coordinate.axis_index == axis_index) return coordinate.value;
-    }
-    return null;
-}
-
-fn validateStatAxisPointPair(a: StatAxisPoint, b: StatAxisPoint) FontError!void {
-    if (a.axis_index == b.axis_index and a.value == b.value) return error.BadSfnt;
-}
-
-fn validateStatAxisPointRange(point: StatAxisPoint, range: StatAxisRange) FontError!void {
-    if (point.axis_index != range.axis_index) return;
-    if (point.value < range.min or point.value > range.max) return;
-
-    if (statFormat3RangeNominalException(point, range)) return;
-
-    // Format 2 ranges may touch point AxisValues at their endpoints, but a
-    // point inside a range (or exactly on the range's nominal endpoint) leaves
-    // style-name selection ambiguous. Validate the full AxisValue set once
-    // during parsing instead of letting later matching depend on table order.
-    if (point.value > range.min and point.value < range.max) return error.BadSfnt;
-    if (point.value == range.nominal) return error.BadSfnt;
-}
-
-fn statFormat3RangeNominalException(point: StatAxisPoint, range: StatAxisRange) bool {
-    return point.format == 3 and
-        point.value == range.nominal and
-        point.flags == range.flags and
-        point.name_id == range.name_id;
-}
-
-fn validateStatAxisRangePair(a: StatAxisRange, b: StatAxisRange) FontError!void {
-    if (a.axis_index != b.axis_index) return;
-
-    const lower, const upper = if (a.min < b.min or (a.min == b.min and a.max <= b.max)) .{ a, b } else .{ b, a };
-    if (lower.max > upper.min) return error.BadSfnt;
-    if (lower.max == upper.min and lower.nominal == lower.max and upper.nominal == upper.min) return error.BadSfnt;
 }
 
 const GvarGlyphTargetContext = struct {
@@ -9643,242 +9162,6 @@ test "MVAR value records reference existing ItemVariationData items" {
     try std.testing.expectError(error.BadSfnt, validateMvarTable(&bad_inner_index, mvar, 1));
 }
 
-test "STAT design axes may differ from fvar presentation axes" {
-    var bytes: [78]u8 = .{0} ** 78;
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 4, 16);
-    writeU16Test(&bytes, 6, 2);
-    writeU16Test(&bytes, 8, 1);
-    writeU16Test(&bytes, 10, 20);
-    writeFvarAxisTest(&bytes, 16, "wght", 100.0, 400.0, 900.0, 256);
-
-    const stat_offset = 36;
-    writeStatHeaderTest(&bytes, stat_offset, 1, 1, 28);
-    writeStatAxisTest(&bytes, stat_offset + 20, "wght", 256, 0);
-    writeU16Test(&bytes, stat_offset + 28, 2);
-    writeStatAxisValueFormat1Test(&bytes, stat_offset + 30, 0);
-
-    const fvar = TableRecord{ .tag = .{ 'f', 'v', 'a', 'r' }, .checksum = 0, .offset = 0, .length = 36 };
-    const stat = TableRecord{ .tag = .{ 'S', 'T', 'A', 'T' }, .checksum = 0, .offset = stat_offset, .length = bytes.len - stat_offset };
-    const names = nameIndexForTest(&.{ 0, 2, 256, 258 });
-    try validateStatTable(std.testing.allocator, &bytes, stat, fvar, &names);
-
-    var mismatched = bytes;
-    writeTagTest(&mismatched, stat_offset + 20, "wdth");
-    try validateStatTable(std.testing.allocator, &mismatched, stat, fvar, &names);
-}
-
-test "STAT design axes have unique tags and ordering values" {
-    var bytes: [56]u8 = .{0} ** 56;
-    writeStatHeaderTest(&bytes, 0, 2, 0, 0);
-    writeStatAxisTest(&bytes, 20, "wght", 256, 0);
-    writeStatAxisTest(&bytes, 28, "wdth", 257, 1);
-
-    const stat = TableRecord{ .tag = .{ 'S', 'T', 'A', 'T' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    const names = nameIndexForTest(&.{ 2, 256, 257 });
-    try validateStatTable(std.testing.allocator, &bytes, stat, null, &names);
-
-    var duplicate_tag = bytes;
-    writeStatAxisTest(&duplicate_tag, 28, "wght", 257, 1);
-    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &duplicate_tag, stat, null, &names));
-
-    var duplicate_order = bytes;
-    writeStatAxisTest(&duplicate_order, 28, "wdth", 257, 0);
-    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &duplicate_order, stat, null, &names));
-
-    var invalid_axis_tag = bytes;
-    invalid_axis_tag[28] = 0x7f; // STAT design-axis tags must also be printable OpenType tags.
-    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &invalid_axis_tag, stat, null, &names));
-}
-
-test "STAT AxisValue offsets and axis indexes stay inside declared records" {
-    var metadata_overlap: [42]u8 = .{0} ** 42;
-    writeStatHeaderTest(&metadata_overlap, 0, 1, 1, 28);
-    writeStatAxisTest(&metadata_overlap, 20, "wght", 256, 0);
-    writeU16Test(&metadata_overlap, 28, 0); // Points back into the AxisValue offsets array.
-    writeStatAxisValueFormat1Test(&metadata_overlap, 30, 0);
-
-    const stat = TableRecord{ .tag = .{ 'S', 'T', 'A', 'T' }, .checksum = 0, .offset = 0, .length = metadata_overlap.len };
-    const names = nameIndexForTest(&.{ 0, 2, 256, 258 });
-    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &metadata_overlap, stat, null, &names));
-
-    var bad_axis_index = metadata_overlap;
-    writeU16Test(&bad_axis_index, 28, 2);
-    writeStatAxisValueFormat1Test(&bad_axis_index, 30, 1); // Only axis 0 is declared.
-    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &bad_axis_index, stat, null, &names));
-}
-
-test "STAT AxisValue offset array may be out of payload order" {
-    var bytes: [64]u8 = .{0} ** 64;
-    writeStatHeaderTest(&bytes, 0, 1, 2, 28);
-    writeStatAxisTest(&bytes, 20, "wght", 256, 0);
-    writeU16Test(&bytes, 28, 4);
-    writeU16Test(&bytes, 30, 24);
-    writeStatAxisValueFormat2Test(&bytes, 32, 0, 258, 350.0, 300.0, 400.0);
-    writeStatAxisValueFormat1WithValueTest(&bytes, 52, 0, 259, 500.0);
-
-    const stat = TableRecord{ .tag = .{ 'S', 'T', 'A', 'T' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    const names = nameIndexForTest(&.{ 0, 2, 256, 258, 259 });
-    try validateStatTable(std.testing.allocator, &bytes, stat, null, &names);
-
-    var decreasing_offsets = bytes;
-    writeU16Test(&decreasing_offsets, 28, 24);
-    writeU16Test(&decreasing_offsets, 30, 4);
-    try validateStatTable(std.testing.allocator, &decreasing_offsets, stat, null, &names);
-
-    var duplicate_offsets = bytes;
-    writeU16Test(&duplicate_offsets, 30, 4);
-    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &duplicate_offsets, stat, null, &names));
-}
-
-test "STAT AxisValue payloads do not overlap" {
-    var bytes: [64]u8 = .{0} ** 64;
-    writeStatHeaderTest(&bytes, 0, 1, 2, 28);
-    writeStatAxisTest(&bytes, 20, "wght", 256, 0);
-    writeU16Test(&bytes, 28, 4);
-    writeU16Test(&bytes, 30, 24);
-    writeStatAxisValueFormat2Test(&bytes, 32, 0, 258, 350.0, 300.0, 400.0);
-    writeStatAxisValueFormat1WithValueTest(&bytes, 52, 0, 258, 500.0);
-
-    const stat = TableRecord{ .tag = .{ 'S', 'T', 'A', 'T' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    const names = nameIndexForTest(&.{ 0, 2, 256, 258 });
-    try validateStatTable(std.testing.allocator, &bytes, stat, null, &names);
-
-    var overlapping_payload = bytes;
-    writeU16Test(&overlapping_payload, 30, 12); // Starts inside the first 20-byte AxisValue record.
-    writeStatAxisValueFormat1WithValueTest(&overlapping_payload, 40, 0, 258, 400.0);
-    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &overlapping_payload, stat, null, &names));
-}
-
-test "STAT AxisValue ranges and points avoid ambiguous overlaps" {
-    const stat = TableRecord{ .tag = .{ 'S', 'T', 'A', 'T' }, .checksum = 0, .offset = 0, .length = 94 };
-    const names = nameIndexForTest(&.{ 0, 2, 256, 258, 259, 260, 261 });
-
-    var touching_ranges: [94]u8 = .{0} ** 94;
-    writeStatHeaderTest(&touching_ranges, 0, 1, 3, 28);
-    writeStatAxisTest(&touching_ranges, 20, "wght", 256, 0);
-    writeU16Test(&touching_ranges, 28, 6);
-    writeU16Test(&touching_ranges, 30, 26);
-    writeU16Test(&touching_ranges, 32, 46);
-    writeStatAxisValueFormat2Test(&touching_ranges, 34, 0, 258, 350.0, 300.0, 400.0);
-    writeStatAxisValueFormat2Test(&touching_ranges, 54, 0, 259, 450.0, 400.0, 500.0);
-    writeStatAxisValueFormat1WithValueTest(&touching_ranges, 74, 0, 260, 500.0);
-    try validateStatTable(std.testing.allocator, &touching_ranges, stat, null, &names);
-
-    var overlapping_ranges = touching_ranges;
-    writeStatAxisValueFormat2Test(&overlapping_ranges, 54, 0, 259, 450.0, 399.0, 500.0);
-    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &overlapping_ranges, stat, null, &names));
-
-    var duplicate_boundary_nominal = touching_ranges;
-    writeStatAxisValueFormat2Test(&duplicate_boundary_nominal, 34, 0, 258, 400.0, 300.0, 400.0);
-    writeStatAxisValueFormat2Test(&duplicate_boundary_nominal, 54, 0, 259, 400.0, 400.0, 500.0);
-    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &duplicate_boundary_nominal, stat, null, &names));
-
-    var point_inside_range = touching_ranges;
-    writeStatAxisValueFormat1WithValueTest(&point_inside_range, 74, 0, 260, 350.0);
-    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &point_inside_range, stat, null, &names));
-
-    var linked_point_at_nominal = touching_ranges;
-    writeStatAxisValueFormat3Test(&linked_point_at_nominal, 74, 0, 258, 350.0, 700.0);
-    try validateStatTable(std.testing.allocator, &linked_point_at_nominal, stat, null, &names);
-
-    var duplicate_points: [60]u8 = .{0} ** 60;
-    writeStatHeaderTest(&duplicate_points, 0, 1, 2, 28);
-    writeStatAxisTest(&duplicate_points, 20, "wght", 256, 0);
-    writeU16Test(&duplicate_points, 28, 4);
-    writeU16Test(&duplicate_points, 30, 16);
-    writeStatAxisValueFormat1WithValueTest(&duplicate_points, 32, 0, 258, 400.0);
-    writeStatAxisValueFormat3Test(&duplicate_points, 44, 0, 261, 400.0, 700.0);
-    const duplicate_points_stat = TableRecord{ .tag = .{ 'S', 'T', 'A', 'T' }, .checksum = 0, .offset = 0, .length = duplicate_points.len };
-    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &duplicate_points, duplicate_points_stat, null, &names));
-}
-
-test "STAT format 4 AxisValue records reference each axis once" {
-    var duplicate_axis: [46]u8 = .{0} ** 46;
-    writeStatHeaderTest(&duplicate_axis, 0, 1, 1, 28);
-    writeStatAxisTest(&duplicate_axis, 20, "wght", 256, 0);
-    writeU16Test(&duplicate_axis, 28, 2);
-    writeU16Test(&duplicate_axis, 30, 4);
-    writeU16Test(&duplicate_axis, 32, 2); // axisCount.
-    writeU16Test(&duplicate_axis, 34, 0); // flags.
-    writeU16Test(&duplicate_axis, 36, 258);
-    writeU16Test(&duplicate_axis, 38, 0);
-    writeF16Dot16Test(&duplicate_axis, 40, 400.0);
-    writeU16Test(&duplicate_axis, 44, 0); // Duplicate axis index.
-
-    const stat = TableRecord{ .tag = .{ 'S', 'T', 'A', 'T' }, .checksum = 0, .offset = 0, .length = duplicate_axis.len };
-    const names = nameIndexForTest(&.{ 0, 2, 256, 258 });
-    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &duplicate_axis, stat, null, &names));
-}
-
-test "STAT single-axis format 4 values must not duplicate point or range labels" {
-    const stat = TableRecord{ .tag = .{ 'S', 'T', 'A', 'T' }, .checksum = 0, .offset = 0, .length = 80 };
-    const names = nameIndexForTest(&.{ 0, 2, 256, 258, 259, 260 });
-
-    var bytes: [80]u8 = .{0} ** 80;
-    writeStatHeaderTest(&bytes, 0, 1, 3, 28);
-    writeStatAxisTest(&bytes, 20, "wght", 256, 0);
-    writeU16Test(&bytes, 28, 6);
-    writeU16Test(&bytes, 30, 18);
-    writeU16Test(&bytes, 32, 38);
-    writeStatAxisValueFormat1WithValueTest(&bytes, 34, 0, 258, 700.0);
-    writeStatAxisValueFormat2Test(&bytes, 46, 0, 259, 450.0, 400.0, 500.0);
-    writeStatAxisValueFormat4Test(&bytes, 66, 260, &.{
-        .{ .axis_index = 0, .value = 300.0 },
-    });
-    try validateStatTable(std.testing.allocator, &bytes, stat, null, &names);
-
-    var duplicate_point = bytes;
-    writeStatAxisValueFormat4Test(&duplicate_point, 66, 260, &.{
-        .{ .axis_index = 0, .value = 700.0 },
-    });
-    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &duplicate_point, stat, null, &names));
-
-    var inside_range = bytes;
-    writeStatAxisValueFormat4Test(&inside_range, 66, 260, &.{
-        .{ .axis_index = 0, .value = 450.0 },
-    });
-    try std.testing.expectError(error.BadSfnt, validateStatTable(std.testing.allocator, &inside_range, stat, null, &names));
-
-    var boundary = bytes;
-    writeStatAxisValueFormat4Test(&boundary, 66, 260, &.{
-        .{ .axis_index = 0, .value = 400.0 },
-    });
-    try validateStatTable(std.testing.allocator, &boundary, stat, null, &names);
-}
-
-test "STAT format 4 AxisValue coordinate sets tolerate platform duplicates" {
-    var bytes: [96]u8 = .{0} ** 96;
-    writeStatHeaderTest(&bytes, 0, 2, 3, 36);
-    writeStatAxisTest(&bytes, 20, "wght", 256, 0);
-    writeStatAxisTest(&bytes, 28, "wdth", 257, 1);
-    writeU16Test(&bytes, 36, 6);
-    writeU16Test(&bytes, 38, 26);
-    writeU16Test(&bytes, 40, 40);
-    writeStatAxisValueFormat4Test(&bytes, 42, 258, &.{
-        .{ .axis_index = 0, .value = 400.0 },
-        .{ .axis_index = 1, .value = 100.0 },
-    });
-    writeStatAxisValueFormat4Test(&bytes, 62, 259, &.{
-        .{ .axis_index = 0, .value = 400.0 },
-    });
-    writeStatAxisValueFormat4Test(&bytes, 76, 260, &.{
-        .{ .axis_index = 0, .value = 700.0 },
-        .{ .axis_index = 1, .value = 100.0 },
-    });
-
-    const stat = TableRecord{ .tag = .{ 'S', 'T', 'A', 'T' }, .checksum = 0, .offset = 0, .length = bytes.len };
-    const names = nameIndexForTest(&.{ 2, 256, 257, 258, 259, 260 });
-    try validateStatTable(std.testing.allocator, &bytes, stat, null, &names);
-
-    var duplicate_coordinate_set = bytes;
-    writeStatAxisValueFormat4Test(&duplicate_coordinate_set, 76, 260, &.{
-        .{ .axis_index = 1, .value = 100.0 },
-        .{ .axis_index = 0, .value = 400.0 },
-    });
-    try validateStatTable(std.testing.allocator, &duplicate_coordinate_set, stat, null, &names);
-}
-
 test "macOS platform UI fonts parse for text metrics" {
     if (@import("builtin").target.os.tag != .macos) return error.SkipZigTest;
     const paths = [_][]const u8{
@@ -10173,10 +9456,6 @@ fn writeUtf16NameRecordTest(bytes: []u8, offset: usize, name_id: u16, length: u1
     writeNameRecordTest(bytes, offset, 3, 1, 0x0409, name_id, length, storage_offset);
 }
 
-fn nameIndexForTest(name_ids: []const u16) NameIdIndex {
-    return NameIdIndex.initForTest(name_ids);
-}
-
 fn writeFvarAxisTest(bytes: []u8, offset: usize, tag_text: []const u8, min: f32, default: f32, max: f32, name_id: u16) void {
     writeTagTest(bytes, offset, tag_text);
     writeF16Dot16Test(bytes, offset + 4, min);
@@ -10184,71 +9463,6 @@ fn writeFvarAxisTest(bytes: []u8, offset: usize, tag_text: []const u8, min: f32,
     writeF16Dot16Test(bytes, offset + 12, max);
     writeU16Test(bytes, offset + 16, 0);
     writeU16Test(bytes, offset + 18, name_id);
-}
-
-fn writeStatHeaderTest(bytes: []u8, offset: usize, design_axis_count: u16, axis_value_count: u16, axis_value_offsets_offset: u32) void {
-    writeU16Test(bytes, offset + 0, 1);
-    writeU16Test(bytes, offset + 2, 1);
-    writeU16Test(bytes, offset + 4, 8);
-    writeU16Test(bytes, offset + 6, design_axis_count);
-    writeU32Test(bytes, offset + 8, 20);
-    writeU16Test(bytes, offset + 12, axis_value_count);
-    writeU32Test(bytes, offset + 14, axis_value_offsets_offset);
-    writeU16Test(bytes, offset + 18, 2); // elidedFallbackNameID
-}
-
-fn writeStatAxisTest(bytes: []u8, offset: usize, tag_text: []const u8, name_id: u16, ordering: u16) void {
-    writeTagTest(bytes, offset, tag_text);
-    writeU16Test(bytes, offset + 4, name_id);
-    writeU16Test(bytes, offset + 6, ordering);
-}
-
-fn writeStatAxisValueFormat1Test(bytes: []u8, offset: usize, axis_index: u16) void {
-    writeStatAxisValueFormat1WithValueTest(bytes, offset, axis_index, 258, 400.0);
-}
-
-fn writeStatAxisValueFormat1WithValueTest(bytes: []u8, offset: usize, axis_index: u16, name_id: u16, value: f32) void {
-    writeU16Test(bytes, offset + 0, 1);
-    writeU16Test(bytes, offset + 2, axis_index);
-    writeU16Test(bytes, offset + 4, 0);
-    writeU16Test(bytes, offset + 6, name_id);
-    writeF16Dot16Test(bytes, offset + 8, value);
-}
-
-fn writeStatAxisValueFormat2Test(bytes: []u8, offset: usize, axis_index: u16, name_id: u16, nominal: f32, min: f32, max: f32) void {
-    writeU16Test(bytes, offset + 0, 2);
-    writeU16Test(bytes, offset + 2, axis_index);
-    writeU16Test(bytes, offset + 4, 0);
-    writeU16Test(bytes, offset + 6, name_id);
-    writeF16Dot16Test(bytes, offset + 8, nominal);
-    writeF16Dot16Test(bytes, offset + 12, min);
-    writeF16Dot16Test(bytes, offset + 16, max);
-}
-
-fn writeStatAxisValueFormat3Test(bytes: []u8, offset: usize, axis_index: u16, name_id: u16, value: f32, linked_value: f32) void {
-    writeU16Test(bytes, offset + 0, 3);
-    writeU16Test(bytes, offset + 2, axis_index);
-    writeU16Test(bytes, offset + 4, 0);
-    writeU16Test(bytes, offset + 6, name_id);
-    writeF16Dot16Test(bytes, offset + 8, value);
-    writeF16Dot16Test(bytes, offset + 12, linked_value);
-}
-
-const StatAxisValueFormat4CoordinateTest = struct {
-    axis_index: u16,
-    value: f32,
-};
-
-fn writeStatAxisValueFormat4Test(bytes: []u8, offset: usize, name_id: u16, coordinates: []const StatAxisValueFormat4CoordinateTest) void {
-    writeU16Test(bytes, offset + 0, 4);
-    writeU16Test(bytes, offset + 2, @intCast(coordinates.len));
-    writeU16Test(bytes, offset + 4, 0);
-    writeU16Test(bytes, offset + 6, name_id);
-    for (coordinates, 0..) |coordinate, index| {
-        const record_offset = offset + 8 + index * 6;
-        writeU16Test(bytes, record_offset + 0, coordinate.axis_index);
-        writeF16Dot16Test(bytes, record_offset + 2, coordinate.value);
-    }
 }
 
 fn writeHvarTableWithOneItemVariationData(bytes: []u8) void {

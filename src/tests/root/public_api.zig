@@ -67,6 +67,9 @@ test "public facade uses domain names without legacy aliases" {
         cangjie.font.metadata.variations.Axis,
         cangjie.font.metadata.variations.Coordinate,
         cangjie.font.metadata.variations.Instance,
+        cangjie.font.metadata.variations.StatAxis,
+        cangjie.font.metadata.variations.StatValue,
+        cangjie.font.metadata.variations.StatCoordinate,
     }) |Value| {
         // Variable-font values cross only the source-level Zig API. Keep them
         // concrete and inspectable rather than regressing to ABI-style opaque

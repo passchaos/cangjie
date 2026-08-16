@@ -113,10 +113,21 @@ pub const Store = struct {
             all_sources,
             logical_component_sources,
         );
+        const appended_len = all_sources.len +
+            if (shared_sources) 0 else logical_component_sources.len;
+        const target_len = std.math.add(
+            usize,
+            self.sources.items.len,
+            appended_len,
+        ) catch return error.OutOfMemory;
+        // Both views publish one immutable handle. Reserve their combined
+        // storage before changing `len`, so OOM cannot leave an unreachable
+        // prefix from the first append when the second append fails.
+        try self.sources.ensureTotalCapacity(allocator, target_len);
         const source_start: u32 = @intCast(self.sources.items.len);
-        try self.sources.appendSlice(allocator, all_sources);
+        self.sources.appendSliceAssumeCapacity(all_sources);
         if (!shared_sources) {
-            try self.sources.appendSlice(allocator, logical_component_sources);
+            self.sources.appendSliceAssumeCapacity(logical_component_sources);
         }
         return .{
             .source_start = source_start,
@@ -214,6 +225,54 @@ test "ligature handles share immutable component source slices" {
     try std.testing.expectEqualSlices(usize, &.{ 2, 5, 9 }, store.logicalComponentSources(store.infos.items[0]).?);
     try std.testing.expectEqual(store.infos.items[0].source_start, store.infos.items[1].source_start);
     try std.testing.expect(store.isValid());
+}
+
+test "dual provenance views append atomically on allocation failure" {
+    const allocator = std.testing.allocator;
+    var fail_index: usize = 0;
+    while (true) : (fail_index += 1) {
+        var store = Store{};
+        defer store.deinit(allocator);
+        try store.sources.append(allocator, 1);
+        store.sources.shrinkAndFree(allocator, store.sources.items.len);
+        var failing = std.testing.FailingAllocator.init(
+            allocator,
+            .{ .fail_index = fail_index },
+        );
+
+        const result = store.addLigatureWithSources(
+            failing.allocator(),
+            &.{ 2, 4, 6 },
+            &.{ 2, 6 },
+        );
+        if (result) |info| {
+            if (failing.has_induced_failure) {
+                return error.SwallowedOutOfMemoryError;
+            }
+            try std.testing.expectEqualSlices(
+                usize,
+                &.{ 1, 2, 4, 6, 2, 6 },
+                store.sources.items,
+            );
+            try std.testing.expectEqualSlices(
+                usize,
+                &.{ 2, 4, 6 },
+                store.componentSources(info).?,
+            );
+            try std.testing.expectEqualSlices(
+                usize,
+                &.{ 2, 6 },
+                store.logicalComponentSources(info).?,
+            );
+            break;
+        } else |err| switch (err) {
+            error.OutOfMemory => try std.testing.expectEqualSlices(
+                usize,
+                &.{1},
+                store.sources.items,
+            ),
+        }
+    }
 }
 
 test "source renumbering updates a shared slice exactly once" {

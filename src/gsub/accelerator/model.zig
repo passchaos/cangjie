@@ -13,6 +13,11 @@ const class_context = @import("../../opentype/class_context.zig");
 /// cached sidecars share one explicit bound.
 pub const max_ligature_components = 64;
 
+/// Class-based contextual accelerators and their runtime matchers share fixed
+/// stack windows. Keep the builder admission policy and executor storage bound
+/// as one model contract so neither side can silently accept wider rules.
+pub const max_context_region_glyphs = 64;
+
 pub const Lookup = struct {
     /// Dispatch fields decoded once from the validated Lookup table. Runtime
     /// use checks `lookup_offset`, so a stale or foreign sidecar falls back to

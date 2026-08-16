@@ -2,4 +2,5 @@
 
 test {
     _ = @import("cursive.zig");
+    _ = @import("marks/root.zig");
 }

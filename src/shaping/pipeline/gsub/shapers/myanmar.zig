@@ -99,7 +99,7 @@ pub fn run(input: Input) !void {
         );
     }
 
-    var final_buf: [20]gsub.FeatureApplication = undefined;
+    var final_buf: [20]gsub.feature.Application = undefined;
     var final_count: usize = 0;
     for (myanmar.featureApplications(.final)) |application| {
         if (!features.enabled(
@@ -110,7 +110,7 @@ pub fn run(input: Input) !void {
         final_buf[final_count] = application;
         final_count += 1;
     }
-    for ([_]gsub.FeatureApplication{
+    for ([_]gsub.feature.Application{
         .{ .tag = unicode.tag("rlig") },
         .{ .tag = unicode.tag("calt") },
         .{ .tag = unicode.tag("clig") },

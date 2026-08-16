@@ -148,16 +148,16 @@ fn setSourceFeature(
 ) void {
     if (source >= source_features.len) return;
     const joining_mask =
-        (gsub.sourceFeatureMaskForTag(unicode.tag("isol")).? |
-            gsub.sourceFeatureMaskForTag(unicode.tag("init")).? |
-            gsub.sourceFeatureMaskForTag(unicode.tag("medi")).? |
-            gsub.sourceFeatureMaskForTag(unicode.tag("fina")).?) &
-        ~gsub.source_feature_mask_marker;
+        (gsub.feature.sourceMaskForTag(unicode.tag("isol")).? |
+            gsub.feature.sourceMaskForTag(unicode.tag("init")).? |
+            gsub.feature.sourceMaskForTag(unicode.tag("medi")).? |
+            gsub.feature.sourceMaskForTag(unicode.tag("fina")).?) &
+        ~gsub.feature.source_mask_marker;
     const form_mask = switch (form) {
-        .isolated => gsub.sourceFeatureMaskForTag(unicode.tag("isol")).?,
-        .initial => gsub.sourceFeatureMaskForTag(unicode.tag("init")).?,
-        .medial => gsub.sourceFeatureMaskForTag(unicode.tag("medi")).?,
-        .final => gsub.sourceFeatureMaskForTag(unicode.tag("fina")).?,
+        .isolated => gsub.feature.sourceMaskForTag(unicode.tag("isol")).?,
+        .initial => gsub.feature.sourceMaskForTag(unicode.tag("init")).?,
+        .medial => gsub.feature.sourceMaskForTag(unicode.tag("medi")).?,
+        .final => gsub.feature.sourceMaskForTag(unicode.tag("fina")).?,
         .none => 0,
     };
     const existing = source_features[source];

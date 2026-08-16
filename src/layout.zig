@@ -1973,7 +1973,7 @@ fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         lookup_options.features;
 
     var gsub_random_state: u32 = 1;
-    var gsub_run_limits = try gsub.RunLimits.init(glyph_ids.items.len);
+    var gsub_run_limits = try gsub.runtime.Limits.init(glyph_ids.items.len);
     // Keep source metadata parallel to glyph ids through GSUB. GPOS MarkLigPos
     // needs the original component sources for a ligature glyph; otherwise a
     // mark after a ligature can only guess a component from post-substitution

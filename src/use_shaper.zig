@@ -367,7 +367,7 @@ pub fn recordRphfSubstitutions(
     source_rphf_substituted: []bool,
 ) void {
     std.debug.assert(glyph_source_indices.len == glyph_stage_substituted.len);
-    const rphf_mask = gsub.sourceFeatureMaskForTag(unicode.tag("rphf")).?;
+    const rphf_mask = gsub.feature.sourceMaskForTag(unicode.tag("rphf")).?;
     var previous_syllable: u8 = 0;
     var found_in_syllable = false;
     for (glyph_source_indices, glyph_stage_substituted) |source, substituted| {
@@ -615,7 +615,7 @@ fn syllableKindIs(syllable_id: u8, kind: SyllableType) bool {
     return (syllable_id & 0x0f) == @intFromEnum(kind);
 }
 
-const feature_applications = [_]gsub.FeatureApplication{
+const feature_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("locl"), .match_source_syllable = true },
     .{ .tag = unicode.tag("ccmp"), .match_source_syllable = true },
     .{ .tag = unicode.tag("nukt"), .match_source_syllable = true },
@@ -648,22 +648,22 @@ const feature_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("rclt") },
 };
 
-const default_preprocessing_applications = [_]gsub.FeatureApplication{
+const default_preprocessing_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("locl"), .match_source_syllable = true },
     .{ .tag = unicode.tag("ccmp"), .match_source_syllable = true },
     .{ .tag = unicode.tag("nukt"), .match_source_syllable = true },
     .{ .tag = unicode.tag("akhn"), .match_source_syllable = true, .auto_zwj = false },
 };
 
-const rphf_applications = [_]gsub.FeatureApplication{
+const rphf_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("rphf"), .source_scoped = true, .match_source_syllable = true, .auto_zwj = false },
 };
 
-const pref_applications = [_]gsub.FeatureApplication{
+const pref_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("pref"), .match_source_syllable = true, .auto_zwj = false },
 };
 
-const basic_applications = [_]gsub.FeatureApplication{
+const basic_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("rkrf"), .match_source_syllable = true, .auto_zwj = false },
     .{ .tag = unicode.tag("abvf"), .match_source_syllable = true, .auto_zwj = false },
     .{ .tag = unicode.tag("blwf"), .match_source_syllable = true, .auto_zwj = false },
@@ -673,14 +673,14 @@ const basic_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("cjct"), .match_source_syllable = true, .auto_zwj = false },
 };
 
-const topographical_applications = [_]gsub.FeatureApplication{
+const topographical_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("isol"), .source_scoped = true },
     .{ .tag = unicode.tag("init"), .source_scoped = true },
     .{ .tag = unicode.tag("medi"), .source_scoped = true },
     .{ .tag = unicode.tag("fina"), .source_scoped = true },
 };
 
-const final_applications = [_]gsub.FeatureApplication{
+const final_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("abvs"), .auto_zwj = false },
     .{ .tag = unicode.tag("blws"), .auto_zwj = false },
     .{ .tag = unicode.tag("haln"), .auto_zwj = false },
@@ -688,7 +688,7 @@ const final_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("psts"), .auto_zwj = false },
 };
 
-const typographic_applications = [_]gsub.FeatureApplication{
+const typographic_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("abvm") },
     .{ .tag = unicode.tag("blwm") },
     .{ .tag = unicode.tag("rlig") },
@@ -699,35 +699,35 @@ const typographic_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("rclt") },
 };
 
-pub fn featureApplications() []const gsub.FeatureApplication {
+pub fn featureApplications() []const gsub.feature.Application {
     return &feature_applications;
 }
 
-pub fn defaultPreprocessingFeatureApplications() []const gsub.FeatureApplication {
+pub fn defaultPreprocessingFeatureApplications() []const gsub.feature.Application {
     return &default_preprocessing_applications;
 }
 
-pub fn rphfFeatureApplications() []const gsub.FeatureApplication {
+pub fn rphfFeatureApplications() []const gsub.feature.Application {
     return &rphf_applications;
 }
 
-pub fn prefFeatureApplications() []const gsub.FeatureApplication {
+pub fn prefFeatureApplications() []const gsub.feature.Application {
     return &pref_applications;
 }
 
-pub fn basicFeatureApplications() []const gsub.FeatureApplication {
+pub fn basicFeatureApplications() []const gsub.feature.Application {
     return &basic_applications;
 }
 
-pub fn topographicalFeatureApplications() []const gsub.FeatureApplication {
+pub fn topographicalFeatureApplications() []const gsub.feature.Application {
     return &topographical_applications;
 }
 
-pub fn finalFeatureApplications() []const gsub.FeatureApplication {
+pub fn finalFeatureApplications() []const gsub.feature.Application {
     return &final_applications;
 }
 
-pub fn typographicFeatureApplications() []const gsub.FeatureApplication {
+pub fn typographicFeatureApplications() []const gsub.feature.Application {
     return &typographic_applications;
 }
 
@@ -1070,7 +1070,7 @@ test "USE prebase vowel reorders before synthetic dotted circle" {
 }
 
 test "USE records only the first rphf substitution in each syllable" {
-    const rphf_mask = gsub.sourceFeatureMaskForTag(unicode.tag("rphf")).?;
+    const rphf_mask = gsub.feature.sourceMaskForTag(unicode.tag("rphf")).?;
     const sources = [_]usize{ 0, 0, 2, 3, 4 };
     const stage_substituted = [_]bool{ true, true, false, true, true };
     const source_features = [_]u32{

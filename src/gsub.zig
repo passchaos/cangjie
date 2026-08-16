@@ -1,15 +1,47 @@
 const std = @import("std");
 const bin = @import("binary.zig");
 const cluster_safety = @import("shaping/cluster_safety.zig");
+const feature_model = @import("gsub/feature/root.zig");
 const GlyphDigest = @import("glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("glyph.zig").GlyphId;
 const ligature_provenance = @import("ligature_provenance.zig");
 const class_context = @import("opentype/class_context.zig");
 const ot_layout = @import("opentype/layout.zig");
+pub const runtime = @import("gsub/runtime/root.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const unicode = @import("unicode.zig");
 const shape_profile_mod = @import("shape_profile.zig");
+
+/// Staged feature planning and application surface.
+///
+/// Low-level whole-table execution remains at the GSUB root. Script shapers
+/// use this domain for explicit feature stages, source masks, and cached plan
+/// ownership instead of depending on a growing flat list of GSUB declarations.
+pub const feature = struct {
+    pub const Application = feature_model.Application;
+    pub const LookupPlanEntry = feature_model.LookupPlanEntry;
+    pub const MergedLookup = feature_model.MergedLookup;
+    pub const MergedLookupPlan = feature_model.MergedLookupPlan;
+    pub const LookupPlan = feature_model.LookupPlan;
+    pub const source_mask_marker = feature_model.source_mask_marker;
+    pub const sourceMaskForTag = feature_model.sourceMaskForTag;
+    pub const random_value = feature_model.random_value;
+
+    pub const selectedLookupIndices = selectedFeatureLookupIndicesForOptions;
+    pub const applySelectedSource = applySelectedSourceFeatureWithOptions;
+    pub const applySource = applySourceFeatureWithOptions;
+    pub const apply = applyFeatureWithOptions;
+    pub const applySequence = applyFeatureSequenceWithOptions;
+    pub const buildLookupPlan = buildFeatureLookupPlan;
+    pub const buildMergedLookupPlan = buildMergedFeatureLookupPlan;
+    pub const applyLookupPlan = applyFeatureLookupPlanWithOptions;
+    pub const applyLookupPlanAfterMetadataProof =
+        applyFeatureLookupPlanWithOptionsAfterMetadataProof;
+    pub const applyMergedLookupPlan = applyMergedFeatureLookupPlanWithOptions;
+    pub const applyMergedLookupPlanAfterMetadataProof =
+        applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof;
+};
 
 /// GSUB parsing is table-driven and intentionally tolerant of unsupported
 /// lookup types: unknown lookups are skipped, while malformed supported lookup
@@ -20,39 +52,6 @@ pub const GsubError = error{
     ShapingLimitExceeded,
     UnsupportedGsub,
     EndOfStream,
-};
-
-// Mirror HarfBuzz's per-buffer safety envelope. The operation budget bounds
-// recursive lookup work, while the independent glyph ceiling prevents
-// cardinality-changing substitutions from growing a run without limit.
-const max_glyph_count_factor = 256;
-const min_max_glyph_count = 65536;
-const max_operations_factor = 4096;
-const min_max_operations = 65536;
-
-pub const RunLimits = struct {
-    operations_left: usize,
-    max_glyph_count: usize,
-
-    pub fn init(initial_glyph_count: usize) GsubError!RunLimits {
-        return .{
-            .operations_left = try scaledGsubLimit(
-                initial_glyph_count,
-                max_operations_factor,
-                min_max_operations,
-            ),
-            .max_glyph_count = try scaledGsubLimit(
-                initial_glyph_count,
-                max_glyph_count_factor,
-                min_max_glyph_count,
-            ),
-        };
-    }
-
-    pub fn applyTo(self: *RunLimits, options: *LookupOptions) void {
-        options.operations_left = &self.operations_left;
-        options.max_glyph_count = self.max_glyph_count;
-    }
 };
 
 const Table = struct {
@@ -491,128 +490,13 @@ const RunDigestCache = struct {
     }
 };
 
-pub const FeatureApplication = struct {
-    tag: u32,
-    source_scoped: bool = false,
-    match_source_syllable: bool = false,
-    auto_zwnj: bool = true,
-    auto_zwj: bool = true,
-    value: u32 = 1,
-};
-
-pub const source_feature_mask_marker: u32 = 0x80000000;
-
-pub fn sourceFeatureMaskForTag(feature_tag: u32) ?u32 {
-    const bit: u5 = if (feature_tag == unicode.tag("rphf"))
-        0
-    else if (feature_tag == unicode.tag("half"))
-        1
-    else if (feature_tag == unicode.tag("locl"))
-        2
-    else if (feature_tag == unicode.tag("ccmp"))
-        3
-    else if (feature_tag == unicode.tag("nukt"))
-        4
-    else if (feature_tag == unicode.tag("akhn"))
-        5
-    else if (feature_tag == unicode.tag("pref"))
-        6
-    else if (feature_tag == unicode.tag("rkrf"))
-        7
-    else if (feature_tag == unicode.tag("abvf"))
-        8
-    else if (feature_tag == unicode.tag("blwf"))
-        9
-    else if (feature_tag == unicode.tag("pstf"))
-        10
-    else if (feature_tag == unicode.tag("vatu"))
-        11
-    else if (feature_tag == unicode.tag("cjct"))
-        12
-    else if (feature_tag == unicode.tag("isol"))
-        13
-    else if (feature_tag == unicode.tag("init"))
-        14
-    else if (feature_tag == unicode.tag("medi"))
-        15
-    else if (feature_tag == unicode.tag("fina"))
-        16
-    else if (feature_tag == unicode.tag("blwm"))
-        17
-    else if (feature_tag == unicode.tag("abvm"))
-        18
-    else if (feature_tag == unicode.tag("abvs"))
-        19
-    else if (feature_tag == unicode.tag("blws"))
-        20
-    else if (feature_tag == unicode.tag("haln"))
-        21
-    else if (feature_tag == unicode.tag("pres"))
-        22
-    else if (feature_tag == unicode.tag("psts"))
-        23
-    else if (feature_tag == unicode.tag("dist"))
-        24
-    else if (feature_tag == unicode.tag("rlig"))
-        25
-    else if (feature_tag == unicode.tag("liga"))
-        26
-    else if (feature_tag == unicode.tag("clig"))
-        27
-    else if (feature_tag == unicode.tag("calt"))
-        28
-    else if (feature_tag == unicode.tag("rclt"))
-        29
-    else if (feature_tag == unicode.tag("cfar"))
-        30
-    else
-        return null;
-    return source_feature_mask_marker | (@as(u32, 1) << bit);
-}
-
-pub const FeatureLookupPlanEntry = struct {
-    application: FeatureApplication,
-    lookups: []u16,
-    lookup_offsets: []usize,
-};
-
-pub const MergedFeatureLookup = struct {
-    lookup: u16,
-    source_mask: u32 = 0,
-    auto_zwnj: bool = true,
-    auto_zwj: bool = true,
-    match_source_syllable: bool = false,
-    value: u32 = 1,
-    /// `rand` uses the maximum feature value as a sentinel, but the numeric
-    /// value alone is not enough once several feature maps are merged by
-    /// lookup index. Retain the semantic bit so cached merged plans still
-    /// advance the shared HarfBuzz-compatible PRNG at each AlternateSubst.
-    random: bool = false,
-};
-
-pub const MergedFeatureLookupPlan = struct {
-    lookups: []MergedFeatureLookup,
-    lookup_offsets: []usize,
-
-    pub fn deinit(self: *MergedFeatureLookupPlan, allocator: std.mem.Allocator) void {
-        allocator.free(self.lookup_offsets);
-        allocator.free(self.lookups);
-        self.* = .{ .lookups = &.{}, .lookup_offsets = &.{} };
-    }
-};
-
-pub const FeatureLookupPlan = struct {
-    entries: []FeatureLookupPlanEntry,
-
-    pub fn deinit(self: *FeatureLookupPlan, allocator: std.mem.Allocator) void {
-        for (self.entries) |entry| {
-            allocator.free(entry.lookups);
-            allocator.free(entry.lookup_offsets);
-        }
-        allocator.free(self.entries);
-        self.* = .{ .entries = &.{} };
-    }
-};
+const FeatureApplication = feature.Application;
+const FeatureLookupPlanEntry = feature.LookupPlanEntry;
+const MergedFeatureLookup = feature.MergedLookup;
+const MergedFeatureLookupPlan = feature.MergedLookupPlan;
+const FeatureLookupPlan = feature.LookupPlan;
+const source_feature_mask_marker = feature.source_mask_marker;
+const sourceFeatureMaskForTag = feature.sourceMaskForTag;
 
 const SelectedLookup = struct {
     index: u16,
@@ -623,7 +507,7 @@ const SelectedLookup = struct {
 /// HarfBuzz enables `rand` globally with HB_OT_MAP_MAX_VALUE. Keep the sentinel
 /// public so explicit script shapers can place the common feature in the same
 /// staged lookup plan as their script-specific features.
-pub const random_feature_value: u32 = 255;
+const random_feature_value = feature.random_value;
 
 /// Apply default or explicitly enabled substitution features to the glyph
 /// stream in place. The input and output are glyph ids; source text metadata is
@@ -787,7 +671,7 @@ pub fn selectedLookupIndicesForOptions(data: []const u8, offset: usize, length: 
 /// This selection API supports the rare ranged-feature layer without adding
 /// range state to `LookupOptions`. The ordinary hot path continues to cache and
 /// apply its complete global plan unchanged.
-pub fn selectedFeatureLookupIndicesForOptions(
+fn selectedFeatureLookupIndicesForOptions(
     data: []const u8,
     offset: usize,
     length: usize,
@@ -853,7 +737,7 @@ pub fn selectedFeatureLookupIndicesForOptions(
 /// Source metadata is already stable across GSUB cardinality changes. Keeping
 /// range assignment outside this function lets callers reuse one selection for
 /// every distinct feature value without widening the ordinary lookup options.
-pub fn applySelectedSourceFeatureWithOptions(
+fn applySelectedSourceFeatureWithOptions(
     data: []const u8,
     offset: usize,
     length: usize,
@@ -1019,7 +903,7 @@ fn exactFeatureLookupIndex(
 /// but the mechanism is deliberately feature-agnostic. The source assignment
 /// remains stable when earlier GSUB stages change glyph cardinality because
 /// `glyph_source_indices` is already maintained alongside the glyph stream.
-pub fn applySourceFeatureWithOptions(
+fn applySourceFeatureWithOptions(
     data: []const u8,
     offset: usize,
     length: usize,
@@ -1035,7 +919,7 @@ pub fn applySourceFeatureWithOptions(
 /// stream. Higher-level shapers use this to preserve script-defined feature
 /// ordering when some stages (for example Arabic joining forms) require
 /// position-scoped application between otherwise global features.
-pub fn applyFeatureWithOptions(
+fn applyFeatureWithOptions(
     data: []const u8,
     offset: usize,
     length: usize,
@@ -1050,11 +934,11 @@ pub fn applyFeatureWithOptions(
 /// Apply an ordered feature plan after validating and preparing the GSUB table
 /// once. This avoids repeating table validation and caller-side GDEF expansion
 /// for scripts whose shaping plan has multiple explicit stages.
-pub fn applyFeatureSequenceWithOptions(
+fn applyFeatureSequenceWithOptions(
     data: []const u8,
     offset: usize,
     length: usize,
-    applications: []const FeatureApplication,
+    applications: []const feature.Application,
     glyphs: *std.ArrayList(GlyphId),
     allocator: std.mem.Allocator,
     options: LookupOptions,
@@ -1130,14 +1014,14 @@ pub fn applyFeatureSequenceWithOptions(
     }
 }
 
-pub fn buildFeatureLookupPlan(
+fn buildFeatureLookupPlan(
     data: []const u8,
     offset: usize,
     length: usize,
-    applications: []const FeatureApplication,
+    applications: []const feature.Application,
     allocator: std.mem.Allocator,
     options: LookupOptions,
-) (GsubError || std.mem.Allocator.Error)!FeatureLookupPlan {
+) (GsubError || std.mem.Allocator.Error)!feature.LookupPlan {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
     const major = try readU16(table, 0);
@@ -1193,14 +1077,14 @@ pub fn buildFeatureLookupPlan(
     return .{ .entries = try entries.toOwnedSlice(allocator) };
 }
 
-pub fn buildMergedFeatureLookupPlan(
+fn buildMergedFeatureLookupPlan(
     data: []const u8,
     offset: usize,
     length: usize,
-    applications: []const FeatureApplication,
+    applications: []const feature.Application,
     allocator: std.mem.Allocator,
     options: LookupOptions,
-) (GsubError || std.mem.Allocator.Error)!MergedFeatureLookupPlan {
+) (GsubError || std.mem.Allocator.Error)!feature.MergedLookupPlan {
     if (length < 10 or offset > data.len or length > data.len - offset) return error.BadGsub;
     const table = Table{ .data = data, .offset = offset, .length = length, .assume_validated = options.assume_validated };
     const major = try readU16(table, 0);
@@ -1254,11 +1138,11 @@ pub fn buildMergedFeatureLookupPlan(
     return .{ .lookups = owned_lookups, .lookup_offsets = lookup_offsets };
 }
 
-pub fn applyFeatureLookupPlanWithOptions(
+fn applyFeatureLookupPlanWithOptions(
     data: []const u8,
     offset: usize,
     length: usize,
-    plan: FeatureLookupPlan,
+    plan: feature.LookupPlan,
     glyphs: *std.ArrayList(GlyphId),
     allocator: std.mem.Allocator,
     options: LookupOptions,
@@ -1286,11 +1170,11 @@ pub fn applyFeatureLookupPlanWithOptions(
 /// glyph IDs before GPOS or metrics. Callers must not use it for an
 /// independently supplied or externally mutated run;
 /// `applyFeatureLookupPlanWithOptions` remains the defensive API.
-pub fn applyFeatureLookupPlanWithOptionsAfterMetadataProof(
+fn applyFeatureLookupPlanWithOptionsAfterMetadataProof(
     data: []const u8,
     offset: usize,
     length: usize,
-    plan: FeatureLookupPlan,
+    plan: feature.LookupPlan,
     glyphs: *std.ArrayList(GlyphId),
     allocator: std.mem.Allocator,
     options: LookupOptions,
@@ -1330,11 +1214,11 @@ pub fn applyFeatureLookupPlanWithOptionsAfterMetadataProof(
     }
 }
 
-pub fn applyMergedFeatureLookupPlanWithOptions(
+fn applyMergedFeatureLookupPlanWithOptions(
     data: []const u8,
     offset: usize,
     length: usize,
-    plan: MergedFeatureLookupPlan,
+    plan: feature.MergedLookupPlan,
     glyphs: *std.ArrayList(GlyphId),
     allocator: std.mem.Allocator,
     options: LookupOptions,
@@ -1354,11 +1238,11 @@ pub fn applyMergedFeatureLookupPlanWithOptions(
 
 /// Merged-plan counterpart to
 /// `applyFeatureLookupPlanWithOptionsAfterMetadataProof`.
-pub fn applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof(
+fn applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof(
     data: []const u8,
     offset: usize,
     length: usize,
-    plan: MergedFeatureLookupPlan,
+    plan: feature.MergedLookupPlan,
     glyphs: *std.ArrayList(GlyphId),
     allocator: std.mem.Allocator,
     options: LookupOptions,
@@ -4140,19 +4024,14 @@ fn optionsWithTopLevelState(
 ) GsubError!LookupOptions {
     var result = optionsWithRunDigestGeneration(options, mutation_generation);
     if (result.operations_left == null) {
-        const limits = try RunLimits.init(initial_glyph_count);
+        const limits = try runtime.Limits.init(initial_glyph_count);
         operations_left.* = limits.operations_left;
         result.operations_left = operations_left;
         if (result.max_glyph_count == null) result.max_glyph_count = limits.max_glyph_count;
     } else if (result.max_glyph_count == null) {
-        result.max_glyph_count = (try RunLimits.init(initial_glyph_count)).max_glyph_count;
+        result.max_glyph_count = (try runtime.Limits.init(initial_glyph_count)).max_glyph_count;
     }
     return result;
-}
-
-fn scaledGsubLimit(initial_glyph_count: usize, factor: usize, minimum: usize) GsubError!usize {
-    const scaled = std.math.mul(usize, initial_glyph_count, factor) catch return error.ShapingLimitExceeded;
-    return @max(scaled, minimum);
 }
 
 fn consumeGsubMutationBudget(
@@ -15579,6 +15458,11 @@ test "GSUB public apply validates ligature component source order" {
     try std.testing.expectError(error.InvalidShapingInput, applyWithOptions(&bytes, 0, bytes.len, &glyphs, allocator, .{
         .ligature_components = &ligature_components,
     }));
+}
+
+test {
+    _ = @import("gsub/tests/feature/root.zig");
+    _ = @import("gsub/tests/runtime/root.zig");
 }
 
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {

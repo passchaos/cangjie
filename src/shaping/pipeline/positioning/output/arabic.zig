@@ -35,13 +35,13 @@ pub fn fallbackGlyph(
 
 pub fn fallbackCodepoint(codepoint: u21, source_feature: u32) ?u21 {
     const bare_features =
-        source_feature & ~gsub.source_feature_mask_marker;
+        source_feature & ~gsub.feature.source_mask_marker;
     const fina_mask =
-        gsub.sourceFeatureMaskForTag(unicode.tag("fina")).? &
-        ~gsub.source_feature_mask_marker;
+        gsub.feature.sourceMaskForTag(unicode.tag("fina")).? &
+        ~gsub.feature.source_mask_marker;
     const medi_mask =
-        gsub.sourceFeatureMaskForTag(unicode.tag("medi")).? &
-        ~gsub.source_feature_mask_marker;
+        gsub.feature.sourceMaskForTag(unicode.tag("medi")).? &
+        ~gsub.feature.source_mask_marker;
     if ((bare_features & fina_mask) != 0) {
         return switch (codepoint) {
             0x0627 => 0xfe8e,
@@ -63,8 +63,8 @@ pub fn fallbackCodepoint(codepoint: u21, source_feature: u32) ?u21 {
 
 test "positional cmap fallback maps retained Arabic forms" {
     const std = @import("std");
-    const fina_mask = gsub.sourceFeatureMaskForTag(unicode.tag("fina")).?;
-    const medi_mask = gsub.sourceFeatureMaskForTag(unicode.tag("medi")).?;
+    const fina_mask = gsub.feature.sourceMaskForTag(unicode.tag("fina")).?;
+    const medi_mask = gsub.feature.sourceMaskForTag(unicode.tag("medi")).?;
 
     try std.testing.expectEqual(
         @as(?u21, 0xfe8e),

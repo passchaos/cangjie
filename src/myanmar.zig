@@ -154,30 +154,30 @@ pub const FeatureStage = enum {
     final,
 };
 
-const rphf_applications = [_]gsub.FeatureApplication{
+const rphf_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("rphf"), .match_source_syllable = true, .auto_zwj = false },
 };
 
-const pref_applications = [_]gsub.FeatureApplication{
+const pref_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("pref"), .match_source_syllable = true, .auto_zwj = false },
 };
 
-const blwf_applications = [_]gsub.FeatureApplication{
+const blwf_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("blwf"), .match_source_syllable = true, .auto_zwj = false },
 };
 
-const pstf_applications = [_]gsub.FeatureApplication{
+const pstf_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("pstf"), .match_source_syllable = true, .auto_zwj = false },
 };
 
-const final_applications = [_]gsub.FeatureApplication{
+const final_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("pres"), .auto_zwj = false },
     .{ .tag = unicode.tag("abvs"), .auto_zwj = false },
     .{ .tag = unicode.tag("blws"), .auto_zwj = false },
     .{ .tag = unicode.tag("psts"), .auto_zwj = false },
 };
 
-pub fn featureApplications(stage: FeatureStage) []const gsub.FeatureApplication {
+pub fn featureApplications(stage: FeatureStage) []const gsub.feature.Application {
     return switch (stage) {
         .rphf => &rphf_applications,
         .pref => &pref_applications,

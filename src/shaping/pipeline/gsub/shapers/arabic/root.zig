@@ -93,7 +93,7 @@ pub fn run(input: Input) !Result {
         input.lookup_options.features,
         true,
     );
-    var common_features_buf: [2]gsub.FeatureApplication = undefined;
+    var common_features_buf: [2]gsub.feature.Application = undefined;
     var common_feature_count: usize = 0;
     if (features.randomApplication(input.lookup_options.features)) |application| {
         common_features_buf[common_feature_count] = application;
@@ -119,9 +119,9 @@ pub fn run(input: Input) !Result {
         stch_feature.recordSubstitutions(input.ligature_components);
     }
 
-    var applications_buf: [15]gsub.FeatureApplication = undefined;
+    var applications_buf: [15]gsub.feature.Application = undefined;
     var application_count: usize = 0;
-    const planned_features = [_]gsub.FeatureApplication{
+    const planned_features = [_]gsub.feature.Application{
         .{ .tag = unicode.tag("ccmp"), .auto_zwj = false },
         .{ .tag = unicode.tag("locl"), .auto_zwj = false },
         .{ .tag = unicode.tag("ltrm"), .auto_zwj = false },
@@ -197,7 +197,7 @@ pub fn run(input: Input) !Result {
 
 fn applyJoiningStages(
     input: Input,
-    applications: []const gsub.FeatureApplication,
+    applications: []const gsub.feature.Application,
     joining_options: gsub.LookupOptions,
 ) !void {
     if (input.profile) |profile| {
@@ -250,9 +250,9 @@ fn applyMongolianFeatures(
     joining_options: gsub.LookupOptions,
 ) !void {
     if (input.lookup_options.script_tag != .mong) return;
-    var applications: [2]gsub.FeatureApplication = undefined;
+    var applications: [2]gsub.feature.Application = undefined;
     var count: usize = 0;
-    for ([_]gsub.FeatureApplication{
+    for ([_]gsub.feature.Application{
         .{ .tag = unicode.tag("rlig"), .auto_zwj = false },
         .{ .tag = unicode.tag("calt"), .auto_zwj = false },
     }) |application| {
@@ -295,9 +295,9 @@ fn applyArabicRequiredFeatures(
             input.gdef_metadata,
         );
     }
-    var applications: [2]gsub.FeatureApplication = undefined;
+    var applications: [2]gsub.feature.Application = undefined;
     var count: usize = 0;
-    for ([_]gsub.FeatureApplication{
+    for ([_]gsub.feature.Application{
         .{ .tag = unicode.tag("calt"), .auto_zwj = false },
         .{ .tag = unicode.tag("rclt"), .auto_zwj = false },
     }) |application| {
@@ -321,9 +321,9 @@ fn applyArabicRequiredFeatures(
 }
 
 fn applyFinalFeatures(input: Input) !void {
-    var applications: [24]gsub.FeatureApplication = undefined;
+    var applications: [24]gsub.feature.Application = undefined;
     var count: usize = 0;
-    for ([_]gsub.FeatureApplication{
+    for ([_]gsub.feature.Application{
         .{ .tag = unicode.tag("rlig"), .auto_zwj = false },
         .{ .tag = unicode.tag("calt"), .auto_zwj = false },
         .{ .tag = unicode.tag("rclt"), .auto_zwj = false },

@@ -18,7 +18,7 @@ pub fn enabled(
 
 pub fn randomApplication(
     overrides: []const unicode.FeatureOverride,
-) ?gsub.FeatureApplication {
+) ?gsub.feature.Application {
     for (overrides) |override| {
         if (override.tag != unicode.tag("rand")) continue;
         if (!override.enabled) return null;
@@ -29,7 +29,7 @@ pub fn randomApplication(
     }
     return .{
         .tag = unicode.tag("rand"),
-        .value = gsub.random_feature_value,
+        .value = gsub.feature.random_value,
     };
 }
 
@@ -49,7 +49,7 @@ pub fn withDefaultDisabledCalt(
 }
 
 pub fn appendExplicitOptional(
-    out: []gsub.FeatureApplication,
+    out: []gsub.feature.Application,
     overrides: []const unicode.FeatureOverride,
 ) usize {
     var count: usize = 0;
@@ -95,7 +95,7 @@ pub fn needsValueAwareSelection(
 
 pub fn scriptPositionApplication(
     position: anytype,
-) ?gsub.FeatureApplication {
+) ?gsub.feature.Application {
     return switch (position) {
         .normal => null,
         .superscript => .{ .tag = unicode.tag("sups") },

@@ -27,23 +27,23 @@ const IncludedCodepoint = struct {
     category: categories.Category,
 };
 
-const locl_mask = gsub.sourceFeatureMaskForTag(unicode.tag("locl")).?;
-const ccmp_mask = gsub.sourceFeatureMaskForTag(unicode.tag("ccmp")).?;
-const nukt_mask = gsub.sourceFeatureMaskForTag(unicode.tag("nukt")).?;
-const akhn_mask = gsub.sourceFeatureMaskForTag(unicode.tag("akhn")).?;
-const rphf_mask = gsub.sourceFeatureMaskForTag(unicode.tag("rphf")).?;
-const pref_mask = gsub.sourceFeatureMaskForTag(unicode.tag("pref")).?;
-const rkrf_mask = gsub.sourceFeatureMaskForTag(unicode.tag("rkrf")).?;
-const abvf_mask = gsub.sourceFeatureMaskForTag(unicode.tag("abvf")).?;
-const blwf_mask = gsub.sourceFeatureMaskForTag(unicode.tag("blwf")).?;
-const half_mask = gsub.sourceFeatureMaskForTag(unicode.tag("half")).?;
-const pstf_mask = gsub.sourceFeatureMaskForTag(unicode.tag("pstf")).?;
-const vatu_mask = gsub.sourceFeatureMaskForTag(unicode.tag("vatu")).?;
-const cjct_mask = gsub.sourceFeatureMaskForTag(unicode.tag("cjct")).?;
-const isol_mask = gsub.sourceFeatureMaskForTag(unicode.tag("isol")).?;
-const init_mask = gsub.sourceFeatureMaskForTag(unicode.tag("init")).?;
-const medi_mask = gsub.sourceFeatureMaskForTag(unicode.tag("medi")).?;
-const fina_mask = gsub.sourceFeatureMaskForTag(unicode.tag("fina")).?;
+const locl_mask = gsub.feature.sourceMaskForTag(unicode.tag("locl")).?;
+const ccmp_mask = gsub.feature.sourceMaskForTag(unicode.tag("ccmp")).?;
+const nukt_mask = gsub.feature.sourceMaskForTag(unicode.tag("nukt")).?;
+const akhn_mask = gsub.feature.sourceMaskForTag(unicode.tag("akhn")).?;
+const rphf_mask = gsub.feature.sourceMaskForTag(unicode.tag("rphf")).?;
+const pref_mask = gsub.feature.sourceMaskForTag(unicode.tag("pref")).?;
+const rkrf_mask = gsub.feature.sourceMaskForTag(unicode.tag("rkrf")).?;
+const abvf_mask = gsub.feature.sourceMaskForTag(unicode.tag("abvf")).?;
+const blwf_mask = gsub.feature.sourceMaskForTag(unicode.tag("blwf")).?;
+const half_mask = gsub.feature.sourceMaskForTag(unicode.tag("half")).?;
+const pstf_mask = gsub.feature.sourceMaskForTag(unicode.tag("pstf")).?;
+const vatu_mask = gsub.feature.sourceMaskForTag(unicode.tag("vatu")).?;
+const cjct_mask = gsub.feature.sourceMaskForTag(unicode.tag("cjct")).?;
+const isol_mask = gsub.feature.sourceMaskForTag(unicode.tag("isol")).?;
+const init_mask = gsub.feature.sourceMaskForTag(unicode.tag("init")).?;
+const medi_mask = gsub.feature.sourceMaskForTag(unicode.tag("medi")).?;
+const fina_mask = gsub.feature.sourceMaskForTag(unicode.tag("fina")).?;
 const topo_mask = isol_mask | init_mask | medi_mask | fina_mask;
 
 const per_syllable_mask =

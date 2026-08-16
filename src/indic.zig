@@ -13,11 +13,11 @@ const blwf_feature = unicode.tag("blwf");
 const half_feature = unicode.tag("half");
 const pstf_feature = unicode.tag("pstf");
 const vatu_feature = unicode.tag("vatu");
-const rphf_source_mask = gsub.sourceFeatureMaskForTag(rphf_feature).?;
-const pref_source_mask = gsub.sourceFeatureMaskForTag(pref_feature).?;
-const blwf_source_mask = gsub.sourceFeatureMaskForTag(blwf_feature).?;
-const half_source_mask = gsub.sourceFeatureMaskForTag(half_feature).?;
-const pstf_source_mask = gsub.sourceFeatureMaskForTag(pstf_feature).?;
+const rphf_source_mask = gsub.feature.sourceMaskForTag(rphf_feature).?;
+const pref_source_mask = gsub.feature.sourceMaskForTag(pref_feature).?;
+const blwf_source_mask = gsub.feature.sourceMaskForTag(blwf_feature).?;
+const half_source_mask = gsub.feature.sourceMaskForTag(half_feature).?;
+const pstf_source_mask = gsub.feature.sourceMaskForTag(pstf_feature).?;
 const scanner_text_section = shaping_sections.isolated_hotpaths;
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
@@ -220,7 +220,7 @@ pub fn markInitialMatraGlyphSources(source_features: []u32, glyph_source_indices
         if (first_source < codepoints.len and isPreBaseMatra(codepoints[first_source], script_tag) and
             matraStartsIndicWord(glyph_source_indices, start, codepoints, script_tag))
         {
-            source_features[first_source] |= gsub.sourceFeatureMaskForTag(unicode.tag("init")).?;
+            source_features[first_source] |= gsub.feature.sourceMaskForTag(unicode.tag("init")).?;
             marked = true;
         }
     }
@@ -1023,12 +1023,12 @@ test "Modern Malayalam keeps virama before stacker consonant" {
     try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, sources.items);
 }
 
-const pre_reorder_feature_applications = [_]gsub.FeatureApplication{
+const pre_reorder_feature_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("nukt"), .match_source_syllable = true },
     .{ .tag = unicode.tag("akhn"), .match_source_syllable = true },
 };
 
-const basic_feature_applications_without_reph = [_]gsub.FeatureApplication{
+const basic_feature_applications_without_reph = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("rkrf"), .match_source_syllable = true },
     .{ .tag = blwf_feature, .source_scoped = true, .match_source_syllable = true },
     .{ .tag = half_feature, .source_scoped = true, .match_source_syllable = true },
@@ -1037,7 +1037,7 @@ const basic_feature_applications_without_reph = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("cjct"), .match_source_syllable = true },
 };
 
-const basic_feature_applications_with_reph = [_]gsub.FeatureApplication{
+const basic_feature_applications_with_reph = [_]gsub.feature.Application{
     .{ .tag = rphf_feature, .source_scoped = true, .match_source_syllable = true },
     .{ .tag = unicode.tag("rkrf"), .match_source_syllable = true },
     .{ .tag = blwf_feature, .source_scoped = true, .match_source_syllable = true },
@@ -1047,15 +1047,15 @@ const basic_feature_applications_with_reph = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("cjct"), .match_source_syllable = true },
 };
 
-const pre_reph_feature_applications = [_]gsub.FeatureApplication{
+const pre_reph_feature_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("pres"), .match_source_syllable = true },
 };
 
-const pref_feature_applications = [_]gsub.FeatureApplication{
+const pref_feature_applications = [_]gsub.feature.Application{
     .{ .tag = pref_feature, .source_scoped = true, .match_source_syllable = true },
 };
 
-const final_feature_applications = [_]gsub.FeatureApplication{
+const final_feature_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("init"), .source_scoped = true, .match_source_syllable = true },
     .{ .tag = unicode.tag("abvs"), .match_source_syllable = true },
     .{ .tag = unicode.tag("blws"), .match_source_syllable = true },
@@ -1063,26 +1063,26 @@ const final_feature_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("haln"), .match_source_syllable = true },
 };
 
-pub fn preReorderFeatureApplications() []const gsub.FeatureApplication {
+pub fn preReorderFeatureApplications() []const gsub.feature.Application {
     return &pre_reorder_feature_applications;
 }
 
-pub fn basicFeatureApplications(has_initial_reph: bool) []const gsub.FeatureApplication {
+pub fn basicFeatureApplications(has_initial_reph: bool) []const gsub.feature.Application {
     return if (has_initial_reph)
         &basic_feature_applications_with_reph
     else
         &basic_feature_applications_without_reph;
 }
 
-pub fn preRephFeatureApplications() []const gsub.FeatureApplication {
+pub fn preRephFeatureApplications() []const gsub.feature.Application {
     return &pre_reph_feature_applications;
 }
 
-pub fn prefFeatureApplications() []const gsub.FeatureApplication {
+pub fn prefFeatureApplications() []const gsub.feature.Application {
     return &pref_feature_applications;
 }
 
-pub fn finalFeatureApplications() []const gsub.FeatureApplication {
+pub fn finalFeatureApplications() []const gsub.feature.Application {
     return &final_feature_applications;
 }
 
@@ -2486,7 +2486,7 @@ test "Old-spec Bengali ra virama normalizes for blwf vatu" {
     try std.testing.expect(markBasicSourceFeatures(&features, &codepoints, .beng));
     try std.testing.expect((features[0] & half_source_mask) != 0);
     try std.testing.expect((features[2] & blwf_source_mask) != 0);
-    try std.testing.expect((features[2] & (rphf_source_mask & ~gsub.source_feature_mask_marker)) == 0);
+    try std.testing.expect((features[2] & (rphf_source_mask & ~gsub.feature.source_mask_marker)) == 0);
 }
 
 test "Old-spec Devanagari ra virama marks blwf vattu" {
@@ -3025,7 +3025,7 @@ test "Bengali pre-base matras move before bases and mark init only at word start
 
     var source_features = [_]u32{0} ** 6;
     try std.testing.expect(markInitialMatraGlyphSources(&source_features, sources.items, &codepoints, .bng2));
-    const init_mask = gsub.sourceFeatureMaskForTag(unicode.tag("init")).?;
+    const init_mask = gsub.feature.sourceMaskForTag(unicode.tag("init")).?;
     try std.testing.expectEqual(init_mask, source_features[1]);
     try std.testing.expectEqual(@as(u32, 0), source_features[3]);
     try std.testing.expectEqual(@as(u32, 0), source_features[5]);

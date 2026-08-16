@@ -176,7 +176,7 @@ fn resizeSourceSidecars(input: Input) !void {
 fn applyObservedStage(
     input: Input,
     use_options: gsub.LookupOptions,
-    applications: []const gsub.FeatureApplication,
+    applications: []const gsub.feature.Application,
     stage: ObservedStage,
 ) !void {
     input.glyph_stage_substituted.clearRetainingCapacity();
@@ -218,15 +218,15 @@ fn applyDirectionFeatures(
     use_options: gsub.LookupOptions,
 ) !void {
     if (!usesDirectionFeatures(input.lookup_options.script_tag)) return;
-    var applications: [2]gsub.FeatureApplication = undefined;
+    var applications: [2]gsub.feature.Application = undefined;
     var count: usize = 0;
     const candidates = if (input.lookup_options.direction == .rtl)
-        [_]gsub.FeatureApplication{
+        [_]gsub.feature.Application{
             .{ .tag = unicode.tag("rtla") },
             .{ .tag = unicode.tag("rtlm") },
         }
     else
-        [_]gsub.FeatureApplication{
+        [_]gsub.feature.Application{
             .{ .tag = unicode.tag("ltra") },
             .{ .tag = unicode.tag("ltrm") },
         };

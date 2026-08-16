@@ -7,11 +7,11 @@ const ligature_provenance = @import("ligature_provenance.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
 const unicode = @import("unicode.zig");
 
-const pref_mask = gsub.sourceFeatureMaskForTag(unicode.tag("pref")).?;
-const blwf_mask = gsub.sourceFeatureMaskForTag(unicode.tag("blwf")).?;
-const abvf_mask = gsub.sourceFeatureMaskForTag(unicode.tag("abvf")).?;
-const pstf_mask = gsub.sourceFeatureMaskForTag(unicode.tag("pstf")).?;
-const cfar_mask = gsub.sourceFeatureMaskForTag(unicode.tag("cfar")).?;
+const pref_mask = gsub.feature.sourceMaskForTag(unicode.tag("pref")).?;
+const blwf_mask = gsub.feature.sourceMaskForTag(unicode.tag("blwf")).?;
+const abvf_mask = gsub.feature.sourceMaskForTag(unicode.tag("abvf")).?;
+const pstf_mask = gsub.feature.sourceMaskForTag(unicode.tag("pstf")).?;
+const cfar_mask = gsub.feature.sourceMaskForTag(unicode.tag("cfar")).?;
 const post_base_mask = blwf_mask | abvf_mask | pstf_mask;
 
 pub fn shouldShape(script_tag: unicode.OpenTypeScriptTag) bool {
@@ -23,7 +23,7 @@ pub const FeatureStage = enum {
     final,
 };
 
-const basic_applications = [_]gsub.FeatureApplication{
+const basic_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("locl"), .match_source_syllable = true },
     .{ .tag = unicode.tag("ccmp"), .match_source_syllable = true },
     .{ .tag = unicode.tag("pref"), .source_scoped = true, .match_source_syllable = true, .auto_zwj = false },
@@ -33,7 +33,7 @@ const basic_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("cfar"), .source_scoped = true, .match_source_syllable = true, .auto_zwj = false },
 };
 
-const final_applications = [_]gsub.FeatureApplication{
+const final_applications = [_]gsub.feature.Application{
     .{ .tag = unicode.tag("pres"), .auto_zwj = false },
     .{ .tag = unicode.tag("abvs"), .auto_zwj = false },
     .{ .tag = unicode.tag("blws"), .auto_zwj = false },
@@ -43,7 +43,7 @@ const final_applications = [_]gsub.FeatureApplication{
     .{ .tag = unicode.tag("calt"), .auto_zwj = false },
 };
 
-pub fn featureApplications(stage: FeatureStage) []const gsub.FeatureApplication {
+pub fn featureApplications(stage: FeatureStage) []const gsub.feature.Application {
     return switch (stage) {
         .basic => &basic_applications,
         .final => &final_applications,

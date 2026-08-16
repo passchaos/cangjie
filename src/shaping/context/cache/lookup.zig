@@ -52,14 +52,14 @@ pub const LookupSelectionCache = struct {
     const FeaturePlanEntry = struct {
         key: LookupSelectionKey,
         features: []unicode.FeatureOverride,
-        applications: []gsub.FeatureApplication,
-        plan: gsub.FeatureLookupPlan,
+        applications: []gsub.feature.Application,
+        plan: gsub.feature.LookupPlan,
     };
     const MergedFeaturePlanEntry = struct {
         key: LookupSelectionKey,
         features: []unicode.FeatureOverride,
-        applications: []gsub.FeatureApplication,
-        plan: gsub.MergedFeatureLookupPlan,
+        applications: []gsub.feature.Application,
+        plan: gsub.feature.MergedLookupPlan,
     };
 
     allocator: std.mem.Allocator,
@@ -149,7 +149,7 @@ pub const LookupSelectionCache = struct {
         return self.gsub_accelerator_entries.items[self.gsub_accelerator_entries.items.len - 1].accelerators;
     }
 
-    pub fn gsubFeatureLookupPlan(self: *LookupSelectionCache, font: *const Font, applications: []const gsub.FeatureApplication, options: gsub.LookupOptions, gdef_metadata: GdefLookupMetadata) !gsub.FeatureLookupPlan {
+    pub fn gsubFeatureLookupPlan(self: *LookupSelectionCache, font: *const Font, applications: []const gsub.feature.Application, options: gsub.LookupOptions, gdef_metadata: GdefLookupMetadata) !gsub.feature.LookupPlan {
         const key = lookupSelectionKey(font, .gsub, options.script_tag, options.language_tag, options.features, options.vertical, null);
         for (self.gsub_feature_plan_entries.items) |entry| {
             if (!lookupSelectionKeysEqual(entry.key, key)) continue;
@@ -167,7 +167,7 @@ pub const LookupSelectionCache = struct {
         }
         const features = try self.allocator.dupe(unicode.FeatureOverride, options.features);
         errdefer self.allocator.free(features);
-        const applications_copy = try self.allocator.dupe(gsub.FeatureApplication, applications);
+        const applications_copy = try self.allocator.dupe(gsub.feature.Application, applications);
         errdefer self.allocator.free(applications_copy);
         try self.gsub_feature_plan_entries.append(self.allocator, .{
             .key = key,
@@ -178,7 +178,7 @@ pub const LookupSelectionCache = struct {
         return self.gsub_feature_plan_entries.items[self.gsub_feature_plan_entries.items.len - 1].plan;
     }
 
-    pub fn gsubMergedFeatureLookupPlan(self: *LookupSelectionCache, font: *const Font, applications: []const gsub.FeatureApplication, options: gsub.LookupOptions, gdef_metadata: GdefLookupMetadata) !gsub.MergedFeatureLookupPlan {
+    pub fn gsubMergedFeatureLookupPlan(self: *LookupSelectionCache, font: *const Font, applications: []const gsub.feature.Application, options: gsub.LookupOptions, gdef_metadata: GdefLookupMetadata) !gsub.feature.MergedLookupPlan {
         const key = lookupSelectionKey(font, .gsub, options.script_tag, options.language_tag, options.features, options.vertical, null);
         for (self.gsub_merged_feature_plan_entries.items) |entry| {
             if (!lookupSelectionKeysEqual(entry.key, key)) continue;
@@ -196,7 +196,7 @@ pub const LookupSelectionCache = struct {
         }
         const features = try self.allocator.dupe(unicode.FeatureOverride, options.features);
         errdefer self.allocator.free(features);
-        const applications_copy = try self.allocator.dupe(gsub.FeatureApplication, applications);
+        const applications_copy = try self.allocator.dupe(gsub.feature.Application, applications);
         errdefer self.allocator.free(applications_copy);
         try self.gsub_merged_feature_plan_entries.append(self.allocator, .{
             .key = key,
@@ -324,7 +324,7 @@ fn featureOverridesEqual(a: []const unicode.FeatureOverride, b: []const unicode.
     return true;
 }
 
-fn featureApplicationsEqual(a: []const gsub.FeatureApplication, b: []const gsub.FeatureApplication) bool {
+fn featureApplicationsEqual(a: []const gsub.feature.Application, b: []const gsub.feature.Application) bool {
     if (a.len != b.len) return false;
     for (a, b) |a_application, b_application| {
         if (a_application.tag != b_application.tag or
@@ -338,10 +338,10 @@ fn featureApplicationsEqual(a: []const gsub.FeatureApplication, b: []const gsub.
 }
 
 test "feature plan cache distinguishes syllable-scoped applications" {
-    const global = [_]gsub.FeatureApplication{
+    const global = [_]gsub.feature.Application{
         .{ .tag = unicode.tag("rphf"), .source_scoped = true },
     };
-    const syllable_scoped = [_]gsub.FeatureApplication{
+    const syllable_scoped = [_]gsub.feature.Application{
         .{
             .tag = unicode.tag("rphf"),
             .source_scoped = true,
@@ -354,10 +354,10 @@ test "feature plan cache distinguishes syllable-scoped applications" {
 }
 
 test "feature plan cache distinguishes feature application values" {
-    const salt_one = [_]gsub.FeatureApplication{
+    const salt_one = [_]gsub.feature.Application{
         .{ .tag = unicode.tag("salt"), .value = 1 },
     };
-    const salt_two = [_]gsub.FeatureApplication{
+    const salt_two = [_]gsub.feature.Application{
         .{ .tag = unicode.tag("salt"), .value = 2 },
     };
     const override_one = [_]unicode.FeatureOverride{

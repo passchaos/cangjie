@@ -1,6 +1,7 @@
 //! Integration coverage migrated from the former package root.
 
 const std = @import("std");
+const incremental = @import("../../../api/font/metadata/incremental/root.zig");
 const font_raster = @import("../../../font.zig").raster_backend;
 const support = @import("../support.zig");
 const Font = support.Font;
@@ -277,11 +278,6 @@ test "parses sbix PNG bitmap glyphs from Apple Color Emoji when available" {
 test "IFT table-keyed and glyph-keyed patch metadata decode from supplied bytes" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");
-    const font_bytes = try test_font.buildMinimalTtf(allocator);
-    defer allocator.free(font_bytes);
-    var font = try Font.parse(allocator, font_bytes);
-    defer font.deinit();
-
     var table_patch: [38]u8 = .{0} ** 38;
     @memcpy(table_patch[0..4], "IFTB");
     for (0..16) |index| table_patch[8 + index] = @intCast(index);
@@ -289,8 +285,8 @@ test "IFT table-keyed and glyph-keyed patch metadata decode from supplied bytes"
     writeU32Root(&table_patch, 26, 0);
     writeU32Root(&table_patch, 30, 4);
     @memcpy(table_patch[34..38], "data");
-    const table_info = try font.iftTableKeyedPatchInfo(allocator, &table_patch);
-    defer font.freeIftTableKeyedPatchInfo(allocator, table_info);
+    const table_info = try incremental.parseTablePatch(allocator, &table_patch);
+    defer incremental.freeTablePatch(allocator, table_info);
     try std.testing.expectEqualStrings("IFTB", &table_info.format);
     try std.testing.expectEqualSlices(u32, &.{ 0, 4 }, table_info.patch_offsets);
 
@@ -301,7 +297,7 @@ test "IFT table-keyed and glyph-keyed patch metadata decode from supplied bytes"
     writeU32Root(&glyph_patch, 25, 256);
     glyph_patch[29] = 0xaa;
     glyph_patch[30] = 0xbb;
-    const glyph_info = try font.iftGlyphKeyedPatchInfo(&glyph_patch);
+    const glyph_info = try incremental.parseGlyphPatch(&glyph_patch);
     try std.testing.expectEqualStrings("IFTG", &glyph_info.format);
     try std.testing.expectEqual(@as(u8, 1), glyph_info.flags);
     try std.testing.expectEqual(@as(u32, 256), glyph_info.max_uncompressed_length);

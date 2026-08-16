@@ -3,4 +3,5 @@
 test {
     _ = @import("metrics.zig");
     _ = @import("outline.zig");
+    _ = @import("validation.zig");
 }

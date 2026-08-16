@@ -202,29 +202,6 @@ test "post metadata handles missing and borrowed mutated tables" {
     try std.testing.expectError(error.BadSfnt, font.postInfo());
 }
 
-test "lazy maxp metadata revalidates borrowed table bytes" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
-
-    const bytes = try test_font.buildMinimalTtf(allocator);
-    defer allocator.free(bytes);
-
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    try std.testing.expectEqual(@as(u16, 2), (try font.maxpInfo()).glyph_count);
-
-    const tables = try font.tables(allocator);
-    defer allocator.free(tables);
-    var maxp_offset: ?usize = null;
-    for (tables) |table| {
-        if (std.mem.eql(u8, &table.tag, "maxp")) maxp_offset = table.offset;
-    }
-    bytes[maxp_offset orelse return error.MissingTable] +%= 1;
-
-    try std.testing.expectError(error.BadSfnt, font.maxpInfo());
-}
-
 test "lazy glyph locations revalidate borrowed loca bytes" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

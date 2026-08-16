@@ -543,29 +543,6 @@ test "lazy gasp metadata revalidates borrowed table bytes" {
     try std.testing.expectError(error.BadSfnt, font.gaspInfo(allocator));
 }
 
-test "lazy head metadata revalidates borrowed table bytes" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("../../../test_font.zig");
-
-    const bytes = try test_font.buildMinimalTtf(allocator);
-    defer allocator.free(bytes);
-
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-
-    try std.testing.expectEqual(@as(u16, 1000), (try font.headInfo()).units_per_em);
-
-    const tables = try font.tables(allocator);
-    defer allocator.free(tables);
-    var head_offset: ?usize = null;
-    for (tables) |table| {
-        if (std.mem.eql(u8, &table.tag, "head")) head_offset = table.offset;
-    }
-    bytes[head_offset orelse return error.MissingTable] +%= 1;
-
-    try std.testing.expectError(error.BadSfnt, font.headInfo());
-}
-
 test "lazy metric header metadata revalidates borrowed bytes" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

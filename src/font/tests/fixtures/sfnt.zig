@@ -103,6 +103,28 @@ pub fn updateTableChecksum(
     return error.BadSfnt;
 }
 
+/// Change one standalone SFNT directory record's declared table length.
+///
+/// Structural table tests use this to isolate length contracts without
+/// duplicating directory walking in each table family.
+pub fn setTableLength(
+    bytes: []u8,
+    comptime tag: *const [4]u8,
+    length: u32,
+) error{BadSfnt}!void {
+    if (bytes.len < 12) return error.BadSfnt;
+    const table_count = std.mem.readInt(u16, bytes[4..6], .big);
+    if (table_count > (bytes.len - 12) / 16) return error.BadSfnt;
+
+    for (0..table_count) |index| {
+        const record_offset = 12 + index * 16;
+        if (!std.mem.eql(u8, bytes[record_offset..][0..4], tag)) continue;
+        writeU32(bytes, record_offset + 12, length);
+        return;
+    }
+    return error.BadSfnt;
+}
+
 pub fn writeU16(bytes: []u8, offset: usize, value: u16) void {
     std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
 }

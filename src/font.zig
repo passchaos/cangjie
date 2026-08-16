@@ -39,6 +39,9 @@ const presentation_metrics = font_metrics.presentation;
 const table_only_fixture = @import("font/tests/fixtures/table_only.zig");
 const bitmap_mod = @import("font/tables/bitmap/root.zig");
 const color_tables = @import("font/tables/color/root.zig");
+const core_tables = @import("font/tables/core/root.zig");
+const head_mod = core_tables.head;
+const maxp_mod = core_tables.maxp;
 const metadata_tables = @import("font/tables/metadata/root.zig");
 const os2_mod = metadata_tables.os2;
 const post_mod = metadata_tables.post;
@@ -75,10 +78,7 @@ pub const FontError = error{
     InvalidName,
 } || cff_mod.CffError || gpos_mod.GposError || gsub_mod.GsubError || std.mem.Allocator.Error || error{EndOfStream};
 
-pub const FontFormat = enum {
-    truetype,
-    opentype_cff,
-};
+pub const FontFormat = core_tables.Format;
 
 pub const Cff2Info = cff2_mod.Info;
 pub const Cff2FontDictInfo = cff2_mod.FontDictInfo;
@@ -119,38 +119,8 @@ pub const FontTableInfo = struct {
     length: usize,
 };
 
-pub const FontHeaderInfo = struct {
-    table_version: u32,
-    font_revision: f32,
-    flags: u16,
-    units_per_em: u16,
-    created: i64,
-    modified: i64,
-    bounds: glyph_mod.Bounds,
-    mac_style: u16,
-    lowest_rec_ppem: u16,
-    font_direction_hint: i16,
-    index_to_loc_format: i16,
-    glyph_data_format: i16,
-};
-
-pub const MaxProfileInfo = struct {
-    version: u32,
-    glyph_count: u16,
-    max_points: ?u16 = null,
-    max_contours: ?u16 = null,
-    max_composite_points: ?u16 = null,
-    max_composite_contours: ?u16 = null,
-    max_zones: ?u16 = null,
-    max_twilight_points: ?u16 = null,
-    max_storage: ?u16 = null,
-    max_function_defs: ?u16 = null,
-    max_instruction_defs: ?u16 = null,
-    max_stack_elements: ?u16 = null,
-    max_size_of_instructions: ?u16 = null,
-    max_component_elements: ?u16 = null,
-    max_component_depth: ?u16 = null,
-};
+pub const FontHeaderInfo = core_tables.HeaderInfo;
+pub const MaxProfileInfo = core_tables.MaxProfileInfo;
 
 pub const MetricHeaderInfo = struct {
     version: u32,
@@ -951,7 +921,7 @@ pub const Font = struct {
         const has_glyf_outlines = glyf != null and loca != null;
         const has_embedded_bitmaps = sbix != null or (cblc != null and cbdt != null);
         const has_layout_tables = gsub != null or gpos != null;
-        const format = try selectOutlineFormat(
+        const format = try maxp_mod.selectFormat(
             data,
             maxp,
             declared_format,
@@ -973,10 +943,12 @@ pub const Font = struct {
         // *declared table records* before reading cross-table fields below, so
         // a truncated head/hhea/maxp table cannot borrow bytes from the next
         // physical table in the file.
-        try validateHeadTable(data, head, format);
-        try validateMaxpTable(data, maxp, format);
+        try head_mod.validate(data, head, format);
+        try maxp_mod.validate(data, maxp, format);
+        const head_info = try head_mod.info(data, head);
+        const maxp_info = try maxp_mod.info(data, maxp);
 
-        const glyph_count = try bin.readU16At(data, maxp.offset + 4);
+        const glyph_count = maxp_info.glyph_count;
         if (post) |post_table| try post_mod.validate(data, post_table, glyph_count, .{
             .compat_ttc_face = is_ttc_face,
             // Glyph names are optional metadata and do not affect cmap,
@@ -1029,8 +1001,8 @@ pub const Font = struct {
         if (ltag) |ltag_table| try validateLtagTable(data, ltag_table);
         if (gasp) |gasp_table| try validateGaspTable(data, gasp_table);
 
-        const units_per_em = try bin.readU16At(data, head.offset + 18);
-        const index_to_loc_format = try bin.readI16At(data, head.offset + 50);
+        const units_per_em = head_info.units_per_em;
+        const index_to_loc_format = head_info.index_to_loc_format;
         const ascender = if (hhea) |table| try bin.readI16At(data, table.offset + 4) else @as(i16, @intCast(units_per_em));
         const descender = if (hhea) |table| try bin.readI16At(data, table.offset + 6) else 0;
         const line_gap = if (hhea) |table| try bin.readI16At(data, table.offset + 8) else 0;
@@ -1042,10 +1014,7 @@ pub const Font = struct {
         } else null;
         if (format == .opentype_cff and cff2 != null) try validateCff2Table(data, cff2.?);
         if (format == .truetype and has_glyf_outlines) {
-            const max_points = try bin.readU16At(data, maxp.offset + 6);
-            const max_contours = try bin.readU16At(data, maxp.offset + 8);
-            const max_component_elements = try bin.readU16At(data, maxp.offset + 28);
-            const max_component_depth = try bin.readU16At(data, maxp.offset + 30);
+            const limits = try maxp_info.trueTypeLimits();
             try validateLocaTable(data, loca.?, glyf.?, glyph_count, index_to_loc_format);
             try validateGlyfTable(
                 allocator,
@@ -1054,10 +1023,10 @@ pub const Font = struct {
                 glyf.?,
                 glyph_count,
                 index_to_loc_format,
-                max_points,
-                max_contours,
-                max_component_elements,
-                max_component_depth,
+                limits.max_points,
+                limits.max_contours,
+                limits.max_component_elements,
+                limits.max_component_depth,
             );
         }
         const gvar_target_context: ?GvarGlyphTargetContext = if (format == .truetype and has_glyf_outlines)
@@ -1941,8 +1910,8 @@ pub const Font = struct {
     /// value type after the borrowed `head` bytes have been revalidated.
     pub fn headInfo(self: *const Font) FontError!FontHeaderInfo {
         try sfnt.checksum.validate(self.data, self.head);
-        try validateHeadTable(self.data, self.head, self.format);
-        return try readFontHeaderInfo(self.data, self.head);
+        try head_mod.validate(self.data, self.head, self.format);
+        return try head_mod.info(self.data, self.head);
     }
 
     /// Read validated metadata from the SFNT `maxp` table.
@@ -1952,8 +1921,8 @@ pub const Font = struct {
     /// and leave TrueType-only maxima as null.
     pub fn maxpInfo(self: *const Font) FontError!MaxProfileInfo {
         try sfnt.checksum.validate(self.data, self.maxp);
-        try validateMaxpTable(self.data, self.maxp, self.format);
-        return try readMaxProfileInfo(self.data, self.maxp);
+        try maxp_mod.validate(self.data, self.maxp, self.format);
+        return try maxp_mod.info(self.data, self.maxp);
     }
 
     /// Read validated metadata from the SFNT `hhea` table.
@@ -4192,6 +4161,7 @@ pub const Font = struct {
             try sfnt.checksum.validate(self.data, self.maxp);
             try sfnt.checksum.validate(self.data, loca);
             try sfnt.checksum.validate(self.data, glyf);
+            try maxp_mod.validate(self.data, self.maxp, self.format);
             try validateLocaTable(self.data, loca, glyf, self.glyph_count, self.index_to_loc_format);
             return try self.glyphBoundsFromParsedTables(glyph_id);
         }
@@ -4260,15 +4230,14 @@ pub const Font = struct {
             try sfnt.checksum.validate(self.data, self.maxp);
             try sfnt.checksum.validate(self.data, loca);
             try sfnt.checksum.validate(self.data, glyf);
+            try maxp_mod.validate(self.data, self.maxp, self.format);
+            const limits =
+                try (try maxp_mod.info(self.data, self.maxp)).trueTypeLimits();
             try validateLocaTable(self.data, loca, glyf, self.glyph_count, self.index_to_loc_format);
             // The SFNT bytes are borrowed from the caller. Re-run the same glyf
             // grammar and component-graph validation enforced by Font.parse so
             // a post-parse mutation cannot be observed only by the particular
             // glyph whose outline is requested.
-            const max_points = try bin.readU16At(self.data, self.maxp.offset + 6);
-            const max_contours = try bin.readU16At(self.data, self.maxp.offset + 8);
-            const max_component_elements = try bin.readU16At(self.data, self.maxp.offset + 28);
-            const max_component_depth = try bin.readU16At(self.data, self.maxp.offset + 30);
             try validateGlyfTable(
                 allocator,
                 self.data,
@@ -4276,10 +4245,10 @@ pub const Font = struct {
                 glyf,
                 self.glyph_count,
                 self.index_to_loc_format,
-                max_points,
-                max_contours,
-                max_component_elements,
-                max_component_depth,
+                limits.max_points,
+                limits.max_contours,
+                limits.max_component_elements,
+                limits.max_component_depth,
             );
         }
         return self.glyphOutlineFromParsedTables(allocator, glyph_id, .revalidate);
@@ -5149,157 +5118,6 @@ pub const raster_backend = struct {
     pub const glyphOutlineAtCoords = Font.glyphOutlineForRasterAtCoords;
     pub const glyphOutline = Font.glyphOutlineForRaster;
 };
-
-fn readFontHeaderInfo(data: []const u8, head: TableRecord) FontError!FontHeaderInfo {
-    try sfnt.requireLength(head, 54);
-    return .{
-        .table_version = try bin.readU32At(data, head.offset),
-        .font_revision = fixed16_16ToF32(try bin.readI32At(data, head.offset + 4)),
-        .flags = try bin.readU16At(data, head.offset + 16),
-        .units_per_em = try bin.readU16At(data, head.offset + 18),
-        .created = try readI64At(data, head.offset + 20),
-        .modified = try readI64At(data, head.offset + 28),
-        .bounds = .{
-            .x_min = try bin.readI16At(data, head.offset + 36),
-            .y_min = try bin.readI16At(data, head.offset + 38),
-            .x_max = try bin.readI16At(data, head.offset + 40),
-            .y_max = try bin.readI16At(data, head.offset + 42),
-        },
-        .mac_style = try bin.readU16At(data, head.offset + 44),
-        .lowest_rec_ppem = try bin.readU16At(data, head.offset + 46),
-        .font_direction_hint = try bin.readI16At(data, head.offset + 48),
-        .index_to_loc_format = try bin.readI16At(data, head.offset + 50),
-        .glyph_data_format = try bin.readI16At(data, head.offset + 52),
-    };
-}
-
-fn readI64At(data: []const u8, offset: usize) FontError!i64 {
-    const high = try bin.readU32At(data, offset);
-    const low = try bin.readU32At(data, offset + 4);
-    return @bitCast((@as(u64, high) << 32) | low);
-}
-
-fn validateHeadTable(data: []const u8, head: TableRecord, format: FontFormat) FontError!void {
-    try sfnt.requireLength(head, 54);
-
-    const version = try bin.readU32At(data, head.offset);
-    const magic_number = try bin.readU32At(data, head.offset + 12);
-    const units_per_em = try bin.readU16At(data, head.offset + 18);
-    const x_min = try bin.readI16At(data, head.offset + 36);
-    const y_min = try bin.readI16At(data, head.offset + 38);
-    const x_max = try bin.readI16At(data, head.offset + 40);
-    const y_max = try bin.readI16At(data, head.offset + 42);
-    const mac_style = try bin.readU16At(data, head.offset + 44);
-    const lowest_rec_ppem = try bin.readU16At(data, head.offset + 46);
-    const font_direction_hint = try bin.readI16At(data, head.offset + 48);
-    const index_to_loc_format = try bin.readI16At(data, head.offset + 50);
-    const glyph_data_format = try bin.readI16At(data, head.offset + 52);
-
-    // These fields are SFNT-wide invariants rather than Cangjie preferences:
-    // accepting an arbitrary version or magic number means the bytes may not be
-    // a `head` table at all, and accepting out-of-range design units makes
-    // later font-size-to-em math ambiguous for otherwise parseable faces.
-    if (version != 0x00010000) return error.BadSfnt;
-    if (magic_number != 0x5f0f3cf5) return error.BadSfnt;
-    if (units_per_em < 16 or units_per_em > 16384) return error.BadSfnt;
-    if (x_min > x_max or y_min > y_max) return error.BadSfnt;
-    // macStyle is a seven-bit legacy summary field in `head`; higher bits are
-    // reserved and must stay zero so style matching does not inherit unknown
-    // future semantics. lowestRecPPEM is a pixel size, so zero is not a
-    // meaningful recommendation. fontDirectionHint is deprecated, but OpenType
-    // still constrains accepted stored values to the historical -2..2 range.
-    if ((mac_style & 0xff80) != 0) return error.BadSfnt;
-    if (lowest_rec_ppem == 0) return error.BadSfnt;
-    if (font_direction_hint < -2 or font_direction_hint > 2) return error.BadSfnt;
-
-    // indexToLocFormat only drives glyf/loca lookup.  CFF-backed OpenType
-    // faces do not have a loca table, so avoid rejecting legacy production OTFs
-    // for an otherwise-unused field while still validating TrueType faces before
-    // their loca table is interpreted.
-    if (format == .truetype and index_to_loc_format != 0 and index_to_loc_format != 1) {
-        return error.InvalidLoca;
-    }
-    if (glyph_data_format != 0) return error.BadSfnt;
-}
-
-fn readMaxProfileInfo(data: []const u8, maxp: TableRecord) FontError!MaxProfileInfo {
-    try sfnt.requireLength(maxp, 6);
-    const version = try bin.readU32At(data, maxp.offset);
-    var info = MaxProfileInfo{
-        .version = version,
-        .glyph_count = try bin.readU16At(data, maxp.offset + 4),
-    };
-    if (version == 0x00010000) {
-        try sfnt.requireLength(maxp, 32);
-        info.max_points = try bin.readU16At(data, maxp.offset + 6);
-        info.max_contours = try bin.readU16At(data, maxp.offset + 8);
-        info.max_composite_points = try bin.readU16At(data, maxp.offset + 10);
-        info.max_composite_contours = try bin.readU16At(data, maxp.offset + 12);
-        info.max_zones = try bin.readU16At(data, maxp.offset + 14);
-        info.max_twilight_points = try bin.readU16At(data, maxp.offset + 16);
-        info.max_storage = try bin.readU16At(data, maxp.offset + 18);
-        info.max_function_defs = try bin.readU16At(data, maxp.offset + 20);
-        info.max_instruction_defs = try bin.readU16At(data, maxp.offset + 22);
-        info.max_stack_elements = try bin.readU16At(data, maxp.offset + 24);
-        info.max_size_of_instructions = try bin.readU16At(data, maxp.offset + 26);
-        info.max_component_elements = try bin.readU16At(data, maxp.offset + 28);
-        info.max_component_depth = try bin.readU16At(data, maxp.offset + 30);
-    }
-    return info;
-}
-
-fn validateMaxpTable(data: []const u8, maxp: TableRecord, format: FontFormat) FontError!void {
-    try sfnt.requireLength(maxp, 6);
-    const version = try bin.readU32At(data, maxp.offset);
-    switch (format) {
-        .truetype => {
-            // TrueType outlines require the version 1.0 maxp payload because
-            // rasterizers use its glyph-program and composite limits when
-            // validating glyf instructions. Accepting the six-byte CFF shape
-            // here would silently classify an internally inconsistent SFNT as
-            // a usable TrueType face.
-            if (version != 0x00010000) return error.BadSfnt;
-            // maxp v1.0 is a fixed 32-byte table. Reject tail bytes so the
-            // trusted glyph-count/summary contract is consumed identically by
-            // parsers that borrow table bytes and by consumers that cache it.
-            if (maxp.length != 32) return error.BadSfnt;
-        },
-        .opentype_cff => {
-            // CFF-backed OpenType fonts use maxp version 0.5, whose contract is
-            // only the version and numGlyphs fields. A version 1.0 maxp table
-            // belongs to glyf-based fonts and indicates a mismatched outline
-            // stack even when the CFF table is otherwise present.
-            if (version != 0x00005000) return error.BadSfnt;
-            // maxp v0.5 has only version and numGlyphs.
-            if (maxp.length != 6) return error.BadSfnt;
-        },
-    }
-}
-
-fn selectOutlineFormat(data: []const u8, maxp: TableRecord, declared_format: FontFormat, has_glyf_outlines: bool, has_cff_outlines: bool) FontError!FontFormat {
-    try sfnt.requireLength(maxp, 6);
-    const version = try bin.readU32At(data, maxp.offset);
-    // Some text-rendering fixtures deliberately carry both glyf and CFF under
-    // conflicting sfnt flavors. HarfBuzz selects the internally complete
-    // outline stack: maxp 1.0 describes glyf limits, while maxp 0.5 is the CFF
-    // glyph-count form. Preserve the scaler as a fallback so malformed
-    // topologies still reach the strict format-specific validator below.
-    if (has_glyf_outlines and version == 0x00010000 and maxp.length == 32) return .truetype;
-    if (has_cff_outlines and version == 0x00005000 and maxp.length == 6) return .opentype_cff;
-    return declared_format;
-}
-
-test "outline format follows complete maxp-backed table stack" {
-    var maxp_10: [32]u8 = .{0} ** 32;
-    writeU32Test(&maxp_10, 0, 0x00010000);
-    const record_10 = TableRecord{ .tag = .{ 'm', 'a', 'x', 'p' }, .checksum = 0, .offset = 0, .length = maxp_10.len };
-    try std.testing.expectEqual(FontFormat.truetype, try selectOutlineFormat(&maxp_10, record_10, .opentype_cff, true, true));
-
-    var maxp_05: [6]u8 = .{0} ** 6;
-    writeU32Test(&maxp_05, 0, 0x00005000);
-    const record_05 = TableRecord{ .tag = .{ 'm', 'a', 'x', 'p' }, .checksum = 0, .offset = 0, .length = maxp_05.len };
-    try std.testing.expectEqual(FontFormat.opentype_cff, try selectOutlineFormat(&maxp_05, record_05, .truetype, true, true));
-}
 
 fn validateCff2Table(data: []const u8, cff2: TableRecord) FontError!void {
     return try cff2_mod.validate(data, cff2.offset, cff2.length);
@@ -12288,90 +12106,6 @@ test "compound glyf aggregates must not exceed maxp composite limits" {
     }
 }
 
-test "maxp table version and length must match the outline format" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        const bytes = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(bytes);
-        var font = try Font.parse(allocator, bytes);
-        font.deinit();
-    }
-
-    {
-        const bytes = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(bytes);
-        const maxp_offset = try sfntTableOffset(bytes, "maxp");
-        writeU32Test(bytes, maxp_offset, 0x00005000);
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(bytes);
-        try setSfntTableLength(bytes, "maxp", 6);
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        const original = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(original);
-        const bytes = try allocator.alloc(u8, original.len + 4);
-        defer allocator.free(bytes);
-        @memcpy(bytes[0..original.len], original);
-        @memset(bytes[original.len..], 0);
-        try setSfntTableLength(bytes, "maxp", 33); // v1.0 maxp has no extension payload.
-        try updateSfntTableChecksum(bytes, "maxp");
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildMinimalOtf(allocator);
-        defer allocator.free(bytes);
-        var font = try Font.parse(allocator, bytes);
-        font.deinit();
-    }
-
-    {
-        const bytes = try test_font.buildMinimalOtf(allocator);
-        defer allocator.free(bytes);
-        const maxp_offset = try sfntTableOffset(bytes, "maxp");
-        writeU32Test(bytes, maxp_offset, 0x00010000);
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        const original = try test_font.buildMinimalOtf(allocator);
-        defer allocator.free(original);
-        const bytes = try allocator.alloc(u8, original.len + 4);
-        defer allocator.free(bytes);
-        @memcpy(bytes[0..original.len], original);
-        @memset(bytes[original.len..], 0);
-        try setSfntTableLength(bytes, "maxp", 7); // v0.5 maxp is exactly version + numGlyphs.
-        try updateSfntTableChecksum(bytes, "maxp");
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-}
-
-test "TrueType maxp maxZones is tolerated for shaping compatibility" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    inline for (.{ 0, 1, 2, 3 }) |max_zones| {
-        const bytes = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(bytes);
-        const maxp_offset = try sfntTableOffset(bytes, "maxp");
-        // OpenType restricts maxZones to 1 or 2, but HarfBuzz/FreeType tolerate
-        // shaping-only subset fonts with stale hinting maxima. Keep the field
-        // readable in maxpInfo(), but do not reject an otherwise usable face.
-        writeU16Test(bytes, maxp_offset + 14, max_zones);
-        try updateSfntTableChecksum(bytes, "maxp");
-        var font = try Font.parse(allocator, bytes);
-        font.deinit();
-    }
-}
-
 test "CFF CharStrings INDEX count must match maxp glyph count" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -12459,73 +12193,6 @@ test "CFF glyph outlines revalidate borrowed CharStrings count" {
     writeU16Test(bytes, cff_offset + info.charstrings_offset, 1);
 
     try std.testing.expectError(error.BadSfnt, font.glyphOutline(allocator, 0));
-}
-
-test "head table invariants are validated at parse time" {
-    const allocator = std.testing.allocator;
-    const test_font = @import("test_font.zig");
-
-    {
-        const bytes = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(bytes);
-        var font = try Font.parse(allocator, bytes);
-        font.deinit();
-    }
-
-    inline for (.{
-        .{ .offset = 0, .value = @as(u32, 0x00020000), .err = error.BadSfnt },
-        .{ .offset = 12, .value = @as(u32, 0), .err = error.BadSfnt },
-    }) |case| {
-        const bytes = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(bytes);
-        const head_offset = try sfntTableOffset(bytes, "head");
-        writeU32Test(bytes, head_offset + case.offset, case.value);
-        try std.testing.expectError(case.err, Font.parse(allocator, bytes));
-    }
-
-    inline for (.{
-        .{ .value = @as(u16, 15), .err = error.BadSfnt },
-        .{ .value = @as(u16, 16385), .err = error.BadSfnt },
-        .{ .value = @as(u16, 2), .err = error.InvalidLoca },
-    }) |case| {
-        const bytes = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(bytes);
-        const head_offset = try sfntTableOffset(bytes, "head");
-        writeU16Test(bytes, head_offset + 18, case.value);
-        if (case.err == error.InvalidLoca) {
-            writeI16Test(bytes, head_offset + 50, @bitCast(case.value));
-            writeU16Test(bytes, head_offset + 18, 1000);
-        }
-        try std.testing.expectError(case.err, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(bytes);
-        const head_offset = try sfntTableOffset(bytes, "head");
-        writeI16Test(bytes, head_offset + 36, 701); // xMin must not exceed xMax.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    inline for (.{
-        .{ .field_offset = @as(usize, 44), .write_value = @as(u16, 0x0080) }, // macStyle reserved bits.
-        .{ .field_offset = @as(usize, 46), .write_value = @as(u16, 0) }, // lowestRecPPEM is a positive pixel size.
-        .{ .field_offset = @as(usize, 48), .write_value = @as(u16, 3) }, // fontDirectionHint must remain in -2..2.
-    }) |case| {
-        const bytes = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(bytes);
-        const head_offset = try sfntTableOffset(bytes, "head");
-        writeU16Test(bytes, head_offset + case.field_offset, case.write_value);
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
-
-    {
-        const bytes = try test_font.buildMinimalTtf(allocator);
-        defer allocator.free(bytes);
-        const head_offset = try sfntTableOffset(bytes, "head");
-        writeI16Test(bytes, head_offset + 52, 1); // glyphDataFormat is specified as zero.
-        try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
-    }
 }
 
 test "TTC face offsets cannot overlap collection metadata" {

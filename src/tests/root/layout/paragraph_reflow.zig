@@ -100,6 +100,37 @@ test "paragraph wrapping keeps multiple-substitution glyph atoms together" {
     try std.testing.expectEqual(paragraph.glyphs[0].cluster, paragraph.glyphs[1].cluster);
 }
 
+test "extremely narrow wrapping skips leading spaces after an emergency line" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &layout_buffer,
+        "A A A",
+        20,
+        .{ .max_width = 100 },
+    );
+    defer paragraph.deinit();
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+
+    const narrow = try paragraph.layout(&reflow, .{ .max_width = 15 });
+    try std.testing.expectEqual(@as(usize, 3), narrow.lines.len);
+    for (narrow.lines) |line| {
+        try std.testing.expectEqual(@as(usize, 1), line.glyph_len);
+    }
+}
+
 test "paragraph wrapping consumes Unicode line break data" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

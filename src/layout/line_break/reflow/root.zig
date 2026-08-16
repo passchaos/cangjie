@@ -256,6 +256,22 @@ pub fn build(
                 line_start,
                 line_byte_end,
             );
+            if (line_start > index + 1) {
+                // An emergency break after an over-wide glyph can be followed
+                // by one or more spaces that have not reached the glyph loop
+                // yet. `trimLeadingSoftBreaks` intentionally assigns those
+                // source bytes to the preceding logical line, so skip their
+                // glyph slots as well. Recomputing a width over
+                // `[line_start..index + 1]` would otherwise form a reversed
+                // slice, and merely clamping the slice would count the trimmed
+                // spaces again on the following iterations.
+                line_width = 0;
+                terminal_emergency_line_committed =
+                    break_end == buffer.glyphs.items.len;
+                last_break.reset();
+                index = line_start - 1;
+                continue :glyph_loop;
+            }
             line_width = geometry.lineWidth(
                 buffer.glyphs.items[line_start .. index + 1],
             );

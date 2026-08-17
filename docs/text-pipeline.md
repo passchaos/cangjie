@@ -766,6 +766,15 @@ allocator-owned records expose sorted contour-point indexes for covered glyphs,
 match HarfBuzz's face-level attachment-point semantics, and retain the same
 borrowed-table checksum and child-grammar defenses as other public GDEF reads.
 
+GDEF class and mark-set inspection is enumerable rather than requiring callers
+to probe every glyph. `Face.glyphs().inClass` and the layout inspection view's
+`glyphsInClass` return allocator-owned glyph IDs, with `.unclassified`
+explicitly representing the complement of all ClassDef assignments.
+`markGlyphSetCount` plus strict-indexed `markGlyphSet` exposes each
+MarkGlyphSetsDef coverage independently, distinguishing an empty set from an
+out-of-range request while preserving duplicate-tolerant canonical set
+semantics used by production fonts.
+
 Paragraph shaping now retains glyph atoms in logical source order and applies
 bidi visual ordering only after line ranges are known. Each line builds its own
 bidi map from `ParagraphLine.byte_start/byte_len`; mixed LTR/RTL text therefore

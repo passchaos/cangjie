@@ -102,6 +102,7 @@ pub const FontError = error{
     InvalidLoca,
     InvalidMetrics,
     InvalidBitmapSize,
+    InvalidMarkGlyphSet,
     CompoundDepthExceeded,
     InvalidName,
 } || cff_mod.CffError || gpos_mod.GposError || gsub_mod.GsubError || std.mem.Allocator.Error || error{EndOfStream};
@@ -3209,6 +3210,49 @@ pub const Font = struct {
         return @enumFromInt(class);
     }
 
+    /// Enumerate all valid glyph IDs assigned to one GDEF GlyphClassDef class.
+    ///
+    /// `.unclassified` is the complement of every explicit class assignment
+    /// across `0..glyph_count`; missing GDEF/ClassDef therefore returns all
+    /// glyph IDs for that class and an empty slice for the other classes.
+    pub fn glyphsInClass(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        requested: GlyphClass,
+    ) FontError![]glyph_mod.GlyphId {
+        try gdef_mod.validateGlyphClassValue(@intFromEnum(requested));
+        const gdef = self.gdef orelse
+            return self.glyphClassFallback(allocator, requested);
+        try sfnt.checksum.validate(self.data, gdef);
+        const gdef_header = try gdef_mod.header(self.data, gdef);
+        const offset = gdef_header.glyph_class_def_offset;
+        if (offset == 0) {
+            return self.glyphClassFallback(allocator, requested);
+        }
+        try gdef_mod.validateChildOffset(
+            offset,
+            gdef.length,
+            gdef_header.length,
+        );
+        try gdef_mod.validate(
+            self.data,
+            gdef,
+            self.glyph_count,
+            try self.gdefVariationAxisCount(gdef_header),
+        );
+        return gdef_mod.glyphsInClass(
+            allocator,
+            self.data[gdef.offset .. gdef.offset + gdef.length],
+            offset,
+            self.glyph_count,
+            requested,
+        ) catch |err| switch (err) {
+            error.BadSfnt => return error.BadSfnt,
+            error.EndOfStream => return error.EndOfStream,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+    }
+
     pub fn markAttachClass(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!u16 {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const gdef = self.gdef orelse return 0;
@@ -3349,6 +3393,79 @@ pub const Font = struct {
         const fvar = self.fvar orelse return error.BadSfnt;
         try sfnt.checksum.validate(self.data, fvar);
         return (try fvar_mod.info(self.data, fvar)).axis_count;
+    }
+
+    fn glyphClassFallback(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        requested: GlyphClass,
+    ) FontError![]glyph_mod.GlyphId {
+        if (requested != .unclassified) {
+            return allocator.alloc(glyph_mod.GlyphId, 0);
+        }
+        const glyphs = try allocator.alloc(
+            glyph_mod.GlyphId,
+            self.glyph_count,
+        );
+        for (glyphs, 0..) |*glyph_id, index| glyph_id.* = @intCast(index);
+        return glyphs;
+    }
+
+    pub fn markGlyphSetCount(self: *const Font) FontError!usize {
+        const resolved = try self.gdefMarkSetsView();
+        return if (resolved) |view|
+            try gdef_mod.markSetCount(view.table, view.offset)
+        else
+            0;
+    }
+
+    pub fn markGlyphSet(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        set_index: usize,
+    ) FontError![]glyph_mod.GlyphId {
+        const view = try self.gdefMarkSetsView() orelse
+            return error.InvalidMarkGlyphSet;
+        return gdef_mod.readMarkSet(
+            allocator,
+            view.table,
+            view.offset,
+            set_index,
+        ) catch |err| switch (err) {
+            error.InvalidMarkGlyphSet => return error.InvalidMarkGlyphSet,
+            error.BadSfnt => return error.BadSfnt,
+            error.EndOfStream => return error.EndOfStream,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+    }
+
+    const GdefMarkSetsView = struct {
+        table: []const u8,
+        offset: usize,
+    };
+
+    fn gdefMarkSetsView(self: *const Font) FontError!?GdefMarkSetsView {
+        const gdef = self.gdef orelse return null;
+        try sfnt.checksum.validate(self.data, gdef);
+        const gdef_header = try gdef_mod.header(self.data, gdef);
+        const offset =
+            gdef_header.mark_glyph_sets_def_offset orelse return null;
+        if (offset == 0) return null;
+        try gdef_mod.validateChildOffset(
+            offset,
+            gdef.length,
+            gdef_header.length,
+        );
+        try gdef_mod.validate(
+            self.data,
+            gdef,
+            self.glyph_count,
+            try self.gdefVariationAxisCount(gdef_header),
+        );
+        return .{
+            .table = self.data[gdef.offset .. gdef.offset + gdef.length],
+            .offset = offset,
+        };
     }
 
     fn markFilteringSets(self: *const Font, allocator: std.mem.Allocator) FontError!?[][]glyph_mod.GlyphId {

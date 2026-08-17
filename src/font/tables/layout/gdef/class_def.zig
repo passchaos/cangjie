@@ -1,9 +1,11 @@
 //! OpenType ClassDef lookup, dense expansion, and GDEF class validation.
 
+const std = @import("std");
 const bin = @import("../../../../binary.zig");
 const types = @import("types.zig");
 
 pub const Error = error{ BadSfnt, EndOfStream };
+pub const AllocationError = Error || std.mem.Allocator.Error;
 pub const GlyphId = u16;
 
 pub fn value(data: []const u8, offset: usize, glyph_id: GlyphId) Error!u16 {
@@ -42,6 +44,28 @@ pub fn readDense(
         ),
         else => return error.BadSfnt,
     }
+}
+
+pub fn glyphsInClass(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    offset: usize,
+    glyph_count: u16,
+    requested: types.GlyphClass,
+) AllocationError![]GlyphId {
+    try validateGlyphClassValue(@intFromEnum(requested));
+    const dense = try allocator.alloc(u16, glyph_count);
+    defer allocator.free(dense);
+    try readDense(data, offset, glyph_count, dense, true);
+
+    var result = std.ArrayList(GlyphId).empty;
+    errdefer result.deinit(allocator);
+    for (dense, 0..) |class, glyph_id| {
+        if (class == @intFromEnum(requested)) {
+            try result.append(allocator, @intCast(glyph_id));
+        }
+    }
+    return result.toOwnedSlice(allocator);
 }
 
 pub fn validateBounds(

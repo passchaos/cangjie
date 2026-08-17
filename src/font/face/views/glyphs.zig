@@ -88,6 +88,14 @@ pub const View = struct {
         return self.implementation.glyphName(glyph_id);
     }
 
+    pub fn inClass(
+        self: View,
+        allocator: std.mem.Allocator,
+        class: font_mod.GlyphClass,
+    ) font_mod.FontError![]glyph_mod.GlyphId {
+        return self.implementation.glyphsInClass(allocator, class);
+    }
+
     /// Return allocator-owned GDEF attachment contour-point indexes.
     pub fn attachmentPoints(
         self: View,

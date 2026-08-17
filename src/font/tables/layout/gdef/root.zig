@@ -27,12 +27,15 @@ pub fn validateBasic(
 
 pub const classValue = class_def.value;
 pub const readClassDefDense = class_def.readDense;
+pub const glyphsInClass = class_def.glyphsInClass;
 pub const validateGlyphClassValue = class_def.validateGlyphClassValue;
 pub const coverageIndex = @import("coverage.zig").coverageIndex;
 pub const readAttachmentPoints = attachment_points.read;
 
 pub const validateMarkSets = mark_sets.validate;
 pub const readMarkSets = mark_sets.read;
+pub const markSetCount = mark_sets.setCountPublic;
+pub const readMarkSet = mark_sets.readSet;
 pub const freeMarkSets = mark_sets.free;
 
 pub const LigatureCaretOptions = ligature_carets.Options;

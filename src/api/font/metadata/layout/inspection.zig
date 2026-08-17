@@ -35,6 +35,14 @@ pub const View = struct {
         return self.implementation().glyphClass(glyph_id);
     }
 
+    pub fn glyphsInClass(
+        self: View,
+        allocator: std.mem.Allocator,
+        class: font.GlyphClass,
+    ) font.FontError![]glyph.GlyphId {
+        return self.implementation().glyphsInClass(allocator, class);
+    }
+
     pub fn markAttachClass(
         self: View,
         glyph_id: glyph.GlyphId,
@@ -63,6 +71,18 @@ pub const View = struct {
             glyph_id,
             normalized_coords,
         );
+    }
+
+    pub fn markGlyphSetCount(self: View) font.FontError!usize {
+        return self.implementation().markGlyphSetCount();
+    }
+
+    pub fn markGlyphSet(
+        self: View,
+        allocator: std.mem.Allocator,
+        set_index: usize,
+    ) font.FontError![]glyph.GlyphId {
+        return self.implementation().markGlyphSet(allocator, set_index);
     }
 
     pub fn kerning(

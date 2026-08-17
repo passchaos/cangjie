@@ -413,6 +413,17 @@ materialized X9 atom at the visual line end without inventing a new source
 range. This is explicit soft-hyphen support, not language-specific automatic
 hyphenation.
 
+The language-data layer for automatic hyphenation is implemented under
+`src/text/hyphenation/`. `cangjie.text.hyphenation.Dictionary` parses the plain
+Unicode Liang-pattern and exception format used by tex-hyphen/libhnj and
+MuPDF's hyphen resources, copies it into an immutable scalar trie, and returns
+UTF-8 byte boundaries. Left/right minimum fragments and owned one-to-one
+Unicode normalization mappings are explicit construction options; no language
+data, locale guess, or runtime callback is built into the library. Paragraph
+integration remains a separate next step so the pattern engine's correctness
+and ownership contract can be validated independently from discretionary glyph
+materialization.
+
 `TextAlign.justify` now provides portable inter-word and CJK inter-character
 justification. Reflow first expands UAX #14 `SP` source atoms on non-terminal
 soft-wrapped lines. If no expandable space exists, it distributes the remaining
@@ -818,9 +829,9 @@ Future changes must preserve these rules:
 3. Keep public and test consumers on owning domain modules; do not recreate a
    broad aggregate layout façade as new shaping or paragraph capabilities are
    added.
-4. Add language-aware hyphenation as the next optional tailoring layer; keep
-   dictionary segmentation and hyphenation outside the default UAX #14 state
-   machine.
+4. Integrate the implemented Liang-pattern dictionary with paragraph reflow as
+   an optional tailoring layer; keep automatic hyphenation outside the default
+   UAX #14 state machine and preserve shaped-boundary safety.
 5. Add Arabic kashida and language-specific CJK punctuation
    compression/hanging where portable references exist, without changing the
    generic inter-word and inter-character contracts.

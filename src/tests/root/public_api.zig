@@ -26,6 +26,7 @@ test "public facade uses domain names without legacy aliases" {
         @typeInfo(cangjie.render.InlineObjectDrawCommand) == .@"struct",
     );
     try std.testing.expect(@hasDecl(cangjie.text, "segmentation"));
+    try std.testing.expect(@hasDecl(cangjie.text, "hyphenation"));
     try std.testing.expect(@hasDecl(cangjie.font.metadata, "variations"));
 
     // The redesign deliberately carries no compatibility layer. These checks
@@ -120,6 +121,12 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(@typeInfo(cangjie.shaping.Engine) == .@"struct");
     try std.testing.expect(
         @typeInfo(cangjie.text.segmentation.WordDictionary) == .@"struct",
+    );
+    try std.testing.expect(
+        @typeInfo(cangjie.text.hyphenation.Dictionary) == .@"struct",
+    );
+    try std.testing.expect(
+        @typeInfo(cangjie.text.hyphenation.Dictionary.Mapping) == .@"struct",
     );
 }
 

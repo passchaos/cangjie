@@ -548,6 +548,12 @@ GSUB, GPOS/AAT, attachment, pipeline-state, and vertical-layout modules. Tests
 also import owning domain modules directly rather than restoring a test-only
 aggregate layout namespace.
 
+Unicode behavioral coverage is grouped beside the implementation under
+`src/unicode/tests_*.zig`: baseline contracts, segmentation, RTL/joining
+scripts, Indic/USE scripts, and other script families have independent test
+containers. Only the two tests that intentionally exercise private joining and
+mark-classification helpers remain in the Unicode root implementation.
+
 Cangjie deliberately does not own an editor or mutable text-buffer model.
 Applications and UI toolkits compose the public Unicode segmentation,
 paragraph, caret, selection, and hit-testing APIs with their own document,

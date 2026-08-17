@@ -14,6 +14,7 @@ const shaping_metadata = @import("shaping_metadata.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const pipeline_types = @import("shaping/pipeline/types.zig");
 const shaping_plan = @import("shaping/plan/root.zig");
+const plan_validation = @import("shaping/plan/validation.zig");
 const normalization = @import("shaping/pipeline/normalization/root.zig");
 const normalize_marks = normalization.marks;
 const normalize_native = normalization.native;
@@ -45,6 +46,7 @@ const font_fallback = @import("shaping/fallback/font/root.zig");
 const stch_feature = @import("shaping/features/stch/root.zig");
 const bidi_reorder = @import("layout/bidi/reorder/root.zig");
 const glyph_position = @import("layout/glyph_position.zig");
+const paragraph_options = @import("layout/paragraph/options.zig");
 const paragraph_types = @import("layout/types/paragraph.zig");
 const run_types = @import("layout/types/runs.zig");
 const line_break_analysis = @import("layout/line_break/analysis.zig");
@@ -96,39 +98,7 @@ pub const BaselineMetrics = paragraph_reflow.BaselineMetrics;
 
 pub const TextMetrics = paragraph_types.TextMetrics;
 
-pub const ParagraphOptions = struct {
-    max_width: f32,
-    wrap_mode: WrapMode = .word,
-    alignment: TextAlign = .start,
-    line_height: ?f32 = null,
-    direction: TextDirection = .ltr,
-    max_lines: ?usize = null,
-    /// Append a simple "..." marker only when `max_lines` actually removes
-    /// content. A paragraph whose natural line count exactly equals the limit
-    /// should remain byte-for-byte shaped text, not be rewritten as truncated.
-    ellipsis: bool = false,
-    tab_width: usize = 4,
-    letter_spacing: f32 = 0,
-    word_spacing: f32 = 0,
-    first_line_indent: f32 = 0,
-    paragraph_spacing: f32 = 0,
-    /// Optional language dictionary for scripts that normally omit spaces.
-    ///
-    /// The dictionary adds soft opportunities to UAX #14; all candidates still
-    /// pass grapheme and shaping `unsafe-to-break` checks. The dictionary must
-    /// outlive this layout call and any `ShapedParagraph` created from it.
-    word_break_dictionary: ?*const segmentation.WordBreakDictionary = null,
-    /// Optional shaping controls used before wrapping. Paragraph layout keeps
-    /// these beside spacing/line options so higher-level styled text can drive
-    /// GSUB/GPOS without doing a separate pre-shape pass.
-    script_tag: ?unicode.OpenTypeScriptTag = null,
-    language_tag: ?unicode.OpenTypeLanguageTag = null,
-    features: []const unicode.FeatureOverride = &.{},
-    /// Normalized variation-space coordinates forwarded to shaping. Paragraph
-    /// layout itself only consumes shaped advances, but variable font metrics
-    /// must be selected before line wrapping.
-    normalized_variation_coords: []const f32 = &.{},
-};
+pub const ParagraphOptions = paragraph_options.Options;
 
 /// One contiguous style item for unified paragraph shaping.
 ///
@@ -185,9 +155,9 @@ pub const ShapedParagraph = struct {
     /// `layout` call or deinitialization. A separate `ReflowBuffer` may be used
     /// concurrently for the same paragraph; one buffer itself is single-user.
     pub fn layout(self: *const ShapedParagraph, reflow: *ReflowBuffer, options: ParagraphOptions) !ParagraphLayout {
-        try validateParagraphOptions(options);
+        try paragraph_options.validate(options);
         if (options.word_break_dictionary != self.word_break_dictionary or
-            !paragraphOptionsMatchShapeKey(self.text, options, self.shape_key))
+            !paragraph_options.matchesShapeKey(self.text, options, self.shape_key))
         {
             return error.ParagraphShapingOptionsChanged;
         }
@@ -360,7 +330,7 @@ pub const TextShaper = struct {
     }
 
     pub fn shapeUtf8CascadeWithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ShapedText {
-        try validateShapingInput(text, font_size, options);
+        try plan_validation.input(text, font_size, options);
         const cache_key = if (shaped_cache != null) ShapedRunCache.key(cascade.fonts, text, font_size, options) else undefined;
         if (shaped_cache) |cache| {
             if (cache.lookup(cache_key)) |entry| {
@@ -471,7 +441,7 @@ pub const TextShaper = struct {
     }
 
     pub fn shapeUtf8ScriptRuns(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ScriptedText {
-        try validateShapingInput(text, font_size, options);
+        try plan_validation.input(text, font_size, options);
         try shapeScriptRunsInto(cascade, buffer, text, font_size, options);
         if (shouldApplyBidiVisualOrder(text, options)) {
             try applyBidiVisualOrder(buffer, text, options.direction, null);
@@ -501,9 +471,9 @@ pub const TextShaper = struct {
         font_size: f32,
         options: ParagraphOptions,
     ) !ShapedParagraph {
-        try validateParagraphOptions(options);
+        try paragraph_options.validate(options);
         if (cascade.fonts.len == 0) return error.EmptyFontCascade;
-        const shape_options = shapeOptionsForParagraph(options);
+        const shape_options = paragraph_options.shapeOptions(options);
         _ = try shapeUtf8CascadeWithCaches(
             cascade,
             fallback_cache,
@@ -569,11 +539,11 @@ pub const TextShaper = struct {
     }
 
     pub fn layoutParagraphUtf8FullyCachedWithOptions(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
-        try validateParagraphOptions(options);
+        try paragraph_options.validate(options);
         // Paragraph layout is deliberately staged: shape first, then line-wrap
         // the finished glyph advances. That keeps OpenType substitution and
         // positioning independent from wrapping policy.
-        _ = try shapeUtf8CascadeFullyCachedWithOptions(cascade, fallback_cache, metrics_cache, glyph_index_cache, buffer, text, font_size, shapeOptionsForParagraph(options));
+        _ = try shapeUtf8CascadeFullyCachedWithOptions(cascade, fallback_cache, metrics_cache, glyph_index_cache, buffer, text, font_size, paragraph_options.shapeOptions(options));
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
         try buildParagraphLines(
             buffer,
@@ -591,8 +561,8 @@ pub const TextShaper = struct {
     }
 
     pub fn layoutParagraphUtf8WithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
-        try validateParagraphOptions(options);
-        _ = try shapeUtf8CascadeWithCaches(cascade, fallback_cache, metrics_cache, glyph_index_cache, shaped_cache, buffer, text, font_size, shapeOptionsForParagraph(options));
+        try paragraph_options.validate(options);
+        _ = try shapeUtf8CascadeWithCaches(cascade, fallback_cache, metrics_cache, glyph_index_cache, shaped_cache, buffer, text, font_size, paragraph_options.shapeOptions(options));
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
         try buildParagraphLines(
             buffer,
@@ -623,9 +593,9 @@ pub const TextShaper = struct {
         spans: []const StyledParagraphSpan,
         options: ParagraphOptions,
     ) !ParagraphLayout {
-        try validateParagraphOptions(options);
-        try validateShapingUtf8(text);
-        try validateShapingFontSize(default_font_size);
+        try paragraph_options.validate(options);
+        try plan_validation.utf8(text);
+        try plan_validation.fontSize(default_font_size);
         if (cascade.fonts.len == 0) return error.EmptyFontCascade;
 
         buffer.clear();
@@ -675,98 +645,6 @@ fn textMetricsFromParagraph(paragraph: ParagraphLayout) TextMetrics {
     };
 }
 
-fn validateShapingInput(text: []const u8, font_size: f32, options: ShapeOptions) !void {
-    try validateShapingUtf8(text);
-    try validateShapingUtf8(options.context_before);
-    try validateShapingUtf8(options.context_after);
-    try validateShapingFontSize(font_size);
-    try validateFeatureOverrides(options.features);
-    try validateNormalizedVariationCoords(options.normalized_variation_coords);
-}
-
-fn validateShapingUtf8(text: []const u8) !void {
-    // The shaping pipeline uses std.unicode.Utf8Iterator, whose decode helpers
-    // assume a validated byte stream and mark malformed input as unreachable.
-    // Keep every public `*Utf8` entry point total by rejecting bad source bytes
-    // before cache keys are built or layout buffers are mutated.
-    if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
-}
-
-fn validateShapingFontSize(font_size: f32) !void {
-    // A public shaping size becomes a scale factor, participates in shaped-run
-    // cache keys, and is copied onto glyph runs. Non-finite or non-positive
-    // sizes would produce NaN/Inf advances (or direction-dependent zero-width
-    // runs) that are hard for layout, hit testing, and renderers to handle
-    // consistently, so reject them before caches or buffers observe the call.
-    if (!std.math.isFinite(font_size) or font_size <= 0) return error.InvalidFontSize;
-}
-
-fn validateFeatureOverrides(features: []const unicode.FeatureOverride) !void {
-    for (features, 0..) |feature, index| {
-        // Feature tags are public shaping controls, not font bytes. Require a
-        // real OpenType tag and one decision per tag before shape-plan keys or
-        // glyph buffers observe the request; otherwise duplicate entries would
-        // hash as distinct cache entries while GSUB/GPOS only honor the first.
-        if (!isOpenTypeFeatureTag(feature.tag)) return error.InvalidFeatureTag;
-        for (features[0..index]) |previous| {
-            if (previous.tag == feature.tag) return error.DuplicateFeatureTag;
-        }
-    }
-}
-
-fn validateNormalizedVariationCoords(coords: []const f32) !void {
-    for (coords) |coord| {
-        if (!std.math.isFinite(coord) or coord < -1 or coord > 1) return error.BadSfnt;
-    }
-}
-
-fn isOpenTypeFeatureTag(tag_value: u32) bool {
-    inline for (0..4) |shift_index| {
-        const shift: u5 = @intCast((3 - shift_index) * 8);
-        const byte: u8 = @intCast((tag_value >> shift) & 0xff);
-        if (byte < 0x20 or byte > 0x7e) return false;
-    }
-    return true;
-}
-
-fn validateParagraphOptions(options: ParagraphOptions) !void {
-    // Paragraph options are applied after shaping, but they still feed public
-    // layout geometry, hit testing, and measurements. Reject non-finite values
-    // before shaping or cache mutation so NaN/Inf cannot poison line widths,
-    // alignments, tab stops, or baseline metrics. Infinite max_width is a
-    // supported shorthand for unbounded layout; NaN is not a usable geometry
-    // input because every comparison against it fails.
-    if (std.math.isNan(options.max_width)) return error.InvalidParagraphOptions;
-    if (options.line_height) |line_height| {
-        if (!std.math.isFinite(line_height) or line_height <= 0) return error.InvalidParagraphOptions;
-    }
-    if (!std.math.isFinite(options.letter_spacing) or
-        !std.math.isFinite(options.word_spacing) or
-        !std.math.isFinite(options.first_line_indent) or
-        !std.math.isFinite(options.paragraph_spacing))
-    {
-        return error.InvalidParagraphOptions;
-    }
-    try validateFeatureOverrides(options.features);
-    try validateNormalizedVariationCoords(options.normalized_variation_coords);
-}
-
-fn shapeOptionsForParagraph(options: ParagraphOptions) ShapeOptions {
-    return .{
-        .direction = options.direction,
-        // Paragraph shaping retains logical source order so line breaking sees
-        // monotonic clusters. Individual script segments still shape in their
-        // OpenType-native direction; visual bidi order is applied after each
-        // line's source range is known.
-        .reorder_bidi = false,
-        .native_direction_shaping = true,
-        .script_tag = options.script_tag,
-        .language_tag = options.language_tag,
-        .features = options.features,
-        .normalized_variation_coords = options.normalized_variation_coords,
-    };
-}
-
 const StyledParagraphDriver = struct {
     cascade: FontCascade,
     buffer: *LayoutBuffer,
@@ -781,12 +659,12 @@ const StyledParagraphDriver = struct {
     }
 
     pub fn validateSpan(_: *@This(), span: StyledParagraphSpan) !void {
-        try validateShapingFontSize(span.font_size);
+        try plan_validation.fontSize(span.font_size);
         if (span.faces) |faces| {
             if (faces.len == 0) return error.EmptyFontCascade;
         }
-        try validateFeatureOverrides(span.features);
-        try validateNormalizedVariationCoords(span.normalized_variation_coords);
+        try plan_validation.features(span.features);
+        try plan_validation.variationCoords(span.normalized_variation_coords);
         if (!std.math.isFinite(span.letter_spacing) or
             !std.math.isFinite(span.word_spacing))
         {
@@ -952,10 +830,6 @@ fn rebuildStyledGlyphMetadata(
     );
 }
 
-fn paragraphOptionsMatchShapeKey(text: []const u8, options: ParagraphOptions, shape_key: ShapePlanKey) bool {
-    return ShapePlanKey.fromText(text, shapeOptionsForParagraph(options)).eql(shape_key);
-}
-
 fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !void {
     buffer.clear();
     if (cascade.fonts.len == 0) return error.EmptyFontCascade;
@@ -1009,7 +883,7 @@ fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, gl
     }
 
     const validate_start = shapeProfileNow(shape_profile, profile_io);
-    try validateShapingInput(text, font_size, options);
+    try plan_validation.input(text, font_size, options);
     if (shape_profile) |p| p.validate_ns += shapeProfileElapsed(validate_start, profile_io);
 
     buffer.clear();

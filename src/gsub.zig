@@ -811,61 +811,6 @@ fn readU32(table: Table, relative: usize) GsubError!u32 {
     return table.readU32(relative);
 }
 
-test "GSUB source syllable matching can target selected lookup indexes" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 46;
-
-    writeU16Test(&bytes, 0, 8);
-    writeU16Test(&bytes, 2, 0);
-    writeU16Test(&bytes, 4, 1);
-    writeU16Test(&bytes, 6, 8);
-
-    const reverse = 8;
-    writeU16Test(&bytes, reverse + 0, 1);
-    writeU16Test(&bytes, reverse + 2, 20);
-    writeU16Test(&bytes, reverse + 4, 1);
-    writeU16Test(&bytes, reverse + 6, 26);
-    writeU16Test(&bytes, reverse + 8, 0);
-    writeU16Test(&bytes, reverse + 10, 1);
-    writeU16Test(&bytes, reverse + 12, 9);
-    writeCoverage1(&bytes, reverse + 20, 2);
-    writeCoverage1(&bytes, reverse + 26, 1);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 2 });
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(allocator);
-    try sources.appendSlice(allocator, &.{ 0, 1 });
-    const source_syllables = [_]u8{ 1, 2 };
-    const matched_lookups = [_]u16{0};
-
-    try applyLookupWithIndex(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 0, 0, &glyphs, allocator, .{
-        .glyph_source_indices = &sources,
-        .source_syllables = &source_syllables,
-        .match_source_syllable_lookups = &matched_lookups,
-    }, null);
-
-    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
-}
-
-fn writeSingleDeltaLookup(bytes: []u8, lookup_offset: usize, glyph: GlyphId, delta: i16) void {
-    writeU16Test(bytes, lookup_offset + 0, 1);
-    writeU16Test(bytes, lookup_offset + 4, 1);
-    writeU16Test(bytes, lookup_offset + 6, 8);
-    const subtable = lookup_offset + 8;
-    writeU16Test(bytes, subtable + 0, 1);
-    writeU16Test(bytes, subtable + 2, 6);
-    writeI16Test(bytes, subtable + 4, delta);
-    writeCoverage1(bytes, subtable + 6, glyph);
-}
-
-fn writeCoverage1(bytes: []u8, offset: usize, glyph: GlyphId) void {
-    writeU16Test(bytes, offset + 0, 1);
-    writeU16Test(bytes, offset + 2, 1);
-    writeU16Test(bytes, offset + 4, glyph);
-}
-
 /// Static test bindings let integration suites exercise root orchestration
 /// without widening the production API or paying for runtime callbacks.
 const topologyTestHasFeature = hasFeature;
@@ -1056,16 +1001,4 @@ test {
     _ = @import("gsub/tests/validation/table/topology.zig")
         .suite(TopologyTestBindings);
     _ = @import("gsub/tests/validation/root.zig");
-}
-
-fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {
-    std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
-}
-
-fn writeI16Test(bytes: []u8, offset: usize, value: i16) void {
-    writeU16Test(bytes, offset, @bitCast(value));
-}
-
-fn writeU32Test(bytes: []u8, offset: usize, value: u32) void {
-    std.mem.writeInt(u32, bytes[offset..][0..4], value, .big);
 }

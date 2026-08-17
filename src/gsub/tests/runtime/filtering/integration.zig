@@ -188,6 +188,48 @@ pub fn suite(comptime Bindings: type) type {
                 glyphs.items,
             );
         }
+
+        test "selected lookup indexes enable source-syllable matching" {
+            const allocator = std.testing.allocator;
+            var bytes = [_]u8{0} ** 46;
+            writeLookup(&bytes, 8, 0, 8, null);
+            const reverse = 8;
+            writeU16(&bytes, reverse, 1);
+            writeU16(&bytes, reverse + 2, 20);
+            writeU16(&bytes, reverse + 4, 1);
+            writeU16(&bytes, reverse + 6, 26);
+            writeU16(&bytes, reverse + 8, 0);
+            writeU16(&bytes, reverse + 10, 1);
+            writeU16(&bytes, reverse + 12, 9);
+            writeCoverage1(&bytes, reverse + 20, 2);
+            writeCoverage1(&bytes, reverse + 26, 1);
+
+            var glyphs = std.ArrayList(GlyphId).empty;
+            defer glyphs.deinit(allocator);
+            try glyphs.appendSlice(allocator, &.{ 1, 2 });
+            var sources = std.ArrayList(usize).empty;
+            defer sources.deinit(allocator);
+            try sources.appendSlice(allocator, &.{ 0, 1 });
+            const syllables = [_]u8{ 1, 2 };
+            try Bindings.applyLookupWithIndex(
+                view(&bytes, false),
+                0,
+                0,
+                &glyphs,
+                allocator,
+                .{
+                    .glyph_source_indices = &sources,
+                    .source_syllables = &syllables,
+                    .match_source_syllable_lookups = &.{0},
+                },
+                null,
+            );
+            try std.testing.expectEqualSlices(
+                GlyphId,
+                &.{ 1, 2 },
+                glyphs.items,
+            );
+        }
     };
 }
 
@@ -229,6 +271,12 @@ fn writeSingleDelta(
     for (glyphs, 0..) |glyph, index| {
         writeU16(bytes, coverage + 4 + index * 2, glyph);
     }
+}
+
+fn writeCoverage1(bytes: []u8, offset: usize, glyph: GlyphId) void {
+    writeU16(bytes, offset, 1);
+    writeU16(bytes, offset + 2, 1);
+    writeU16(bytes, offset + 4, glyph);
 }
 
 fn writeU16(bytes: []u8, offset: usize, value: u16) void {

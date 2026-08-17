@@ -1,6 +1,6 @@
 //! CPU raster targets and renderer-facing glyph draw lists.
 
-const bridge = @import("../../render_bridge.zig");
+const bridge = @import("../../render/bridge/root.zig");
 const raster = @import("../../raster.zig");
 const public_raster = @import("../../render/api/root.zig");
 

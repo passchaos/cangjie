@@ -506,6 +506,13 @@ Font discovery and matching are implemented under `src/font/database/`:
 - `root.zig` owns loaded bytes and faces, directory scanning, fallback cascade
   construction, and the attributed-text bridge.
 
+Renderer-facing draw-list construction lives under `src/render/bridge/`.
+`root.zig` converts paragraph geometry into positioned glyph, atlas, path, and
+color-paint requests with stable cache keys, while `tests.zig` owns bitmap,
+SVG, COLR, variation, cursor, and selection integration coverage. Rasterization
+and shaping remain dependencies of the bridge rather than peer responsibilities
+inside one root-level renderer file.
+
 The shaping integration suite is similarly rooted at
 `src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,
 GSUB, GPOS/AAT, attachment, pipeline-state, and vertical-layout modules. Tests

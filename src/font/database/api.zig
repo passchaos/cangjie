@@ -7,7 +7,7 @@ const std = @import("std");
 
 const face_mod = @import("../face/root.zig");
 const paragraph_types = @import("../../layout/types/paragraph.zig");
-const impl = @import("../../database.zig");
+const impl = @import("root.zig");
 
 pub const FaceInfo = struct {
     face: *const face_mod.Face,

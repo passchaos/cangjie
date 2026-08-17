@@ -1,210 +1,32 @@
+//! Owned font database storage, loading, scanning, matching, and fallback.
+
 const std = @import("std");
-const builtin = @import("builtin");
-const face_mod = @import("font/face/root.zig");
-const Font = @import("font.zig").Font;
-const font_container = @import("font_container.zig");
-const paragraph_types = @import("layout/types/paragraph.zig");
-const font_fallback = @import("shaping/fallback/font/root.zig");
-const attributed_font_resolution = @import("text/attributed/font_resolution.zig");
+const face_mod = @import("../face/root.zig");
+const Font = @import("../../font.zig").Font;
+const font_container = @import("../../font_container.zig");
+const paragraph_types = @import("../../layout/types/paragraph.zig");
+const font_fallback = @import("../../shaping/fallback/font/root.zig");
+const attributed_font_resolution = @import("../../text/attributed/font_resolution.zig");
+const manifest_mod = @import("manifest.zig");
+const matching = @import("matching.zig");
+const source_mod = @import("sources.zig");
+const types = @import("types.zig");
 
-pub const FontStyle = enum {
-    normal,
-    italic,
-    oblique,
-};
+pub const FontStyle = types.Style;
+pub const FontFaceInfo = types.FaceInfo;
+pub const FontQuery = types.Query;
+pub const FontManifestEntry = manifest_mod.Entry;
+pub const FontSource = source_mod.Source;
 
-pub const FontFaceInfo = struct {
-    face: *const face_mod.Face,
-    family: []const u8,
-    subfamily: []const u8,
-    full_name: []const u8,
-    postscript_name: []const u8,
-    weight: u16 = 400,
-    stretch: u16 = 100,
-    style: FontStyle = .normal,
-};
-
-pub const FontQuery = struct {
-    family: []const u8,
-    postscript_name: ?[]const u8 = null,
-    weight: u16 = 400,
-    stretch: u16 = 100,
-    style: FontStyle = .normal,
-};
-
-pub const FontManifestEntry = struct {
-    family: []const u8,
-    subfamily: []const u8,
-    full_name: []const u8,
-    postscript_name: []const u8,
-    content_hash: u64 = 0,
-    content_size: u64 = 0,
-    weight: u16,
-    stretch: u16,
-    style: FontStyle,
-};
-
-pub fn serializeManifest(allocator: std.mem.Allocator, entries: []const FontManifestEntry) ![]u8 {
-    var writer: std.Io.Writer.Allocating = .init(allocator);
-    errdefer writer.deinit();
-    try writeManifest(&writer.writer, entries);
-    return try writer.toOwnedSlice();
-}
-
-fn writeManifest(writer: *std.Io.Writer, entries: []const FontManifestEntry) !void {
-    try writer.writeAll("cangjie-font-manifest-v3\n");
-    try writer.writeAll("family\tsubfamily\tfull_name\tpostscript_name\tcontent_hash\tcontent_size\tweight\tstretch\tstyle\n");
-    for (entries) |entry| {
-        try writeEscapedField(writer, entry.family);
-        try writer.writeByte('\t');
-        try writeEscapedField(writer, entry.subfamily);
-        try writer.writeByte('\t');
-        try writeEscapedField(writer, entry.full_name);
-        try writer.writeByte('\t');
-        try writeEscapedField(writer, entry.postscript_name);
-        try writer.print("\t{x}\t{d}\t{d}\t{d}\t{s}\n", .{ entry.content_hash, entry.content_size, entry.weight, entry.stretch, fontStyleName(entry.style) });
-    }
-}
-
-pub fn parseManifest(allocator: std.mem.Allocator, text: []const u8) ![]FontManifestEntry {
-    var lines = std.mem.splitScalar(u8, text, '\n');
-    const magic = stripManifestLineEnding(lines.next() orelse return error.InvalidManifest);
-    if (!std.mem.eql(u8, magic, "cangjie-font-manifest-v3")) return error.InvalidManifest;
-    const header = stripManifestLineEnding(lines.next() orelse return error.InvalidManifest);
-    if (!std.mem.eql(u8, header, "family\tsubfamily\tfull_name\tpostscript_name\tcontent_hash\tcontent_size\tweight\tstretch\tstyle")) return error.InvalidManifest;
-
-    var entries = std.ArrayList(FontManifestEntry).empty;
-    errdefer {
-        for (entries.items) |entry| {
-            allocator.free(entry.family);
-            allocator.free(entry.subfamily);
-            allocator.free(entry.full_name);
-            allocator.free(entry.postscript_name);
-        }
-        entries.deinit(allocator);
-    }
-
-    while (lines.next()) |raw_line| {
-        const line = stripManifestLineEnding(raw_line);
-        if (line.len == 0) continue;
-        var fields = std.mem.splitScalar(u8, line, '\t');
-        var raw: [9][]const u8 = undefined;
-        for (&raw) |*field| {
-            field.* = fields.next() orelse return error.InvalidManifest;
-        }
-        if (fields.next() != null) return error.InvalidManifest;
-
-        const family = try unescapeManifestField(allocator, raw[0]);
-        errdefer allocator.free(family);
-        const subfamily = try unescapeManifestField(allocator, raw[1]);
-        errdefer allocator.free(subfamily);
-        const full_name = try unescapeManifestField(allocator, raw[2]);
-        errdefer allocator.free(full_name);
-        const postscript_name = try unescapeManifestField(allocator, raw[3]);
-        errdefer allocator.free(postscript_name);
-
-        const entry = FontManifestEntry{
-            .family = family,
-            .subfamily = subfamily,
-            .full_name = full_name,
-            .postscript_name = postscript_name,
-            .content_hash = parseManifestInt(u64, raw[4], 16) catch return error.InvalidManifest,
-            .content_size = parseManifestInt(u64, raw[5], 10) catch return error.InvalidManifest,
-            .weight = parseManifestWeight(raw[6]) catch return error.InvalidManifest,
-            .stretch = parseManifestStretch(raw[7]) catch return error.InvalidManifest,
-            .style = try parseFontStyle(raw[8]),
-        };
-        try entries.append(allocator, entry);
-    }
-
-    return try entries.toOwnedSlice(allocator);
-}
-
-pub fn writeManifestFile(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, path: []const u8, entries: []const FontManifestEntry) !void {
-    const text = try serializeManifest(allocator, entries);
-    defer allocator.free(text);
-    try dir.writeFile(io, .{ .sub_path = path, .data = text, .flags = .{ .truncate = true } });
-}
-
-pub fn readManifestFile(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, path: []const u8, limit: std.Io.Limit) ![]FontManifestEntry {
-    const text = try dir.readFileAlloc(io, path, allocator, limit);
-    defer allocator.free(text);
-    return try parseManifest(allocator, text);
-}
-
-pub fn manifestEntryMatchesBytes(entry: FontManifestEntry, bytes: []const u8) bool {
-    if (entry.content_size != 0 and entry.content_size != bytes.len) return false;
-    if (entry.content_hash != 0 and entry.content_hash != fontBytesHash(bytes)) return false;
-    return true;
-}
-
-pub const FontSource = union(enum) {
-    directory: Directory,
-    file: File,
-
-    pub const Directory = struct {
-        path: []const u8,
-        recursive: bool = true,
-        ignore_missing: bool = true,
-    };
-
-    pub const File = struct {
-        path: []const u8,
-        ignore_missing: bool = true,
-    };
-};
-
-pub fn defaultSystemFontSources() []const FontSource {
-    return defaultSystemFontSourcesForOs(builtin.os.tag);
-}
-
-pub fn defaultSystemFontSourcesForOs(os_tag: std.Target.Os.Tag) []const FontSource {
-    return switch (os_tag) {
-        .macos => &.{
-            .{ .directory = .{ .path = "/System/Library/Fonts", .recursive = true, .ignore_missing = true } },
-            .{ .directory = .{ .path = "/Library/Fonts", .recursive = true, .ignore_missing = true } },
-        },
-        .linux => &.{
-            .{ .directory = .{ .path = "/usr/share/fonts", .recursive = true, .ignore_missing = true } },
-            .{ .directory = .{ .path = "/usr/local/share/fonts", .recursive = true, .ignore_missing = true } },
-        },
-        .windows => &.{
-            .{ .directory = .{ .path = "C:\\Windows\\Fonts", .recursive = true, .ignore_missing = true } },
-        },
-        else => &.{},
-    };
-}
-
-pub fn userFontSourcesForOs(home_path: []const u8, os_tag: std.Target.Os.Tag, buffer: []FontSource, path_buffer: []u8) ![]const FontSource {
-    var count: usize = 0;
-    var path_offset: usize = 0;
-    switch (os_tag) {
-        .macos => {
-            try appendUserFontSource(buffer, &count, path_buffer, &path_offset, home_path, "Library/Fonts");
-        },
-        .linux => {
-            try appendUserFontSource(buffer, &count, path_buffer, &path_offset, home_path, ".local/share/fonts");
-            try appendUserFontSource(buffer, &count, path_buffer, &path_offset, home_path, ".fonts");
-        },
-        else => {},
-    }
-    return buffer[0..count];
-}
-
-pub fn combinedSystemFontSourcesForOs(home_path: ?[]const u8, os_tag: std.Target.Os.Tag, buffer: []FontSource, path_buffer: []u8) ![]const FontSource {
-    var count: usize = 0;
-    const system_sources = defaultSystemFontSourcesForOs(os_tag);
-    if (system_sources.len > buffer.len) return error.NoSpaceLeft;
-    for (system_sources) |source| {
-        buffer[count] = source;
-        count += 1;
-    }
-    if (home_path) |home| {
-        const user_sources = try userFontSourcesForOs(home, os_tag, buffer[count..], path_buffer);
-        count += user_sources.len;
-    }
-    return buffer[0..count];
-}
+pub const serializeManifest = manifest_mod.serializeManifest;
+pub const parseManifest = manifest_mod.parseManifest;
+pub const writeManifestFile = manifest_mod.writeManifestFile;
+pub const readManifestFile = manifest_mod.readManifestFile;
+pub const manifestEntryMatchesBytes = manifest_mod.manifestEntryMatchesBytes;
+pub const defaultSystemFontSources = source_mod.defaultSystemFontSources;
+pub const defaultSystemFontSourcesForOs = source_mod.defaultSystemFontSourcesForOs;
+pub const userFontSourcesForOs = source_mod.userFontSourcesForOs;
+pub const combinedSystemFontSourcesForOs = source_mod.combinedSystemFontSourcesForOs;
 
 pub const FontDatabase = struct {
     allocator: std.mem.Allocator,
@@ -243,9 +65,9 @@ pub const FontDatabase = struct {
         const postscript_name = try self.allocator.dupe(u8, try databasePostScriptName(font, &scratch));
         errdefer self.allocator.free(postscript_name);
         const attributes = try font.styleAttributes();
-        const weight = if (font.hasStyleAttributes()) attributes.weight else inferWeight(subfamily);
-        const stretch = if (font.hasStyleAttributes()) widthClassToStretch(attributes.width) else 100;
-        const style = if (attributes.italic) .italic else inferStyle(subfamily);
+        const weight = if (font.hasStyleAttributes()) attributes.weight else matching.inferWeight(subfamily);
+        const stretch = if (font.hasStyleAttributes()) matching.widthClassToStretch(attributes.width) else 100;
+        const style = if (attributes.italic) .italic else matching.inferStyle(subfamily);
         if (self.findDuplicateFace(family, subfamily, full_name, postscript_name, weight, stretch, style)) |index| {
             self.allocator.free(family);
             self.allocator.free(subfamily);
@@ -287,7 +109,7 @@ pub const FontDatabase = struct {
         );
         return try self.addOwnedFontFaceBytes(
             owned_bytes,
-            fontBytesHash(bytes),
+            manifest_mod.bytesHash(bytes),
             bytes.len,
             0,
         );
@@ -312,7 +134,7 @@ pub const FontDatabase = struct {
         );
         defer self.allocator.free(decoded);
         const count = try Font.faceCount(decoded);
-        const source_hash = fontBytesHash(bytes);
+        const source_hash = manifest_mod.bytesHash(bytes);
         var added: usize = 0;
         errdefer {
             while (added > 0) : (added -= 1) {
@@ -450,7 +272,7 @@ pub const FontDatabase = struct {
         source_size: usize,
         face_index: usize,
     ) !usize {
-        const content_hash = fontBytesHash(owned_bytes);
+        const content_hash = manifest_mod.bytesHash(owned_bytes);
         if (self.findOwnedFaceByBytes(owned_bytes, content_hash, face_index)) |index| {
             self.allocator.free(owned_bytes);
             return index;
@@ -519,8 +341,8 @@ pub const FontDatabase = struct {
         var best: ?usize = null;
         var best_score: u32 = std.math.maxInt(u32);
         for (self.faces.items, 0..) |face, index| {
-            if (!familyMatches(face.family, query.family)) continue;
-            const score = matchScore(face, query);
+            if (!matching.familyMatches(face.family, query.family)) continue;
+            const score = matching.matchScore(face, query);
             if (score < best_score) {
                 best = index;
                 best_score = score;
@@ -607,7 +429,7 @@ pub const FontDatabase = struct {
         for (self.faces.items, 0..) |face, index| {
             var seen = false;
             for (self.faces.items[0..index]) |previous| {
-                if (familyMatches(previous.family, face.family)) {
+                if (matching.familyMatches(previous.family, face.family)) {
                     seen = true;
                     break;
                 }
@@ -623,7 +445,7 @@ pub const FontDatabase = struct {
         for (self.faces.items) |face| {
             var seen = false;
             for (names.items) |name| {
-                if (familyMatches(name, face.family)) {
+                if (matching.familyMatches(name, face.family)) {
                     seen = true;
                     break;
                 }
@@ -637,7 +459,7 @@ pub const FontDatabase = struct {
         var indices = std.ArrayList(usize).empty;
         errdefer indices.deinit(allocator);
         for (self.faces.items, 0..) |face, index| {
-            if (familyMatches(face.family, family)) try indices.append(allocator, index);
+            if (matching.familyMatches(face.family, family)) try indices.append(allocator, index);
         }
         return try indices.toOwnedSlice(allocator);
     }
@@ -685,13 +507,7 @@ pub const FontDatabase = struct {
     }
 
     pub fn freeManifest(allocator: std.mem.Allocator, entries: []FontManifestEntry) void {
-        for (entries) |entry| {
-            allocator.free(entry.family);
-            allocator.free(entry.subfamily);
-            allocator.free(entry.full_name);
-            allocator.free(entry.postscript_name);
-        }
-        allocator.free(entries);
+        manifest_mod.free(allocator, entries);
     }
 
     fn findFallbackFace(self: *const FontDatabase, codepoint: u21, query: FontQuery) ?*const FontFaceInfo {
@@ -699,7 +515,7 @@ pub const FontDatabase = struct {
         var best_score: u32 = std.math.maxInt(u32);
         for (self.faces.items, 0..) |face, index| {
             if (!fontCovers(face_mod.backend.font(face.face), codepoint)) continue;
-            const score = matchScore(face, query) + if (familyMatches(face.family, query.family)) @as(u32, 0) else 5000;
+            const score = matching.matchScore(face, query) + if (matching.familyMatches(face.family, query.family)) @as(u32, 0) else 5000;
             if (score < best_score) {
                 best = index;
                 best_score = score;
@@ -768,10 +584,6 @@ const OwnedFont = struct {
     face_index: usize,
 };
 
-fn fontBytesHash(bytes: []const u8) u64 {
-    return std.hash.Wyhash.hash(0, bytes);
-}
-
 fn appendUniqueFont(allocator: std.mem.Allocator, fonts: *std.ArrayList(*const Font), font: *const Font) !void {
     for (fonts.items) |existing| {
         if (existing == font) return;
@@ -823,151 +635,4 @@ fn isCollectionPath(path: []const u8) bool {
         // one-face WOFF2, so scanners can discover every face without parsing
         // the compressed header twice or special-casing its flavor here.
         std.ascii.endsWithIgnoreCase(path, ".woff2");
-}
-
-fn appendUserFontSource(buffer: []FontSource, count: *usize, path_buffer: []u8, path_offset: *usize, home_path: []const u8, relative_path: []const u8) !void {
-    if (count.* >= buffer.len) return error.NoSpaceLeft;
-    const need_separator = home_path.len != 0 and home_path[home_path.len - 1] != '/';
-    const path_len = home_path.len + @intFromBool(need_separator) + relative_path.len;
-    if (path_len > path_buffer.len - path_offset.*) return error.NoSpaceLeft;
-    const start = path_offset.*;
-    @memcpy(path_buffer[start..][0..home_path.len], home_path);
-    var cursor = start + home_path.len;
-    if (need_separator) {
-        path_buffer[cursor] = '/';
-        cursor += 1;
-    }
-    @memcpy(path_buffer[cursor..][0..relative_path.len], relative_path);
-    cursor += relative_path.len;
-    buffer[count.*] = .{ .directory = .{ .path = path_buffer[start..cursor], .recursive = true, .ignore_missing = true } };
-    count.* += 1;
-    path_offset.* = cursor;
-}
-
-fn familyMatches(a: []const u8, b: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(a, b);
-}
-
-fn matchScore(face: FontFaceInfo, query: FontQuery) u32 {
-    var score: u32 = 0;
-    score += numericDistance(face.weight, query.weight);
-    score += numericDistance(face.stretch, query.stretch) * 2;
-    if (face.style != query.style) score += 1000;
-    return score;
-}
-
-fn numericDistance(a: u16, b: u16) u32 {
-    return if (a > b) a - b else b - a;
-}
-
-fn widthClassToStretch(width_class: u16) u16 {
-    return switch (width_class) {
-        1 => 50,
-        2 => 62,
-        3 => 75,
-        4 => 87,
-        5 => 100,
-        6 => 112,
-        7 => 125,
-        8 => 150,
-        9 => 200,
-        else => 100,
-    };
-}
-
-fn writeEscapedField(writer: *std.Io.Writer, value: []const u8) !void {
-    for (value) |byte| {
-        switch (byte) {
-            '\\' => try writer.writeAll("\\\\"),
-            '\t' => try writer.writeAll("\\t"),
-            '\n' => try writer.writeAll("\\n"),
-            '\r' => try writer.writeAll("\\r"),
-            else => try writer.writeByte(byte),
-        }
-    }
-}
-
-fn stripManifestLineEnding(line: []const u8) []const u8 {
-    return if (line.len != 0 and line[line.len - 1] == '\r') line[0 .. line.len - 1] else line;
-}
-
-fn parseManifestInt(comptime T: type, value: []const u8, base: u8) !T {
-    if (value.len == 0) return error.InvalidManifest;
-    return std.fmt.parseInt(T, value, base) catch error.InvalidManifest;
-}
-
-fn parseManifestWeight(value: []const u8) !u16 {
-    const weight = try parseManifestInt(u16, value, 10);
-    return if (weight >= 1 and weight <= 1000) weight else error.InvalidManifest;
-}
-
-fn parseManifestStretch(value: []const u8) !u16 {
-    const stretch = try parseManifestInt(u16, value, 10);
-    return if (stretch >= 1 and stretch <= 1000) stretch else error.InvalidManifest;
-}
-
-fn unescapeManifestField(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(allocator);
-    var index: usize = 0;
-    while (index < value.len) : (index += 1) {
-        const byte = value[index];
-        if (byte != '\\') {
-            try out.append(allocator, byte);
-            continue;
-        }
-        index += 1;
-        if (index >= value.len) return error.InvalidManifest;
-        try out.append(allocator, switch (value[index]) {
-            '\\' => '\\',
-            't' => '\t',
-            'n' => '\n',
-            'r' => '\r',
-            else => return error.InvalidManifest,
-        });
-    }
-    return try out.toOwnedSlice(allocator);
-}
-
-fn fontStyleName(style: FontStyle) []const u8 {
-    return switch (style) {
-        .normal => "normal",
-        .italic => "italic",
-        .oblique => "oblique",
-    };
-}
-
-fn parseFontStyle(value: []const u8) !FontStyle {
-    if (std.mem.eql(u8, value, "normal")) return .normal;
-    if (std.mem.eql(u8, value, "italic")) return .italic;
-    if (std.mem.eql(u8, value, "oblique")) return .oblique;
-    return error.InvalidManifest;
-}
-
-fn inferWeight(subfamily: []const u8) u16 {
-    if (containsIgnoreCase(subfamily, "Thin")) return 100;
-    if (containsIgnoreCase(subfamily, "ExtraLight") or containsIgnoreCase(subfamily, "UltraLight")) return 200;
-    if (containsIgnoreCase(subfamily, "Light")) return 300;
-    if (containsIgnoreCase(subfamily, "Medium")) return 500;
-    if (containsIgnoreCase(subfamily, "SemiBold") or containsIgnoreCase(subfamily, "DemiBold")) return 600;
-    if (containsIgnoreCase(subfamily, "Bold")) return 700;
-    if (containsIgnoreCase(subfamily, "ExtraBold") or containsIgnoreCase(subfamily, "UltraBold")) return 800;
-    if (containsIgnoreCase(subfamily, "Black") or containsIgnoreCase(subfamily, "Heavy")) return 900;
-    return 400;
-}
-
-fn inferStyle(subfamily: []const u8) FontStyle {
-    if (containsIgnoreCase(subfamily, "Italic")) return .italic;
-    if (containsIgnoreCase(subfamily, "Oblique")) return .oblique;
-    return .normal;
-}
-
-fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
-    if (needle.len == 0) return true;
-    if (needle.len > haystack.len) return false;
-    var index: usize = 0;
-    while (index + needle.len <= haystack.len) : (index += 1) {
-        if (std.ascii.eqlIgnoreCase(haystack[index .. index + needle.len], needle)) return true;
-    }
-    return false;
 }

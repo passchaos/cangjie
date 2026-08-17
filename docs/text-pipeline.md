@@ -495,6 +495,17 @@ namespace. The root integration suite is likewise split under
 paragraph responsibility instead of making the public root a 10,000-line test
 container.
 
+Font discovery and matching are implemented under `src/font/database/`:
+
+- `types.zig` owns query, style, and indexed-face records.
+- `manifest.zig` owns stable manifest records, TSV encoding/decoding, file
+  persistence, and content identity checks.
+- `sources.zig` owns platform and user font-source descriptions.
+- `matching.zig` owns family/weight/stretch/style scoring and legacy metadata
+  inference.
+- `root.zig` owns loaded bytes and faces, directory scanning, fallback cascade
+  construction, and the attributed-text bridge.
+
 The shaping integration suite is similarly rooted at
 `src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,
 GSUB, GPOS/AAT, attachment, pipeline-state, and vertical-layout modules. Tests

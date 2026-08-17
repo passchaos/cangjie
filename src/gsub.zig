@@ -26,7 +26,6 @@ const contextual_safety =
     @import("gsub/execution/contextual/safety.zig");
 const lookup_execution = @import("gsub/execution/lookup/root.zig");
 const GlyphId = @import("glyph.zig").GlyphId;
-const ligature_provenance = @import("ligature_provenance.zig");
 pub const runtime = @import("gsub/runtime/root.zig");
 const runtime_prefilter = @import("gsub/runtime/prefilter/root.zig");
 const table_core = @import("gsub/table/root.zig");
@@ -796,27 +795,6 @@ const ContextualRecordExecutor = struct {
     }
 };
 
-fn applySubstitutionRecordsMapped(
-    table: Table,
-    glyphs: *std.ArrayList(GlyphId),
-    records_offset: usize,
-    record_count: usize,
-    input_indices: []const usize,
-    allocator: std.mem.Allocator,
-    options: LookupOptions,
-) (GsubError || std.mem.Allocator.Error)!void {
-    return contextual_records.apply(
-        ContextualRecordExecutor,
-        table,
-        glyphs,
-        records_offset,
-        record_count,
-        input_indices,
-        allocator,
-        options,
-    );
-}
-
 fn checkedExtensionSubtablePayloadOffset(table: Table, extension_offset: usize, relative_offset: u32) GsubError!usize {
     return table_core.offset.extensionPayload(table, extension_offset, relative_offset);
 }
@@ -831,172 +809,6 @@ fn readU16(table: Table, relative: usize) GsubError!u16 {
 
 fn readU32(table: Table, relative: usize) GsubError!u32 {
     return table.readU32(relative);
-}
-
-test "GSUB contextual ligature compacts positions before a later multiple substitution" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 92;
-
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 8, 10); // LookupList.
-    writeU16Test(&bytes, 10, 2);
-    writeU16Test(&bytes, 12, 6); // Ligature lookup at 16.
-    writeU16Test(&bytes, 14, 40); // Multiple lookup at 50.
-
-    writeU16Test(&bytes, 16, 4);
-    writeU16Test(&bytes, 20, 1);
-    writeU16Test(&bytes, 22, 8);
-    const ligature_subst = 24;
-    writeU16Test(&bytes, ligature_subst + 0, 1);
-    writeU16Test(&bytes, ligature_subst + 2, 18);
-    writeU16Test(&bytes, ligature_subst + 4, 1);
-    writeU16Test(&bytes, ligature_subst + 6, 8);
-    const ligature_set = ligature_subst + 8;
-    writeU16Test(&bytes, ligature_set + 0, 1);
-    writeU16Test(&bytes, ligature_set + 2, 4);
-    const ligature = ligature_set + 4;
-    writeU16Test(&bytes, ligature + 0, 10);
-    writeU16Test(&bytes, ligature + 2, 2);
-    writeU16Test(&bytes, ligature + 4, 2);
-    writeCoverage1(&bytes, ligature_subst + 18, 1);
-
-    writeU16Test(&bytes, 50, 2);
-    writeU16Test(&bytes, 54, 1);
-    writeU16Test(&bytes, 56, 8);
-    const multiple_subst = 58;
-    writeU16Test(&bytes, multiple_subst + 0, 1);
-    writeU16Test(&bytes, multiple_subst + 2, 12);
-    writeU16Test(&bytes, multiple_subst + 4, 1);
-    writeU16Test(&bytes, multiple_subst + 6, 18);
-    writeCoverage1(&bytes, multiple_subst + 12, 3);
-    const sequence = multiple_subst + 18;
-    writeU16Test(&bytes, sequence + 0, 2);
-    writeU16Test(&bytes, sequence + 2, 3);
-    writeU16Test(&bytes, sequence + 4, 4);
-
-    const records = 84;
-    writeU16Test(&bytes, records + 0, 0);
-    writeU16Test(&bytes, records + 2, 0);
-    writeU16Test(&bytes, records + 4, 1);
-    writeU16Test(&bytes, records + 6, 1);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 2, 3 });
-
-    const input_indices = [_]usize{ 0, 1, 2 };
-    try applySubstitutionRecordsMapped(
-        .{ .data = &bytes, .offset = 0, .length = bytes.len },
-        &glyphs,
-        records,
-        2,
-        &input_indices,
-        allocator,
-        .{},
-    );
-
-    // The first nested lookup consumes input position one into a ligature.
-    // SequenceIndex one in the next record therefore names the former input
-    // position two, whose MultipleSubst expansion must remain in the result.
-    try std.testing.expectEqualSlices(GlyphId, &.{ 10, 3, 4 }, glyphs.items);
-}
-
-test "GSUB contextual ligature remaps records across ignored components" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 112;
-
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 8, 10);
-    writeU16Test(&bytes, 10, 3);
-    writeU16Test(&bytes, 12, 8);
-    writeU16Test(&bytes, 14, 50);
-    writeU16Test(&bytes, 16, 82);
-
-    writeU16Test(&bytes, 18, 5);
-    writeU16Test(&bytes, 22, 1);
-    writeU16Test(&bytes, 24, 8);
-
-    const context = 26;
-    writeU16Test(&bytes, context + 0, 1);
-    writeU16Test(&bytes, context + 2, 28);
-    writeU16Test(&bytes, context + 4, 1);
-    writeU16Test(&bytes, context + 6, 8);
-
-    const set = context + 8;
-    writeU16Test(&bytes, set + 0, 1);
-    writeU16Test(&bytes, set + 2, 4);
-    const rule = set + 4;
-    writeU16Test(&bytes, rule + 0, 3);
-    writeU16Test(&bytes, rule + 2, 2);
-    writeU16Test(&bytes, rule + 4, 99);
-    writeU16Test(&bytes, rule + 6, 2);
-    writeU16Test(&bytes, rule + 8, 0);
-    writeU16Test(&bytes, rule + 10, 1);
-    writeU16Test(&bytes, rule + 12, 2);
-    writeU16Test(&bytes, rule + 14, 2);
-    writeCoverage1(&bytes, context + 28, 1);
-
-    writeU16Test(&bytes, 60, 4);
-    writeU16Test(&bytes, 62, 0x0008);
-    writeU16Test(&bytes, 64, 1);
-    writeU16Test(&bytes, 66, 8);
-    const lig_subst = 68;
-    writeU16Test(&bytes, lig_subst + 0, 1);
-    writeU16Test(&bytes, lig_subst + 2, 18);
-    writeU16Test(&bytes, lig_subst + 4, 1);
-    writeU16Test(&bytes, lig_subst + 6, 8);
-    const ligature_set = lig_subst + 8;
-    writeU16Test(&bytes, ligature_set + 0, 1);
-    writeU16Test(&bytes, ligature_set + 2, 4);
-    const ligature = ligature_set + 4;
-    writeU16Test(&bytes, ligature + 0, 40);
-    writeU16Test(&bytes, ligature + 2, 2);
-    writeU16Test(&bytes, ligature + 4, 2);
-    writeCoverage1(&bytes, lig_subst + 18, 1);
-
-    writeU16Test(&bytes, 92, 1);
-    writeU16Test(&bytes, 96, 1);
-    writeU16Test(&bytes, 98, 8);
-    const single = 100;
-    writeU16Test(&bytes, single + 0, 1);
-    writeU16Test(&bytes, single + 2, 6);
-    writeI16Test(&bytes, single + 4, 1);
-    writeCoverage1(&bytes, single + 6, 40);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 99, 2 });
-
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(allocator);
-    try sources.appendSlice(allocator, &.{ 0, 1, 2 });
-
-    var ligature_components = ligature_provenance.Store{};
-    defer ligature_components.deinit(allocator);
-    try ligature_components.infos.resize(allocator, 3);
-    @memset(ligature_components.infos.items, .{});
-
-    var glyph_classes = [_]u16{0} ** 100;
-    glyph_classes[99] = 3;
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 18, &glyphs, allocator, .{
-        .glyph_classes = &glyph_classes,
-        .glyph_source_indices = &sources,
-        .ligature_components = &ligature_components,
-    });
-
-    // HarfBuzz models a one-glyph contraction by removing the logical
-    // position immediately after SequenceIndex zero. The old position two
-    // shifts to one, so a later SequenceIndex two is now out of range even
-    // though the nested ligature physically skipped the mark between inputs.
-    try std.testing.expectEqualSlices(GlyphId, &.{ 40, 99 }, glyphs.items);
-    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, sources.items);
-    try std.testing.expectEqual(@as(u8, 2), ligature_components.infos.items[0].component_count);
-    try std.testing.expectEqualSlices(
-        usize,
-        &.{ 0, 2 },
-        ligature_components.componentSources(ligature_components.infos.items[0]).?,
-    );
-    try std.testing.expectEqual(@as(u8, 1), ligature_components.infos.items[1].component_count);
 }
 
 test "GSUB source syllable matching can target selected lookup indexes" {
@@ -1155,6 +967,26 @@ const chainingTestApplyLookupWithIndex = applyLookupWithIndex;
 const ChainingExecutionIntegrationTestBindings = struct {
     pub const applyLookup = chainingTestApplyLookup;
     pub const applyLookupWithIndex = chainingTestApplyLookupWithIndex;
+    pub fn applyRecords(
+        table: Table,
+        glyphs: *std.ArrayList(GlyphId),
+        records_offset: usize,
+        record_count: usize,
+        input_indices: []const usize,
+        allocator: std.mem.Allocator,
+        options: LookupOptions,
+    ) (GsubError || std.mem.Allocator.Error)!void {
+        return contextual_records.apply(
+            ContextualRecordExecutor,
+            table,
+            glyphs,
+            records_offset,
+            record_count,
+            input_indices,
+            allocator,
+            options,
+        );
+    }
     pub const validateTable = validateGlyphBounds;
 };
 
@@ -1195,6 +1027,8 @@ test {
     _ = @import("gsub/tests/execution/contextual/nested/chaining_integration.zig")
         .suite(ContextExecutionIntegrationTestBindings);
     _ = @import("gsub/tests/execution/contextual/records/mutation_integration.zig")
+        .suite(ChainingExecutionIntegrationTestBindings);
+    _ = @import("gsub/tests/execution/contextual/records/ligature_integration.zig")
         .suite(ChainingExecutionIntegrationTestBindings);
     _ = @import("gsub/tests/execution/lookup/atomicity.zig")
         .suite(FilteringIntegrationTestBindings);

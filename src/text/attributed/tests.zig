@@ -1,5 +1,6 @@
 const std = @import("std");
-const core = @import("../../core.zig");
+const attributed_model = @import("root.zig");
+const style = @import("../style/root.zig");
 const database = @import("../../database.zig");
 const font_mod = @import("../../font.zig");
 const glyph_mod = @import("../../glyph.zig");
@@ -36,7 +37,7 @@ test "unified attributed paragraph wraps sizes and preserves paint runs" {
     var owned = try OwnedFont.init(allocator, try test_font.buildMinimalTtf(allocator));
     defer owned.deinit();
     const fonts = [_]*const font_mod.Font{&owned.font};
-    const spans = [_]core.StyleSpan{
+    const spans = [_]style.StyleSpan{
         .{ .byte_range = .{ .start = 0, .len = 2 }, .style = .{
             .font_size = 20,
             .color = .{ .r = 255, .g = 0, .b = 0, .a = 255 },
@@ -46,7 +47,7 @@ test "unified attributed paragraph wraps sizes and preserves paint runs" {
             .color = .{ .r = 0, .g = 0, .b = 255, .a = 255 },
         } },
     };
-    var result = try core.layoutAttributedParagraphUtf8(
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
         allocator,
         font_fallback.Cascade.init(&fonts),
         .{ .text = "A A A", .spans = &spans },
@@ -72,7 +73,7 @@ test "unified attributed paragraph applies feature spacing and measurement" {
     const enable_sups = [_]unicode.FeatureOverride{
         .{ .tag = unicode.tag("sups"), .enabled = true },
     };
-    const spans = [_]core.StyleSpan{
+    const spans = [_]style.StyleSpan{
         .{ .byte_range = .{ .start = 0, .len = 1 }, .style = .{
             .font_size = 20,
         } },
@@ -82,8 +83,8 @@ test "unified attributed paragraph applies feature spacing and measurement" {
             .letter_spacing = 3,
         } },
     };
-    const attributed = core.AttributedText{ .text = "AAA", .spans = &spans };
-    var result = try core.layoutAttributedParagraphUtf8(
+    const attributed = attributed_model.AttributedText{ .text = "AAA", .spans = &spans };
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
         allocator,
         font_fallback.Cascade.init(&fonts),
         attributed,
@@ -97,7 +98,7 @@ test "unified attributed paragraph applies feature spacing and measurement" {
 
     var buffer = context_output.Buffer.init(allocator);
     defer buffer.deinit();
-    const measured = try core.measureAttributedTextUtf8(
+    const measured = try attributed_model.measureAttributedTextUtf8(
         font_fallback.Cascade.init(&fonts),
         &buffer,
         attributed,
@@ -115,7 +116,7 @@ test "paint-only spans preserve ligatures and selection geometry" {
     );
     defer owned.deinit();
     const fonts = [_]*const font_mod.Font{&owned.font};
-    const spans = [_]core.StyleSpan{
+    const spans = [_]style.StyleSpan{
         .{ .byte_range = .{ .start = 0, .len = 1 }, .style = .{
             .color = .{ .r = 255, .g = 0, .b = 0, .a = 255 },
         } },
@@ -123,7 +124,7 @@ test "paint-only spans preserve ligatures and selection geometry" {
             .color = .{ .r = 0, .g = 0, .b = 255, .a = 255 },
         } },
     };
-    var result = try core.layoutAttributedParagraphUtf8(
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
         allocator,
         font_fallback.Cascade.init(&fonts),
         .{ .text = "AA", .spans = &spans },
@@ -145,13 +146,13 @@ test "styled bidi order carries paint fragments" {
     defer owned.deinit();
     const fonts = [_]*const font_mod.Font{&owned.font};
     const text = "A אב";
-    const spans = [_]core.StyleSpan{
+    const spans = [_]style.StyleSpan{
         .{ .byte_range = .{ .start = 0, .len = 2 }, .style = .{} },
         .{ .byte_range = .{ .start = 2, .len = text.len - 2 }, .style = .{
             .decoration = .{ .underline = true },
         } },
     };
-    var result = try core.layoutAttributedParagraphUtf8(
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
         allocator,
         font_fallback.Cascade.init(&fonts),
         .{ .text = text, .spans = &spans },
@@ -191,7 +192,7 @@ test "styled cascade fallback keeps size and minimum line height" {
     );
     defer fallback.deinit();
     const fonts = [_]*const font_mod.Font{ &primary.font, &fallback.font };
-    const spans = [_]core.StyleSpan{
+    const spans = [_]style.StyleSpan{
         .{ .byte_range = .{ .start = 0, .len = 1 }, .style = .{
             .font_size = 20,
         } },
@@ -200,7 +201,7 @@ test "styled cascade fallback keeps size and minimum line height" {
             .line_height = 70,
         } },
     };
-    var result = try core.layoutAttributedParagraphUtf8(
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
         allocator,
         font_fallback.Cascade.init(&fonts),
         .{ .text = "AB", .spans = &spans },
@@ -224,7 +225,7 @@ test "styled Arabic items retain joining context" {
     );
     defer owned.deinit();
     const fonts = [_]*const font_mod.Font{&owned.font};
-    const spans = [_]core.StyleSpan{
+    const spans = [_]style.StyleSpan{
         .{ .byte_range = .{ .start = 0, .len = 2 }, .style = .{
             .font_size = 20,
         } },
@@ -233,7 +234,7 @@ test "styled Arabic items retain joining context" {
             .color = .{ .r = 255, .g = 0, .b = 0, .a = 255 },
         } },
     };
-    var result = try core.layoutAttributedParagraphUtf8(
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
         allocator,
         font_fallback.Cascade.init(&fonts),
         .{
@@ -256,13 +257,13 @@ test "styled ellipsis inherits terminal paint and buffer reuse clears metadata" 
     defer owned.deinit();
     const fonts = [_]*const font_mod.Font{&owned.font};
     const cascade = font_fallback.Cascade.init(&fonts);
-    const spans = [_]core.StyleSpan{
+    const spans = [_]style.StyleSpan{
         .{ .byte_range = .{ .start = 0, .len = 2 }, .style = .{} },
         .{ .byte_range = .{ .start = 2, .len = 5 }, .style = .{
             .color = .{ .r = 0, .g = 180, .b = 0, .a = 255 },
         } },
     };
-    var result = try core.layoutAttributedParagraphUtf8(
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
         allocator,
         cascade,
         .{
@@ -393,7 +394,7 @@ test "font database resolves attributed families weights and fallback" {
     _ = try font_database.addFontBytes(bold_italic_bytes);
 
     const text = "ABCA";
-    const spans = [_]core.StyleSpan{
+    const spans = [_]style.StyleSpan{
         .{ .byte_range = .{ .start = 0, .len = 1 }, .style = .{} },
         .{ .byte_range = .{ .start = 1, .len = 2 }, .style = .{
             .font_family = "Alternate Sans",
@@ -405,7 +406,7 @@ test "font database resolves attributed families weights and fallback" {
             .font_style = .italic,
         } },
     };
-    const attributed = core.AttributedText{ .text = text, .spans = &spans };
+    const attributed = attributed_model.AttributedText{ .text = text, .spans = &spans };
     var result = try font_database.layoutAttributedParagraphUtf8(
         allocator,
         attributed,
@@ -469,7 +470,7 @@ test "font database attributed layout reports unresolved families" {
     defer font_database.deinit();
     _ = try font_database.addFontBytes(bytes);
 
-    const spans = [_]core.StyleSpan{.{
+    const spans = [_]style.StyleSpan{.{
         .byte_range = .{ .start = 0, .len = 1 },
         .style = .{ .font_family = "Missing Sans" },
     }};
@@ -477,7 +478,7 @@ test "font database attributed layout reports unresolved families" {
         error.FontFamilyNotFound,
         font_database.layoutAttributedParagraphUtf8(
             allocator,
-            core.AttributedText{ .text = "A", .spans = &spans },
+            attributed_model.AttributedText{ .text = "A", .spans = &spans },
             .{ .family = "Present Sans" },
             100,
         ),

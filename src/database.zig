@@ -566,8 +566,8 @@ pub const FontDatabase = struct {
 
     /// Resolve per-style font queries and lay out one unified attributed
     /// paragraph. The result type is inferred from the attributed value, so
-    /// this database layer stays independent of `core.zig` while the public
-    /// root can expose a concrete convenience wrapper. Returned font runs
+    /// this database layer stays independent of concrete application style
+    /// records while the public root exposes a convenience wrapper. Font runs
     /// borrow faces from this database; keep it alive until the result is
     /// deinitialized.
     pub fn layoutAttributedParagraphUtf8(

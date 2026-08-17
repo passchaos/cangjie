@@ -189,6 +189,12 @@ This keeps the public owner concrete: callers hold an `Engine` value, returned
 views borrow it until the next operation, and no opaque ABI handle or runtime
 callback is required inside the source-level pipeline.
 
+Portable ranges, locale identifiers, and presentation styles live in
+`src/text/style/`; attributed UTF-8 ownership and standalone layout operations
+live in `src/text/attributed/`. This replaces the former root-level core
+aggregate, so font-independent style records and attributed orchestration have
+separate module and test boundaries.
+
 Cluster-safe fallback is grouped under `src/shaping/fallback/`:
 
 - `font/root.zig` owns borrowed cascade identity and complete-cluster font

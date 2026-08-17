@@ -199,13 +199,26 @@ fn shapeLine(allocator: std.mem.Allocator, font: *hb.hb_font_t, line: []const u8
         }
     }
     if (options.not_found_variation_selector_glyph) |glyph_id| {
-        hb.hb_buffer_set_not_found_variation_selector_glyph(buffer, glyph_id);
+        if (comptime @hasDecl(
+            hb,
+            "hb_buffer_set_not_found_variation_selector_glyph",
+        )) {
+            hb.hb_buffer_set_not_found_variation_selector_glyph(
+                buffer,
+                glyph_id,
+            );
+        } else {
+            return error.UnsupportedHarfBuzzVersion;
+        }
     }
     hb.hb_buffer_set_cluster_level(buffer, @intFromEnum(options.cluster_level orelse .monotone_graphemes));
     var flags: hb.hb_buffer_flags_t = hb.HB_BUFFER_FLAG_DEFAULT;
     if (options.beginning_of_text) flags |= hb.HB_BUFFER_FLAG_BOT;
     if (options.end_of_text) flags |= hb.HB_BUFFER_FLAG_EOT;
     if (options.unsafe_to_concat) flags |= hb.HB_BUFFER_FLAG_PRODUCE_UNSAFE_TO_CONCAT;
+    if (options.show_flags) {
+        flags |= hb.HB_BUFFER_FLAG_PRODUCE_SAFE_TO_INSERT_TATWEEL;
+    }
     if (options.remove_default_ignorables) flags |= hb.HB_BUFFER_FLAG_REMOVE_DEFAULT_IGNORABLES;
     if (flags != hb.HB_BUFFER_FLAG_DEFAULT) hb.hb_buffer_set_flags(buffer, flags);
     // Match hb-shape's context API usage rather than adding one slice from a

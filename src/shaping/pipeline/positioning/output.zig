@@ -236,6 +236,12 @@ pub fn emit(input: Input) !Result {
             kern_x_offset,
             &fallback_mark_base,
         );
+        const positional_boundary_unsafe =
+            input.gpos_unsafe_glyphs.isUnsafeBefore(index) or
+            input.source_boundaries.isUnsafeBeforeByte(span.start);
+        const safe_to_insert_tatweel =
+            !positional_boundary_unsafe and
+            input.source_boundaries.isSafeTatweelBeforeByte(span.start);
         if (needs_attachment_remapping) {
             input.scratch.glyph_output_indices.items[index] =
                 input.output.items.len - segment_glyph_start;
@@ -247,8 +253,12 @@ pub fn emit(input: Input) !Result {
             .cluster = span.start,
             .source_byte_len = span.end - span.start,
             .flags = .{
-                .unsafe_to_break_before = input.gpos_unsafe_glyphs.isUnsafeBefore(index) or
-                    input.source_boundaries.isUnsafeBeforeByte(span.start),
+                // HarfBuzz exposes tatweel insertion points as unsafe normal
+                // line breaks: callers may reshape there only after actually
+                // inserting the elongation character.
+                .unsafe_to_break_before = positional_boundary_unsafe or
+                    safe_to_insert_tatweel,
+                .safe_to_insert_tatweel = safe_to_insert_tatweel,
             },
             .x_advance = if (visible_not_found_variation_selector)
                 0

@@ -392,7 +392,8 @@ fn usesHarfBuzzVerticalSummary(direction: options_mod.Direction) bool {
 fn glyphFlags(allocator: std.mem.Allocator, text: []const u8, options: options_mod.Options, glyphs: []const cangjie.shaping.Glyph) ![]const u32 {
     const values = try allocator.alloc(u32, glyphs.len);
     for (glyphs, values) |glyph, *value| {
-        value.* = @intFromBool(glyph.isUnsafeToBreakBefore());
+        value.* = @intFromBool(glyph.isUnsafeToBreakBefore()) |
+            (@as(u32, @intFromBool(glyph.isSafeToInsertTatweel())) << 2);
     }
     if (!options.unsafe_to_concat) return values;
     if (options.direction != .rtl or !textContainsCodepoint(text, 0x200c)) return values;

@@ -114,6 +114,55 @@ test "Linux Noto Sans Arabic parses duplicate contextual GPOS coverage" {
     try std.testing.expect(stats.bounds != null);
 }
 
+test "Linux Noto Arabic exposes HarfBuzz-compatible tatweel insertion flags" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const font_bytes = std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        linux_noto_sans_arabic_path,
+        allocator,
+        .limited(16 * 1024 * 1024),
+    ) catch |err| switch (err) {
+        error.FileNotFound, error.AccessDenied => return error.SkipZigTest,
+        else => return err,
+    };
+    defer allocator.free(font_bytes);
+    var font = try cangjie.font.Face.parse(allocator, font_bytes);
+    defer font.deinit();
+
+    var engine = cangjie.shaping.Engine.init(
+        allocator,
+        .{ .cache_shaped_runs = true },
+    );
+    defer engine.deinit();
+    const text = "بب";
+    const request = cangjie.shaping.TextRequest{
+        .text = text,
+        .font_size = 32,
+        .options = .{ .direction = .rtl },
+    };
+    const cascade = cangjie.font.Cascade.init(&.{&font});
+    const first = try engine.shapeText(cascade, request);
+    try expectTatweelFlags(first);
+
+    // Complete shaped-run cache storage must preserve the public flags exactly.
+    const cached = try engine.shapeText(cascade, request);
+    try expectTatweelFlags(cached);
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        engine.stats().shaped_runs.hits,
+    );
+}
+
+fn expectTatweelFlags(text: cangjie.shaping.Text) !void {
+    try std.testing.expectEqual(@as(usize, 2), text.glyphs.len);
+    // Native RTL visual order places the boundary-bearing second source first.
+    try std.testing.expect(text.glyphs[0].isSafeToInsertTatweel());
+    try std.testing.expect(text.glyphs[0].isUnsafeToBreakBefore());
+    try std.testing.expect(!text.glyphs[1].isSafeToInsertTatweel());
+}
+
 test "Linux Noto Sans CJK vertical shaping uses real vert substitutions and vmtx" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
 

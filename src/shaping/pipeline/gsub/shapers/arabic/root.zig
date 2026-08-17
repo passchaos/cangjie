@@ -28,6 +28,7 @@ pub const Input = struct {
     codepoints: []const u21,
     glyph_source_indices: []const usize,
     ligature_components: *ligature_provenance.Store,
+    source_boundaries: *@import("../../../../cluster_safety.zig").SourceBoundaries,
     source_features: *std.ArrayList(u32),
     joining_forms: *std.ArrayList(unicode.JoiningForm),
     base_gsub_options: gsub.runtime.Options,
@@ -60,6 +61,17 @@ pub fn run(input: Input) !Result {
             input.codepoints,
             input.glyph_source_indices,
         );
+        try input.joining_forms.resize(
+            input.allocator,
+            input.codepoints.len,
+        );
+        try joining.resolveWithContext(
+            input.allocator,
+            input.lookup_options.context_before,
+            input.codepoints,
+            input.lookup_options.context_after,
+            input.joining_forms.items,
+        );
     } else {
         try input.joining_forms.resize(
             input.allocator,
@@ -79,6 +91,12 @@ pub fn run(input: Input) !Result {
             feature.* = joining.featureTag(form);
         }
     }
+    try joining.markSafeTatweelBoundaries(
+        input.allocator,
+        input.source_boundaries,
+        input.codepoints,
+        input.joining_forms.items,
+    );
     if (input.lookup_options.script_tag == .mong) {
         joining.inheritMongolianVariationSelectors(
             input.source_features.items,

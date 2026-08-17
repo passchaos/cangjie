@@ -19,7 +19,10 @@ pub const Flags = packed struct(u8) {
     inline_object: bool = false,
     /// Synthetic visible hyphen inserted at an automatic word boundary.
     automatic_hyphen: bool = false,
-    _reserved: u4 = 0,
+    /// HarfBuzz-compatible proof that U+0640 may be inserted before this
+    /// cluster without interrupting cursive shaping.
+    safe_to_insert_tatweel: bool = false,
+    _reserved: u3 = 0,
 };
 
 /// One positioned glyph after cmap mapping, GSUB substitution, and GPOS/kern
@@ -65,6 +68,10 @@ pub const GlyphPosition = struct {
 
     pub fn isAutomaticHyphen(self: GlyphPosition) bool {
         return self.flags.automatic_hyphen;
+    }
+
+    pub fn isSafeToInsertTatweel(self: GlyphPosition) bool {
+        return self.flags.safe_to_insert_tatweel;
     }
 
     /// Logical source end represented by this output.

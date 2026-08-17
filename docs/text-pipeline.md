@@ -481,7 +481,15 @@ opening/closing edge alignment in all three regional conventions. The generic
 default continues using Unicode line-break classes only.
 
 Arabic kashida insertion remains a separate future tailoring rather than being
-guessed by the generic path.
+guessed by the generic path. The shaping surface now exposes
+`Glyph.isSafeToInsertTatweel()`, matching HarfBuzz's
+`SAFE_TO_INSERT_TATWEEL`: Arabic-family joining nominates a UTF-8 source
+boundary, and later GSUB/GPOS/kern/attachment safety clears the nomination if
+insertion would interrupt shaping. A surviving candidate is also marked
+unsafe for an ordinary line break. The flag is retained by cascade and
+complete shaped-run caches and is the required evidence for a future
+line-local U+0640 insertion followed by reshaping; Cangjie does not insert an
+unshaped glyph into an already positioned run.
 
 Paragraph alignment distinguishes logical and physical edges:
 `TextAlign.start`/`end` resolve through the paragraph direction, while
@@ -872,8 +880,8 @@ Future changes must preserve these rules:
 3. Keep public and test consumers on owning domain modules; do not recreate a
    broad aggregate layout façade as new shaping or paragraph capabilities are
    added.
-4. Add Arabic kashida and any remaining language-specific punctuation
-   priorities where portable references exist, without changing the explicit
+4. Add Arabic kashida line-local source insertion and reshaping using only the
+   retained `safe_to_insert_tatweel` boundaries, without changing the explicit
    GB/CNS/JIS compression-capacity or line-edge hanging contracts.
 5. Add fuzz and CI matrices for stage boundaries, cache reuse, malformed font
    data, mixed-script fallback, vertical text, and retained reflow, alongside

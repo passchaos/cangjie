@@ -322,6 +322,7 @@ pub fn run(input: Input) !void {
             .codepoints = codepoints.items,
             .glyph_source_indices = glyph_source_indices.items,
             .ligature_components = ligature_components,
+            .source_boundaries = source_boundaries,
             .source_features = source_features,
             .joining_forms = joining_forms,
             .base_gsub_options = gsub_options,

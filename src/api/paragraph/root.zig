@@ -57,6 +57,7 @@ pub const TextGeometryCaret = text_geometry.CaretGeometry;
 pub const TextGeometrySelectionRange = text_geometry.SelectionRange;
 pub const TextGeometrySelectionFragment = text_geometry.SelectionFragment;
 pub const TextGeometrySelectionError = text_geometry.SelectionError;
+pub const TextGeometryVisualCaretStop = text_geometry.VisualCaretStop;
 
 /// Build owned, platform-neutral text-run geometry from a final paragraph.
 ///

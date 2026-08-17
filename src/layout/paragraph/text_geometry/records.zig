@@ -45,12 +45,26 @@ pub const SelectionFragment = struct {
     rect: paragraph_types.TextRect,
 };
 
+/// One boundary in left-to-right visual traversal order.
+///
+/// Bidi transitions can assign distinct logical positions to the same physical
+/// x coordinate. `from_left` is selected when traversal arrives from a smaller
+/// x (or the preceding line); `from_right` is selected in the reverse
+/// direction.
+pub const VisualCaretStop = struct {
+    line_index: usize,
+    x: f32,
+    from_left: CaretPosition,
+    from_right: CaretPosition,
+};
+
 /// Borrowed concrete view shared by interaction algorithms.
 pub const GeometryView = struct {
     source_byte_len: usize,
     lines: []const Line,
     spans: []const Span,
     graphemes: []const Grapheme,
+    visual_caret_stops: []const VisualCaretStop,
 };
 
 /// Stable identity and font properties copied from one final paragraph run.
@@ -138,6 +152,8 @@ pub const Line = struct {
     bounds: paragraph_types.TextRect,
     span_start: usize,
     span_len: usize,
+    visual_caret_start: usize,
+    visual_caret_len: usize,
 
     pub fn byteEnd(self: Line) usize {
         return self.byte_start + self.byte_len;
@@ -145,5 +161,12 @@ pub const Line = struct {
 
     pub fn spans(self: Line, items: []const Span) []const Span {
         return items[self.span_start .. self.span_start + self.span_len];
+    }
+
+    pub fn visualCaretStops(
+        self: Line,
+        items: []const VisualCaretStop,
+    ) []const VisualCaretStop {
+        return items[self.visual_caret_start .. self.visual_caret_start + self.visual_caret_len];
     }
 };

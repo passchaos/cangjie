@@ -59,6 +59,14 @@ test "text geometry affinity distinguishes both sides of a soft wrap" {
     ).?;
     try std.testing.expectEqual(@as(usize, 1), second_line_hit.line_index);
 
+    const next_line = geometry.nextVisualCaret(upstream.position).?;
+    try std.testing.expectEqual(downstream.position, next_line.position);
+    try std.testing.expectEqual(@as(usize, 1), next_line.line_index);
+    const previous_line =
+        geometry.previousVisualCaret(downstream.position).?;
+    try std.testing.expectEqual(upstream.position, previous_line.position);
+    try std.testing.expectEqual(@as(usize, 0), previous_line.line_index);
+
     const across_lines = try geometry.selectionFragments(
         allocator,
         .{ .byte_start = 0, .byte_end = text.len },
@@ -98,6 +106,25 @@ test "text geometry retains trailing hard-break and empty paragraph carets" {
     defer trailing.deinit();
     try std.testing.expectEqual(@as(usize, 2), trailing.lines.len);
     try std.testing.expectEqual(@as(usize, 0), trailing.lines[1].span_len);
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        trailing.lines[1].visual_caret_len,
+    );
+    const first_line_stops = trailing.lines[0].visualCaretStops(
+        trailing.visual_caret_stops,
+    );
+    try std.testing.expect(first_line_stops.len >= 3);
+    // The visible 'A' end and zero-width hard-break atom share x but are
+    // separate topology steps with different logical ownership.
+    try std.testing.expectApproxEqAbs(
+        first_line_stops[first_line_stops.len - 2].x,
+        first_line_stops[first_line_stops.len - 1].x,
+        0.001,
+    );
+    try std.testing.expect(
+        first_line_stops[first_line_stops.len - 2].from_left.byte_offset !=
+            first_line_stops[first_line_stops.len - 1].from_left.byte_offset,
+    );
     const final_caret = trailing.caret(.{
         .byte_offset = text.len,
         .affinity = .downstream,
@@ -113,6 +140,9 @@ test "text geometry retains trailing hard-break and empty paragraph carets" {
         final_caret.rect.y + 1,
     ).?;
     try std.testing.expectEqual(text.len, final_hit.position.byte_offset);
+    try std.testing.expect(
+        trailing.nextVisualCaret(final_caret.position) == null,
+    );
 
     const empty_layout = try TextShaper.layoutParagraphUtf8(
         cascade,

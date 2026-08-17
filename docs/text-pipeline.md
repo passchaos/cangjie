@@ -759,6 +759,14 @@ merged per line, while mixed-bidi visual gaps remain separate fragments. This
 lets platform adapters paint accurate selections inside GDEF-authored
 ligatures and across wraps without reconstructing bidi geometry themselves.
 
+Every geometry owner also materializes `visual_caret_stops` in line then
+physical-left-to-right order. A stop records the logical position selected when
+arriving from either physical side, preserving bidi transitions where one x
+coordinate has two logical meanings and zero-width controls where consecutive
+topology steps share x. `nextVisualCaret`/`previousVisualCaret` traverse this
+topology across soft wraps and GDEF-authored ligature boundaries without
+storing mutable cursor state.
+
 GDEF's previously validation-only `AttachList` is also available through
 `Face.glyphs().attachmentPoints` and
 `cangjie.font.metadata.layout.inspect(face).attachmentPoints`. The

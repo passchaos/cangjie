@@ -10,6 +10,7 @@ const spans_impl = @import("spans.zig");
 const styled_paragraph = @import("../../styled_paragraph.zig");
 const unicode = @import("../../../unicode.zig");
 const types = @import("types.zig");
+const visual_carets = @import("visual_carets.zig");
 
 pub const Options = struct {
     /// Base direction used to lay out the paragraph.
@@ -77,11 +78,15 @@ fn buildInternal(
     errdefer output_graphemes.deinit(allocator);
     var output_word_starts = std.ArrayList(usize).empty;
     errdefer output_word_starts.deinit(allocator);
+    var output_visual_carets =
+        std.ArrayList(types.VisualCaretStop).empty;
+    errdefer output_visual_carets.deinit(allocator);
     var drafts = std.ArrayList(draft.Grapheme).empty;
     defer drafts.deinit(allocator);
 
     for (layout.lines, 0..) |line, line_index| {
         const line_span_start = output_spans.items.len;
+        const visual_caret_start = output_visual_carets.items.len;
         drafts.clearRetainingCapacity();
         const source_range = source.graphemeRangeForLine(
             source_graphemes,
@@ -147,7 +152,7 @@ fn buildInternal(
             &output_graphemes,
             &output_word_starts,
         );
-        try output_lines.append(allocator, .{
+        const output_line = types.Line{
             .byte_start = line.byte_start,
             .byte_len = line.byte_len,
             .bounds = .{
@@ -158,7 +163,21 @@ fn buildInternal(
             },
             .span_start = line_span_start,
             .span_len = output_spans.items.len - line_span_start,
-        });
+            .visual_caret_start = visual_caret_start,
+            .visual_caret_len = 0,
+        };
+        try visual_carets.appendLine(
+            allocator,
+            output_spans.items,
+            output_graphemes.items,
+            output_line,
+            line_index,
+            &output_visual_carets,
+        );
+        var completed_line = output_line;
+        completed_line.visual_caret_len =
+            output_visual_carets.items.len - visual_caret_start;
+        try output_lines.append(allocator, completed_line);
     }
 
     const owned_lines = try output_lines.toOwnedSlice(allocator);
@@ -168,6 +187,9 @@ fn buildInternal(
     const owned_graphemes = try output_graphemes.toOwnedSlice(allocator);
     errdefer allocator.free(owned_graphemes);
     const owned_word_starts = try output_word_starts.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_word_starts);
+    const owned_visual_carets =
+        try output_visual_carets.toOwnedSlice(allocator);
     return .{
         .allocator = allocator,
         .source_byte_len = text.len,
@@ -175,5 +197,6 @@ fn buildInternal(
         .spans = owned_spans,
         .graphemes = owned_graphemes,
         .word_starts = owned_word_starts,
+        .visual_caret_stops = owned_visual_carets,
     };
 }

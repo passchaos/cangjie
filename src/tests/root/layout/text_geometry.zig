@@ -165,6 +165,32 @@ test "text geometry prefers authored GDEF ligature carets" {
         paragraph.TextGeometryAffinity.downstream,
         hit_after.position.affinity,
     );
+
+    const stops = geometry.lines[0].visualCaretStops(
+        geometry.visual_caret_stops,
+    );
+    try std.testing.expectEqual(@as(usize, 3), stops.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), stops[0].x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 6), stops[1].x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), stops[2].x, 0.001);
+    const next_internal = geometry.nextVisualCaret(.{
+        .byte_offset = 0,
+        .affinity = .downstream,
+    }).?;
+    try std.testing.expectEqual(@as(usize, 1), next_internal.position.byte_offset);
+    try std.testing.expectEqual(
+        paragraph.TextGeometryAffinity.upstream,
+        next_internal.position.affinity,
+    );
+    const previous_internal = geometry.previousVisualCaret(.{
+        .byte_offset = 2,
+        .affinity = .upstream,
+    }).?;
+    try std.testing.expectEqual(@as(usize, 1), previous_internal.position.byte_offset);
+    try std.testing.expectEqual(
+        paragraph.TextGeometryAffinity.downstream,
+        previous_internal.position.affinity,
+    );
 }
 
 test "text geometry applies GDEF caret variation at the final run instance" {
@@ -504,6 +530,50 @@ test "text geometry keeps bidi spans logical and positions RTL graphemes visuall
     try std.testing.expectEqual(@as(usize, 2), discontiguous.len);
     try std.testing.expect(discontiguous[0].rect.x <
         discontiguous[1].rect.x);
+
+    const visual_stops = geometry.lines[0].visualCaretStops(
+        geometry.visual_caret_stops,
+    );
+    try std.testing.expectEqual(@as(usize, 5), visual_stops.len);
+    for (visual_stops[1..], visual_stops[0 .. visual_stops.len - 1]) |
+        current,
+        previous,
+    | {
+        try std.testing.expect(current.x >= previous.x);
+    }
+
+    var forward = geometry.caret(.{
+        .byte_offset = 0,
+        .affinity = .downstream,
+    }).?;
+    const expected_forward = [_]paragraph.TextGeometryCaretPosition{
+        .{ .byte_offset = 1, .affinity = .upstream },
+        .{ .byte_offset = 3, .affinity = .downstream },
+        .{ .byte_offset = 1, .affinity = .downstream },
+        .{ .byte_offset = text.len, .affinity = .upstream },
+    };
+    for (expected_forward) |expected| {
+        forward = geometry.nextVisualCaret(forward.position).?;
+        try std.testing.expectEqual(expected, forward.position);
+    }
+    try std.testing.expect(
+        geometry.nextVisualCaret(forward.position) == null,
+    );
+
+    var backward = forward;
+    const expected_backward = [_]paragraph.TextGeometryCaretPosition{
+        .{ .byte_offset = 5, .affinity = .downstream },
+        .{ .byte_offset = 3, .affinity = .upstream },
+        .{ .byte_offset = 5, .affinity = .upstream },
+        .{ .byte_offset = 0, .affinity = .downstream },
+    };
+    for (expected_backward) |expected| {
+        backward = geometry.previousVisualCaret(backward.position).?;
+        try std.testing.expectEqual(expected, backward.position);
+    }
+    try std.testing.expect(
+        geometry.previousVisualCaret(backward.position) == null,
+    );
 }
 
 test "text geometry honors an explicit RTL paragraph base direction" {

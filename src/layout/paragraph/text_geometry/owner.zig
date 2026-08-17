@@ -5,6 +5,7 @@ const std = @import("std");
 const interaction = @import("interaction.zig");
 const records = @import("records.zig");
 const selection = @import("selection.zig");
+const visual_carets = @import("visual_carets.zig");
 
 pub const TextGeometry = struct {
     allocator: std.mem.Allocator,
@@ -13,12 +14,14 @@ pub const TextGeometry = struct {
     spans: []records.Span,
     graphemes: []records.Grapheme,
     word_starts: []usize,
+    visual_caret_stops: []records.VisualCaretStop,
 
     pub fn deinit(self: *TextGeometry) void {
         self.allocator.free(self.word_starts);
         self.allocator.free(self.graphemes);
         self.allocator.free(self.spans);
         self.allocator.free(self.lines);
+        self.allocator.free(self.visual_caret_stops);
         self.* = undefined;
     }
 
@@ -58,6 +61,20 @@ pub const TextGeometry = struct {
         return selection.build(allocator, self.geometryView(), range);
     }
 
+    pub fn nextVisualCaret(
+        self: TextGeometry,
+        current: records.CaretPosition,
+    ) ?records.CaretGeometry {
+        return visual_carets.next(self.geometryView(), current);
+    }
+
+    pub fn previousVisualCaret(
+        self: TextGeometry,
+        current: records.CaretPosition,
+    ) ?records.CaretGeometry {
+        return visual_carets.previous(self.geometryView(), current);
+    }
+
     fn interactionView(self: TextGeometry) interaction.View {
         return self.geometryView();
     }
@@ -68,6 +85,7 @@ pub const TextGeometry = struct {
             .lines = self.lines,
             .spans = self.spans,
             .graphemes = self.graphemes,
+            .visual_caret_stops = self.visual_caret_stops,
         };
     }
 };

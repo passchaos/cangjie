@@ -9,6 +9,7 @@ pub const CaretPosition = records.CaretPosition;
 pub const CaretGeometry = records.CaretGeometry;
 pub const SelectionRange = records.SelectionRange;
 pub const SelectionFragment = records.SelectionFragment;
+pub const VisualCaretStop = records.VisualCaretStop;
 pub const FontRun = records.FontRun;
 pub const Grapheme = records.Grapheme;
 pub const Span = records.Span;

@@ -83,83 +83,9 @@ pub const ShapePlanKey = shaping_plan.ShapePlanKey;
 pub const ShapePlan = shaping_plan.ShapePlan;
 pub const ShapePlanCache = shaping_plan.ShapePlanCache;
 
-pub const ShapedRunCacheKey = struct {
-    cascade_hash: u64,
-    text_hash: u64,
-    text_len: usize,
-    font_size_bits: u32,
-    plan: ShapePlanKey,
-};
-
-pub const ShapedRunCacheEntry = struct {
-    key: ShapedRunCacheKey,
-    glyphs: []GlyphPosition,
-    runs: []CascadeRun,
-    hits: usize = 0,
-};
-
-pub const ShapedRunCache = struct {
-    allocator: std.mem.Allocator,
-    entries: std.ArrayList(ShapedRunCacheEntry) = .empty,
-    hits: usize = 0,
-    misses: usize = 0,
-
-    pub fn init(allocator: std.mem.Allocator) ShapedRunCache {
-        return .{ .allocator = allocator };
-    }
-
-    pub fn deinit(self: *ShapedRunCache) void {
-        self.clear();
-        self.entries.deinit(self.allocator);
-        self.* = undefined;
-    }
-
-    pub fn clear(self: *ShapedRunCache) void {
-        for (self.entries.items) |entry| {
-            self.allocator.free(entry.glyphs);
-            self.allocator.free(entry.runs);
-        }
-        self.entries.clearRetainingCapacity();
-        self.hits = 0;
-        self.misses = 0;
-    }
-
-    pub fn key(cascade: FontCascade, text: []const u8, font_size: f32, options: ShapeOptions) ShapedRunCacheKey {
-        return .{
-            .cascade_hash = cascadeHash(cascade),
-            .text_hash = std.hash.Wyhash.hash(0, text),
-            .text_len = text.len,
-            .font_size_bits = @bitCast(font_size),
-            .plan = ShapePlanKey.fromText(text, options),
-        };
-    }
-
-    pub fn load(self: *ShapedRunCache, key_value: ShapedRunCacheKey, buffer: *LayoutBuffer) !?ShapedText {
-        for (self.entries.items) |*entry| {
-            if (!shapedRunCacheKeysEqual(entry.key, key_value)) continue;
-            self.hits += 1;
-            entry.hits += 1;
-            buffer.clear();
-            try buffer.glyphs.appendSlice(buffer.allocator, entry.glyphs);
-            try buffer.runs.appendSlice(buffer.allocator, entry.runs);
-            return buffer.shapedText();
-        }
-        self.misses += 1;
-        return null;
-    }
-
-    pub fn store(self: *ShapedRunCache, key_value: ShapedRunCacheKey, shaped: ShapedText) !void {
-        const glyphs = try self.allocator.dupe(GlyphPosition, shaped.glyphs);
-        errdefer self.allocator.free(glyphs);
-        const runs = try self.allocator.dupe(CascadeRun, shaped.runs);
-        errdefer self.allocator.free(runs);
-        try self.entries.append(self.allocator, .{
-            .key = key_value,
-            .glyphs = glyphs,
-            .runs = runs,
-        });
-    }
-};
+pub const ShapedRunCacheKey = layout_cache.ShapedRunCacheKey;
+pub const ShapedRunCacheEntry = layout_cache.ShapedRunCacheEntry;
+pub const ShapedRunCache = layout_cache.ShapedRunCache;
 
 pub const TextAlign = paragraph_types.TextAlign;
 pub const WrapMode = paragraph_types.WrapMode;
@@ -668,9 +594,14 @@ pub const TextShaper = struct {
 
     pub fn shapeUtf8CascadeWithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ShapedText {
         try validateShapingInput(text, font_size, options);
-        const cache_key = if (shaped_cache != null) ShapedRunCache.key(cascade, text, font_size, options) else undefined;
+        const cache_key = if (shaped_cache != null) ShapedRunCache.key(cascade.fonts, text, font_size, options) else undefined;
         if (shaped_cache) |cache| {
-            if (try cache.load(cache_key, buffer)) |cached| return cached;
+            if (cache.lookup(cache_key)) |entry| {
+                buffer.clear();
+                try buffer.glyphs.appendSlice(buffer.allocator, entry.glyphs);
+                try buffer.runs.appendSlice(buffer.allocator, entry.runs);
+                return buffer.shapedText();
+            }
         }
         buffer.clear();
         if (cascade.fonts.len == 0) return error.EmptyFontCascade;
@@ -1686,23 +1617,6 @@ fn lookupOptionsForText(text: []const u8, options: ShapeOptions) ResolvedLookupO
 
 fn effectiveLanguageTag(text: []const u8, options: ShapeOptions) unicode.OpenTypeLanguageTag {
     return options.language_tag orelse unicode.inferOpenTypeLanguageTag(text);
-}
-
-fn shapedRunCacheKeysEqual(a: ShapedRunCacheKey, b: ShapedRunCacheKey) bool {
-    return a.cascade_hash == b.cascade_hash and
-        a.text_hash == b.text_hash and
-        a.text_len == b.text_len and
-        a.font_size_bits == b.font_size_bits and
-        a.plan.eql(b.plan);
-}
-
-fn cascadeHash(cascade: FontCascade) u64 {
-    var hasher = std.hash.Wyhash.init(0);
-    for (cascade.fonts) |font| {
-        const addr = @intFromPtr(font);
-        hasher.update(std.mem.asBytes(&addr));
-    }
-    return hasher.final();
 }
 
 fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, resolved_lookup_options: ResolvedLookupOptions) !void {
@@ -2920,8 +2834,8 @@ test "remove-default-ignorables deletes the font's fallback space glyph" {
 
     const fonts = [_]*const Font{&font};
     const cascade = FontCascade.init(&fonts);
-    const default_key = ShapedRunCache.key(cascade, text, 20, .{});
-    const removed_key = ShapedRunCache.key(cascade, text, 20, .{ .remove_default_ignorables = true });
+    const default_key = ShapedRunCache.key(cascade.fonts, text, 20, .{});
+    const removed_key = ShapedRunCache.key(cascade.fonts, text, 20, .{ .remove_default_ignorables = true });
     try std.testing.expect(!default_key.plan.eql(removed_key.plan));
 }
 

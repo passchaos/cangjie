@@ -3,6 +3,7 @@
 const std = @import("std");
 
 const GlyphPosition = @import("../glyph_position.zig").GlyphPosition;
+const inline_object = @import("../inline_object/root.zig");
 const run_types = @import("runs.zig");
 const CascadeRun = run_types.CascadeRun;
 const unicode = @import("../../unicode.zig");
@@ -67,6 +68,8 @@ pub const ParagraphLine = struct {
     ascent: f32,
     descent: f32,
     leading: f32,
+    inline_object_start: usize = 0,
+    inline_object_len: usize = 0,
 
     pub fn glyphs(self: ParagraphLine, paragraph: ParagraphLayout) []const GlyphPosition {
         return paragraph.glyphs[self.glyph_start .. self.glyph_start + self.glyph_len];
@@ -78,6 +81,13 @@ pub const ParagraphLine = struct {
 
     pub fn byteEnd(self: ParagraphLine) usize {
         return self.byte_start + self.byte_len;
+    }
+
+    pub fn inlineObjects(
+        self: ParagraphLine,
+        paragraph: ParagraphLayout,
+    ) []const inline_object.Positioned {
+        return paragraph.inline_objects[self.inline_object_start .. self.inline_object_start + self.inline_object_len];
     }
 };
 
@@ -98,6 +108,7 @@ pub const ParagraphLayout = struct {
     glyphs: []const GlyphPosition,
     runs: []const CascadeRun,
     lines: []const ParagraphLine,
+    inline_objects: []const inline_object.Positioned = &.{},
     width: f32,
     height: f32,
 
@@ -119,6 +130,26 @@ pub const ParagraphLayout = struct {
         var pen_x: f32 = 0;
         const glyph_end = line.glyph_start + line.glyph_len;
         for (self.glyphs[line.glyph_start..glyph_end], line.glyph_start..) |glyph, glyph_index| {
+            if (glyph.isInlineObject()) {
+                const object = self.inlineObjectAtByte(glyph.cluster) orelse
+                    continue;
+                if (object.kind == .in_flow) {
+                    const midpoint = pen_x + object.width / 2;
+                    if (local_x < midpoint) {
+                        return .{
+                            .glyph_index = glyph_index,
+                            .cluster = glyph.cluster,
+                        };
+                    }
+                    if (local_x < pen_x + object.width) {
+                        return .{
+                            .glyph_index = glyph_index,
+                            .cluster = glyph.cluster + glyph.source_byte_len,
+                            .trailing = true,
+                        };
+                    }
+                }
+            }
             const midpoint = pen_x + glyph.x_advance / 2;
             if (local_x < midpoint) {
                 return .{ .glyph_index = glyph_index, .cluster = glyph.cluster };
@@ -130,6 +161,16 @@ pub const ParagraphLayout = struct {
         }
 
         return textPositionAtGlyphTrailingEdge(self, glyph_end - 1);
+    }
+
+    fn inlineObjectAtByte(
+        self: ParagraphLayout,
+        byte_index: usize,
+    ) ?inline_object.Positioned {
+        for (self.inline_objects) |object| {
+            if (object.byte_index == byte_index) return object;
+        }
+        return null;
     }
 
     /// Convert a logical TextPosition back to a zero-width caret rectangle.

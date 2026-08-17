@@ -3,6 +3,7 @@
 const std = @import("std");
 
 const paragraph_types = @import("../types/paragraph.zig");
+const inline_object = @import("../inline_object/root.zig");
 const pipeline_types = @import("../../shaping/pipeline/types.zig");
 const shaping_plan = @import("../../shaping/plan/root.zig");
 const plan_validation = @import("../../shaping/plan/validation.zig");
@@ -23,6 +24,11 @@ pub const Options = struct {
     word_spacing: f32 = 0,
     first_line_indent: f32 = 0,
     paragraph_spacing: f32 = 0,
+    /// Inline objects anchored by U+FFFC markers in the paragraph text.
+    ///
+    /// This slice may change between retained reflows as long as object count
+    /// and byte anchors remain identical; geometry does not affect shaping.
+    inline_objects: []const inline_object.Object = &.{},
     /// Optional dictionary tailoring for scripts that normally omit spaces.
     ///
     /// The dictionary is borrowed and must outlive the layout call or retained

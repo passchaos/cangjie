@@ -2,13 +2,18 @@
 
 const std = @import("std");
 
+pub const no_run = std.math.maxInt(usize);
+
 pub fn buildGlyphRunIndices(
     allocator: std.mem.Allocator,
     runs: anytype,
     glyph_count: usize,
 ) ![]usize {
     const indices = try allocator.alloc(usize, glyph_count);
-    @memset(indices, 0);
+    // Synthetic inline objects and future non-font atoms deliberately remain
+    // unowned. A sentinel prevents bidi permutation from borrowing the nearest
+    // font and later exposing a fake `.notdef` render request.
+    @memset(indices, no_run);
     for (runs, 0..) |run, run_index| {
         const end = @min(glyph_count, run.glyph_start + run.glyph_len);
         if (run.glyph_start >= end) continue;
@@ -24,17 +29,20 @@ pub fn rebuild(
 ) !void {
     buffer.runs.clearRetainingCapacity();
     if (visual_run_indices.len == 0 or old_runs.len == 0) return;
-    var start: usize = 0;
-    var current_run_index = visual_run_indices[0];
-    var index: usize = 1;
-    while (index <= visual_run_indices.len) : (index += 1) {
-        if (index < visual_run_indices.len and
-            visual_run_indices[index] == current_run_index)
-        {
+    var index: usize = 0;
+    while (index < visual_run_indices.len) {
+        if (visual_run_indices[index] == no_run) {
+            index += 1;
             continue;
         }
-        if (current_run_index >= old_runs.len) {
-            return error.InvalidBidiMap;
+        const start = index;
+        const current_run_index = visual_run_indices[index];
+        if (current_run_index >= old_runs.len) return error.InvalidBidiMap;
+        index += 1;
+        while (index < visual_run_indices.len and
+            visual_run_indices[index] == current_run_index)
+        {
+            index += 1;
         }
         const source_run = old_runs[current_run_index];
         try buffer.runs.append(buffer.allocator, .{
@@ -46,25 +54,30 @@ pub fn rebuild(
             .x_offset = 0,
             .y_offset = 0,
         });
-        if (index < visual_run_indices.len) {
-            start = index;
-            current_run_index = visual_run_indices[index];
-        }
     }
 }
 
 pub fn recomputeOffsets(buffer: anytype) void {
     var x_offset: f32 = 0;
     var y_offset: f32 = 0;
+    var glyph_cursor: usize = 0;
     for (buffer.runs.items) |*run| {
-        run.x_offset = x_offset;
-        run.y_offset = y_offset;
-        for (
-            buffer.glyphs.items[run.glyph_start .. run.glyph_start + run.glyph_len],
-        ) |glyph| {
+        const run_start = @min(run.glyph_start, buffer.glyphs.items.len);
+        for (buffer.glyphs.items[glyph_cursor..run_start]) |glyph| {
             x_offset += glyph.x_advance;
             y_offset += glyph.y_advance;
         }
+        run.x_offset = x_offset;
+        run.y_offset = y_offset;
+        const run_end = @min(
+            run_start + run.glyph_len,
+            buffer.glyphs.items.len,
+        );
+        for (buffer.glyphs.items[run_start..run_end]) |glyph| {
+            x_offset += glyph.x_advance;
+            y_offset += glyph.y_advance;
+        }
+        glyph_cursor = run_end;
     }
 }
 

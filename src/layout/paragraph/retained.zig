@@ -4,6 +4,7 @@ const std = @import("std");
 
 const bidi_reorder = @import("../bidi/reorder/root.zig");
 const glyph_position = @import("../glyph_position.zig");
+const inline_object = @import("../inline_object/root.zig");
 const paragraph_options = @import("options.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 const run_types = @import("../types/runs.zig");
@@ -25,6 +26,7 @@ pub const ShapedParagraph = struct {
     runs: []const run_types.CascadeRun,
     grapheme_clusters: []const unicode.GraphemeCluster,
     line_breaks: []const unicode.LineBreak,
+    inline_object_indexes: []const usize,
     word_break_dictionary: ?*const segmentation.WordBreakDictionary,
     default_metrics: paragraph_reflow.BaselineMetrics,
     shape_key: shaping_plan.ShapePlanKey,
@@ -32,6 +34,7 @@ pub const ShapedParagraph = struct {
 
     pub fn deinit(self: *ShapedParagraph) void {
         self.allocator.free(self.line_breaks);
+        self.allocator.free(self.inline_object_indexes);
         self.allocator.free(self.grapheme_clusters);
         self.allocator.free(self.runs);
         self.allocator.free(self.glyphs);
@@ -53,7 +56,12 @@ pub const ShapedParagraph = struct {
         options: paragraph_options.Options,
     ) !paragraph_types.ParagraphLayout {
         try paragraph_options.validate(options);
+        try inline_object.validate(self.text, options.inline_objects);
         if (options.word_break_dictionary != self.word_break_dictionary or
+            !inline_object.indexesMatch(
+                self.inline_object_indexes,
+                options.inline_objects,
+            ) or
             !paragraph_options.matchesShapeKey(
                 self.text,
                 options,
@@ -81,6 +89,10 @@ pub const ShapedParagraph = struct {
                 options.direction == .rtl,
             );
         }
+        try inline_object.position(
+            &reflow.buffer,
+            options.inline_objects,
+        );
         return reflow.buffer.paragraphLayout();
     }
 };

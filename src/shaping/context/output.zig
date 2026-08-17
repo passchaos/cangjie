@@ -8,6 +8,7 @@ const std = @import("std");
 
 const Font = @import("../../font.zig").Font;
 const glyph_position = @import("../../layout/glyph_position.zig");
+const inline_object = @import("../../layout/inline_object/root.zig");
 const paragraph_types = @import("../../layout/types/paragraph.zig");
 const run_types = @import("../../layout/types/runs.zig");
 const ShapeStageProfile = @import("../../shape_profile.zig").ShapeStageProfile;
@@ -19,6 +20,7 @@ pub const Buffer = struct {
     glyphs: std.ArrayList(glyph_position.GlyphPosition) = .empty,
     runs: std.ArrayList(run_types.CascadeRun) = .empty,
     lines: std.ArrayList(paragraph_types.ParagraphLine) = .empty,
+    inline_objects: std.ArrayList(inline_object.Positioned) = .empty,
     script_runs: std.ArrayList(run_types.ScriptedRun) = .empty,
     shape_profile: ?*ShapeStageProfile = null,
     profile_io: ?std.Io = null,
@@ -36,6 +38,7 @@ pub const Buffer = struct {
     pub fn deinit(self: *Buffer) void {
         self.shape_scratch.deinit(self.allocator);
         self.script_runs.deinit(self.allocator);
+        self.inline_objects.deinit(self.allocator);
         self.lines.deinit(self.allocator);
         self.runs.deinit(self.allocator);
         self.glyphs.deinit(self.allocator);
@@ -46,6 +49,7 @@ pub const Buffer = struct {
         self.glyphs.clearRetainingCapacity();
         self.runs.clearRetainingCapacity();
         self.lines.clearRetainingCapacity();
+        self.inline_objects.clearRetainingCapacity();
         self.script_runs.clearRetainingCapacity();
     }
 
@@ -80,6 +84,7 @@ pub const Buffer = struct {
             .glyphs = self.glyphs.items,
             .runs = self.runs.items,
             .lines = self.lines.items,
+            .inline_objects = self.inline_objects.items,
             .width = max_width,
             .height = height,
         };

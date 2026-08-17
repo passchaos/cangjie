@@ -2,6 +2,7 @@ const std = @import("std");
 const face_mod = @import("../../font/face/root.zig");
 const Font = @import("../../font.zig").Font;
 const glyph_position = @import("../../layout/glyph_position.zig");
+const inline_object = @import("../../layout/inline_object/root.zig");
 const styled_buffer = @import("../../layout/styled_buffer.zig");
 const styled_paragraph = @import("../../layout/styled_paragraph.zig");
 const paragraph_types = @import("../../layout/types/paragraph.zig");
@@ -26,6 +27,7 @@ pub fn Result(comptime TextStyle: type) type {
         glyphs: []glyph_position.GlyphPosition,
         font_runs: []run_types.CascadeRun,
         lines: []paragraph_types.ParagraphLine,
+        inline_objects: []inline_object.Positioned,
         style_runs: []StyleRun(TextStyle),
         paragraph: paragraph_types.ParagraphLayout,
 
@@ -34,6 +36,7 @@ pub fn Result(comptime TextStyle: type) type {
         /// longer used; the geometry and run arrays themselves are owned here.
         pub fn deinit(self: *@This()) void {
             self.allocator.free(self.style_runs);
+            self.allocator.free(self.inline_objects);
             self.allocator.free(self.lines);
             self.allocator.free(self.font_runs);
             self.allocator.free(self.glyphs);
@@ -75,6 +78,7 @@ pub fn layoutResolved(
     // Paragraph-wide line height is a minimum shared by every style. A style's
     // line height is carried separately and affects only intersecting lines.
     options.line_height = attributed.paragraph_style.line_height;
+    options.inline_objects = attributed.inline_objects;
 
     var buffer = context_output.Buffer.init(allocator);
     defer buffer.deinit();
@@ -96,6 +100,9 @@ pub fn layoutResolved(
     errdefer allocator.free(font_runs);
     const lines = try allocator.dupe(paragraph_types.ParagraphLine, paragraph.lines);
     errdefer allocator.free(lines);
+    const inline_objects =
+        try allocator.dupe(inline_object.Positioned, paragraph.inline_objects);
+    errdefer allocator.free(inline_objects);
     const styled_glyphs = styled.glyphMetadata();
     if (styled_glyphs.len != glyphs.len) return error.InvalidStyleSpans;
     const style_runs = try buildStyleRuns(
@@ -111,11 +118,13 @@ pub fn layoutResolved(
         .glyphs = glyphs,
         .font_runs = font_runs,
         .lines = lines,
+        .inline_objects = inline_objects,
         .style_runs = style_runs,
         .paragraph = .{
             .glyphs = glyphs,
             .runs = font_runs,
             .lines = lines,
+            .inline_objects = inline_objects,
             .width = paragraph.width,
             .height = paragraph.height,
         },
@@ -145,6 +154,8 @@ pub fn measureResolved(
     const primary_style = attributed.primaryTextStyle();
     var styled = styled_buffer.Buffer.init(buffer.allocator);
     defer styled.deinit();
+    var options = attributed.paragraph_style.paragraphOptions(max_width);
+    options.inline_objects = attributed.inline_objects;
     const paragraph = try shaping_orchestrator.TextShaper.layoutStyledParagraphUtf8(
         cascade,
         buffer,
@@ -152,7 +163,7 @@ pub fn measureResolved(
         attributed.text,
         primary_style.font_size,
         spans,
-        attributed.paragraph_style.paragraphOptions(max_width),
+        options,
     );
     return metricsFromParagraph(paragraph);
 }

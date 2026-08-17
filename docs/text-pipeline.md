@@ -585,6 +585,18 @@ Paragraph shaping now retains glyph atoms in logical source order and applies
 bidi visual ordering only after line ranges are known. Each line builds its own
 bidi map from `ParagraphLine.byte_start/byte_len`; mixed LTR/RTL text therefore
 reorders independently when a width change creates different line boundaries.
+
+Paragraph inline objects use U+FFFC OBJECT REPLACEMENT CHARACTER as their
+stable UTF-8 source anchor. `cangjie.paragraph.InlineObject` supports in-flow
+objects that contribute width and baseline-relative line extents, plus
+out-of-flow objects that retain a positioned anchor without changing line
+geometry. Object markers participate in Unicode bidi, wrapping, caret, and
+selection, but never enter font fallback or generate glyph render requests.
+Final `PositionedInlineObject` records are available on both paragraph layouts
+and renderer draw lists. Retained paragraphs may change object dimensions and
+identifiers during reflow while preserving the original marker indexes.
+Yield/resume custom out-of-flow layout for floats and exclusions remains the
+next layer rather than being coupled to the basic object contract.
 This follows Parley's per-line ordering model while keeping standalone shaping
 APIs in their existing HarfBuzz-compatible visual buffer order.
 

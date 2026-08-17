@@ -202,6 +202,7 @@ fn appendGlyph(
     if (visual_codepoint) |codepoint| mirror: {
         if (codepoint == glyph.codepoint) break :mirror;
         const run_index = glyph_run_indices[glyph_index];
+        if (run_index == @import("runs.zig").no_run) break :mirror;
         const font = if (run_index < old_runs.len)
             run_types.fontForBackend(old_runs[run_index])
         else

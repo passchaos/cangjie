@@ -9,6 +9,7 @@ const std = @import("std");
 const Font = @import("../../../font.zig").Font;
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const discretionary_hyphen = @import("../../discretionary_hyphen.zig");
+const inline_object = @import("../../inline_object/root.zig");
 const run_types = @import("../../types/runs.zig");
 
 pub const BaselineMetrics = struct {
@@ -50,6 +51,8 @@ pub fn defaultBaselineMetrics(
 
 pub fn lineRunInfo(
     runs: anytype,
+    glyphs: []const GlyphPosition,
+    objects: []const inline_object.Object,
     glyph_start: usize,
     glyph_end: usize,
     default_metrics: BaselineMetrics,
@@ -75,6 +78,15 @@ pub fn lineRunInfo(
         metrics.ascent = @max(metrics.ascent, run_metrics.ascent);
         metrics.descent = @max(metrics.descent, run_metrics.descent);
         metrics.leading = @max(metrics.leading, run_metrics.leading);
+    }
+    for (glyphs[glyph_start..glyph_end]) |glyph| {
+        if (!glyph.isInlineObject()) continue;
+        const object = inline_object.find(objects, glyph.cluster) orelse
+            continue;
+        if (object.kind != .in_flow) continue;
+        const object_metrics = inline_object.verticalMetrics(object);
+        metrics.ascent = @max(metrics.ascent, object_metrics.ascent);
+        metrics.descent = @max(metrics.descent, object_metrics.descent);
     }
     const run_start_index = first_run orelse 0;
     return .{

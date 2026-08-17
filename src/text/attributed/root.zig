@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const glyph_position = @import("../../layout/glyph_position.zig");
+const inline_object = @import("../../layout/inline_object/root.zig");
 const paragraph_options = @import("../../layout/paragraph/options.zig");
 const paragraph_types = @import("../../layout/types/paragraph.zig");
 const context_output = @import("../../shaping/context/output.zig");
@@ -48,9 +49,11 @@ pub const AttributedText = struct {
     text: []const u8,
     spans: []const StyleSpan,
     paragraph_style: ParagraphStyle = .{},
+    inline_objects: []const inline_object.Object = &.{},
 
     pub fn validate(self: AttributedText) !void {
         if (!std.unicode.utf8ValidateSlice(self.text)) return error.InvalidUtf8;
+        try inline_object.validate(self.text, self.inline_objects);
         for (self.spans) |span| {
             if (span.byte_range.end() > self.text.len) return error.InvalidRange;
             if (!isUtf8Boundary(self.text, span.byte_range.start)) return error.InvalidUtf8Boundary;
@@ -81,6 +84,7 @@ pub const AttributedText = struct {
         options.letter_spacing = style.letter_spacing;
         options.word_spacing = style.word_spacing;
         options.normalized_variation_coords = style.normalized_variation_coords;
+        options.inline_objects = self.inline_objects;
         return options;
     }
 
@@ -124,6 +128,9 @@ pub fn measureAttributedTextUtf8(cascade: font_fallback.Cascade, buffer: *contex
 }
 
 pub fn measureAttributedRunsUtf8(allocator: std.mem.Allocator, cascade: font_fallback.Cascade, attributed: AttributedText) !TextMetrics {
+    if (attributed.inline_objects.len != 0) {
+        return error.InlineObjectsRequireParagraphLayout;
+    }
     var positioned = try layoutAttributedRunsUtf8(allocator, cascade, attributed);
     defer positioned.deinit();
     return positioned.metrics;
@@ -183,6 +190,9 @@ pub fn layoutAttributedParagraphUtf8(
 }
 
 pub fn layoutAttributedRunsUtf8(allocator: std.mem.Allocator, cascade: font_fallback.Cascade, attributed: AttributedText) !AttributedRunLayout {
+    if (attributed.inline_objects.len != 0) {
+        return error.InlineObjectsRequireParagraphLayout;
+    }
     const runs = try attributed.runs(allocator);
     defer allocator.free(runs);
     var buffer = context_output.Buffer.init(allocator);
@@ -222,6 +232,9 @@ pub fn layoutAttributedRunsUtf8(allocator: std.mem.Allocator, cascade: font_fall
 }
 
 pub fn layoutAttributedGlyphRunsUtf8(allocator: std.mem.Allocator, cascade: font_fallback.Cascade, attributed: AttributedText) !AttributedGlyphRunLayout {
+    if (attributed.inline_objects.len != 0) {
+        return error.InlineObjectsRequireParagraphLayout;
+    }
     const runs = try attributed.runs(allocator);
     defer allocator.free(runs);
     var buffer = context_output.Buffer.init(allocator);

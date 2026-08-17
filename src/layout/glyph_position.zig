@@ -15,7 +15,9 @@ pub const Flags = packed struct(u8) {
     /// Reusing this shaped run across the boundary at the glyph's `cluster`
     /// would change OpenType contextual substitution results.
     unsafe_to_break_before: bool = false,
-    _reserved: u6 = 0,
+    /// Synthetic non-rendering atom for one U+FFFC inline object anchor.
+    inline_object: bool = false,
+    _reserved: u5 = 0,
 };
 
 /// One positioned glyph after cmap mapping, GSUB substitution, and GPOS/kern
@@ -53,6 +55,10 @@ pub const GlyphPosition = struct {
 
     pub fn isUnsafeToBreakBefore(self: GlyphPosition) bool {
         return self.flags.unsafe_to_break_before;
+    }
+
+    pub fn isInlineObject(self: GlyphPosition) bool {
+        return self.flags.inline_object;
     }
 };
 

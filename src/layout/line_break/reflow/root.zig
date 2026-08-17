@@ -10,6 +10,7 @@ const discretionary_hyphen = @import("../../discretionary_hyphen.zig");
 const geometry = @import("geometry.zig");
 const horizontal_justification =
     @import("../../justification/horizontal.zig");
+const inline_object = @import("../../inline_object/root.zig");
 const opportunities = @import("opportunities.zig");
 const segmentation = @import("../../../text/segmentation/root.zig");
 const shaped_boundary = @import("../shaped_boundary.zig");
@@ -87,6 +88,14 @@ pub fn build(
     // safe grapheme boundary, never splitting a shaped source atom.
     glyph_loop: while (index < buffer.glyphs.items.len) : (index += 1) {
         var glyph = &buffer.glyphs.items[index];
+        if (glyph.isInlineObject()) {
+            const object = inline_object.find(
+                options.inline_objects,
+                glyph.cluster,
+            ) orelse return error.InvalidInlineObjects;
+            glyph.x_advance =
+                if (object.kind == .in_flow) object.width else 0;
+        }
         if (opportunities.isMandatory(glyph.codepoint)) {
             const break_end_index =
                 if (glyph.codepoint == '\r' and
@@ -100,6 +109,8 @@ pub fn build(
             );
             const line_info = geometry.lineRunInfo(
                 buffer.runs.items,
+                buffer.glyphs.items,
+                options.inline_objects,
                 line_start,
                 index,
                 default_metrics,
@@ -219,6 +230,8 @@ pub fn build(
             }
             const line_info = geometry.lineRunInfo(
                 buffer.runs.items,
+                buffer.glyphs.items,
+                options.inline_objects,
                 line_start,
                 break_end,
                 default_metrics,
@@ -310,6 +323,8 @@ pub fn build(
     if (!terminal_emergency_line_committed) {
         const line_info = geometry.lineRunInfo(
             buffer.runs.items,
+            buffer.glyphs.items,
+            options.inline_objects,
             line_start,
             buffer.glyphs.items.len,
             default_metrics,

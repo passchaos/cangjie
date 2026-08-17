@@ -46,7 +46,9 @@ pub fn rebuild(
             return error.InvalidStyleSpans;
         list.appendAssumeCapacity(.{
             .style_index = span.style_index,
-            .layout_spacing = if (isWordSpacingCodepoint(glyph.codepoint))
+            .layout_spacing = if (glyph.isInlineObject())
+                0
+            else if (isWordSpacingCodepoint(glyph.codepoint))
                 span.word_spacing
             else if (!isMandatoryLineBreak(glyph.codepoint))
                 span.letter_spacing

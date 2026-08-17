@@ -861,6 +861,10 @@ pub const Rasterizer = struct {
         const font = face_mod.backend.font(run.font);
         const use_default_outline = normalizedVariationCoordinatesAreDefault(normalized_variation_coords);
         for (run.glyphs) |position| {
+            if (position.isInlineObject()) {
+                pen_x += position.x_advance;
+                continue;
+            }
             var outline = if (use_default_outline)
                 try font_raster.glyphOutline(font, self.allocator, position.glyph_id)
             else
@@ -888,6 +892,10 @@ pub const Rasterizer = struct {
     pub fn renderColorRunAtCoords(self: *Rasterizer, target: *ColorRenderTarget, run: run_types.GlyphRun, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
         var pen_x = x;
         for (run.glyphs) |position| {
+            if (position.isInlineObject()) {
+                pen_x += position.x_advance;
+                continue;
+            }
             try self.renderColorGlyphAtCoords(target, face_mod.backend.font(run.font), position.glyph_id, run.font_size, pen_x + position.x_offset, baseline_y + position.y_offset, palette_index, normalized_variation_coords);
             pen_x += position.x_advance;
         }

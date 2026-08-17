@@ -173,6 +173,62 @@ test "styled bidi order carries paint fragments" {
     try std.testing.expect(saw_underlined);
 }
 
+test "attributed paragraph retains inline object geometry and style metadata" {
+    const allocator = std.testing.allocator;
+    var owned = try OwnedFont.init(
+        allocator,
+        try test_font.buildMinimalTtf(allocator),
+    );
+    defer owned.deinit();
+    const fonts = [_]*const font_mod.Font{&owned.font};
+    const marker = @import("../../layout/inline_object/root.zig");
+    const text = "A" ++ marker.object_replacement_utf8 ++ "A";
+    const spans = [_]style.StyleSpan{.{
+        .byte_range = .{ .start = 0, .len = text.len },
+        .style = .{ .color = .{ .r = 5, .g = 10, .b = 15, .a = 255 } },
+    }};
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
+        allocator,
+        font_fallback.Cascade.init(&fonts),
+        .{
+            .text = text,
+            .spans = &spans,
+            .inline_objects = &.{.{
+                .id = 88,
+                .byte_index = 1,
+                .width = 14,
+                .height = 18,
+            }},
+        },
+        200,
+    );
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), result.inline_objects.len);
+    try std.testing.expectEqual(@as(u64, 88), result.inline_objects[0].id);
+    try std.testing.expectEqual(@as(usize, 1), result.style_runs.len);
+    try std.testing.expectEqual(@as(usize, 3), result.style_runs[0].glyph_len);
+
+    const attributed = attributed_model.AttributedText{
+        .text = text,
+        .spans = &spans,
+        .inline_objects = &.{.{
+            .id = 88,
+            .byte_index = 1,
+            .width = 14,
+            .height = 18,
+        }},
+    };
+    try std.testing.expectError(
+        error.InlineObjectsRequireParagraphLayout,
+        attributed_model.layoutAttributedRunsUtf8(
+            allocator,
+            font_fallback.Cascade.init(&fonts),
+            attributed,
+        ),
+    );
+}
+
 test "styled cascade fallback keeps size and minimum line height" {
     const allocator = std.testing.allocator;
     var primary = try OwnedFont.init(

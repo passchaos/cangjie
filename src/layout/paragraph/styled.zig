@@ -5,6 +5,7 @@ const std = @import("std");
 const face_mod = @import("../../font/face/root.zig");
 const Font = @import("../../font.zig").Font;
 const bidi_reorder = @import("../bidi/reorder/root.zig");
+const inline_object = @import("../inline_object/root.zig");
 const paragraph_reflow = @import("../line_break/reflow/root.zig");
 const paragraph_options = @import("options.zig");
 const paragraph_types = @import("../types/paragraph.zig");
@@ -36,6 +37,7 @@ pub fn layout(input: Input) !paragraph_types.ParagraphLayout {
     try plan_validation.utf8(input.text);
     try plan_validation.fontSize(input.default_font_size);
     if (input.cascade.fonts.len == 0) return error.EmptyFontCascade;
+    try inline_object.validate(input.text, input.options.inline_objects);
 
     input.buffer.clear();
     input.styled.clear();
@@ -92,7 +94,6 @@ const Driver = struct {
         inferred_script: unicode.Script,
         span: styled_paragraph.Span,
     ) !void {
-        const item_text = self.text[byte_start..byte_end];
         const item_cascade = font_fallback.Cascade.init(
             if (span.faces) |faces|
                 face_mod.backend.fonts(faces)
@@ -100,6 +101,54 @@ const Driver = struct {
                 self.cascade.fonts,
         );
         const run_start = self.buffer.runs.items.len;
+        var source_start = byte_start;
+        for (self.options.inline_objects) |object| {
+            if (object.byte_index < byte_start) continue;
+            if (object.byte_index >= byte_end) break;
+            if (source_start < object.byte_index) {
+                try self.shapeTextRange(
+                    item_cascade,
+                    source_start,
+                    object.byte_index,
+                    inferred_script,
+                    span,
+                );
+            }
+            const object_advance =
+                if (object.kind == .in_flow) object.width else 0;
+            try self.buffer.glyphs.append(self.buffer.allocator, .{
+                .glyph_id = 0,
+                .codepoint = inline_object.object_replacement_character,
+                .cluster = object.byte_index,
+                .source_byte_len = inline_object.object_replacement_utf8.len,
+                .x_advance = object_advance,
+                .flags = .{ .inline_object = true },
+            });
+            self.pen.x += object_advance;
+            source_start =
+                object.byte_index + inline_object.object_replacement_utf8.len;
+        }
+        if (source_start < byte_end) {
+            try self.shapeTextRange(
+                item_cascade,
+                source_start,
+                byte_end,
+                inferred_script,
+                span,
+            );
+        }
+        if (span.faces != null) self.normalizeNewRunFontIndices(run_start);
+    }
+
+    fn shapeTextRange(
+        self: *@This(),
+        cascade: font_fallback.Cascade,
+        byte_start: usize,
+        byte_end: usize,
+        inferred_script: unicode.Script,
+        span: styled_paragraph.Span,
+    ) !void {
+        const item_text = self.text[byte_start..byte_end];
         var segment_context = SegmentContext{
             .buffer = self.buffer,
             .font_size = span.font_size,
@@ -125,12 +174,11 @@ const Driver = struct {
             },
         };
         self.pen = try fallback_segment.shape(&segment_context, .{
-            .cascade = item_cascade,
+            .cascade = cascade,
             .text = item_text,
             .cluster_base = byte_start,
             .pen = self.pen,
         });
-        if (span.faces != null) self.normalizeNewRunFontIndices(run_start);
     }
 
     pub fn finish(
@@ -219,6 +267,10 @@ const Driver = struct {
                 visual_order,
             );
         }
+        try inline_object.position(
+            self.buffer,
+            self.options.inline_objects,
+        );
     }
 
     fn normalizeNewRunFontIndices(

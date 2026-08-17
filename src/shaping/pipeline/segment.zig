@@ -116,7 +116,6 @@ pub fn run(input: Input) !void {
     const source_rphf_substituted = &scratch.source_rphf_substituted;
     const source_pref_substituted = &scratch.source_pref_substituted;
     const glyph_script_positions = &scratch.glyph_script_positions;
-    const glyph_output_indices = &scratch.glyph_output_indices;
     const stch_actions = &scratch.stch_actions;
     const source_boundaries = &scratch.source_boundaries;
 
@@ -560,6 +559,10 @@ pub fn run(input: Input) !void {
         .profile_io = profile_io,
     });
     const segment_glyph_start = output_result.segment_glyph_start;
+    // `emit` may resize this list. Reacquire the field after that mutation
+    // instead of retaining an interior pointer across a call that receives the
+    // complete scratch owner; this also keeps Zig's pointer provenance exact.
+    const glyph_output_indices = &scratch.glyph_output_indices;
     const attachment_links = &scratch.attachment_links;
     const has_kerx_attachments = (position_engine_plan.has_state_attachments and
         position_engine_plan.summary.has_cross_stream_adjustment) or

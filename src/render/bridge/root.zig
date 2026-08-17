@@ -6,6 +6,7 @@ const font_raster = @import("../../font.zig").raster_backend;
 const font_mod = @import("../../font.zig");
 const glyph_mod = @import("../../glyph.zig");
 const glyph_position = @import("../../layout/glyph_position.zig");
+const inline_object = @import("../../layout/inline_object/root.zig");
 const paragraph_types = @import("../../layout/types/paragraph.zig");
 const run_types = @import("../../layout/types/runs.zig");
 
@@ -183,6 +184,8 @@ pub const TextSelectionGeometry = struct {
     rect: paragraph_types.TextRect,
 };
 
+pub const InlineObjectDrawCommand = inline_object.Positioned;
+
 pub const GlyphDrawList = struct {
     allocator: std.mem.Allocator,
     glyphs: []PositionedGlyph,
@@ -195,8 +198,10 @@ pub const GlyphDrawList = struct {
     normalized_variation_coords: []f32,
     cursor: ?TextCursorGeometry,
     selection: []TextSelectionGeometry,
+    inline_objects: []InlineObjectDrawCommand,
 
     pub fn deinit(self: *GlyphDrawList) void {
+        self.allocator.free(self.inline_objects);
         self.allocator.free(self.selection);
         self.allocator.free(self.normalized_variation_coords);
         self.allocator.free(self.color_stops);
@@ -235,6 +240,7 @@ const BridgeBuilder = struct {
     color_layers: std.ArrayList(ColorGlyphLayerCommand) = .empty,
     color_stops: std.ArrayList(font_mod.ColorPaint.ColorStop) = .empty,
     selection: std.ArrayList(TextSelectionGeometry) = .empty,
+    inline_objects: std.ArrayList(InlineObjectDrawCommand) = .empty,
     cursor: ?TextCursorGeometry = null,
     variation_hash: u64,
 
@@ -248,6 +254,7 @@ const BridgeBuilder = struct {
     }
 
     fn deinitScratch(self: *BridgeBuilder) void {
+        self.inline_objects.deinit(self.allocator);
         self.selection.deinit(self.allocator);
         self.color_stops.deinit(self.allocator);
         self.color_layers.deinit(self.allocator);
@@ -262,6 +269,16 @@ const BridgeBuilder = struct {
     }
 
     fn build(self: *BridgeBuilder) !void {
+        try self.inline_objects.ensureTotalCapacity(
+            self.allocator,
+            self.paragraph.inline_objects.len,
+        );
+        for (self.paragraph.inline_objects) |object| {
+            var positioned = object;
+            positioned.x += self.options.origin_x;
+            positioned.y += self.options.origin_y;
+            self.inline_objects.appendAssumeCapacity(positioned);
+        }
         for (self.paragraph.lines, 0..) |line, line_index| {
             try self.appendLine(line, line_index);
         }
@@ -498,6 +515,9 @@ const BridgeBuilder = struct {
         errdefer self.allocator.free(color_stops);
         const selection = try self.selection.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(selection);
+        const inline_objects =
+            try self.inline_objects.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(inline_objects);
         const result = GlyphDrawList{
             .allocator = self.allocator,
             .glyphs = glyphs,
@@ -510,6 +530,7 @@ const BridgeBuilder = struct {
             .normalized_variation_coords = normalized_variation_coords,
             .cursor = self.cursor,
             .selection = selection,
+            .inline_objects = inline_objects,
         };
         // Requests live as long as the draw list, not as long as the caller's
         // BridgeOptions. Rebind every borrowed location to the single owned

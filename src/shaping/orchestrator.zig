@@ -21,6 +21,7 @@ const fallback_segment = @import("fallback/segment.zig");
 const script_run_itemization = @import("itemization/script_runs.zig");
 const bidi_reorder = @import("../layout/bidi/reorder/root.zig");
 const glyph_position = @import("../layout/glyph_position.zig");
+const inline_object = @import("../layout/inline_object/root.zig");
 const paragraph_options = @import("../layout/paragraph/options.zig");
 const retained_paragraph = @import("../layout/paragraph/retained.zig");
 const styled_paragraph_layout = @import("../layout/paragraph/styled.zig");
@@ -168,7 +169,7 @@ pub const TextShaper = struct {
         try paragraph_options.validate(options);
         if (cascade.fonts.len == 0) return error.EmptyFontCascade;
         const shape_options = paragraph_options.shapeOptions(options);
-        _ = try shapeUtf8CascadeWithCaches(
+        try shapeParagraphContent(
             cascade,
             fallback_cache,
             metrics_cache,
@@ -178,6 +179,7 @@ pub const TextShaper = struct {
             text,
             font_size,
             shape_options,
+            options.inline_objects,
         );
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
         const logical_shaped = buffer.shapedText();
@@ -197,6 +199,14 @@ pub const TextShaper = struct {
             options.word_break_dictionary,
         );
         errdefer allocator.free(line_breaks);
+        const inline_object_indexes = try allocator.alloc(
+            usize,
+            options.inline_objects.len,
+        );
+        errdefer allocator.free(inline_object_indexes);
+        for (inline_object_indexes, options.inline_objects) |*index, object| {
+            index.* = object.byte_index;
+        }
 
         return .{
             .allocator = allocator,
@@ -205,6 +215,7 @@ pub const TextShaper = struct {
             .runs = owned_runs,
             .grapheme_clusters = grapheme_clusters,
             .line_breaks = line_breaks,
+            .inline_object_indexes = inline_object_indexes,
             .word_break_dictionary = options.word_break_dictionary,
             .default_metrics = defaultBaselineMetrics(cascade.fonts[0], font_size),
             .shape_key = ShapePlanKey.fromText(text, shape_options),
@@ -237,7 +248,18 @@ pub const TextShaper = struct {
         // Paragraph layout is deliberately staged: shape first, then line-wrap
         // the finished glyph advances. That keeps OpenType substitution and
         // positioning independent from wrapping policy.
-        _ = try shapeUtf8CascadeFullyCachedWithOptions(cascade, fallback_cache, metrics_cache, glyph_index_cache, buffer, text, font_size, paragraph_options.shapeOptions(options));
+        try shapeParagraphContent(
+            cascade,
+            fallback_cache,
+            metrics_cache,
+            glyph_index_cache,
+            null,
+            buffer,
+            text,
+            font_size,
+            paragraph_options.shapeOptions(options),
+            options.inline_objects,
+        );
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
         try buildParagraphLines(
             buffer,
@@ -251,12 +273,24 @@ pub const TextShaper = struct {
         if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
             try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
         }
+        try inline_object.position(buffer, options.inline_objects);
         return buffer.paragraphLayout();
     }
 
     pub fn layoutParagraphUtf8WithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
         try paragraph_options.validate(options);
-        _ = try shapeUtf8CascadeWithCaches(cascade, fallback_cache, metrics_cache, glyph_index_cache, shaped_cache, buffer, text, font_size, paragraph_options.shapeOptions(options));
+        try shapeParagraphContent(
+            cascade,
+            fallback_cache,
+            metrics_cache,
+            glyph_index_cache,
+            shaped_cache,
+            buffer,
+            text,
+            font_size,
+            paragraph_options.shapeOptions(options),
+            options.inline_objects,
+        );
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
         try buildParagraphLines(
             buffer,
@@ -270,6 +304,7 @@ pub const TextShaper = struct {
         if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
             try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
         }
+        try inline_object.position(buffer, options.inline_objects);
         return buffer.paragraphLayout();
     }
 
@@ -462,6 +497,91 @@ fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []
         .cluster_base = cluster_base,
         .pen = pen,
     });
+}
+
+fn shapeParagraphContent(
+    cascade: FontCascade,
+    fallback_cache: ?*FontFallbackCache,
+    metrics_cache: ?*GlyphMetricsCache,
+    glyph_index_cache: ?*GlyphIndexCache,
+    shaped_cache: ?*ShapedRunCache,
+    buffer: *LayoutBuffer,
+    text: []const u8,
+    font_size: f32,
+    options: ShapeOptions,
+    objects: []const inline_object.Object,
+) !void {
+    try plan_validation.input(text, font_size, options);
+    if (cascade.fonts.len == 0) return error.EmptyFontCascade;
+    try inline_object.validate(text, objects);
+    if (objects.len == 0) {
+        _ = try TextShaper.shapeUtf8CascadeWithCaches(
+            cascade,
+            fallback_cache,
+            metrics_cache,
+            glyph_index_cache,
+            shaped_cache,
+            buffer,
+            text,
+            font_size,
+            options,
+        );
+        return;
+    }
+
+    buffer.clear();
+    var source_start: usize = 0;
+    var pen = PenPosition{};
+    for (objects) |object| {
+        if (source_start < object.byte_index) {
+            const segment = text[source_start..object.byte_index];
+            var context = DynamicFallbackContext{
+                .buffer = buffer,
+                .metrics_cache = metrics_cache,
+                .glyph_index_cache = glyph_index_cache,
+                .font_size = font_size,
+                .options = options,
+            };
+            pen = try fallback_segment.shape(&context, .{
+                .cascade = cascade,
+                .fallback_cache = fallback_cache,
+                .glyph_index_cache = glyph_index_cache,
+                .text = segment,
+                .cluster_base = source_start,
+                .pen = pen,
+            });
+        }
+        const object_advance = if (object.kind == .in_flow) object.width else 0;
+        try buffer.glyphs.append(buffer.allocator, .{
+            .glyph_id = 0,
+            .codepoint = inline_object.object_replacement_character,
+            .cluster = object.byte_index,
+            .source_byte_len = inline_object.object_replacement_utf8.len,
+            .x_advance = object_advance,
+            .flags = .{ .inline_object = true },
+        });
+        pen.x += object_advance;
+        source_start =
+            object.byte_index + inline_object.object_replacement_utf8.len;
+    }
+    if (source_start < text.len) {
+        const segment = text[source_start..];
+        var context = DynamicFallbackContext{
+            .buffer = buffer,
+            .metrics_cache = metrics_cache,
+            .glyph_index_cache = glyph_index_cache,
+            .font_size = font_size,
+            .options = options,
+        };
+        _ = try fallback_segment.shape(&context, .{
+            .cascade = cascade,
+            .fallback_cache = fallback_cache,
+            .glyph_index_cache = glyph_index_cache,
+            .text = segment,
+            .cluster_base = source_start,
+            .pen = pen,
+        });
+    }
 }
 
 fn applyBidiVisualOrder(

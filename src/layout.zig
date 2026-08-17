@@ -29,12 +29,12 @@ const bidi_reorder = @import("layout/bidi/reorder/root.zig");
 const glyph_position = @import("layout/glyph_position.zig");
 const paragraph_options = @import("layout/paragraph/options.zig");
 const retained_paragraph = @import("layout/paragraph/retained.zig");
+const styled_paragraph_layout = @import("layout/paragraph/styled.zig");
 const paragraph_types = @import("layout/types/paragraph.zig");
 const run_types = @import("layout/types/runs.zig");
 const line_break_analysis = @import("layout/line_break/analysis.zig");
 const paragraph_reflow = @import("layout/line_break/reflow/root.zig");
 const shaped_boundary = @import("layout/line_break/shaped_boundary.zig");
-const styled_bidi = @import("layout/styled_bidi.zig");
 const styled_buffer = @import("layout/styled_buffer.zig");
 const styled_paragraph = @import("layout/styled_paragraph.zig");
 const segmentation = @import("text/segmentation/root.zig");
@@ -412,24 +412,15 @@ pub const TextShaper = struct {
         spans: []const StyledParagraphSpan,
         options: ParagraphOptions,
     ) !ParagraphLayout {
-        try paragraph_options.validate(options);
-        try plan_validation.utf8(text);
-        try plan_validation.fontSize(default_font_size);
-        if (cascade.fonts.len == 0) return error.EmptyFontCascade;
-
-        buffer.clear();
-        styled.clear();
-        var driver = StyledParagraphDriver{
+        return try styled_paragraph_layout.layout(.{
             .cascade = cascade,
             .buffer = buffer,
             .styled = styled,
             .text = text,
             .default_font_size = default_font_size,
+            .spans = spans,
             .options = options,
-        };
-        try styled_paragraph.layout(&driver, text, spans);
-
-        return buffer.paragraphLayout();
+        });
     }
 
     pub fn measureParagraphUtf8(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !TextMetrics {
@@ -462,191 +453,6 @@ fn textMetricsFromParagraph(paragraph: ParagraphLayout) TextMetrics {
         .descent = first.descent,
         .leading = first.leading,
     };
-}
-
-const StyledParagraphDriver = struct {
-    cascade: FontCascade,
-    buffer: *LayoutBuffer,
-    styled: *StyledParagraphBuffer,
-    text: []const u8,
-    default_font_size: f32,
-    options: ParagraphOptions,
-    pen: PenPosition = .{},
-
-    pub fn allocator(self: *@This()) std.mem.Allocator {
-        return self.buffer.allocator;
-    }
-
-    pub fn validateSpan(_: *@This(), span: StyledParagraphSpan) !void {
-        try plan_validation.fontSize(span.font_size);
-        if (span.faces) |faces| {
-            if (faces.len == 0) return error.EmptyFontCascade;
-        }
-        try plan_validation.features(span.features);
-        try plan_validation.variationCoords(span.normalized_variation_coords);
-        if (!std.math.isFinite(span.letter_spacing) or
-            !std.math.isFinite(span.word_spacing))
-        {
-            return error.InvalidStyleSpans;
-        }
-        if (span.minimum_line_height) |height| {
-            if (!std.math.isFinite(height) or height <= 0) {
-                return error.InvalidStyleSpans;
-            }
-        }
-    }
-
-    fn normalizeNewRunFontIndices(
-        self: *@This(),
-        run_start: usize,
-    ) void {
-        // `shapeCascadeSegmentInto` records indexes relative to the style-local
-        // cascade. Public paragraph runs use the driver's union cascade so
-        // diagnostics and render integrations see one stable index space.
-        for (self.buffer.runs.items[run_start..]) |*run| {
-            for (self.cascade.fonts, 0..) |font, font_index| {
-                if (font != run_types.fontForBackend(run.*)) continue;
-                run.font_index = font_index;
-                break;
-            }
-        }
-    }
-
-    pub fn shapeItem(
-        self: *@This(),
-        byte_start: usize,
-        byte_end: usize,
-        inferred_script: unicode.Script,
-        span: StyledParagraphSpan,
-    ) !void {
-        const item_text = self.text[byte_start..byte_end];
-        const item_cascade = FontCascade.init(
-            if (span.faces) |faces|
-                face_mod.backend.fonts(faces)
-            else
-                self.cascade.fonts,
-        );
-        const run_start = self.buffer.runs.items.len;
-        self.pen = try shapeCascadeSegmentInto(
-            item_cascade,
-            self.buffer,
-            item_text,
-            span.font_size,
-            byte_start,
-            self.pen,
-            .{
-                .lookup = .{
-                    .script = inferred_script,
-                    .script_tag = span.script_tag orelse
-                        unicode.openTypeScriptTag(inferred_script),
-                    .script_tag_explicit = span.script_tag != null,
-                    .language_tag = span.language_tag orelse
-                        unicode.inferOpenTypeLanguageTag(item_text),
-                    .direction = self.options.direction,
-                    .reorder_bidi = false,
-                    .native_direction_shaping = true,
-                    .features = span.features,
-                    .normalized_variation_coords = span.normalized_variation_coords,
-                    .context_before = self.text[0..byte_start],
-                    .context_after = self.text[byte_end..],
-                    .beginning_of_text = byte_start == 0,
-                    .end_of_text = byte_end == self.text.len,
-                },
-                .all_ascii = fallback_segment.isAscii(item_text),
-            },
-        );
-        if (span.faces != null) {
-            self.normalizeNewRunFontIndices(run_start);
-        }
-    }
-
-    pub fn finish(self: *@This(), spans: []const StyledParagraphSpan) !void {
-        try normalizeParagraphGlyphsToLogicalOrder(self.buffer);
-        try rebuildStyledGlyphMetadata(self.buffer, self.styled, spans);
-        try styled_buffer.applySpacing(
-            self.styled.metadata.items,
-            self.buffer.glyphs.items,
-        );
-        const shaped_glyph_count = self.buffer.glyphs.items.len;
-        var line_options = self.options;
-        // The established line engine remains style-agnostic. Defer synthetic
-        // dots until its prefix truncation is complete so the sidecar can
-        // capture the terminal visible style before the fit loop removes it.
-        line_options.ellipsis = false;
-        try buildParagraphLines(
-            self.buffer,
-            self.text,
-            line_options,
-            defaultBaselineMetrics(
-                self.cascade.fonts[0],
-                self.default_font_size,
-            ),
-            null,
-            null,
-            self.options.word_break_dictionary,
-        );
-        const content_omitted = self.buffer.glyphs.items.len < shaped_glyph_count or
-            (self.buffer.lines.items.len != 0 and
-                self.buffer.lines.items[self.buffer.lines.items.len - 1].byteEnd() <
-                    self.text.len);
-        try styled_buffer.synchronizeAfterTruncation(
-            &self.styled.metadata,
-            self.buffer.glyphs.items.len,
-        );
-        if (self.options.ellipsis and content_omitted and
-            self.buffer.glyphs.items.len != 0)
-        {
-            try styled_buffer.appendEllipsis(
-                &self.styled.metadata,
-                self.styled.allocator,
-                self.buffer,
-                if (self.options.max_width > 0)
-                    self.options.max_width
-                else
-                    std.math.inf(f32),
-                resolvedAlignment(self.options),
-                alignedLineX,
-            );
-        }
-        styled_buffer.applyMinimumLineHeights(
-            self.styled.metadata.items,
-            self.buffer.glyphs.items.len,
-            self.buffer.lines.items,
-        );
-        if (plan_bidi.paragraphNeedsReorder(self.text, self.options.direction)) {
-            const visual_order = try styled_bidi.visualPermutation(
-                self.buffer.allocator,
-                self.text,
-                self.options.direction == .rtl,
-                self.buffer.lines.items,
-                self.buffer.glyphs.items,
-            );
-            defer self.buffer.allocator.free(visual_order);
-            try applyParagraphLineBidiVisualOrder(
-                self.buffer,
-                self.text,
-                self.options.direction,
-            );
-            try styled_buffer.reorderByPermutation(
-                &self.styled.metadata,
-                self.styled.allocator,
-                visual_order,
-            );
-        }
-    }
-};
-
-fn rebuildStyledGlyphMetadata(
-    buffer: *LayoutBuffer,
-    styled: *StyledParagraphBuffer,
-    spans: []const StyledParagraphSpan,
-) !void {
-    return try styled_buffer.rebuild(
-        &styled.metadata,
-        styled.allocator,
-        buffer.glyphs.items,
-        spans,
-    );
 }
 
 fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !void {

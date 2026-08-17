@@ -162,13 +162,54 @@ pub fn apply(
     }
 }
 
-fn collectBoundaries(
+pub fn collectBoundaries(
     boundaries: *std.ArrayList(Boundary),
     allocator: std.mem.Allocator,
     glyphs: []const GlyphPosition,
     runs: []const run_types.CascadeRun,
     line: paragraph_types.ParagraphLine,
     recipe: anytype,
+) !void {
+    return collectBoundariesForKind(
+        boundaries,
+        allocator,
+        glyphs,
+        runs,
+        line,
+        recipe,
+        .kashida,
+    );
+}
+
+pub fn collectJstfExtenderBoundaries(
+    boundaries: *std.ArrayList(Boundary),
+    allocator: std.mem.Allocator,
+    glyphs: []const GlyphPosition,
+    runs: []const run_types.CascadeRun,
+    line: paragraph_types.ParagraphLine,
+    recipe: anytype,
+) !void {
+    return collectBoundariesForKind(
+        boundaries,
+        allocator,
+        glyphs,
+        runs,
+        line,
+        recipe,
+        .jstf_extender,
+    );
+}
+
+const BoundaryKind = enum { kashida, jstf_extender };
+
+fn collectBoundariesForKind(
+    boundaries: *std.ArrayList(Boundary),
+    allocator: std.mem.Allocator,
+    glyphs: []const GlyphPosition,
+    runs: []const run_types.CascadeRun,
+    line: paragraph_types.ParagraphLine,
+    recipe: anytype,
+    comptime kind: BoundaryKind,
 ) !void {
     boundaries.clearRetainingCapacity();
     const line_end = line.glyph_start + line.glyph_len;
@@ -180,7 +221,11 @@ fn collectBoundaries(
         if (glyph.cluster <= line.byte_start or glyph.cluster >= line.byteEnd()) {
             continue;
         }
-        if (!recipe.acceptKashidaBoundary(glyph.cluster)) continue;
+        const accepted = switch (kind) {
+            .kashida => recipe.acceptKashidaBoundary(glyph.cluster),
+            .jstf_extender => recipe.acceptJstfExtenderBoundary(glyph.cluster),
+        };
+        if (!accepted) continue;
         const font = fontForGlyphIndex(runs, glyph_index) orelse continue;
         for (boundaries.items) |boundary| {
             if (boundary.byte_offset == glyph.cluster) break;
@@ -213,7 +258,7 @@ fn fontForGlyphIndex(
     return null;
 }
 
-fn buildTemporaryLine(
+pub fn buildTemporaryLine(
     output: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     line_text: []const u8,
@@ -244,7 +289,7 @@ fn buildTemporaryLine(
     output.appendSliceAssumeCapacity(line_text[source_cursor..]);
 }
 
-fn normalizeTemporaryClusters(
+pub fn normalizeTemporaryClusters(
     glyphs: []GlyphPosition,
     line_byte_start: usize,
     original_byte_len: usize,
@@ -323,7 +368,7 @@ pub fn insertionCountAtBoundary(
         @intFromBool(boundary_index < insertion_count % boundary_count);
 }
 
-fn lineContainsSynthetic(
+pub fn lineContainsSynthetic(
     glyphs: []const GlyphPosition,
     line: paragraph_types.ParagraphLine,
 ) bool {
@@ -346,12 +391,12 @@ fn lineContainsSynthetic(
     return false;
 }
 
-const SourceRange = struct {
+pub const SourceRange = struct {
     start: usize,
     end: usize,
 };
 
-fn visibleSourceRange(
+pub fn visibleSourceRange(
     glyphs: []const GlyphPosition,
     line: paragraph_types.ParagraphLine,
 ) ?SourceRange {

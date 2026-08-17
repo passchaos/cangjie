@@ -26,6 +26,8 @@ const font_expansion =
     @import("../layout/justification/font_expansion.zig");
 const jstf_justification =
     @import("../layout/justification/jstf.zig");
+const jstf_extender =
+    @import("../layout/justification/jstf/extender.zig");
 const kashida_justification =
     @import("../layout/justification/kashida.zig");
 const paragraph_options = @import("../layout/paragraph/options.zig");
@@ -738,6 +740,12 @@ fn reshapeUniformParagraph(
     };
     try jstf_justification.apply(
         buffer,
+        options,
+        recipe,
+    );
+    try jstf_extender.apply(
+        buffer,
+        text,
         options,
         recipe,
     );

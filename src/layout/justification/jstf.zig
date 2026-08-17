@@ -15,7 +15,12 @@ pub fn apply(
     options: anytype,
     recipe: anytype,
 ) !void {
-    if (options.alignment != .justify or buffer.lines.items.len == 0) return;
+    if (options.alignment != .justify or
+        !options.jstf.enabled or
+        buffer.lines.items.len == 0)
+    {
+        return;
+    }
 
     var work = @TypeOf(buffer.*).init(buffer.allocator);
     defer work.deinit();

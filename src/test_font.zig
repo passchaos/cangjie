@@ -196,6 +196,81 @@ pub fn buildJstfCardinalityShrinkageTtf(
     return buildSfnt(allocator, 0x00010000, tables);
 }
 
+/// Add a synthetic JSTF ExtenderGlyph table to any validated font fixture.
+///
+/// This preserves the base font's Arabic shaping and Tatweel cmap while
+/// allowing focused runtime tests to name either the real U+0640 glyph or a
+/// deliberately unrelated glyph as the authored extender set.
+pub fn addJstfExtenderTable(
+    allocator: std.mem.Allocator,
+    sfnt_bytes: []const u8,
+    script_tag: *const [4]u8,
+    extender_glyph: u16,
+) ![]u8 {
+    if (sfnt_bytes.len < 12) return error.BadSfnt;
+    const table_count = std.mem.readInt(u16, sfnt_bytes[4..6], .big);
+    if (12 + @as(usize, table_count) * 16 > sfnt_bytes.len) {
+        return error.BadSfnt;
+    }
+    const tables = try allocator.alloc(Table, @as(usize, table_count) + 1);
+    var initialized: usize = 0;
+    errdefer {
+        for (tables[0..initialized]) |table| allocator.free(table.data);
+        allocator.free(tables);
+    }
+    for (0..table_count) |index| {
+        const record = 12 + index * 16;
+        const offset: usize = @intCast(std.mem.readInt(
+            u32,
+            sfnt_bytes[record + 8 ..][0..4],
+            .big,
+        ));
+        const length: usize = @intCast(std.mem.readInt(
+            u32,
+            sfnt_bytes[record + 12 ..][0..4],
+            .big,
+        ));
+        if (offset > sfnt_bytes.len or length > sfnt_bytes.len - offset) {
+            return error.BadSfnt;
+        }
+        if (std.mem.eql(u8, sfnt_bytes[record .. record + 4], "JSTF")) {
+            return error.BadSfnt;
+        }
+        tables[index] = .{
+            // buildSfnt consumes this synchronously while the caller's base
+            // font bytes remain alive; only payload bytes require ownership.
+            .tag = sfnt_bytes[record .. record + 4],
+            .data = try allocator.dupe(
+                u8,
+                sfnt_bytes[offset .. offset + length],
+            ),
+        };
+        // Per-table head checksums are defined with checkSumAdjustment zeroed.
+        // buildSfnt is constructing a new directory and does not preserve the
+        // original font-wide adjustment.
+        if (std.mem.eql(u8, tables[index].tag, "head") and
+            tables[index].data.len >= 12)
+        {
+            writeU32(tables[index].data, 8, 0);
+        }
+        initialized += 1;
+    }
+    tables[table_count] = .{
+        .tag = "JSTF",
+        .data = try jstfExtenderOnlyTable(
+            allocator,
+            script_tag,
+            extender_glyph,
+        ),
+    };
+    initialized += 1;
+    const scaler = std.mem.readInt(u32, sfnt_bytes[0..4], .big);
+    // Ownership transfers to buildSfnt, whose own error path releases every
+    // initialized payload and the table array.
+    initialized = 0;
+    return buildSfnt(allocator, scaler, tables);
+}
+
 pub fn buildMvarTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try mvarTtfTables(allocator));
 }
@@ -4464,6 +4539,25 @@ fn jstfCardinalityHmtxTable(allocator: std.mem.Allocator) ![]u8 {
         writeU16(bytes, glyph_index * 4, advance);
         writeI16(bytes, glyph_index * 4 + 2, 0);
     }
+    return bytes;
+}
+
+fn jstfExtenderOnlyTable(
+    allocator: std.mem.Allocator,
+    script_tag: *const [4]u8,
+    extender_glyph: u16,
+) ![]u8 {
+    const bytes = try allocator.alloc(u8, 24);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 1);
+    @memcpy(bytes[6..10], script_tag);
+    writeU16(bytes, 10, 12);
+    const script = 12;
+    writeU16(bytes, script, 6);
+    const extenders = 18;
+    writeU16(bytes, extenders, 1);
+    writeU16(bytes, extenders + 2, extender_glyph);
     return bytes;
 }
 

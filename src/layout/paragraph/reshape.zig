@@ -41,7 +41,8 @@ pub const Uniform = struct {
         _: usize,
         _: usize,
     ) bool {
-        return self.options.alignment == .justify;
+        return self.options.alignment == .justify and
+            self.options.jstf.enabled;
     }
 
     pub fn jstfTags(
@@ -62,6 +63,13 @@ pub const Uniform = struct {
             .language = self.options.language_tag orelse
                 unicode_mod.inferOpenTypeLanguageTag(line_text),
         };
+    }
+
+    pub fn acceptJstfExtenderBoundary(
+        _: Uniform,
+        _: usize,
+    ) bool {
+        return true;
     }
 
     pub fn saveCandidate(_: Uniform) !void {}

@@ -213,6 +213,156 @@ test "Linux Noto Naskh Arabic justification inserts shaped Kashida" {
     try expectShapedKashidaLayout(retained_layout, text);
 }
 
+test "synthetic JSTF ExtenderGlyph drives source-shaped Tatweel insertion" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const base_bytes = std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        linux_noto_naskh_arabic_path,
+        allocator,
+        .limited(16 * 1024 * 1024),
+    ) catch |err| switch (err) {
+        error.FileNotFound, error.AccessDenied => return error.SkipZigTest,
+        else => return err,
+    };
+    defer allocator.free(base_bytes);
+    var base = try cangjie.font.Face.parse(allocator, base_bytes);
+    defer base.deinit();
+    const tatweel_glyph = try base.glyphs().index(0x0640);
+    const font_bytes = try cangjie.testing.test_font.addJstfExtenderTable(
+        allocator,
+        base_bytes,
+        "arab",
+        tatweel_glyph,
+    );
+    defer allocator.free(font_bytes);
+    var font = try cangjie.font.Face.parse(allocator, font_bytes);
+    defer font.deinit();
+
+    var engine = cangjie.shaping.Engine.init(allocator, .{});
+    defer engine.deinit();
+    const text = "بب بب بب";
+    const layout = try engine.layout(
+        cangjie.font.Cascade.init(&.{&font}),
+        .{
+            .text = text,
+            .font_size = 32,
+            .options = .{
+                .max_width = 95,
+                .direction = .rtl,
+                .alignment = .justify,
+                // Prove that the JSTF-specific stage, not the generic fallback,
+                // owns the source insertion.
+                .kashida = .{ .enabled = false },
+            },
+        },
+    );
+    try expectShapedKashidaLayout(layout, text);
+
+    var retained = try engine.prepareParagraph(
+        cangjie.font.Cascade.init(&.{&font}),
+        .{
+            .text = text,
+            .font_size = 32,
+            .options = .{
+                .max_width = 95,
+                .direction = .rtl,
+                .alignment = .justify,
+                .kashida = .{ .enabled = false },
+            },
+        },
+    );
+    defer retained.deinit();
+    var reflow = cangjie.paragraph.ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const retained_layout = try retained.layout(
+        &reflow,
+        .{
+            .max_width = 95,
+            .direction = .rtl,
+            .alignment = .justify,
+            .kashida = .{ .enabled = false },
+        },
+    );
+    try expectShapedKashidaLayout(retained_layout, text);
+
+    const spans = [_]cangjie.paragraph.StyledSpan{.{
+        .byte_start = 0,
+        .byte_len = text.len,
+        .style_index = 23,
+        .font_size = 32,
+    }};
+    const styled = try engine.layoutStyled(
+        cangjie.font.Cascade.init(&.{&font}),
+        .{
+            .text = text,
+            .default_font_size = 32,
+            .spans = &spans,
+            .options = .{
+                .max_width = 95,
+                .direction = .rtl,
+                .alignment = .justify,
+                .kashida = .{ .enabled = false },
+            },
+        },
+    );
+    try expectShapedKashidaLayout(styled.layout, text);
+    try std.testing.expectEqual(
+        styled.layout.glyphs.len,
+        styled.glyph_metadata.len,
+    );
+    for (styled.glyph_metadata) |metadata| {
+        try std.testing.expectEqual(@as(u32, 23), metadata.style_index);
+    }
+
+    const disabled = try engine.layout(
+        cangjie.font.Cascade.init(&.{&font}),
+        .{
+            .text = text,
+            .font_size = 32,
+            .options = .{
+                .max_width = 95,
+                .direction = .rtl,
+                .alignment = .justify,
+                .jstf = .{ .enabled = false },
+                .kashida = .{ .enabled = false },
+            },
+        },
+    );
+    for (disabled.glyphs) |glyph| {
+        try std.testing.expect(!glyph.isKashida());
+    }
+
+    // A non-Tatweel extender set cannot be satisfied by the current source
+    // safety proof and must not trigger a fabricated glyph insertion.
+    const rejected_bytes = try cangjie.testing.test_font.addJstfExtenderTable(
+        allocator,
+        base_bytes,
+        "arab",
+        try base.glyphs().index(0x0628),
+    );
+    defer allocator.free(rejected_bytes);
+    var rejected = try cangjie.font.Face.parse(allocator, rejected_bytes);
+    defer rejected.deinit();
+    const rejected_layout = try engine.layout(
+        cangjie.font.Cascade.init(&.{&rejected}),
+        .{
+            .text = text,
+            .font_size = 32,
+            .options = .{
+                .max_width = 95,
+                .direction = .rtl,
+                .alignment = .justify,
+                .kashida = .{ .enabled = false },
+            },
+        },
+    );
+    for (rejected_layout.glyphs) |glyph| {
+        try std.testing.expect(!glyph.isKashida());
+    }
+}
+
 test "Linux Noto Naskh styled paragraph keeps Kashida metadata aligned" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
 

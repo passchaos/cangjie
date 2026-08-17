@@ -63,7 +63,8 @@ pub const Recipe = struct {
         start: usize,
         end: usize,
     ) bool {
-        if (self.options.alignment != .justify) return false;
+        if (self.options.alignment != .justify or
+            !self.options.jstf.enabled) return false;
         const span = styled_paragraph.spanForCluster(
             self.spans,
             start,
@@ -96,6 +97,13 @@ pub const Recipe = struct {
             .language = span.language_tag orelse
                 unicode.inferOpenTypeLanguageTag(line_text),
         };
+    }
+
+    pub fn acceptJstfExtenderBoundary(
+        self: Recipe,
+        boundary: usize,
+    ) bool {
+        return self.acceptKashidaBoundary(boundary);
     }
 
     pub fn shapeLine(

@@ -553,6 +553,16 @@ otherwise the ordinary soft/emergency break remains authoritative. Retained
 reflow, Engine-backed one-shot cache reuse, styled glyph metadata, and later
 line/run indexes all follow the same replacement contract.
 
+JSTF `ExtenderGlyph` sets are also consumed without synthesizing positioned
+glyphs. The table supplies glyph ids but no Unicode scalar or insertion
+location, so Cangjie uses only the source boundary proof currently defined for
+U+0640: the font's nominal Tatweel mapping must belong to the selected script's
+extender set, a retained SAFE_TO_INSERT_TATWEEL boundary must exist, and the
+complete reshaped candidate must emit a zero-source-byte extender glyph. Fonts
+whose extender set cannot be reached through that source contract are skipped
+conservatively. A dedicated paragraph JSTF policy controls priority processing
+and bounds extender attempts independently from generic Kashida fallback.
+
 Paragraph alignment distinguishes logical and physical edges:
 `TextAlign.start`/`end` resolve through the paragraph direction, while
 `left`/`right` always name physical edges. `start` is the default, preserving
@@ -942,9 +952,9 @@ Future changes must preserve these rules:
 3. Keep public and test consumers on owning domain modules; do not recreate a
    broad aggregate layout façade as new shaping or paragraph capabilities are
    added.
-4. Complete OpenType `JSTF` extender-glyph runtime; shrinkage and extension
-   priorities already apply GSUB/GPOS enable-disable sets and JstfMax lookups
-   independently from the fvar `jstf`/`wdth` convention.
+4. Extend the current U+0640-safe OpenType `JSTF` ExtenderGlyph source contract
+   only when another Unicode extender has an equally explicit insertion-safety
+   proof; never insert a raw glyph id into positioned output.
 5. Add fuzz and CI matrices for stage boundaries, cache reuse, malformed font
    data, mixed-script fallback, vertical text, and retained reflow, alongside
    the existing Unicode and HarfBuzz parity gates.

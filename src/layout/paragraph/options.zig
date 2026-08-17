@@ -88,6 +88,16 @@ pub const FontExpansion = struct {
     enabled: bool = true,
 };
 
+/// OpenType JSTF line-level justification policy.
+pub const Jstf = struct {
+    /// Apply shrinkage/extension priority lists and ExtenderGlyph suggestions.
+    enabled: bool = true,
+    /// Bound source-level U+0640 attempts made for an authored ExtenderGlyph
+    /// set. Zero disables only extender insertion; priority modifications and
+    /// JstfMax remain active.
+    max_extender_insertions_per_line: usize = 8,
+};
+
 pub const Options = struct {
     max_width: f32,
     wrap_mode: paragraph_types.WrapMode = .word,
@@ -120,6 +130,8 @@ pub const Options = struct {
     kashida: Kashida = .{},
     /// Optional variable-font width adaptation before discrete expansion.
     font_expansion: FontExpansion = .{},
+    /// OpenType JSTF table policy, independent from generic Kashida fallback.
+    jstf: Jstf = .{},
     /// Shaping controls resolved before line breaking.
     script_tag: ?unicode.OpenTypeScriptTag = null,
     language_tag: ?unicode.OpenTypeLanguageTag = null,
@@ -245,6 +257,23 @@ test "zero Kashida insertion limit is an explicit disable" {
     try validate(options);
     try std.testing.expectEqual(
         @as(usize, 0),
+        options.kashida.max_insertions_per_line,
+    );
+}
+
+test "JSTF extender limit is independent from generic Kashida" {
+    const options = Options{
+        .max_width = 100,
+        .jstf = .{ .max_extender_insertions_per_line = 0 },
+        .kashida = .{ .max_insertions_per_line = 7 },
+    };
+    try validate(options);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        options.jstf.max_extender_insertions_per_line,
+    );
+    try std.testing.expectEqual(
+        @as(usize, 7),
         options.kashida.max_insertions_per_line,
     );
 }

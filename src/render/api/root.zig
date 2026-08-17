@@ -99,6 +99,53 @@ pub const Rasterizer = struct {
         return self.implementation.renderRun(target, run, x, baseline_y);
     }
 
+    /// Rasterize one glyph from an already parsed face.
+    ///
+    /// This is the positioned-glyph counterpart to `drawRun`: the renderer
+    /// trusts the validation proof owned by `Face.parse` and therefore avoids
+    /// revalidating the complete font for each glyph. The face and target remain
+    /// caller-owned and need only outlive this call.
+    pub fn drawGlyph(
+        self: *Rasterizer,
+        target: *raster.RenderTarget,
+        face: *const face_mod.Face,
+        glyph_id: glyph_mod.GlyphId,
+        font_size: f32,
+        x: f32,
+        baseline_y: f32,
+    ) !void {
+        return self.implementation.renderFaceGlyph(
+            target,
+            face_mod.backend.font(face),
+            glyph_id,
+            font_size,
+            x,
+            baseline_y,
+        );
+    }
+
+    /// Variation-coordinate form of `drawGlyph`.
+    pub fn drawGlyphAt(
+        self: *Rasterizer,
+        target: *raster.RenderTarget,
+        face: *const face_mod.Face,
+        glyph_id: glyph_mod.GlyphId,
+        font_size: f32,
+        x: f32,
+        baseline_y: f32,
+        normalized_coords: []const f32,
+    ) !void {
+        return self.implementation.renderFaceGlyphAtCoords(
+            target,
+            face_mod.backend.font(face),
+            glyph_id,
+            font_size,
+            x,
+            baseline_y,
+            normalized_coords,
+        );
+    }
+
     pub fn drawRunAt(
         self: *Rasterizer,
         target: *raster.RenderTarget,

@@ -85,8 +85,11 @@ test "public facade uses domain names without legacy aliases" {
     const Rasterizer = cangjie.render.Rasterizer;
     try std.testing.expect(@typeInfo(Rasterizer) == .@"struct");
     try std.testing.expect(@typeInfo(cangjie.render.Prepared) == .@"struct");
+    try std.testing.expect(@hasDecl(Rasterizer, "drawGlyph"));
+    try std.testing.expect(@hasDecl(Rasterizer, "drawGlyphAt"));
     try std.testing.expect(@hasDecl(Rasterizer, "drawRun"));
     try std.testing.expect(@hasDecl(Rasterizer, "drawColorGlyph"));
+    try std.testing.expect(!@hasDecl(Rasterizer, "renderFaceGlyph"));
     try std.testing.expect(!@hasDecl(Rasterizer, "renderRun"));
     try std.testing.expect(!@hasDecl(Rasterizer, "renderColorGlyph"));
 
@@ -140,6 +143,44 @@ test "concrete face views cover the normal application workflow" {
     const run = try engine.shape(&face, .{ .text = "A", .font_size = 20 });
     try std.testing.expectEqual(@as(usize, 1), run.glyphs.len);
     try std.testing.expectEqual(&face, run.font);
+}
+
+test "public rasterizer draws a positioned glyph from a parsed face" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    const glyph_id = try face.glyphs().index('A');
+    var target = try cangjie.render.GrayTarget.init(allocator, 24, 24);
+    defer target.deinit();
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
+    defer rasterizer.deinit();
+
+    try rasterizer.drawGlyph(
+        &target,
+        &face,
+        glyph_id,
+        16,
+        2,
+        20,
+    );
+    try std.testing.expect(std.mem.indexOfNone(u8, target.pixels, &.{0}) != null);
+
+    const direct = try allocator.dupe(u8, target.pixels);
+    defer allocator.free(direct);
+    target.clear(0);
+    try rasterizer.drawGlyphAt(
+        &target,
+        &face,
+        glyph_id,
+        16,
+        2,
+        20,
+        &.{},
+    );
+    try std.testing.expectEqualSlices(u8, direct, target.pixels);
 }
 
 test "core font inspection is reachable through the public metadata domain" {

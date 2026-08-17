@@ -873,17 +873,69 @@ pub const Rasterizer = struct {
         return try self.renderRunAtCoords(target, run, x, baseline_y, &.{});
     }
 
+    pub fn renderFaceGlyph(
+        self: *Rasterizer,
+        target: *RenderTarget,
+        font: *const font_mod.Font,
+        glyph_id: glyph_mod.GlyphId,
+        font_size: f32,
+        x: f32,
+        baseline_y: f32,
+    ) !void {
+        return try self.renderFaceGlyphAtCoords(
+            target,
+            font,
+            glyph_id,
+            font_size,
+            x,
+            baseline_y,
+            &.{},
+        );
+    }
+
+    pub fn renderFaceGlyphAtCoords(
+        self: *Rasterizer,
+        target: *RenderTarget,
+        font: *const font_mod.Font,
+        glyph_id: glyph_mod.GlyphId,
+        font_size: f32,
+        x: f32,
+        baseline_y: f32,
+        normalized_variation_coords: []const f32,
+    ) !void {
+        // `Font.parse` established the whole-face validation proof. Keep
+        // trusted outline extraction inside the rendering implementation so
+        // public Face users cannot accidentally request the defensive,
+        // mutation-aware outline path once per glyph in a raster loop.
+        var outline = try self.glyphOutlineForRenderAtCoords(
+            font,
+            glyph_id,
+            normalized_variation_coords,
+        );
+        defer outline.deinit();
+        try self.renderGlyph(
+            target,
+            &outline,
+            x,
+            baseline_y,
+            font_size,
+            font.units_per_em,
+        );
+    }
+
     pub fn renderRunAtCoords(self: *Rasterizer, target: *RenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32, normalized_variation_coords: []const f32) !void {
         var pen_x = x;
         const font = face_mod.backend.font(run.font);
-        const use_default_outline = normalizedVariationCoordinatesAreDefault(normalized_variation_coords);
         for (run.glyphs) |position| {
-            var outline = if (use_default_outline)
-                try font_raster.glyphOutline(font, self.allocator, position.glyph_id)
-            else
-                try font_raster.glyphOutlineAtCoords(font, self.allocator, position.glyph_id, normalized_variation_coords);
-            defer outline.deinit();
-            try self.renderGlyph(target, &outline, pen_x + position.x_offset, baseline_y + position.y_offset, run.font_size, font.units_per_em);
+            try self.renderFaceGlyphAtCoords(
+                target,
+                font,
+                position.glyph_id,
+                run.font_size,
+                pen_x + position.x_offset,
+                baseline_y + position.y_offset,
+                normalized_variation_coords,
+            );
             pen_x += position.x_advance;
         }
     }

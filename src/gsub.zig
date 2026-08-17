@@ -836,104 +836,6 @@ fn readU32(table: Table, relative: usize) GsubError!u32 {
     return table.readU32(relative);
 }
 
-test "GSUB direct context substitution preflights payload arrays atomically" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 110;
-
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 8, 10);
-    writeU16Test(&bytes, 10, 2);
-    writeU16Test(&bytes, 12, 6);
-    writeU16Test(&bytes, 14, 60);
-
-    writeU16Test(&bytes, 16, 5);
-    writeU16Test(&bytes, 20, 2);
-    writeU16Test(&bytes, 22, 10);
-    writeU16Test(&bytes, 24, 34);
-
-    const first_context = 26;
-    writeU16Test(&bytes, first_context + 0, 3);
-    writeU16Test(&bytes, first_context + 2, 1);
-    writeU16Test(&bytes, first_context + 4, 1);
-    writeU16Test(&bytes, first_context + 6, 12);
-    writeU16Test(&bytes, first_context + 8, 0);
-    writeU16Test(&bytes, first_context + 10, 1);
-    writeCoverage1(&bytes, first_context + 12, 10);
-
-    const malformed_context = 50;
-    writeU16Test(&bytes, malformed_context + 0, 3);
-    writeU16Test(&bytes, malformed_context + 2, 1);
-    writeU16Test(&bytes, malformed_context + 4, 0);
-    writeU16Test(&bytes, malformed_context + 6, 10);
-    const truncated_coverage = malformed_context + 10;
-    writeU16Test(&bytes, truncated_coverage + 0, 1);
-    writeU16Test(&bytes, truncated_coverage + 2, 54);
-    writeU16Test(&bytes, truncated_coverage + 4, 30);
-    // The second ContextSubst subtable declares a Coverage array that reaches
-    // beyond table.length. Lookup preflight must reject the whole lookup before
-    // the first subtable applies its nested SingleSubst.
-
-    writeSingleDeltaLookup(&bytes, 70, 10, 5);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 10, 30 });
-
-    try std.testing.expectError(error.BadGsub, applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, allocator, .{}));
-    try std.testing.expectEqualSlices(GlyphId, &.{ 10, 30 }, glyphs.items);
-}
-
-test "GSUB direct chaining substitution preflights payload arrays atomically" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 112;
-
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 8, 10);
-    writeU16Test(&bytes, 10, 2);
-    writeU16Test(&bytes, 12, 6);
-    writeU16Test(&bytes, 14, 62);
-
-    writeU16Test(&bytes, 16, 6);
-    writeU16Test(&bytes, 20, 2);
-    writeU16Test(&bytes, 22, 10);
-    writeU16Test(&bytes, 24, 36);
-
-    const first_chain = 26;
-    writeU16Test(&bytes, first_chain + 0, 3);
-    writeU16Test(&bytes, first_chain + 2, 0);
-    writeU16Test(&bytes, first_chain + 4, 1);
-    writeU16Test(&bytes, first_chain + 6, 16);
-    writeU16Test(&bytes, first_chain + 8, 0);
-    writeU16Test(&bytes, first_chain + 10, 1);
-    writeU16Test(&bytes, first_chain + 12, 0);
-    writeU16Test(&bytes, first_chain + 14, 1);
-    writeCoverage1(&bytes, first_chain + 16, 10);
-
-    const malformed_chain = 52;
-    writeU16Test(&bytes, malformed_chain + 0, 3);
-    writeU16Test(&bytes, malformed_chain + 2, 0);
-    writeU16Test(&bytes, malformed_chain + 4, 1);
-    writeU16Test(&bytes, malformed_chain + 6, 16);
-    writeU16Test(&bytes, malformed_chain + 8, 0);
-    writeU16Test(&bytes, malformed_chain + 10, 0);
-    const truncated_coverage = malformed_chain + 16;
-    writeU16Test(&bytes, truncated_coverage + 0, 1);
-    writeU16Test(&bytes, truncated_coverage + 2, 54);
-    writeU16Test(&bytes, truncated_coverage + 4, 30);
-    // ChainingSubst format 3 has three independent offset arrays. A malformed
-    // later input coverage must be detected before an earlier subtable can run
-    // the nested lookup and leave the caller with partial substitutions.
-
-    writeSingleDeltaLookup(&bytes, 72, 10, 5);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 10, 30 });
-
-    try std.testing.expectError(error.BadGsub, applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, allocator, .{}));
-    try std.testing.expectEqualSlices(GlyphId, &.{ 10, 30 }, glyphs.items);
-}
-
 test "GSUB contextual record truncation is atomic" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 96;
@@ -2538,6 +2440,8 @@ const TopologyTestBindings = struct {
 test {
     _ = @import("gsub/tests/accelerator/root.zig");
     _ = @import("gsub/tests/execution/root.zig");
+    _ = @import("gsub/tests/execution/contextual/atomicity/root.zig")
+        .lookupSuite(ChainingExecutionIntegrationTestBindings);
     _ = @import("gsub/tests/execution/contextual/chaining/integration.zig")
         .suite(ChainingExecutionIntegrationTestBindings);
     _ = @import("gsub/tests/execution/contextual/context/integration.zig")

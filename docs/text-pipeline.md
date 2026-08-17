@@ -767,6 +767,13 @@ topology steps share x. `nextVisualCaret`/`previousVisualCaret` traverse this
 topology across soft wraps and GDEF-authored ligature boundaries without
 storing mutable cursor state.
 
+`nextLineCaret` and `previousLineCaret` extend the same topology vertically.
+They accept a caller-retained preferred x and choose the nearest stop on the
+adjacent line, naturally clamping to short or empty lines while resolving bidi
+dual positions from the physical approach side. Keeping preferred x outside
+the owner preserves repeatable vertical movement without introducing document
+or cursor state into Cangjie.
+
 GDEF's previously validation-only `AttachList` is also available through
 `Face.glyphs().attachmentPoints` and
 `cangjie.font.metadata.layout.inspect(face).attachmentPoints`. The

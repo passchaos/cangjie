@@ -574,6 +574,23 @@ test "text geometry keeps bidi spans logical and positions RTL graphemes visuall
     try std.testing.expect(
         geometry.previousVisualCaret(backward.position) == null,
     );
+
+    const middle = geometry.caret(.{
+        .byte_offset = 3,
+        .affinity = .downstream,
+    }).?;
+    // A synthetic second-line query is covered in the interaction suite; here
+    // assert that an absent adjacent line and non-finite preferred x are
+    // rejected without changing bidi affinity.
+    try std.testing.expect(
+        geometry.nextLineCaret(middle.position, middle.rect.x) == null,
+    );
+    try std.testing.expect(
+        geometry.previousLineCaret(
+            middle.position,
+            std.math.inf(f32),
+        ) == null,
+    );
 }
 
 test "text geometry honors an explicit RTL paragraph base direction" {

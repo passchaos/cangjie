@@ -67,6 +67,31 @@ test "text geometry affinity distinguishes both sides of a soft wrap" {
     try std.testing.expectEqual(upstream.position, previous_line.position);
     try std.testing.expectEqual(@as(usize, 0), previous_line.line_index);
 
+    const preferred_x = upstream.rect.x;
+    const vertical_next = geometry.nextLineCaret(
+        upstream.position,
+        preferred_x,
+    ).?;
+    try std.testing.expectEqual(@as(usize, 1), vertical_next.line_index);
+    try std.testing.expectApproxEqAbs(
+        preferred_x,
+        vertical_next.rect.x,
+        0.001,
+    );
+    const vertical_previous = geometry.previousLineCaret(
+        vertical_next.position,
+        preferred_x,
+    ).?;
+    try std.testing.expectEqual(@as(usize, 0), vertical_previous.line_index);
+    try std.testing.expectApproxEqAbs(
+        preferred_x,
+        vertical_previous.rect.x,
+        0.001,
+    );
+    try std.testing.expect(
+        geometry.previousLineCaret(upstream.position, preferred_x) == null,
+    );
+
     const across_lines = try geometry.selectionFragments(
         allocator,
         .{ .byte_start = 0, .byte_end = text.len },
@@ -142,6 +167,24 @@ test "text geometry retains trailing hard-break and empty paragraph carets" {
     try std.testing.expectEqual(text.len, final_hit.position.byte_offset);
     try std.testing.expect(
         trailing.nextVisualCaret(final_caret.position) == null,
+    );
+    const from_first_to_empty = trailing.nextLineCaret(
+        .{ .byte_offset = 0, .affinity = .downstream },
+        500,
+    ).?;
+    try std.testing.expectEqual(@as(usize, 1), from_first_to_empty.line_index);
+    try std.testing.expectEqual(text.len, from_first_to_empty.position.byte_offset);
+    try std.testing.expect(
+        trailing.nextLineCaret(from_first_to_empty.position, 500) == null,
+    );
+    const back_to_hard_break = trailing.previousLineCaret(
+        from_first_to_empty.position,
+        500,
+    ).?;
+    try std.testing.expectEqual(@as(usize, 0), back_to_hard_break.line_index);
+    try std.testing.expectEqual(
+        first_line_stops[first_line_stops.len - 1].from_right,
+        back_to_hard_break.position,
     );
 
     const empty_layout = try TextShaper.layoutParagraphUtf8(
@@ -251,5 +294,55 @@ test "text geometry rejects selection ranges hidden by truncation" {
             allocator,
             .{ .byte_start = 0, .byte_end = text.len },
         ),
+    );
+}
+
+test "vertical caret navigation clamps preferred x on unequal lines" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const text = "AAA\nA";
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const layout = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&fonts),
+        &layout_buffer,
+        text,
+        20,
+        .{ .max_width = 200 },
+    );
+    var geometry = try paragraph.buildGeometry(
+        allocator,
+        text,
+        layout,
+        .{},
+    );
+    defer geometry.deinit();
+
+    const first_line_end = geometry.caret(.{
+        .byte_offset = layout.lines[0].byteEnd(),
+        .affinity = .upstream,
+    }).?;
+    const clamped = geometry.nextLineCaret(
+        first_line_end.position,
+        first_line_end.rect.x,
+    ).?;
+    const second_stops = geometry.lines[1].visualCaretStops(
+        geometry.visual_caret_stops,
+    );
+    try std.testing.expectApproxEqAbs(
+        second_stops[second_stops.len - 1].x,
+        clamped.rect.x,
+        0.001,
+    );
+    try std.testing.expect(
+        geometry.nextLineCaret(
+            first_line_end.position,
+            std.math.nan(f32),
+        ) == null,
     );
 }

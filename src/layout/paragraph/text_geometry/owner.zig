@@ -75,6 +75,35 @@ pub const TextGeometry = struct {
         return visual_carets.previous(self.geometryView(), current);
     }
 
+    /// Move to the nearest stop on the following visual line.
+    ///
+    /// `preferred_x` is caller-owned state and should remain unchanged across a
+    /// sequence of vertical moves.
+    pub fn nextLineCaret(
+        self: TextGeometry,
+        current: records.CaretPosition,
+        preferred_x: f32,
+    ) ?records.CaretGeometry {
+        return visual_carets.nextLine(
+            self.geometryView(),
+            current,
+            preferred_x,
+        );
+    }
+
+    /// Move to the nearest stop on the preceding visual line.
+    pub fn previousLineCaret(
+        self: TextGeometry,
+        current: records.CaretPosition,
+        preferred_x: f32,
+    ) ?records.CaretGeometry {
+        return visual_carets.previousLine(
+            self.geometryView(),
+            current,
+            preferred_x,
+        );
+    }
+
     fn interactionView(self: TextGeometry) interaction.View {
         return self.geometryView();
     }

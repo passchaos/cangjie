@@ -123,6 +123,22 @@ pub fn previous(
     return adjacent(geometry, current, false);
 }
 
+pub fn nextLine(
+    geometry: records.GeometryView,
+    current: records.CaretPosition,
+    preferred_x: f32,
+) ?records.CaretGeometry {
+    return adjacentLine(geometry, current, preferred_x, true);
+}
+
+pub fn previousLine(
+    geometry: records.GeometryView,
+    current: records.CaretPosition,
+    preferred_x: f32,
+) ?records.CaretGeometry {
+    return adjacentLine(geometry, current, preferred_x, false);
+}
+
 fn adjacent(
     geometry: records.GeometryView,
     requested: records.CaretPosition,
@@ -152,6 +168,55 @@ fn adjacent(
         .line_index = target.line_index,
         .rect = .{
             .x = target.x,
+            .y = line.bounds.y,
+            .width = 0,
+            .height = line.bounds.height,
+        },
+    };
+}
+
+fn adjacentLine(
+    geometry: records.GeometryView,
+    current: records.CaretPosition,
+    preferred_x: f32,
+    forward: bool,
+) ?records.CaretGeometry {
+    if (!std.math.isFinite(preferred_x)) return null;
+    const normalized = @import("interaction.zig").caret(
+        geometry,
+        current,
+    ) orelse return null;
+    const target_line_index = if (forward)
+        normalized.line_index + 1
+    else if (normalized.line_index == 0)
+        return null
+    else
+        normalized.line_index - 1;
+    if (target_line_index >= geometry.lines.len) return null;
+    const line = geometry.lines[target_line_index];
+    const stops = line.visualCaretStops(geometry.visual_caret_stops);
+    if (stops.len == 0) return null;
+
+    var best_index: usize = 0;
+    var best_distance = @abs(preferred_x - stops[0].x);
+    for (stops[1..], 1..) |stop, index| {
+        const distance = @abs(preferred_x - stop.x);
+        if (distance < best_distance or
+            (distance == best_distance and stop.x >= stops[best_index].x))
+        {
+            best_index = index;
+            best_distance = distance;
+        }
+    }
+    const stop = stops[best_index];
+    return .{
+        .position = if (preferred_x < stop.x)
+            stop.from_left
+        else
+            stop.from_right,
+        .line_index = target_line_index,
+        .rect = .{
+            .x = stop.x,
             .y = line.bounds.y,
             .width = 0,
             .height = line.bounds.height,

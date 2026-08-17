@@ -51,6 +51,7 @@ const stch_feature = @import("shaping/features/stch/root.zig");
 const bidi_reorder = @import("layout/bidi/reorder/root.zig");
 const glyph_position = @import("layout/glyph_position.zig");
 const paragraph_options = @import("layout/paragraph/options.zig");
+const retained_paragraph = @import("layout/paragraph/retained.zig");
 const paragraph_types = @import("layout/types/paragraph.zig");
 const run_types = @import("layout/types/runs.zig");
 const line_break_analysis = @import("layout/line_break/analysis.zig");
@@ -120,94 +121,8 @@ pub const TextRect = paragraph_types.TextRect;
 pub const ParagraphLayout = paragraph_types.ParagraphLayout;
 const positionByteOffset = paragraph_types.positionByteOffset;
 
-/// Width-independent, owning paragraph content.
-///
-/// HarfBuzz shapes one homogeneous buffer, while Parley retains shaped
-/// paragraph content and rebuilds only visual lines when the available width
-/// changes. This object is Cangjie's equivalent boundary: it owns immutable
-/// source bytes, glyphs, font runs, and Unicode boundary analysis, but no line
-/// geometry. Fonts referenced by `runs` must outlive this object and every
-/// layout returned from it.
-pub const ShapedParagraph = struct {
-    allocator: std.mem.Allocator,
-    text: []const u8,
-    glyphs: []const GlyphPosition,
-    runs: []const CascadeRun,
-    grapheme_clusters: []const unicode.GraphemeCluster,
-    line_breaks: []const unicode.LineBreak,
-    word_break_dictionary: ?*const segmentation.WordBreakDictionary,
-    default_metrics: BaselineMetrics,
-    shape_key: ShapePlanKey,
-    needs_bidi_reorder: bool,
-
-    pub fn deinit(self: *ShapedParagraph) void {
-        self.allocator.free(self.line_breaks);
-        self.allocator.free(self.grapheme_clusters);
-        self.allocator.free(self.runs);
-        self.allocator.free(self.glyphs);
-        self.allocator.free(self.text);
-        self.* = undefined;
-    }
-
-    pub fn shapedText(self: *const ShapedParagraph) ShapedText {
-        return .{ .glyphs = self.glyphs, .runs = self.runs };
-    }
-
-    /// Reflow this immutable shaping result into reusable output storage.
-    ///
-    /// The returned slices borrow `reflow` and remain valid until its next
-    /// `layout` call or deinitialization. A separate `ReflowBuffer` may be used
-    /// concurrently for the same paragraph; one buffer itself is single-user.
-    pub fn layout(self: *const ShapedParagraph, reflow: *ReflowBuffer, options: ParagraphOptions) !ParagraphLayout {
-        try paragraph_options.validate(options);
-        if (options.word_break_dictionary != self.word_break_dictionary or
-            !paragraph_options.matchesShapeKey(self.text, options, self.shape_key))
-        {
-            return error.ParagraphShapingOptionsChanged;
-        }
-        try reflow.restore(self);
-        errdefer reflow.buffer.clear();
-        try buildParagraphLines(
-            &reflow.buffer,
-            self.text,
-            options,
-            self.default_metrics,
-            self.grapheme_clusters,
-            self.line_breaks,
-            self.word_break_dictionary,
-        );
-        if (self.needs_bidi_reorder) {
-            try applyParagraphLineBidiVisualOrder(&reflow.buffer, self.text, options.direction);
-        }
-        return reflow.buffer.paragraphLayout();
-    }
-};
-
-/// Reusable scratch/output storage for reflowing a `ShapedParagraph`.
-///
-/// Reflow restores pristine shaped glyphs and runs before applying tabs,
-/// spacing, line limits, or ellipsis. This prevents width changes from
-/// accumulating advance adjustments or permanently truncating the shaped
-/// paragraph.
-pub const ReflowBuffer = struct {
-    buffer: LayoutBuffer,
-
-    pub fn init(allocator: std.mem.Allocator) ReflowBuffer {
-        return .{ .buffer = LayoutBuffer.init(allocator) };
-    }
-
-    pub fn deinit(self: *ReflowBuffer) void {
-        self.buffer.deinit();
-        self.* = undefined;
-    }
-
-    fn restore(self: *ReflowBuffer, paragraph: *const ShapedParagraph) !void {
-        self.buffer.clear();
-        try self.buffer.glyphs.appendSlice(self.buffer.allocator, paragraph.glyphs);
-        errdefer self.buffer.clear();
-        try self.buffer.runs.appendSlice(self.buffer.allocator, paragraph.runs);
-    }
-};
+pub const ShapedParagraph = retained_paragraph.ShapedParagraph;
+pub const ReflowBuffer = retained_paragraph.ReflowBuffer;
 
 pub const FontCascade = font_fallback.Cascade;
 

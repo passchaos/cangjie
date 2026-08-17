@@ -96,7 +96,6 @@ const ChainingSubtableGroup = accelerator_model.ChainingGroup;
 const ChainingSubtablePair = accelerator_model.ChainingPair;
 const ChainingPairSubtableGroup = accelerator_model.ChainingPairGroup;
 const ChainingPairSubtablePair = accelerator_model.ChainingPairEntry;
-const deinitLookupAccelerators = accelerator_root.ownership.deinit;
 const deinitLookupAcceleratorContents =
     accelerator_root.ownership.deinitContents;
 
@@ -835,136 +834,6 @@ fn readU16(table: Table, relative: usize) GsubError!u16 {
 
 fn readU32(table: Table, relative: usize) GsubError!u32 {
     return table.readU32(relative);
-}
-
-test "GSUB chaining coverage lookup tries subtables per position" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 150;
-
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 8, 10);
-    writeU16Test(&bytes, 10, 3); // LookupCount.
-    writeU16Test(&bytes, 12, 10); // ChainingContext lookup at 20.
-    writeU16Test(&bytes, 14, 90); // SingleSubst lookup at 100.
-    writeU16Test(&bytes, 16, 114); // SingleSubst lookup at 124.
-
-    writeU16Test(&bytes, 20, 6);
-    writeU16Test(&bytes, 22, 0);
-    writeU16Test(&bytes, 24, 2);
-    writeU16Test(&bytes, 26, 10);
-    writeU16Test(&bytes, 28, 48);
-
-    const first_chain = 30;
-    writeU16Test(&bytes, first_chain + 0, 3);
-    writeU16Test(&bytes, first_chain + 2, 0);
-    writeU16Test(&bytes, first_chain + 4, 2);
-    writeU16Test(&bytes, first_chain + 6, 18);
-    writeU16Test(&bytes, first_chain + 8, 24);
-    writeU16Test(&bytes, first_chain + 10, 0);
-    writeU16Test(&bytes, first_chain + 12, 1);
-    writeU16Test(&bytes, first_chain + 14, 0);
-    writeU16Test(&bytes, first_chain + 16, 1);
-    writeCoverage1(&bytes, first_chain + 18, 1);
-    writeCoverage1(&bytes, first_chain + 24, 1);
-
-    const second_chain = 68;
-    writeU16Test(&bytes, second_chain + 0, 3);
-    writeU16Test(&bytes, second_chain + 2, 0);
-    writeU16Test(&bytes, second_chain + 4, 2);
-    writeU16Test(&bytes, second_chain + 6, 18);
-    writeU16Test(&bytes, second_chain + 8, 24);
-    writeU16Test(&bytes, second_chain + 10, 0);
-    writeU16Test(&bytes, second_chain + 12, 1);
-    writeU16Test(&bytes, second_chain + 14, 0);
-    writeU16Test(&bytes, second_chain + 16, 2);
-    writeCoverage1(&bytes, second_chain + 18, 1);
-    writeCoverage1(&bytes, second_chain + 24, 2);
-
-    writeSingleDeltaLookup(&bytes, 100, 1, 1); // 1 -> 2.
-    writeSingleDeltaLookup(&bytes, 124, 1, 2); // 1 -> 3.
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 1 });
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 20, &glyphs, allocator, .{});
-
-    try std.testing.expectEqualSlices(GlyphId, &.{ 2, 1 }, glyphs.items);
-
-    glyphs.clearRetainingCapacity();
-    try glyphs.appendSlice(allocator, &.{ 99, 1, 1 });
-    const accelerators = try accelerator_root.build.lookup.build(&bytes, 0, bytes.len, allocator);
-    defer deinitLookupAccelerators(allocator, accelerators);
-    try std.testing.expect(!accelerators[0].chaining_input_digest.mayHave(99));
-    try applyLookupWithIndex(
-        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
-        20,
-        0,
-        &glyphs,
-        allocator,
-        .{ .lookup_accelerators = accelerators, .assume_validated = true },
-        null,
-    );
-
-    // The lookup digest rejects the leading miss, while the following covered
-    // position still tries ordered subtable alternatives and substitutes.
-    try std.testing.expectEqualSlices(GlyphId, &.{ 99, 2, 1 }, glyphs.items);
-}
-
-test "GSUB chaining class lookup stops after the first matching subtable" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 180;
-
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 8, 10); // LookupList.
-    writeU16Test(&bytes, 10, 3);
-    writeU16Test(&bytes, 12, 12); // Chaining lookup at 20.
-    writeU16Test(&bytes, 14, 122); // Identity SingleSubst at 130.
-    writeU16Test(&bytes, 16, 146); // Visible SingleSubst at 154.
-
-    writeU16Test(&bytes, 20, 6); // ChainingContextSubst.
-    writeU16Test(&bytes, 24, 2);
-    writeU16Test(&bytes, 26, 10); // First class subtable at 30.
-    writeU16Test(&bytes, 28, 60); // Second class subtable at 80.
-
-    for ([_]usize{ 30, 80 }, 0..) |chain, subtable_index| {
-        writeU16Test(&bytes, chain + 0, 2);
-        writeU16Test(&bytes, chain + 2, 34); // Coverage.
-        writeU16Test(&bytes, chain + 4, 0); // No backtrack ClassDef.
-        writeU16Test(&bytes, chain + 6, 40); // Input ClassDef.
-        writeU16Test(&bytes, chain + 8, 0); // No lookahead ClassDef.
-        writeU16Test(&bytes, chain + 10, 2); // ClassSetCount.
-        writeU16Test(&bytes, chain + 12, 0);
-        writeU16Test(&bytes, chain + 14, 16); // Class 1 set.
-
-        const set = chain + 16;
-        writeU16Test(&bytes, set + 0, 1);
-        writeU16Test(&bytes, set + 2, 4);
-        const rule = set + 4;
-        writeU16Test(&bytes, rule + 0, 0); // BacktrackGlyphCount.
-        writeU16Test(&bytes, rule + 2, 1); // InputGlyphCount.
-        writeU16Test(&bytes, rule + 4, 0); // LookAheadGlyphCount.
-        writeU16Test(&bytes, rule + 6, 1); // SubstCount.
-        writeU16Test(&bytes, rule + 8, 0);
-        writeU16Test(&bytes, rule + 10, @intCast(subtable_index + 1));
-
-        writeCoverage1(&bytes, chain + 34, 1);
-        writeClassDef1(&bytes, chain + 40, 1, 1);
-    }
-
-    // The first nested lookup deliberately substitutes glyph 1 with itself.
-    // It still counts as a successful rule application and prevents the second
-    // chaining subtable from applying its visible 1 -> 11 substitution at the
-    // same position.
-    writeSingleDeltaLookup(&bytes, 130, 1, 0);
-    writeSingleDeltaLookup(&bytes, 154, 1, 10);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.append(allocator, 1);
-
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 20, &glyphs, allocator, .{});
-
-    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
 }
 
 test "GSUB context substitution skips lookup-flag ignored glyphs" {
@@ -2592,13 +2461,6 @@ fn writeCoverage1(bytes: []u8, offset: usize, glyph: GlyphId) void {
     writeU16Test(bytes, offset + 4, glyph);
 }
 
-fn writeClassDef1(bytes: []u8, offset: usize, start: GlyphId, class: u16) void {
-    writeU16Test(bytes, offset + 0, 1);
-    writeU16Test(bytes, offset + 2, start);
-    writeU16Test(bytes, offset + 4, 1);
-    writeU16Test(bytes, offset + 6, class);
-}
-
 /// Static test bindings let integration suites exercise root orchestration
 /// without widening the production API or paying for runtime callbacks.
 const topologyTestHasFeature = hasFeature;
@@ -2692,9 +2554,11 @@ const ContextExecutionIntegrationTestBindings = struct {
 };
 
 const chainingTestApplyLookup = applyLookup;
+const chainingTestApplyLookupWithIndex = applyLookupWithIndex;
 
 const ChainingExecutionIntegrationTestBindings = struct {
     pub const applyLookup = chainingTestApplyLookup;
+    pub const applyLookupWithIndex = chainingTestApplyLookupWithIndex;
 };
 
 const GlyphBoundsTestBindings = struct {

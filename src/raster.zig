@@ -6,50 +6,14 @@ const font_mod = @import("font.zig");
 const glyph_mod = @import("glyph.zig");
 const run_types = @import("layout/types/runs.zig");
 const curves = @import("raster/curves.zig");
+const prepared_mod = @import("raster/prepared.zig");
 const scanline = @import("raster/scanline.zig");
 const prepared_scanline = @import("raster/prepared_scanline.zig");
+const targets = @import("raster/targets.zig");
 
-pub const RenderTarget = struct {
-    allocator: std.mem.Allocator,
-    width: u32,
-    height: u32,
-    pixels: []u8,
-
-    pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !RenderTarget {
-        const pixels = try allocator.alloc(u8, @as(usize, width) * height);
-        @memset(pixels, 0);
-        return .{ .allocator = allocator, .width = width, .height = height, .pixels = pixels };
-    }
-
-    pub fn deinit(self: *RenderTarget) void {
-        self.allocator.free(self.pixels);
-        self.* = undefined;
-    }
-
-    pub fn clear(self: *RenderTarget, value: u8) void {
-        @memset(self.pixels, value);
-    }
-
-    pub fn at(self: *const RenderTarget, x: u32, y: u32) u8 {
-        return self.pixels[@as(usize, y) * self.width + x];
-    }
-
-    fn blend(self: *RenderTarget, x: i32, y: i32, coverage: u8) void {
-        if (x < 0 or y < 0) return;
-        const ux: u32 = @intCast(x);
-        const uy: u32 = @intCast(y);
-        if (ux >= self.width or uy >= self.height) return;
-        const idx = @as(usize, uy) * self.width + ux;
-        self.pixels[idx] = @max(self.pixels[idx], coverage);
-    }
-};
-
-pub const Rgba = struct {
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-};
+pub const RenderTarget = targets.RenderTarget;
+pub const Rgba = targets.Rgba;
+pub const PreparedGlyph = prepared_mod.PreparedGlyph;
 
 const max_color_glyph_traversal_depth = 64;
 const max_embedded_bitmap_dimension = 16 * 1024;
@@ -1392,34 +1356,21 @@ pub const Rasterizer = struct {
                 const expanded: u8 = @intCast(@min(@as(u16, 255), @as(u16, coverage) + 24));
                 const side: u8 = @intCast(@min(@as(u16, 255), @as(u16, coverage) * 3 / 5));
                 const vertical: u8 = @intCast(@min(@as(u16, 255), @as(u16, coverage) * 2 / 3));
-                target.blend(x, y, expanded);
-                if (x - 1 >= min_x) target.blend(x - 1, y, side);
-                if (x + 1 <= max_x) target.blend(x + 1, y, side);
-                if (y - 1 >= min_y) target.blend(x, y - 1, vertical);
-                if (y + 1 <= max_y) target.blend(x, y + 1, vertical);
+                targets.blendCoverage(target, x, y, expanded);
+                if (x - 1 >= min_x) {
+                    targets.blendCoverage(target, x - 1, y, side);
+                }
+                if (x + 1 <= max_x) {
+                    targets.blendCoverage(target, x + 1, y, side);
+                }
+                if (y - 1 >= min_y) {
+                    targets.blendCoverage(target, x, y - 1, vertical);
+                }
+                if (y + 1 <= max_y) {
+                    targets.blendCoverage(target, x, y + 1, vertical);
+                }
             }
         }
-    }
-};
-
-pub const PreparedGlyph = struct {
-    prepared_fill: prepared_scanline.PreparedFill,
-    hint_size: f32,
-
-    /// Whether retained real-font measurements predict a win over direct
-    /// `renderGlyph` in a repeated-render loop.
-    ///
-    /// Callers should branch once before entering the loop, not once per glyph
-    /// render. Tiny straight-sided glyphs are already optimized by the direct
-    /// stack-local path; prepared geometry pays off for curve-heavy or
-    /// multi-contour outlines.
-    pub fn recommendedForRepeatedRendering(self: *const PreparedGlyph) bool {
-        return self.prepared_fill.lines.len >= 16;
-    }
-
-    pub fn deinit(self: *PreparedGlyph) void {
-        self.prepared_fill.deinit();
-        self.* = undefined;
     }
 };
 

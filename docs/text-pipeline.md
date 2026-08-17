@@ -526,6 +526,12 @@ SVG, COLR, variation, cursor, and selection integration coverage. Rasterization
 and shaping remain dependencies of the bridge rather than peer responsibilities
 inside one root-level renderer file.
 
+CPU raster storage has focused ownership modules under `src/raster/`:
+`targets.zig` owns grayscale target allocation and renderer RGBA records, while
+`prepared.zig` owns reusable prepared scan geometry. The raster engine consumes
+these concrete values without making target storage responsible for outline,
+SVG, COLR, or scan-conversion policy.
+
 The shaping integration suite is similarly rooted at
 `src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,
 GSUB, GPOS/AAT, attachment, pipeline-state, and vertical-layout modules. Tests

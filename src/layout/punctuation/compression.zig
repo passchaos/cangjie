@@ -12,6 +12,7 @@ const std = @import("std");
 const GlyphPosition = @import("../glyph_position.zig").GlyphPosition;
 const geometry = @import("../line_break/reflow/geometry.zig");
 const hanging = @import("hanging.zig");
+const paragraph_options = @import("../paragraph/options.zig");
 const unicode = @import("../../unicode.zig");
 const line_break_properties =
     @import("../../unicode/line_break/properties.zig");
@@ -27,6 +28,7 @@ pub fn effectiveCapacity(
     glyph_end: usize,
     compression_fraction: f32,
     hanging_fraction: f32,
+    convention: paragraph_options.PunctuationConvention,
 ) f32 {
     if (compression_fraction <= 0 or glyph_start >= glyph_end) return 0;
     const hanging_index =
@@ -51,11 +53,13 @@ pub fn effectiveCapacity(
         const left = sideCapacity(
             glyphs[atom_start],
             compression_fraction,
+            convention,
         ).left;
         const right_index = atom_end - 1;
         const right = sideCapacity(
             glyphs[right_index],
             compression_fraction,
+            convention,
         ).right;
         total += left * effectiveFactor(
             atom_start,
@@ -118,6 +122,7 @@ pub fn apply(buffer: anytype, options: anytype) !void {
             required,
             compression_fraction,
             options.punctuation.end_hanging_fraction,
+            options.punctuation.convention,
             hanging_index,
         );
         std.debug.assert(applied + 0.001 >= required);
@@ -130,11 +135,16 @@ fn applyToLine(
     required: f32,
     compression_fraction: f32,
     hanging_fraction: f32,
+    convention: paragraph_options.PunctuationConvention,
     hanging_index: ?usize,
 ) f32 {
     std.debug.assert(glyphs.len == sides.len);
     for (glyphs, sides) |glyph, *entry| {
-        entry.* = sideCapacity(glyph, compression_fraction);
+        entry.* = sideCapacity(
+            glyph,
+            compression_fraction,
+            convention,
+        );
     }
     restrictToSourceAtomEdges(glyphs, sides);
     var remaining = required;
@@ -210,7 +220,11 @@ const Sides = struct {
     right: f32 = 0,
 };
 
-fn sideCapacity(glyph: GlyphPosition, fraction: f32) Sides {
+fn sideCapacity(
+    glyph: GlyphPosition,
+    fraction: f32,
+    convention: paragraph_options.PunctuationConvention,
+) Sides {
     if (glyph.isInlineObject() or glyph.isDiscretionaryHyphen() or
         !line_break_properties.lookup(glyph.codepoint).east_asian or
         glyph.x_advance <= 0)
@@ -218,6 +232,9 @@ fn sideCapacity(glyph: GlyphPosition, fraction: f32) Sides {
         return .{};
     }
     const half = glyph.x_advance * 0.5 * fraction;
+    if (explicitSides(glyph.codepoint, convention, half)) |sides| {
+        return sides;
+    }
     return switch (unicode.lineBreakClassForCodepoint(glyph.codepoint)) {
         .open_punctuation => .{ .left = half },
         .close_punctuation,
@@ -231,6 +248,81 @@ fn sideCapacity(glyph: GlyphPosition, fraction: f32) Sides {
         },
         else => .{},
     };
+}
+
+fn explicitSides(
+    codepoint: u21,
+    convention: paragraph_options.PunctuationConvention,
+    half: f32,
+) ?Sides {
+    if (convention == .generic) return null;
+    if (isRightAlignedOpening(codepoint)) return .{ .left = half };
+    if (isLeftAlignedClosing(codepoint)) return .{ .right = half };
+    if (isStopPunctuation(codepoint)) {
+        return switch (convention) {
+            .gb, .jis => .{ .right = half },
+            .cns => .{ .left = half / 2, .right = half / 2 },
+            .generic => unreachable,
+        };
+    }
+    if (isFullwidthQuestionOrExclamation(codepoint)) {
+        return if (convention == .gb)
+            .{ .right = half }
+        else
+            .{};
+    }
+    return null;
+}
+
+fn isRightAlignedOpening(codepoint: u21) bool {
+    return switch (codepoint) {
+        0x3008, // 〈
+        0x300a, // 《
+        0x300c, // 「
+        0x300e, // 『
+        0x3010, // 【
+        0x3014, // 〔
+        0x3016, // 〖
+        0xff08, // （
+        0xff3b, // ［
+        0xff5b, // ｛
+        => true,
+        else => false,
+    };
+}
+
+fn isLeftAlignedClosing(codepoint: u21) bool {
+    return switch (codepoint) {
+        0x3009, // 〉
+        0x300b, // 》
+        0x300d, // 」
+        0x300f, // 』
+        0x3011, // 】
+        0x3015, // 〕
+        0x3017, // 〗
+        0xff09, // ）
+        0xff3d, // ］
+        0xff5d, // ｝
+        => true,
+        else => false,
+    };
+}
+
+fn isStopPunctuation(codepoint: u21) bool {
+    return switch (codepoint) {
+        0x3001, // 、
+        0x3002, // 。
+        0xff0c, // ，
+        0xff0e, // ．
+        0xff1a, // ：
+        0xff1b, // ；
+        => true,
+        else => false,
+    };
+}
+
+fn isFullwidthQuestionOrExclamation(codepoint: u21) bool {
+    return codepoint == 0xff01 or codepoint == 0xff1f;
 }
 
 fn restrictToSourceAtomEdges(
@@ -280,13 +372,13 @@ test "compression uses only the reduction needed" {
     };
     try std.testing.expectApproxEqAbs(
         @as(f32, 10),
-        effectiveCapacity(&glyphs, 0, glyphs.len, 1, 0),
+        effectiveCapacity(&glyphs, 0, glyphs.len, 1, 0, .generic),
         0.001,
     );
     var sides: [glyphs.len]Sides = undefined;
     try std.testing.expectApproxEqAbs(
         @as(f32, 3),
-        applyToLine(&glyphs, &sides, 3, 1, 0, null),
+        applyToLine(&glyphs, &sides, 3, 1, 0, .generic, null),
         0.001,
     );
     try std.testing.expectApproxEqAbs(@as(f32, 7), glyphs[0].x_advance, 0.001);
@@ -300,7 +392,7 @@ test "capacity counts only reusable source-atom edges" {
     };
     try std.testing.expectApproxEqAbs(
         @as(f32, 3),
-        effectiveCapacity(&glyphs, 0, glyphs.len, 1, 0),
+        effectiveCapacity(&glyphs, 0, glyphs.len, 1, 0, .generic),
         0.001,
     );
 }
@@ -312,17 +404,84 @@ test "hanging reduces effective compression capacity at the same edge" {
     };
     try std.testing.expectApproxEqAbs(
         @as(f32, 5),
-        effectiveCapacity(&glyphs, 0, glyphs.len, 1, 0),
+        effectiveCapacity(&glyphs, 0, glyphs.len, 1, 0, .generic),
         0.001,
     );
     try std.testing.expectApproxEqAbs(
         @as(f32, 2.5),
-        effectiveCapacity(&glyphs, 0, glyphs.len, 1, 0.5),
+        effectiveCapacity(&glyphs, 0, glyphs.len, 1, 0.5, .generic),
         0.001,
     );
     try std.testing.expectApproxEqAbs(
         @as(f32, 0),
-        effectiveCapacity(&glyphs, 0, glyphs.len, 1, 1),
+        effectiveCapacity(&glyphs, 0, glyphs.len, 1, 1, .generic),
         0.001,
     );
+}
+
+test "GB CNS and JIS conventions classify stop and question punctuation" {
+    const stop = GlyphPosition{
+        .glyph_id = 1,
+        .codepoint = 0x3002,
+        .cluster = 0,
+        .x_advance = 16,
+    };
+    const gb_stop = sideCapacity(stop, 1, .gb);
+    const cns_stop = sideCapacity(stop, 1, .cns);
+    const jis_stop = sideCapacity(stop, 1, .jis);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), gb_stop.left, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 8), gb_stop.right, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 4), cns_stop.left, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 4), cns_stop.right, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), jis_stop.left, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 8), jis_stop.right, 0.001);
+
+    const question = GlyphPosition{
+        .glyph_id = 2,
+        .codepoint = 0xff1f,
+        .cluster = 3,
+        .x_advance = 16,
+    };
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 8),
+        sideCapacity(question, 1, .gb).right,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0),
+        sideCapacity(question, 1, .cns).right,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0),
+        sideCapacity(question, 1, .jis).right,
+        0.001,
+    );
+}
+
+test "all regional conventions align brackets to the glyph edge" {
+    const opening = GlyphPosition{
+        .glyph_id = 1,
+        .codepoint = 0x300c,
+        .cluster = 0,
+        .x_advance = 16,
+    };
+    const closing = GlyphPosition{
+        .glyph_id = 2,
+        .codepoint = 0x300d,
+        .cluster = 3,
+        .x_advance = 16,
+    };
+    for ([_]paragraph_options.PunctuationConvention{ .gb, .cns, .jis }) |style| {
+        try std.testing.expectApproxEqAbs(
+            @as(f32, 8),
+            sideCapacity(opening, 1, style).left,
+            0.001,
+        );
+        try std.testing.expectApproxEqAbs(
+            @as(f32, 8),
+            sideCapacity(closing, 1, style).right,
+            0.001,
+        );
+    }
 }

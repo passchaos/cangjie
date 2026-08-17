@@ -311,6 +311,134 @@ test "partial compression limit declines an otherwise overfull candidate" {
     }
 }
 
+test "GB CNS and JIS conventions produce distinct stop geometry" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCodepointSetTtf(
+        allocator,
+        &.{ 0x3001, 0x3002, 0x4e00, 0x4e01 },
+    );
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = font_fallback.Cascade.init(&.{&font});
+    var buffer = context_output.Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const gb = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        "一。、丁",
+        20,
+        .{
+            .max_width = 42,
+            .punctuation = .{
+                .convention = .gb,
+                .max_compression_fraction = 1,
+            },
+        },
+    );
+    const gb_stop_advance = gb.glyphs[1].x_advance;
+    const gb_stop_offset = gb.glyphs[1].x_offset;
+    const cns = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        "一。、丁",
+        20,
+        .{
+            .max_width = 42,
+            .punctuation = .{
+                .convention = .cns,
+                .max_compression_fraction = 1,
+            },
+        },
+    );
+    const cns_stop_advance = cns.glyphs[1].x_advance;
+    const cns_stop_offset = cns.glyphs[1].x_offset;
+    const jis = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        "一。、丁",
+        20,
+        .{
+            .max_width = 42,
+            .punctuation = .{
+                .convention = .jis,
+                .max_compression_fraction = 1,
+            },
+        },
+    );
+    try std.testing.expectApproxEqAbs(
+        gb_stop_advance,
+        jis.glyphs[1].x_advance,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        gb_stop_offset,
+        jis.glyphs[1].x_offset,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        gb_stop_advance,
+        cns_stop_advance,
+        0.001,
+    );
+    try std.testing.expect(cns_stop_offset < gb_stop_offset);
+}
+
+test "only GB convention compresses fullwidth question marks" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCodepointSetTtf(
+        allocator,
+        &.{ 0x4e00, 0x4e01, 0xff1f },
+    );
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = font_fallback.Cascade.init(&.{&font});
+    var buffer = context_output.Buffer.init(allocator);
+    defer buffer.deinit();
+    const text = "一？丁";
+
+    const gb = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{
+            .max_width = 28,
+            .punctuation = .{
+                .convention = .gb,
+                .max_compression_fraction = 1,
+            },
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 2), gb.lines[0].glyph_len);
+
+    for ([_]@import("../paragraph/options.zig").PunctuationConvention{
+        .cns,
+        .jis,
+    }) |convention| {
+        const paragraph =
+            try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
+                cascade,
+                &buffer,
+                text,
+                20,
+                .{
+                    .max_width = 28,
+                    .punctuation = .{
+                        .convention = convention,
+                        .max_compression_fraction = 1,
+                    },
+                },
+            );
+        try std.testing.expectEqual(
+            @as(usize, 1),
+            paragraph.lines[0].glyph_len,
+        );
+    }
+}
+
 test "compression and hanging combine without double-counting capacity" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildCodepointSetTtf(
@@ -431,7 +559,10 @@ test "retained reflow restores and reapplies punctuation compression" {
     defer reflow.deinit();
     const compressed = try paragraph.layout(&reflow, .{
         .max_width = 42,
-        .punctuation = .{ .max_compression_fraction = 1 },
+        .punctuation = .{
+            .convention = .cns,
+            .max_compression_fraction = 1,
+        },
     });
     try std.testing.expectEqual(@as(usize, 3), compressed.lines[0].glyph_len);
     try std.testing.expect(compressed.glyphs[1].x_advance < 16);
@@ -646,7 +777,10 @@ test "styled paragraph keeps metadata aligned after punctuation compression" {
             &spans,
             .{
                 .max_width = 42,
-                .punctuation = .{ .max_compression_fraction = 1 },
+                .punctuation = .{
+                    .convention = .jis,
+                    .max_compression_fraction = 1,
+                },
             },
         );
     try std.testing.expectEqual(@as(usize, 3), paragraph.lines[0].glyph_len);
@@ -684,7 +818,10 @@ test "RTL compression preserves physical punctuation placement" {
         .{
             .max_width = 60,
             .direction = .rtl,
-            .punctuation = .{ .max_compression_fraction = 1 },
+            .punctuation = .{
+                .convention = .gb,
+                .max_compression_fraction = 1,
+            },
         },
     );
     try std.testing.expectEqual(@as(usize, 4), paragraph.lines[0].glyph_len);

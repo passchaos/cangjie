@@ -204,6 +204,7 @@ pub fn build(
                 index + 1,
                 options.punctuation.max_compression_fraction,
                 options.punctuation.end_hanging_fraction,
+                options.punctuation.convention,
             );
         if (occupied_line_width >
             current_line_limit + current_compression_capacity and
@@ -244,6 +245,7 @@ pub fn build(
                         candidate_index,
                         options.punctuation.max_compression_fraction,
                         candidate_hanging_fraction,
+                        options.punctuation.convention,
                     );
                 if (@max(0, last_break.width - candidate_hanging) >
                     current_line_limit + candidate_compression)

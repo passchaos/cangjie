@@ -96,6 +96,7 @@ test "paragraph style converts to paragraph options" {
             .max_consecutive_lines = 2,
         },
         .punctuation = .{
+            .convention = .cns,
             .max_compression_fraction = 0.75,
             .end_hanging_fraction = 0.5,
         },
@@ -131,6 +132,10 @@ test "paragraph style converts to paragraph options" {
         @as(f32, 0.75),
         options.punctuation.max_compression_fraction,
         0.001,
+    );
+    try std.testing.expectEqual(
+        @TypeOf(options.punctuation.convention).cns,
+        options.punctuation.convention,
     );
     try std.testing.expectApproxEqAbs(@as(f32, 10), options.first_line_indent, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 4), options.paragraph_spacing, 0.001);

@@ -134,6 +134,9 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(
         @typeInfo(cangjie.paragraph.Punctuation) == .@"struct",
     );
+    try std.testing.expect(
+        @typeInfo(cangjie.paragraph.PunctuationConvention) == .@"enum",
+    );
 }
 
 test "concrete face views cover the normal application workflow" {

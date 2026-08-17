@@ -33,7 +33,22 @@ pub const Hyphenation = struct {
 };
 
 /// Optional optical punctuation treatment applied after line selection.
+pub const PunctuationConvention = enum {
+    /// Unicode-property-only behavior without regional typographic inference.
+    generic,
+    /// Mainland Chinese GB/T 15834-style punctuation alignment.
+    gb,
+    /// Taiwan/Hong Kong CNS-style centered stop punctuation.
+    cns,
+    /// Japanese JIS X 4051-style punctuation alignment.
+    jis,
+};
+
 pub const Punctuation = struct {
+    /// Explicit punctuation convention. Cangjie never infers this from locale
+    /// or OpenType language tags because application language policy may differ
+    /// from shaping-language selection.
+    convention: PunctuationConvention = .generic,
     /// Maximum fraction of CLREQ's half-advance punctuation shrinkability.
     ///
     /// Zero disables compression. One permits at most half a glyph advance per

@@ -43,6 +43,7 @@ const diagnostic_fallback = diagnostics.fallback;
 const diagnostic_quality = diagnostics.quality;
 const diagnostic_types = diagnostics.types;
 const font_fallback = @import("shaping/fallback/font/root.zig");
+const fallback_segment = @import("shaping/fallback/segment.zig");
 const script_run_itemization =
     @import("shaping/itemization/script_runs.zig");
 const stch_feature = @import("shaping/features/stch/root.zig");
@@ -343,94 +344,19 @@ pub const TextShaper = struct {
             }
         }
         buffer.clear();
-        if (cascade.fonts.len == 0) return error.EmptyFontCascade;
-
-        // Select fallback for complete grapheme/shaping clusters. Keeping a
-        // combining sequence or emoji ZWJ chain in one segment lets the chosen
-        // font's GSUB/GPOS observe the whole sequence instead of producing
-        // unrelated glyph runs for the base and its continuations.
-        var segment_start: usize = 0;
-        var segment_font_index: ?usize = null;
-        var pen_x: f32 = 0;
-        var pen_y: f32 = 0;
-
-        if (textIsAscii(text)) {
-            // ASCII is one grapheme per byte (CRLF still chooses the same font
-            // for both controls). Preserve the old one-pass fallback loop so
-            // the dominant Latin/UI path does not pay for Unicode clustering.
-            for (text, 0..) |codepoint, cluster_start| {
-                const font_index = try selectFontWithOptionalCache(cascade, fallback_cache, glyph_index_cache, codepoint);
-                if (segment_font_index == null) {
-                    segment_start = cluster_start;
-                    segment_font_index = font_index;
-                } else if (segment_font_index.? != font_index) {
-                    const next_pen = try appendCascadeRun(
-                        cascade.fonts[segment_font_index.?],
-                        metrics_cache,
-                        glyph_index_cache,
-                        segment_font_index.?,
-                        buffer,
-                        text[segment_start..cluster_start],
-                        font_size,
-                        segment_start,
-                        .{ .x = pen_x, .y = pen_y },
-                        lookupOptionsForText(text[segment_start..cluster_start], options),
-                    );
-                    pen_x = next_pen.x;
-                    pen_y = next_pen.y;
-                    segment_start = cluster_start;
-                    segment_font_index = font_index;
-                }
-            }
-        } else {
-            var clusters = unicode.graphemeClustersAssumeValid(text);
-            while (clusters.next()) |cluster| {
-                const cluster_end = cluster.byte_start + cluster.byte_len;
-                const cluster_text = text[cluster.byte_start..cluster_end];
-                const font_index = try selectFontForCluster(
-                    cascade,
-                    fallback_cache,
-                    glyph_index_cache,
-                    cluster_text,
-                );
-                if (segment_font_index == null) {
-                    segment_start = cluster.byte_start;
-                    segment_font_index = font_index;
-                } else if (segment_font_index.? != font_index) {
-                    const next_pen = try appendCascadeRun(
-                        cascade.fonts[segment_font_index.?],
-                        metrics_cache,
-                        glyph_index_cache,
-                        segment_font_index.?,
-                        buffer,
-                        text[segment_start..cluster.byte_start],
-                        font_size,
-                        segment_start,
-                        .{ .x = pen_x, .y = pen_y },
-                        lookupOptionsForText(text[segment_start..cluster.byte_start], options),
-                    );
-                    pen_x = next_pen.x;
-                    pen_y = next_pen.y;
-                    segment_start = cluster.byte_start;
-                    segment_font_index = font_index;
-                }
-            }
-        }
-
-        if (segment_font_index) |font_index| {
-            _ = try appendCascadeRun(
-                cascade.fonts[font_index],
-                metrics_cache,
-                glyph_index_cache,
-                font_index,
-                buffer,
-                text[segment_start..],
-                font_size,
-                segment_start,
-                .{ .x = pen_x, .y = pen_y },
-                lookupOptionsForText(text[segment_start..], options),
-            );
-        }
+        var fallback_context = DynamicFallbackContext{
+            .buffer = buffer,
+            .metrics_cache = metrics_cache,
+            .glyph_index_cache = glyph_index_cache,
+            .font_size = font_size,
+            .options = options,
+        };
+        _ = try fallback_segment.shape(&fallback_context, .{
+            .cascade = cascade,
+            .fallback_cache = fallback_cache,
+            .glyph_index_cache = glyph_index_cache,
+            .text = text,
+        });
 
         if (shouldApplyBidiVisualOrder(text, options)) {
             try applyBidiVisualOrder(buffer, text, options.direction, null);
@@ -742,7 +668,7 @@ const StyledParagraphDriver = struct {
                     .beginning_of_text = byte_start == 0,
                     .end_of_text = byte_end == self.text.len,
                 },
-                .all_ascii = textIsAscii(item_text),
+                .all_ascii = fallback_segment.isAscii(item_text),
             },
         );
         if (span.faces != null) {
@@ -878,9 +804,64 @@ fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []cons
     }
 }
 
-const PenPosition = struct {
-    x: f32 = 0,
-    y: f32 = 0,
+const PenPosition = fallback_segment.Pen;
+
+const DynamicFallbackContext = struct {
+    buffer: *LayoutBuffer,
+    metrics_cache: ?*GlyphMetricsCache,
+    glyph_index_cache: ?*GlyphIndexCache,
+    font_size: f32,
+    options: ShapeOptions,
+
+    pub fn appendSegment(
+        self: *@This(),
+        cascade: FontCascade,
+        font_index: usize,
+        text: []const u8,
+        cluster_base: usize,
+        pen: PenPosition,
+    ) !PenPosition {
+        return try appendCascadeRun(
+            cascade.fonts[font_index],
+            self.metrics_cache,
+            self.glyph_index_cache,
+            font_index,
+            self.buffer,
+            text,
+            self.font_size,
+            cluster_base,
+            pen,
+            lookupOptionsForText(text, self.options),
+        );
+    }
+};
+
+const FixedFallbackContext = struct {
+    buffer: *LayoutBuffer,
+    font_size: f32,
+    lookup_options: ResolvedLookupOptions,
+
+    pub fn appendSegment(
+        self: *@This(),
+        cascade: FontCascade,
+        font_index: usize,
+        text: []const u8,
+        cluster_base: usize,
+        pen: PenPosition,
+    ) !PenPosition {
+        return try appendCascadeRun(
+            cascade.fonts[font_index],
+            null,
+            null,
+            font_index,
+            self.buffer,
+            text,
+            self.font_size,
+            cluster_base,
+            pen,
+            self.lookup_options,
+        );
+    }
 };
 
 fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !GlyphRun {
@@ -946,99 +927,17 @@ test "RTL presence scan ignores ASCII without hiding RTL scripts" {
 }
 
 fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen: PenPosition, lookup_options: ResolvedLookupOptions) !PenPosition {
-    // Script itemization happens outside this helper. This pass only performs
-    // fallback segmentation inside that script run, so each append keeps the
-    // same OpenType script/language lookup selection.
-    var segment_start: usize = 0;
-    var segment_font_index: ?usize = null;
-    var next_pen = pen;
-
-    if (textIsAscii(text)) {
-        for (text, 0..) |codepoint, cluster_start| {
-            const font_index = try cascade.selectFont(codepoint);
-            if (segment_font_index == null) {
-                segment_start = cluster_start;
-                segment_font_index = font_index;
-            } else if (segment_font_index.? != font_index) {
-                next_pen = try appendCascadeRun(cascade.fonts[segment_font_index.?], null, null, segment_font_index.?, buffer, text[segment_start..cluster_start], font_size, cluster_base + segment_start, next_pen, lookup_options);
-                segment_start = cluster_start;
-                segment_font_index = font_index;
-            }
-        }
-    } else {
-        var clusters = unicode.graphemeClustersAssumeValid(text);
-        while (clusters.next()) |cluster| {
-            const cluster_end = cluster.byte_start + cluster.byte_len;
-            const font_index = try cascade.selectFontForCluster(text[cluster.byte_start..cluster_end]);
-            if (segment_font_index == null) {
-                segment_start = cluster.byte_start;
-                segment_font_index = font_index;
-            } else if (segment_font_index.? != font_index) {
-                next_pen = try appendCascadeRun(cascade.fonts[segment_font_index.?], null, null, segment_font_index.?, buffer, text[segment_start..cluster.byte_start], font_size, cluster_base + segment_start, next_pen, lookup_options);
-                segment_start = cluster.byte_start;
-                segment_font_index = font_index;
-            }
-        }
-    }
-
-    if (segment_font_index) |font_index| {
-        next_pen = try appendCascadeRun(cascade.fonts[font_index], null, null, font_index, buffer, text[segment_start..], font_size, cluster_base + segment_start, next_pen, lookup_options);
-    }
-    return next_pen;
-}
-
-fn selectFontForCluster(
-    cascade: FontCascade,
-    fallback_cache: ?*FontFallbackCache,
-    glyph_index_cache: ?*GlyphIndexCache,
-    cluster: []const u8,
-) !usize {
-    if (cascade.fonts.len == 0) return error.EmptyFontCascade;
-    if (cascade.fonts.len == 1) return 0;
-
-    // One-byte clusters dominate Latin/UI shaping. Preserve the existing
-    // codepoint fallback cache and its direct ASCII glyph cache for this case.
-    if (cluster.len == 1 and cluster[0] < 0x80) {
-        return try selectFontWithOptionalCache(cascade, fallback_cache, glyph_index_cache, cluster[0]);
-    }
-
-    if (fallback_cache) |cache| {
-        return try cache.selectFontForCluster(
-            cascade,
-            glyph_index_cache,
-            cluster,
-        );
-    }
-    return try font_fallback.selectFontForClusterFrom(
-        cascade.fonts,
-        glyph_index_cache,
-        cluster,
-    );
-}
-
-fn textIsAscii(text: []const u8) bool {
-    for (text) |byte| {
-        if (byte >= 0x80) return false;
-    }
-    return true;
-}
-
-fn selectFontWithOptionalCache(cascade: FontCascade, cache: ?*FontFallbackCache, glyph_index_cache: ?*GlyphIndexCache, codepoint: u21) !usize {
-    if (cache) |fallback_cache| {
-        if (glyph_index_cache) |glyph_cache| {
-            return try fallback_cache.selectFontWithGlyphCache(
-                cascade,
-                glyph_cache,
-                codepoint,
-            );
-        }
-        return try fallback_cache.selectFont(cascade, codepoint);
-    }
-    return try font_fallback.selectFontFrom(
-        cascade.fonts,
-        glyph_index_cache,
-        codepoint,
-    );
+    var fallback_context = FixedFallbackContext{
+        .buffer = buffer,
+        .font_size = font_size,
+        .lookup_options = lookup_options,
+    };
+    return try fallback_segment.shape(&fallback_context, .{
+        .cascade = cascade,
+        .text = text,
+        .cluster_base = cluster_base,
+        .pen = pen,
+    });
 }
 
 fn applyBidiVisualOrder(

@@ -9,7 +9,7 @@ const gpos = @import("gpos.zig");
 const ligature_provenance = @import("ligature_provenance.zig");
 const gsub = @import("gsub.zig");
 const layout_cache = @import("shaping/context/cache/root.zig");
-const layout_scratch = @import("shaping/context/scratch.zig");
+const context_output = @import("shaping/context/output.zig");
 const shaping_metadata = @import("shaping_metadata.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const pipeline_types = @import("shaping/pipeline/types.zig");
@@ -391,73 +391,7 @@ fn gdefMetadataForShaping(font: *const Font, allocator: std.mem.Allocator, cache
     return &out_owned.*.?;
 }
 
-pub const LayoutBuffer = struct {
-    allocator: std.mem.Allocator,
-    glyphs: std.ArrayList(GlyphPosition) = .empty,
-    runs: std.ArrayList(CascadeRun) = .empty,
-    lines: std.ArrayList(ParagraphLine) = .empty,
-    script_runs: std.ArrayList(ScriptedRun) = .empty,
-    shape_profile: ?*ShapeStageProfile = null,
-    profile_io: ?std.Io = null,
-    profile_fast_path: bool = false,
-    gdef_metadata_cache: ?*GdefMetadataCache = null,
-    gsub_table_proof_cache: ?*GsubTableProofCache = null,
-    gpos_table_proof_cache: ?*GposTableProofCache = null,
-    lookup_selection_cache: ?*LookupSelectionCache = null,
-    shape_scratch: layout_scratch.ShapeScratch = .{},
-
-    pub fn init(allocator: std.mem.Allocator) LayoutBuffer {
-        return .{ .allocator = allocator };
-    }
-
-    pub fn deinit(self: *LayoutBuffer) void {
-        self.shape_scratch.deinit(self.allocator);
-        self.script_runs.deinit(self.allocator);
-        self.lines.deinit(self.allocator);
-        self.runs.deinit(self.allocator);
-        self.glyphs.deinit(self.allocator);
-        self.* = undefined;
-    }
-
-    pub fn clear(self: *LayoutBuffer) void {
-        self.glyphs.clearRetainingCapacity();
-        self.runs.clearRetainingCapacity();
-        self.lines.clearRetainingCapacity();
-        self.script_runs.clearRetainingCapacity();
-    }
-
-    pub fn run(self: *const LayoutBuffer, font: *const Font, font_size: f32) GlyphRun {
-        return run_types.initGlyphRun(font, font_size, self.glyphs.items);
-    }
-
-    pub fn shapedText(self: *const LayoutBuffer) ShapedText {
-        return .{ .glyphs = self.glyphs.items, .runs = self.runs.items };
-    }
-
-    pub fn scriptedText(self: *const LayoutBuffer) ScriptedText {
-        return .{
-            .glyphs = self.glyphs.items,
-            .font_runs = self.runs.items,
-            .script_runs = self.script_runs.items,
-        };
-    }
-
-    pub fn paragraphLayout(self: *const LayoutBuffer) ParagraphLayout {
-        var max_width: f32 = 0;
-        var height: f32 = 0;
-        for (self.lines.items) |line| {
-            max_width = @max(max_width, line.x + line.width);
-            height = @max(height, line.y + line.height);
-        }
-        return .{
-            .glyphs = self.glyphs.items,
-            .runs = self.runs.items,
-            .lines = self.lines.items,
-            .width = max_width,
-            .height = height,
-        };
-    }
-};
+pub const LayoutBuffer = context_output.Buffer;
 
 pub const TextShaper = struct {
     pub fn shapeUtf8(font: *const Font, buffer: *LayoutBuffer, text: []const u8, font_size: f32) !GlyphRun {

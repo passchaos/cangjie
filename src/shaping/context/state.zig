@@ -2,21 +2,23 @@
 
 const std = @import("std");
 
+const cache = @import("cache/root.zig");
 const layout = @import("../../layout.zig");
+const output_mod = @import("output.zig");
 const stats_mod = @import("stats.zig");
 
 pub const State = struct {
     allocator: std.mem.Allocator,
-    output: layout.LayoutBuffer,
+    output: output_mod.Buffer,
     styled_output: layout.StyledParagraphBuffer,
-    glyph_metrics: layout.GlyphMetricsCache,
-    glyph_indices: layout.GlyphIndexCache,
-    font_fallback: layout.FontFallbackCache,
-    gdef_metadata: layout.GdefMetadataCache,
-    gsub_table_proofs: layout.GsubTableProofCache,
-    gpos_table_proofs: layout.GposTableProofCache,
-    lookup_selection: layout.LookupSelectionCache,
-    shaped_runs: layout.ShapedRunCache,
+    glyph_metrics: cache.GlyphMetricsCache,
+    glyph_indices: cache.GlyphIndexCache,
+    font_fallback: cache.FontFallbackCache,
+    gdef_metadata: cache.GdefMetadataCache,
+    gsub_table_proofs: cache.GsubTableProofCache,
+    gpos_table_proofs: cache.GposTableProofCache,
+    lookup_selection: cache.LookupSelectionCache,
+    shaped_runs: cache.ShapedRunCache,
     cache_font_data: bool,
     cache_shaped_runs: bool,
 
@@ -27,16 +29,16 @@ pub const State = struct {
     ) State {
         return .{
             .allocator = allocator,
-            .output = layout.LayoutBuffer.init(allocator),
+            .output = output_mod.Buffer.init(allocator),
             .styled_output = layout.StyledParagraphBuffer.init(allocator),
-            .glyph_metrics = layout.GlyphMetricsCache.init(allocator),
-            .glyph_indices = layout.GlyphIndexCache.init(allocator),
-            .font_fallback = layout.FontFallbackCache.init(allocator),
-            .gdef_metadata = layout.GdefMetadataCache.init(allocator),
-            .gsub_table_proofs = layout.GsubTableProofCache.init(allocator),
-            .gpos_table_proofs = layout.GposTableProofCache.init(allocator),
-            .lookup_selection = layout.LookupSelectionCache.init(allocator),
-            .shaped_runs = layout.ShapedRunCache.init(allocator),
+            .glyph_metrics = cache.GlyphMetricsCache.init(allocator),
+            .glyph_indices = cache.GlyphIndexCache.init(allocator),
+            .font_fallback = cache.FontFallbackCache.init(allocator),
+            .gdef_metadata = cache.GdefMetadataCache.init(allocator),
+            .gsub_table_proofs = cache.GsubTableProofCache.init(allocator),
+            .gpos_table_proofs = cache.GposTableProofCache.init(allocator),
+            .lookup_selection = cache.LookupSelectionCache.init(allocator),
+            .shaped_runs = cache.ShapedRunCache.init(allocator),
             .cache_font_data = cache_font_data,
             .cache_shaped_runs = cache_shaped_runs,
         };
@@ -107,7 +109,7 @@ pub const State = struct {
 
     pub fn shapedRunCache(
         self: *State,
-    ) ?*layout.ShapedRunCache {
+    ) ?*cache.ShapedRunCache {
         return if (self.cache_shaped_runs) &self.shaped_runs else null;
     }
 

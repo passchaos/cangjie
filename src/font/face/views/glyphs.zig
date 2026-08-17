@@ -88,6 +88,15 @@ pub const View = struct {
         return self.implementation.glyphName(glyph_id);
     }
 
+    /// Return allocator-owned GDEF attachment contour-point indexes.
+    pub fn attachmentPoints(
+        self: View,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+    ) font_mod.FontError![]font_mod.AttachmentPoint {
+        return self.implementation.attachmentPoints(allocator, glyph_id);
+    }
+
     /// Return allocator-owned GDEF ligature caret positions in design units.
     ///
     /// An empty slice means the glyph is uncovered or its authored contour

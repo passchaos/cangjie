@@ -8,6 +8,7 @@ pub const BaselineScript = font.BaseScriptInfo;
 
 pub const GlyphClass = font.GlyphClass;
 pub const LigatureCaret = font.LigatureCaret;
+pub const AttachmentPoint = font.AttachmentPoint;
 pub const Kern = font.KernInfo;
 pub const KernSubtable = font.KernSubtableInfo;
 pub const Justification = font.JstfInfo;

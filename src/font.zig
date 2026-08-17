@@ -328,6 +328,7 @@ pub const BitmapStrikeInfo = bitmap_mod.StrikeInfo;
 
 pub const GlyphClass = gdef_mod.GlyphClass;
 pub const LigatureCaret = gdef_mod.LigatureCaret;
+pub const AttachmentPoint = gdef_mod.AttachmentPoint;
 
 const TableRecord = sfnt.Record;
 
@@ -3228,6 +3229,51 @@ pub const Font = struct {
         );
     }
 
+    /// Return the GDEF AttachList contour-point indexes for one glyph.
+    ///
+    /// The returned slice is allocator-owned and remains sorted in authored
+    /// order. Missing GDEF/AttachList data and uncovered glyphs return an empty
+    /// slice.
+    pub fn attachmentPoints(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+    ) FontError![]AttachmentPoint {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const gdef = self.gdef orelse
+            return allocator.alloc(AttachmentPoint, 0);
+        try sfnt.checksum.validate(self.data, gdef);
+        const gdef_header = try gdef_mod.header(self.data, gdef);
+        const attach_list_offset = gdef_header.attach_list_offset;
+        if (attach_list_offset == 0) {
+            return allocator.alloc(AttachmentPoint, 0);
+        }
+        try gdef_mod.validateChildOffset(
+            attach_list_offset,
+            gdef.length,
+            gdef_header.length,
+        );
+        // This public reader retains the borrowed-byte lifecycle contract used
+        // by glyph classes and ligature carets: post-parse mutations cannot
+        // bypass maxp, Coverage, child-offset, or point-order validation.
+        try gdef_mod.validate(
+            self.data,
+            gdef,
+            self.glyph_count,
+            try self.gdefVariationAxisCount(gdef_header),
+        );
+        return gdef_mod.readAttachmentPoints(
+            allocator,
+            self.data[gdef.offset .. gdef.offset + gdef.length],
+            attach_list_offset,
+            glyph_id,
+        ) catch |err| switch (err) {
+            error.BadSfnt => return error.BadSfnt,
+            error.EndOfStream => return error.EndOfStream,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+    }
+
     /// Return GDEF LigCaretList positions for one glyph.
     ///
     /// CaretValue format 1 uses its authored coordinate, format 2 resolves a
@@ -3257,13 +3303,8 @@ pub const Font = struct {
             gdef_header.length,
         );
         const table = self.data[gdef.offset .. gdef.offset + gdef.length];
-        const variation_axis_count: ?usize =
-            if (gdef_header.item_variation_store_offset) |offset| axis_count: {
-                if (offset == 0) break :axis_count null;
-                const fvar = self.fvar orelse return error.BadSfnt;
-                try sfnt.checksum.validate(self.data, fvar);
-                break :axis_count (try fvar_mod.info(self.data, fvar)).axis_count;
-            } else null;
+        const variation_axis_count =
+            try self.gdefVariationAxisCount(gdef_header);
         // Revalidate the complete child grammar against maxp before lazy reads;
         // Font borrows bytes and callers may mutate them after parse.
         try gdef_mod.validate(
@@ -3296,6 +3337,18 @@ pub const Font = struct {
             error.EndOfStream => return error.EndOfStream,
             error.OutOfMemory => return error.OutOfMemory,
         };
+    }
+
+    fn gdefVariationAxisCount(
+        self: *const Font,
+        gdef_header: gdef_mod.Header,
+    ) FontError!?usize {
+        const offset =
+            gdef_header.item_variation_store_offset orelse return null;
+        if (offset == 0) return null;
+        const fvar = self.fvar orelse return error.BadSfnt;
+        try sfnt.checksum.validate(self.data, fvar);
+        return (try fvar_mod.info(self.data, fvar)).axis_count;
     }
 
     fn markFilteringSets(self: *const Font, allocator: std.mem.Allocator) FontError!?[][]glyph_mod.GlyphId {

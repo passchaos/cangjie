@@ -759,6 +759,13 @@ merged per line, while mixed-bidi visual gaps remain separate fragments. This
 lets platform adapters paint accurate selections inside GDEF-authored
 ligatures and across wraps without reconstructing bidi geometry themselves.
 
+GDEF's previously validation-only `AttachList` is also available through
+`Face.glyphs().attachmentPoints` and
+`cangjie.font.metadata.layout.inspect(face).attachmentPoints`. The
+allocator-owned records expose sorted contour-point indexes for covered glyphs,
+match HarfBuzz's face-level attachment-point semantics, and retain the same
+borrowed-table checksum and child-grammar defenses as other public GDEF reads.
+
 Paragraph shaping now retains glyph atoms in logical source order and applies
 bidi visual ordering only after line ranges are known. Each line builds its own
 bidi map from `ParagraphLine.byte_start/byte_len`; mixed LTR/RTL text therefore

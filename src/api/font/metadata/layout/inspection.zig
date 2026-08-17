@@ -42,6 +42,14 @@ pub const View = struct {
         return self.implementation().markAttachClass(glyph_id);
     }
 
+    pub fn attachmentPoints(
+        self: View,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph.GlyphId,
+    ) font.FontError![]font.AttachmentPoint {
+        return self.implementation().attachmentPoints(allocator, glyph_id);
+    }
+
     pub fn ligatureCarets(
         self: View,
         allocator: std.mem.Allocator,

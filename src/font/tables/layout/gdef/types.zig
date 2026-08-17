@@ -24,3 +24,8 @@ pub const Header = struct {
 pub const LigatureCaret = struct {
     position: f32,
 };
+
+/// One GDEF AttachList contour-point index.
+pub const AttachmentPoint = struct {
+    point_index: u16,
+};

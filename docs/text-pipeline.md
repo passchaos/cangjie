@@ -815,8 +815,37 @@ selection, but never enter font fallback or generate glyph render requests.
 Final `PositionedInlineObject` records are available on both paragraph layouts
 and renderer draw lists. Retained paragraphs may change object dimensions and
 identifiers during reflow while preserving the original marker indexes.
-Yield/resume custom out-of-flow layout for floats and exclusions remains the
-next layer rather than being coupled to the basic object contract.
+
+`InlineObjectKind.custom_out_of_flow` and
+`cangjie.paragraph.OutOfFlowResolver` add the caller-controlled placement layer
+without embedding an application layout callback or opaque state into
+Cangjie. The resolver is a concrete replay/resume state machine. A caller
+starts it with base paragraph options, lays out the returned
+`OutOfFlowPass.options`, and presents that final layout to `next`. The first
+visible unresolved object yields an `OutOfFlowPlacementRequest` containing its
+stable object/source identity, fallback anchor, owning line box, baseline, and
+selected exclusion region. The caller submits absolute paragraph-space
+geometry plus an optional independent rectangular exclusion, then repeats the
+pass until `next` returns `.complete`.
+
+Requests follow UTF-8 source order even when bidi changes visual order. Objects
+removed by the original line limit never yield; an object already accepted
+from a visible pass may not silently disappear on a later replay. Generation
+and request tokens reject stale state. Submitted absolute bounds are rendering
+output only and do not enlarge paragraph metrics; only the optional exclusion
+changes line selection. Static exclusions and pre-authored placements are
+preserved, and `resolvedOptions` exposes the final combined slices while the
+resolver owns them.
+
+The protocol works with one-shot and styled layout, but retained
+`ShapedParagraph` plus `ReflowBuffer` is the intended repeated-placement path:
+Unicode analysis and whole-paragraph shaping stay immutable while each
+response deterministically rebuilds only paragraph presentation. The current
+implementation deliberately replays reflow after a response so exclusions,
+dynamic line heights, ellipsis, justification, punctuation, bidi, caret
+geometry, and rendering all observe one ordinary final layout. The internal
+breaker can later retain an incremental checkpoint without changing this
+public concrete protocol.
 This follows Parley's per-line ordering model while keeping standalone shaping
 APIs in their existing HarfBuzz-compatible visual buffer order.
 

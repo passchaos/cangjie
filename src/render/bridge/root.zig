@@ -276,6 +276,8 @@ const BridgeBuilder = struct {
             var positioned = object;
             positioned.x += self.options.origin_x;
             positioned.y += self.options.origin_y;
+            positioned.anchor_x += self.options.origin_x;
+            positioned.anchor_y += self.options.origin_y;
             self.inline_objects.appendAssumeCapacity(positioned);
         }
         for (self.paragraph.lines, 0..) |line, line_index| {

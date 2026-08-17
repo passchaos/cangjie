@@ -1,6 +1,7 @@
 //! Width-independent paragraph shaping and repeatable visual reflow.
 
 const paragraph_options = @import("../../layout/paragraph/options.zig");
+const out_of_flow = @import("../../layout/paragraph/out_of_flow.zig");
 const text_geometry = @import(
     "../../layout/paragraph/text_geometry/root.zig",
 );
@@ -30,6 +31,13 @@ pub const TextMetrics = paragraph_types.TextMetrics;
 pub const InlineObject = inline_object.Object;
 pub const InlineObjectKind = inline_object.Kind;
 pub const PositionedInlineObject = inline_object.Positioned;
+pub const OutOfFlowGeometry = inline_object.Geometry;
+pub const OutOfFlowPlacement = inline_object.Placement;
+pub const OutOfFlowResolution = inline_object.Resolution;
+pub const OutOfFlowResolver = out_of_flow.Resolver;
+pub const OutOfFlowPass = out_of_flow.Pass;
+pub const OutOfFlowStep = out_of_flow.Step;
+pub const OutOfFlowPlacementRequest = out_of_flow.PlacementRequest;
 pub const Exclusion = paragraph_options.Exclusion;
 pub const object_replacement_character =
     inline_object.object_replacement_character;

@@ -1,6 +1,7 @@
 //! Portable text ranges, locale identifiers, and presentation styles.
 
 const std = @import("std");
+const inline_object = @import("../../layout/inline_object/root.zig");
 const paragraph_options = @import("../../layout/paragraph/options.zig");
 const paragraph_reflow = @import("../../layout/line_break/reflow/root.zig");
 const paragraph_types = @import("../../layout/types/paragraph.zig");
@@ -245,6 +246,7 @@ pub const ParagraphStyle = struct {
     first_line_indent: f32 = 0,
     paragraph_spacing: f32 = 0,
     exclusions: []const paragraph_options.Exclusion = &.{},
+    out_of_flow_placements: []const inline_object.Placement = &.{},
     /// Optional segmentation for Thai, Lao, Khmer, or Myanmar text.
     ///
     /// The dictionary is borrowed and must outlive layout or any retained
@@ -274,6 +276,7 @@ pub const ParagraphStyle = struct {
             .first_line_indent = self.first_line_indent,
             .paragraph_spacing = self.paragraph_spacing,
             .exclusions = self.exclusions,
+            .out_of_flow_placements = self.out_of_flow_placements,
             .word_break_dictionary = self.word_break_dictionary,
             .hyphenation = self.hyphenation,
             .punctuation = self.punctuation,

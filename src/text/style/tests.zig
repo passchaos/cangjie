@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const style_model = @import("root.zig");
+const inline_object = @import("../../layout/inline_object/root.zig");
 const paragraph_types = @import("../../layout/types/paragraph.zig");
 const pipeline_types = @import("../../shaping/pipeline/types.zig");
 const hyphenation = @import("../hyphenation/root.zig");
@@ -79,6 +80,15 @@ test "paragraph style converts to paragraph options" {
         .{ .left_min = 1, .right_min = 1 },
     );
     defer hyphenation_dictionary.deinit();
+    const placement = inline_object.Placement{
+        .byte_index = 4,
+        .geometry = .{
+            .x = 1,
+            .y = 2,
+            .width = 3,
+            .height = 4,
+        },
+    };
     const style = ParagraphStyle{
         .direction = .rtl,
         .text_align = .center,
@@ -89,6 +99,7 @@ test "paragraph style converts to paragraph options" {
         .tab_width = 2,
         .first_line_indent = 10,
         .paragraph_spacing = 4,
+        .out_of_flow_placements = &.{placement},
         .word_break_dictionary = &dictionary,
         .hyphenation = .{
             .dictionary = &hyphenation_dictionary,
@@ -150,6 +161,10 @@ test "paragraph style converts to paragraph options" {
     try std.testing.expect(!options.font_expansion.enabled);
     try std.testing.expectApproxEqAbs(@as(f32, 10), options.first_line_indent, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 4), options.paragraph_spacing, 0.001);
+    try std.testing.expectEqual(
+        placement,
+        options.out_of_flow_placements[0],
+    );
 
     const defaults = (ParagraphStyle{}).paragraphOptions(80);
     try std.testing.expectEqual(paragraph_types.TextAlign.start, defaults.alignment);

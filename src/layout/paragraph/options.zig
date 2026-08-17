@@ -125,6 +125,12 @@ pub const Options = struct {
     /// This slice may change between retained reflows as long as object count
     /// and byte anchors remain identical; geometry does not affect shaping.
     inline_objects: []const inline_object.Object = &.{},
+    /// Absolute placements for `.custom_out_of_flow` objects.
+    ///
+    /// Ordinary layout may consume caller-authored placements directly.
+    /// `paragraph.OutOfFlowResolver` produces this slice while coordinating
+    /// placement-dependent exclusions across replayed reflow passes.
+    out_of_flow_placements: []const inline_object.Placement = &.{},
     /// Optional dictionary tailoring for scripts that normally omit spaces.
     ///
     /// The dictionary is borrowed and must outlive the layout call or retained
@@ -166,6 +172,10 @@ pub fn validate(options: Options) !void {
         return error.InvalidParagraphOptions;
     }
     try exclusions.validate(options.exclusions);
+    try inline_object.validatePlacements(
+        options.inline_objects,
+        options.out_of_flow_placements,
+    );
     if (!std.math.isFinite(options.punctuation.end_hanging_fraction) or
         options.punctuation.end_hanging_fraction < 0 or
         options.punctuation.end_hanging_fraction > 1)

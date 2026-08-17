@@ -153,6 +153,7 @@ pub const ShapedParagraph = struct {
         try inline_object.position(
             &reflow.buffer,
             options.inline_objects,
+            options.out_of_flow_placements,
         );
         return reflow.buffer.paragraphLayout();
     }

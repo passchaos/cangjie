@@ -332,6 +332,7 @@ const Driver = struct {
         try inline_object.position(
             self.buffer,
             self.options.inline_objects,
+            self.options.out_of_flow_placements,
         );
     }
 

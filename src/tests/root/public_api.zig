@@ -18,6 +18,12 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(
         @typeInfo(cangjie.paragraph.PositionedInlineObject) == .@"struct",
     );
+    try std.testing.expect(
+        @typeInfo(cangjie.paragraph.OutOfFlowResolver) == .@"struct",
+    );
+    try std.testing.expect(
+        @typeInfo(cangjie.paragraph.OutOfFlowPlacementRequest) == .@"struct",
+    );
     try std.testing.expectEqual(
         @as(u21, 0xfffc),
         cangjie.paragraph.object_replacement_character,

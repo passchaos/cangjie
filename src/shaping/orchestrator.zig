@@ -330,7 +330,11 @@ pub const TextShaper = struct {
             try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
         }
         punctuation_hanging.apply(buffer, options);
-        try inline_object.position(buffer, options.inline_objects);
+        try inline_object.position(
+            buffer,
+            options.inline_objects,
+            options.out_of_flow_placements,
+        );
         return buffer.paragraphLayout();
     }
 
@@ -384,7 +388,11 @@ pub const TextShaper = struct {
             try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
         }
         punctuation_hanging.apply(buffer, options);
-        try inline_object.position(buffer, options.inline_objects);
+        try inline_object.position(
+            buffer,
+            options.inline_objects,
+            options.out_of_flow_placements,
+        );
         return buffer.paragraphLayout();
     }
 

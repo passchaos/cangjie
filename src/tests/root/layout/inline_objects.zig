@@ -83,6 +83,16 @@ test "in-flow object wraps, owns line height, caret geometry, and draw output" {
         draw_list.inline_objects[0].x,
         0.001,
     );
+    try std.testing.expectApproxEqAbs(
+        positioned.anchor_x + 3,
+        draw_list.inline_objects[0].anchor_x,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        positioned.anchor_y + 5,
+        draw_list.inline_objects[0].anchor_y,
+        0.001,
+    );
     // The marker is not font-owned and therefore produces no glyph draw.
     try std.testing.expectEqual(@as(usize, 2), draw_list.glyphs.len);
 }

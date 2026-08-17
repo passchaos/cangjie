@@ -66,6 +66,9 @@ pub const ParagraphLine = struct {
     y: f32,
     /// First-line or paragraph-segment indentation reserved before alignment.
     indent: f32 = 0,
+    /// Physical x and measure of the selected contiguous line fragment.
+    region_x: f32 = 0,
+    region_width: f32 = 0,
     /// Portion of edge glyph advance protruding before the physical line box.
     ///
     /// Glyph positions and caret geometry still include this ink. `x` remains

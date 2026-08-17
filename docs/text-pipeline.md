@@ -795,6 +795,17 @@ bidi visual ordering only after line ranges are known. Each line builds its own
 bidi map from `ParagraphLine.byte_start/byte_len`; mixed LTR/RTL text therefore
 reorders independently when a width change creates different line boundaries.
 
+`ParagraphOptions.exclusions` adds platform-neutral rectangular float/exclusion
+geometry. Each wrapped visual line subtracts vertically intersecting rectangles
+from its indented container and selects the widest remaining contiguous
+fragment; equal fragments prefer physical left for LTR and physical right for
+RTL. Fully blocked bands advance to the nearest rectangle bottom without
+creating empty source lines. `ParagraphLine.region_x/region_width` retain the
+chosen fragment so alignment, optical punctuation, compression, justification,
+ellipsis, styled minimum line heights, retained reflow, caret geometry, and
+rendering all consume one final measure. Multiple simultaneous fragments on a
+single baseline remain outside the current one-line/one-fragment model.
+
 Paragraph inline objects use U+FFFC OBJECT REPLACEMENT CHARACTER as their
 stable UTF-8 source anchor. `cangjie.paragraph.InlineObject` supports in-flow
 objects that contribute width and baseline-relative line extents, plus

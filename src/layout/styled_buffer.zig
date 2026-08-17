@@ -1,5 +1,6 @@
 const std = @import("std");
 const run_types = @import("types/runs.zig");
+const reflow_regions = @import("line_break/reflow/regions.zig");
 const styled_paragraph = @import("styled_paragraph.zig");
 const unicode = @import("../unicode.zig");
 
@@ -166,10 +167,8 @@ pub fn appendEllipsis(
     const dot_advance = @as(f32, @floatFromInt(dot_metrics.advance_width)) *
         (run.font_size / @as(f32, @floatFromInt(font.units_per_em)));
     const ellipsis_width = dot_advance * @as(f32, @floatFromInt(ellipsis_count));
-    const width_limit = if (std.math.isFinite(max_width))
-        max_width
-    else
-        std.math.inf(f32);
+    const region = reflow_regions.stored(line.*, max_width);
+    const width_limit = region.width;
     // Optical punctuation hanging is invalid once ellipsis changes the
     // terminal glyph. Restore the full advance sum before fitting the dots.
     line.width = 0;
@@ -241,7 +240,11 @@ pub fn appendEllipsis(
         line.glyph_start,
         line.glyph_start + line.glyph_len,
     );
-    line.x = alignedLineX(line.width, max_width, alignment);
+    line.x = region.x + alignedLineX(
+        @min(line.width, region.width),
+        region.width,
+        alignment,
+    );
 }
 
 pub fn reorderByPermutation(

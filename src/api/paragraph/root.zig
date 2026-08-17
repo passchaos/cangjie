@@ -30,6 +30,7 @@ pub const TextMetrics = paragraph_types.TextMetrics;
 pub const InlineObject = inline_object.Object;
 pub const InlineObjectKind = inline_object.Kind;
 pub const PositionedInlineObject = inline_object.Positioned;
+pub const Exclusion = paragraph_options.Exclusion;
 pub const object_replacement_character =
     inline_object.object_replacement_character;
 pub const object_replacement_utf8 = inline_object.object_replacement_utf8;

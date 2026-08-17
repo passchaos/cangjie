@@ -10,6 +10,7 @@ const Font = @import("../../../font.zig").Font;
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const discretionary_hyphen = @import("../../discretionary_hyphen.zig");
 const inline_object = @import("../../inline_object/root.zig");
+const regions = @import("regions.zig");
 const run_types = @import("../../types/runs.zig");
 
 pub const BaselineMetrics = struct {
@@ -32,6 +33,34 @@ pub const RunRange = struct {
     start: usize,
     len: usize,
 };
+
+pub fn resolvedLineInfo(
+    runs: anytype,
+    glyphs: []const GlyphPosition,
+    objects: []const inline_object.Object,
+    glyph_start: usize,
+    glyph_end: usize,
+    default_metrics: BaselineMetrics,
+    requested_line_height: ?f32,
+    recipe_minimum_line_height: ?f32,
+) LineRunInfo {
+    const effective_line_height = if (recipe_minimum_line_height) |minimum|
+        if (requested_line_height) |requested|
+            @max(minimum, requested)
+        else
+            minimum
+    else
+        requested_line_height;
+    return lineRunInfo(
+        runs,
+        glyphs,
+        objects,
+        glyph_start,
+        glyph_end,
+        default_metrics,
+        effective_line_height,
+    );
+}
 
 pub fn defaultBaselineMetrics(
     font: *const Font,
@@ -107,27 +136,6 @@ pub fn resolvedAlignment(options: anytype) @TypeOf(options.alignment) {
     };
 }
 
-pub fn lineIndent(line_index: usize, options: anytype) f32 {
-    if (line_index == 0) return @max(0, options.first_line_indent);
-    return 0;
-}
-
-pub fn lineWidthLimit(
-    line_index: usize,
-    max_width: f32,
-    options: anytype,
-) f32 {
-    return lineWidthLimitForIndent(
-        max_width,
-        lineIndent(line_index, options),
-    );
-}
-
-pub fn lineWidthLimitForIndent(max_width: f32, indent: f32) f32 {
-    if (!std.math.isFinite(max_width)) return max_width;
-    return @max(0, max_width - indent);
-}
-
 pub fn appendLine(
     buffer: anytype,
     glyph_start: usize,
@@ -138,12 +146,15 @@ pub fn appendLine(
     run_info: LineRunInfo,
     y: f32,
     alignment: anytype,
-    max_width: f32,
-    indent: f32,
+    region: regions.LineRegion,
     justification_target: ?f32,
 ) !void {
-    const available_width = lineWidthLimitForIndent(max_width, indent);
-    const x = indent + alignedLineX(width, available_width, alignment);
+    const occupied_width = @min(width, region.width);
+    const x = region.x + alignedLineX(
+        occupied_width,
+        region.width,
+        alignment,
+    );
     const metrics = run_info.metrics;
     try buffer.lines.append(buffer.allocator, .{
         .glyph_start = glyph_start,
@@ -154,7 +165,9 @@ pub fn appendLine(
         .byte_len = byte_end - byte_start,
         .x = x,
         .y = y,
-        .indent = indent,
+        .indent = region.indent,
+        .region_x = region.x,
+        .region_width = region.width,
         .width = width,
         .justification_target = justification_target,
         .height = metrics.lineHeight(),

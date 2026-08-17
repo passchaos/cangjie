@@ -11,6 +11,7 @@ const std = @import("std");
 
 const GlyphPosition = @import("../glyph_position.zig").GlyphPosition;
 const geometry = @import("../line_break/reflow/geometry.zig");
+const regions = @import("../line_break/reflow/regions.zig");
 const hanging = @import("hanging.zig");
 const paragraph_options = @import("../paragraph/options.zig");
 const unicode = @import("../../unicode.zig");
@@ -101,10 +102,7 @@ pub fn apply(buffer: anytype, options: anytype) !void {
         if (line.glyph_len == 0) continue;
         const glyph_end = line.glyph_start + line.glyph_len;
         const glyphs = buffer.glyphs.items[line.glyph_start..glyph_end];
-        const available = geometry.lineWidthLimitForIndent(
-            max_width,
-            line.indent,
-        );
+        const available = regions.stored(line, max_width).width;
         const hanging_amount = hanging.logicalEndAmount(
             buffer.glyphs.items,
             line.glyph_start,

@@ -3,6 +3,7 @@
 const std = @import("std");
 
 const paragraph_types = @import("../types/paragraph.zig");
+const exclusions = @import("exclusions.zig");
 const inline_object = @import("../inline_object/root.zig");
 const hyphenation = @import("../../text/hyphenation/root.zig");
 const pipeline_types = @import("../../shaping/pipeline/types.zig");
@@ -10,6 +11,8 @@ const shaping_plan = @import("../../shaping/plan/root.zig");
 const plan_validation = @import("../../shaping/plan/validation.zig");
 const segmentation = @import("../../text/segmentation/root.zig");
 const unicode = @import("../../unicode.zig");
+
+pub const Exclusion = exclusions.Exclusion;
 
 /// Optional language-aware discretionary line-breaking policy.
 ///
@@ -112,6 +115,11 @@ pub const Options = struct {
     word_spacing: f32 = 0,
     first_line_indent: f32 = 0,
     paragraph_spacing: f32 = 0,
+    /// Rectangular paragraph-space areas unavailable to wrapped text.
+    ///
+    /// Lines choose the widest remaining contiguous horizontal fragment.
+    /// Exclusions are ignored by `.no_wrap`.
+    exclusions: []const exclusions.Exclusion = &.{},
     /// Inline objects anchored by U+FFFC markers in the paragraph text.
     ///
     /// This slice may change between retained reflows as long as object count
@@ -157,6 +165,7 @@ pub fn validate(options: Options) !void {
     {
         return error.InvalidParagraphOptions;
     }
+    try exclusions.validate(options.exclusions);
     if (!std.math.isFinite(options.punctuation.end_hanging_fraction) or
         options.punctuation.end_hanging_fraction < 0 or
         options.punctuation.end_hanging_fraction > 1)
@@ -246,6 +255,32 @@ test "punctuation compression fraction stays normalized" {
     try validate(.{
         .max_width = 100,
         .punctuation = .{ .max_compression_fraction = 1 },
+    });
+}
+
+test "paragraph exclusions require finite nonnegative rectangles" {
+    for ([_]Exclusion{
+        .{ .x = std.math.nan(f32), .y = 0, .width = 1, .height = 1 },
+        .{ .x = 0, .y = std.math.inf(f32), .width = 1, .height = 1 },
+        .{ .x = 0, .y = 0, .width = -1, .height = 1 },
+        .{ .x = 0, .y = 0, .width = 1, .height = -1 },
+    }) |item| {
+        try std.testing.expectError(
+            error.InvalidParagraphOptions,
+            validate(.{
+                .max_width = 100,
+                .exclusions = &.{item},
+            }),
+        );
+    }
+    try validate(.{
+        .max_width = 100,
+        .exclusions = &.{.{
+            .x = -10,
+            .y = 0,
+            .width = 20,
+            .height = 20,
+        }},
     });
 }
 

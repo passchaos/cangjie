@@ -28,6 +28,10 @@ pub const Uniform = struct {
     font_size: f32,
     options: paragraph_options.Options,
 
+    pub fn minimumLineHeight(_: Uniform, _: usize, _: usize) ?f32 {
+        return null;
+    }
+
     pub fn acceptKashidaBoundary(_: Uniform, _: usize) bool {
         return true;
     }

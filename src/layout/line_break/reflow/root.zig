@@ -17,6 +17,7 @@ const inline_object = @import("../../inline_object/root.zig");
 const opportunities = @import("opportunities.zig");
 const punctuation_compression = @import("../../punctuation/compression.zig");
 const punctuation_hanging = @import("../../punctuation/hanging.zig");
+const regions = @import("regions.zig");
 const segmentation = @import("../../../text/segmentation/root.zig");
 const shaped_boundary = @import("../shaped_boundary.zig");
 const truncation = @import("truncation.zig");
@@ -69,11 +70,15 @@ pub fn buildWithJstfShrinkage(
         options.max_width
     else
         std.math.inf(f32);
-    const wrap_width = if (options.wrap_mode == .no_wrap)
-        std.math.inf(f32)
-    else
-        max_width;
     const alignment = geometry.resolvedAlignment(options);
+    const uses_exclusions =
+        options.wrap_mode != .no_wrap and options.exclusions.len != 0;
+    const max_lines = options.max_lines orelse std.math.maxInt(usize);
+    if (max_lines == 0) {
+        buffer.runs.clearRetainingCapacity();
+        buffer.glyphs.clearRetainingCapacity();
+        return;
+    }
     var line_start: usize = 0;
     var line_byte_start: usize = 0;
     var line_width: f32 = 0;
@@ -81,9 +86,17 @@ pub fn buildWithJstfShrinkage(
     var y: f32 = 0;
     var index: usize = 0;
     var line_in_paragraph: usize = 0;
+    var region_height = requestedLineHeight(default_metrics, options.line_height);
+    var active_region = try regions.preview(
+        buffer.allocator,
+        options,
+        line_in_paragraph,
+        y,
+        region_height,
+        max_width,
+    );
     var consecutive_hyphenated_lines: usize = 0;
     var terminal_emergency_line_committed = false;
-    const max_lines = options.max_lines orelse std.math.maxInt(usize);
     var selected_automatic_hyphens =
         std.ArrayList(automatic_hyphens.Selected).empty;
     defer selected_automatic_hyphens.deinit(buffer.allocator);
@@ -146,7 +159,7 @@ pub fn buildWithJstfShrinkage(
             const line_byte_end = shaped_boundary.glyphSourceEnd(
                 buffer.glyphs.items[break_end_index - 1],
             );
-            const line_info = geometry.lineRunInfo(
+            const line_info = geometry.resolvedLineInfo(
                 buffer.runs.items,
                 buffer.glyphs.items,
                 options.inline_objects,
@@ -154,6 +167,15 @@ pub fn buildWithJstfShrinkage(
                 index,
                 default_metrics,
                 options.line_height,
+                recipe.minimumLineHeight(line_start, index),
+            );
+            const line_region = try regions.resolve(
+                buffer.allocator,
+                options,
+                line_in_paragraph,
+                &y,
+                line_info.metrics.lineHeight(),
+                max_width,
             );
             try geometry.appendLine(
                 buffer,
@@ -165,8 +187,7 @@ pub fn buildWithJstfShrinkage(
                 line_info,
                 y,
                 alignment,
-                max_width,
-                geometry.lineIndent(line_in_paragraph, options),
+                line_region,
                 null,
             );
             if (buffer.lines.items.len >= max_lines) {
@@ -194,6 +215,18 @@ pub fn buildWithJstfShrinkage(
             last_break.reset();
             consecutive_hyphenated_lines = 0;
             line_in_paragraph = 0;
+            region_height = requestedLineHeight(
+                default_metrics,
+                options.line_height,
+            );
+            active_region = try regions.preview(
+                buffer.allocator,
+                options,
+                line_in_paragraph,
+                y,
+                region_height,
+                max_width,
+            );
             index = break_end_index - 1;
             continue :glyph_loop;
         }
@@ -208,11 +241,40 @@ pub fn buildWithJstfShrinkage(
         }
         glyph.x_advance += geometry.spacingForGlyph(glyph.codepoint, options);
         line_width += glyph.x_advance;
-        const current_line_limit = geometry.lineWidthLimit(
-            line_in_paragraph,
-            wrap_width,
-            options,
-        );
+        if (uses_exclusions) {
+            const next_region_height = @max(
+                region_height,
+                glyphLineHeight(
+                    buffer.runs.items,
+                    buffer.glyphs.items,
+                    options.inline_objects,
+                    index,
+                    default_metrics,
+                    options.line_height,
+                    recipe.minimumLineHeight(index, index + 1),
+                ),
+            );
+            if (next_region_height > region_height) {
+                region_height = next_region_height;
+                // The complete prospective line band determines its fragment.
+                // Overflow still follows the normal safe-break path below; a
+                // tall glyph must not create an ad-hoc break inside a shaped
+                // atom or bypass discretionary-hyphen and punctuation policy.
+                active_region = try regions.preview(
+                    buffer.allocator,
+                    options,
+                    line_in_paragraph,
+                    y,
+                    region_height,
+                    max_width,
+                );
+            }
+        }
+        const current_region = active_region;
+        const current_line_limit = if (options.wrap_mode == .no_wrap)
+            std.math.inf(f32)
+        else
+            current_region.width;
         // A hanging punctuation glyph may cross the inline-end measure while
         // remaining on this line. Delay overflow until the occupied portion,
         // rather than the complete glyph advance, exceeds the limit. The
@@ -275,6 +337,29 @@ pub fn buildWithJstfShrinkage(
                     line_width,
                     &last_break,
                 );
+                if (uses_exclusions) {
+                    // Source-level JSTF replacement can change run metrics as
+                    // well as glyph count. Refresh the prospective band before
+                    // measuring the next source atom against exclusions.
+                    region_height = lineHeightForRange(
+                        buffer.runs.items,
+                        buffer.glyphs.items,
+                        options.inline_objects,
+                        line_start,
+                        index + 1,
+                        default_metrics,
+                        options.line_height,
+                        recipe.minimumLineHeight(line_start, index + 1),
+                    );
+                    active_region = try regions.preview(
+                        buffer.allocator,
+                        options,
+                        line_in_paragraph,
+                        y,
+                        region_height,
+                        max_width,
+                    );
+                }
                 continue :glyph_loop;
             }
             // Discretionary opportunities include visible hyphen width. Reject
@@ -291,6 +376,29 @@ pub fn buildWithJstfShrinkage(
                 const candidate_index =
                     last_break.glyph_index orelse break :candidate null;
                 if (candidate_is_limited_hyphen) break :candidate null;
+                const candidate_width_limit = if (!uses_exclusions)
+                    current_line_limit
+                else candidate_limit: {
+                    const candidate_height = lineHeightForRange(
+                        buffer.runs.items,
+                        buffer.glyphs.items,
+                        options.inline_objects,
+                        line_start,
+                        candidate_index,
+                        default_metrics,
+                        options.line_height,
+                        recipe.minimumLineHeight(line_start, candidate_index),
+                    );
+                    const candidate_region = try regions.preview(
+                        buffer.allocator,
+                        options,
+                        line_in_paragraph,
+                        y,
+                        candidate_height,
+                        max_width,
+                    );
+                    break :candidate_limit candidate_region.width;
+                };
                 // A selected discretionary boundary adds a visible hyphen
                 // after this prefix. The preceding source glyph is therefore
                 // no longer at logical line end and cannot contribute hanging.
@@ -315,7 +423,7 @@ pub fn buildWithJstfShrinkage(
                         options.punctuation.convention,
                     );
                 if (@max(0, last_break.width - candidate_hanging) >
-                    current_line_limit + candidate_compression)
+                    candidate_width_limit + candidate_compression)
                 {
                     break :candidate null;
                 }
@@ -374,16 +482,7 @@ pub fn buildWithJstfShrinkage(
             const justify_line =
                 next_line_start < buffer.glyphs.items.len and
                 buffer.lines.items.len + 1 < max_lines;
-            const indent = geometry.lineIndent(line_in_paragraph, options);
-            const justification_target =
-                if (justify_line and alignment == .justify)
-                    @max(
-                        break_width,
-                        geometry.lineWidthLimitForIndent(max_width, indent),
-                    )
-                else
-                    null;
-            const line_info = geometry.lineRunInfo(
+            const line_info = geometry.resolvedLineInfo(
                 buffer.runs.items,
                 buffer.glyphs.items,
                 options.inline_objects,
@@ -391,7 +490,24 @@ pub fn buildWithJstfShrinkage(
                 break_end,
                 default_metrics,
                 options.line_height,
+                recipe.minimumLineHeight(line_start, break_end),
             );
+            const committed_region = try regions.resolve(
+                buffer.allocator,
+                options,
+                line_in_paragraph,
+                &y,
+                line_info.metrics.lineHeight(),
+                max_width,
+            );
+            // The prospective overflowing prefix can be taller than the
+            // selected source prefix. Justification must therefore use the
+            // exact region re-resolved for the committed line, not the preview.
+            const justification_target =
+                if (justify_line and alignment == .justify)
+                    @max(break_width, committed_region.width)
+                else
+                    null;
             try geometry.appendLine(
                 buffer,
                 line_start,
@@ -402,8 +518,7 @@ pub fn buildWithJstfShrinkage(
                 line_info,
                 y,
                 alignment,
-                max_width,
-                indent,
+                committed_region,
                 justification_target,
             );
             if (buffer.lines.items.len >= max_lines) {
@@ -437,6 +552,24 @@ pub fn buildWithJstfShrinkage(
                 else
                     0;
             line_start = next_line_start;
+            region_height = lineHeightForRange(
+                buffer.runs.items,
+                buffer.glyphs.items,
+                options.inline_objects,
+                line_start,
+                index + 1,
+                default_metrics,
+                options.line_height,
+                recipe.minimumLineHeight(line_start, index + 1),
+            );
+            active_region = try regions.preview(
+                buffer.allocator,
+                options,
+                line_in_paragraph,
+                y,
+                region_height,
+                max_width,
+            );
             line_byte_start = shaped_boundary.byteEndForGlyphPrefix(
                 buffer.glyphs.items,
                 line_start,
@@ -452,6 +585,18 @@ pub fn buildWithJstfShrinkage(
                 // slice, and merely clamping the slice would count the trimmed
                 // spaces again on the following iterations.
                 line_width = 0;
+                region_height = requestedLineHeight(
+                    default_metrics,
+                    options.line_height,
+                );
+                active_region = try regions.preview(
+                    buffer.allocator,
+                    options,
+                    line_in_paragraph,
+                    y,
+                    region_height,
+                    max_width,
+                );
                 terminal_emergency_line_committed =
                     break_end == buffer.glyphs.items.len;
                 last_break.reset();
@@ -496,7 +641,7 @@ pub fn buildWithJstfShrinkage(
     // fabricating an empty line unless the source actually ended in a hard
     // separator.
     if (!terminal_emergency_line_committed) {
-        const line_info = geometry.lineRunInfo(
+        const line_info = geometry.resolvedLineInfo(
             buffer.runs.items,
             buffer.glyphs.items,
             options.inline_objects,
@@ -504,6 +649,15 @@ pub fn buildWithJstfShrinkage(
             buffer.glyphs.items.len,
             default_metrics,
             options.line_height,
+            recipe.minimumLineHeight(line_start, buffer.glyphs.items.len),
+        );
+        const line_region = try regions.resolve(
+            buffer.allocator,
+            options,
+            line_in_paragraph,
+            &y,
+            line_info.metrics.lineHeight(),
+            max_width,
         );
         try geometry.appendLine(
             buffer,
@@ -515,8 +669,7 @@ pub fn buildWithJstfShrinkage(
             line_info,
             y,
             alignment,
-            max_width,
-            geometry.lineIndent(line_in_paragraph, options),
+            line_region,
             null,
         );
     }
@@ -535,6 +688,10 @@ pub fn buildWithJstfShrinkage(
 }
 
 const NoShrinkageRecipe = struct {
+    pub fn minimumLineHeight(_: @This(), _: usize, _: usize) ?f32 {
+        return null;
+    }
+
     pub fn canShrinkSourceRange(_: @This(), _: usize, _: usize) bool {
         return false;
     }
@@ -627,4 +784,54 @@ pub fn applyPendingJustification(buffer: anytype) void {
         );
         line.justification_target = null;
     }
+}
+
+fn requestedLineHeight(
+    default_metrics: BaselineMetrics,
+    requested: ?f32,
+) f32 {
+    return @max(default_metrics.lineHeight(), requested orelse 0);
+}
+
+fn glyphLineHeight(
+    runs: anytype,
+    glyphs: []const @import("../../glyph_position.zig").GlyphPosition,
+    objects: []const inline_object.Object,
+    glyph_index: usize,
+    default_metrics: BaselineMetrics,
+    requested: ?f32,
+    styled_minimum: ?f32,
+) f32 {
+    return lineHeightForRange(
+        runs,
+        glyphs,
+        objects,
+        glyph_index,
+        @min(glyph_index + 1, glyphs.len),
+        default_metrics,
+        requested,
+        styled_minimum,
+    );
+}
+
+fn lineHeightForRange(
+    runs: anytype,
+    glyphs: []const @import("../../glyph_position.zig").GlyphPosition,
+    objects: []const inline_object.Object,
+    glyph_start: usize,
+    glyph_end: usize,
+    default_metrics: BaselineMetrics,
+    requested: ?f32,
+    styled_minimum: ?f32,
+) f32 {
+    return geometry.resolvedLineInfo(
+        runs,
+        glyphs,
+        objects,
+        glyph_start,
+        @max(glyph_start, glyph_end),
+        default_metrics,
+        requested,
+        styled_minimum,
+    ).metrics.lineHeight();
 }

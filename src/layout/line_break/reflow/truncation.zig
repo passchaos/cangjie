@@ -3,6 +3,7 @@
 const std = @import("std");
 
 const geometry = @import("geometry.zig");
+const regions = @import("regions.zig");
 const run_types = @import("../../types/runs.zig");
 
 pub fn apply(
@@ -76,10 +77,8 @@ fn appendEllipsisToLastLine(
         (run.font_size / @as(f32, @floatFromInt(font.units_per_em)));
     const ellipsis_width =
         dot_advance * @as(f32, @floatFromInt(ellipsis_count));
-    const width_limit = if (std.math.isFinite(max_width))
-        max_width
-    else
-        std.math.inf(f32);
+    const region = regions.stored(line.*, max_width);
+    const width_limit = region.width;
     // Reflow may have selected this line using optical punctuation hanging.
     // Ellipsis changes the terminal glyph and therefore invalidates that
     // discount. Restore the complete advance sum before fitting synthetic
@@ -131,5 +130,9 @@ fn appendEllipsisToLastLine(
         line.glyph_start,
         line.glyph_start + line.glyph_len,
     ).len;
-    line.x = geometry.alignedLineX(line.width, max_width, alignment);
+    line.x = region.x + geometry.alignedLineX(
+        @min(line.width, region.width),
+        region.width,
+        alignment,
+    );
 }

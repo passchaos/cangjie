@@ -9,6 +9,7 @@ const std = @import("std");
 
 const GlyphPosition = @import("../glyph_position.zig").GlyphPosition;
 const geometry = @import("../line_break/reflow/geometry.zig");
+const regions = @import("../line_break/reflow/regions.zig");
 const unicode = @import("../../unicode.zig");
 const line_break_properties =
     @import("../../unicode/line_break/properties.zig");
@@ -77,13 +78,10 @@ pub fn apply(buffer: anytype, options: anytype) void {
             }
         }
         line.width = @max(0, full_width - amount);
-        const available_width = geometry.lineWidthLimitForIndent(
-            max_width,
-            line.indent,
-        );
-        const occupied_x = line.indent + geometry.alignedLineX(
-            line.width,
-            available_width,
+        const region = regions.stored(line.*, max_width);
+        const occupied_x = region.x + geometry.alignedLineX(
+            @min(line.width, region.width),
+            region.width,
             alignment,
         );
         // `line.x` remains the origin of the first physical glyph. The occupied

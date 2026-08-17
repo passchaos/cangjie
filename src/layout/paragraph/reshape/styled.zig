@@ -32,6 +32,26 @@ pub const Recipe = struct {
     spans: []const styled_paragraph.Span,
     options: paragraph_options.Options,
 
+    pub fn minimumLineHeight(
+        self: Recipe,
+        glyph_start: usize,
+        glyph_end: usize,
+    ) ?f32 {
+        if (glyph_start > glyph_end or glyph_end > self.metadata.items.len) {
+            return null;
+        }
+        var result: ?f32 = null;
+        for (self.metadata.items[glyph_start..glyph_end]) |item| {
+            if (item.minimum_line_height) |minimum| {
+                result = if (result) |current|
+                    @max(current, minimum)
+                else
+                    minimum;
+            }
+        }
+        return result;
+    }
+
     pub fn acceptKashidaBoundary(
         self: Recipe,
         boundary: usize,

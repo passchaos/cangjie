@@ -19,7 +19,7 @@ const position_attachments = positioning.attachments;
 const diagnostics = @import("shaping/diagnostics/root.zig");
 const diagnostic_caret = diagnostics.caret;
 const diagnostic_fallback = diagnostics.fallback;
-const diagnostic_quality = diagnostics.quality;
+const diagnostic_orchestration = diagnostics.orchestration;
 const diagnostic_types = diagnostics.types;
 const font_fallback = @import("shaping/fallback/font/root.zig");
 const fallback_segment = @import("shaping/fallback/segment.zig");
@@ -113,13 +113,6 @@ pub const ClusterCaretConsistencyReport = diagnostic_types.ClusterCaretConsisten
 
 pub const diagnoseFontFallbackUtf8 = diagnostic_fallback.analyze;
 
-/// Shape text and validate source cluster/caret invariants without depending on
-/// a renderer, platform text API, or UI layer.
-///
-/// The paragraph is laid out with unbounded width so the report focuses on
-/// shaper source metadata and caret normalization rather than line wrapping.
-/// Callers can use this in fixtures and benchmarks as a cheap preflight before
-/// asserting pixels or editor selection geometry.
 pub fn diagnoseClusterCaretConsistencyUtf8(
     allocator: std.mem.Allocator,
     cascade: FontCascade,
@@ -127,23 +120,16 @@ pub fn diagnoseClusterCaretConsistencyUtf8(
     font_size: f32,
     options: ShapeOptions,
 ) !ClusterCaretConsistencyReport {
-    var buffer = LayoutBuffer.init(allocator);
-    defer buffer.deinit();
-
-    _ = try TextShaper.shapeUtf8CascadeWithOptions(cascade, &buffer, text, font_size, options);
-    try buildParagraphLines(&buffer, text, .{
-        .max_width = std.math.inf(f32),
-        .direction = options.direction,
-    }, defaultBaselineMetrics(cascade.fonts[0], font_size), null, null, null);
-    return try diagnoseClusterCaretConsistencyForLayout(allocator, text, buffer.paragraphLayout());
+    return try diagnostic_orchestration.clusterCaretConsistency(
+        TextShaper,
+        allocator,
+        cascade,
+        text,
+        font_size,
+        options,
+    );
 }
 
-/// Shape text and return a compact quality/coverage report.
-///
-/// The report owns only the `missing_glyphs` slice. All other values are scalar
-/// aggregates computed from the shaped glyph stream and deterministic fallback
-/// decisions, so this helper remains cheap enough to run in unit tests,
-/// benchmarks, and CI quality gates.
 pub fn diagnoseShapeQualityUtf8(
     allocator: std.mem.Allocator,
     cascade: FontCascade,
@@ -151,23 +137,14 @@ pub fn diagnoseShapeQualityUtf8(
     font_size: f32,
     options: ShapeOptions,
 ) !ShapeQualityReport {
-    var buffer = LayoutBuffer.init(allocator);
-    defer buffer.deinit();
-
-    const scripted = try TextShaper.shapeUtf8ScriptRuns(
+    return try diagnostic_orchestration.shapeQuality(
+        TextShaper,
+        allocator,
         cascade,
-        &buffer,
         text,
         font_size,
         options,
     );
-    const fallback = try diagnostic_fallback.analyze(
-        allocator,
-        cascade,
-        text,
-    );
-    defer allocator.free(fallback);
-    return try diagnostic_quality.summarize(allocator, scripted, fallback);
 }
 
 const diagnoseClusterCaretConsistencyForLayout = diagnostic_caret.analyze;

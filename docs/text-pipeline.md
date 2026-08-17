@@ -223,10 +223,10 @@ Renderer-free analysis is organized under `src/shaping/diagnostics/`:
 - `orchestration.zig` composes shaping, paragraph geometry, and pure analysis
   through a comptime-supplied shaper type.
 
-The public diagnostic API remains thin. Its current compatibility wrappers
-statically bind `TextShaper` through `src/layout.zig`; report storage and the
-diagnostic algorithms themselves do not depend on that façade or on runtime
-type erasure.
+The public diagnostic API remains thin.
+`src/api/shaping/root.zig` statically binds the ordinary shaper directly to the
+diagnostic orchestrator; report storage and the diagnostic algorithms do not
+depend on `src/layout.zig` or on runtime type erasure.
 
 The first executable shaping stage is isolated under
 `src/shaping/pipeline/source/`:
@@ -719,9 +719,10 @@ Future changes must preserve these rules:
 2. Define bounded cache budgets and eviction policy for long-lived engines,
    while preserving exact cache-key comparisons, explicit lifetime rules, and
    observable hit/miss statistics.
-3. Finish routing public shaping and paragraph APIs directly to their domain
-   modules, then retire the remaining `src/layout.zig` compatibility aliases
-   once all internal consumers have migrated.
+3. Continue routing the remaining public rendering, debug, attributed-text,
+   and database APIs directly to their domain modules, then retire
+   `src/layout.zig` once all internal and compatibility consumers have
+   migrated.
 4. Add language-aware hyphenation as the next optional tailoring layer; keep
    dictionary segmentation and hyphenation outside the default UAX #14 state
    machine.

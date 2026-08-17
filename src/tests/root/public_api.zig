@@ -506,6 +506,36 @@ test "shaping and paragraph domains expose reusable library workflows" {
     try std.testing.expectEqual(@as(usize, 3), shaped.glyphs.len);
     try std.testing.expectEqual(@as(usize, 1), shaped.runs.len);
 
+    const fallback = try cangjie.shaping.diagnostics.fontFallback(
+        allocator,
+        cascade,
+        "A",
+    );
+    defer allocator.free(fallback);
+    try std.testing.expectEqual(@as(usize, 1), fallback.len);
+    try std.testing.expectEqual(@as(usize, 0), fallback[0].font_index);
+
+    var quality = try cangjie.shaping.diagnostics.quality(
+        allocator,
+        cascade,
+        "A",
+        20,
+        .{},
+    );
+    defer quality.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), quality.glyph_count);
+    try std.testing.expectEqual(@as(usize, 0), quality.missing_glyph_count);
+
+    var caret = try cangjie.shaping.diagnostics.caretConsistency(
+        allocator,
+        cascade,
+        "A",
+        20,
+        .{},
+    );
+    defer caret.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), caret.issue_count);
+
     var paragraph = try engine.prepareParagraph(cascade, .{
         .text = "A A A",
         .font_size = 20,

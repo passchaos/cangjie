@@ -3,10 +3,17 @@
 const std = @import("std");
 
 const face_mod = @import("../../font/face/root.zig");
-const layout = @import("../../layout.zig");
-const shaping_diagnostics = @import("../../shaping/diagnostics/root.zig");
-const unicode = @import("../../unicode.zig");
+const glyph_position = @import("../../layout/glyph_position.zig");
+const run_types = @import("../../layout/types/runs.zig");
+const cache = @import("../../shaping/context/cache/root.zig");
 const context = @import("../../shaping/context/root.zig");
+const shaping_diagnostics = @import("../../shaping/diagnostics/root.zig");
+const diagnostic_types = shaping_diagnostics.types;
+const font_fallback = @import("../../shaping/fallback/font/root.zig");
+const ordinary_shaper = @import("../../shaping/orchestrator.zig").TextShaper;
+const pipeline_types = @import("../../shaping/pipeline/types.zig");
+const shaping_plan = @import("../../shaping/plan/root.zig");
+const unicode = @import("../../unicode.zig");
 
 /// Reusable owner of shaping, fallback, paragraph output, and font-derived
 /// caches. One engine serves one worker at a time; returned views remain valid
@@ -14,31 +21,34 @@ const context = @import("../../shaping/context/root.zig");
 pub const Engine = context.Engine;
 pub const Request = context.ShapeRequest;
 pub const TextRequest = context.CascadeRequest;
-pub const Options = layout.ShapeOptions;
-pub const Direction = layout.TextDirection;
-pub const WritingMode = layout.WritingMode;
-pub const Orientation = layout.TextOrientation;
-pub const ScriptPosition = layout.ScriptPosition;
-pub const ClusterLevel = layout.ClusterLevel;
+pub const Options = shaping_plan.ShapeOptions;
+pub const Direction = pipeline_types.TextDirection;
+pub const WritingMode = pipeline_types.WritingMode;
+pub const Orientation = pipeline_types.TextOrientation;
+pub const ScriptPosition = pipeline_types.ScriptPosition;
+pub const ClusterLevel = pipeline_types.ClusterLevel;
 pub const Feature = unicode.FeatureOverride;
 pub const FeatureRange = unicode.GsubFeatureRange;
 
-pub const Metrics = layout.GlyphMetrics;
-pub const Glyph = layout.GlyphPosition;
-pub const Run = layout.GlyphRun;
-pub const FontRun = layout.CascadeRun;
-pub const Text = layout.ShapedText;
-pub const ScriptRun = layout.ScriptedRun;
-pub const ItemizedText = layout.ScriptedText;
+pub const Metrics = cache.GlyphMetrics;
+pub const Glyph = glyph_position.GlyphPosition;
+pub const Run = run_types.GlyphRun;
+pub const FontRun = run_types.CascadeRun;
+pub const Text = run_types.ShapedText;
+pub const ScriptRun = run_types.ScriptedRun;
+pub const ItemizedText = run_types.ScriptedText;
 
-pub const FontFallbackDecision = layout.FontFallbackDecision;
-pub const MissingGlyphDiagnostic = layout.MissingGlyphDiagnostic;
-pub const QualityFontRunDiagnostic = layout.ShapeQualityFontRunDiagnostic;
-pub const QualityScriptRunDiagnostic = layout.ShapeQualityScriptRunDiagnostic;
-pub const QualityReport = layout.ShapeQualityReport;
-pub const CaretIssueKind = layout.ClusterCaretIssueKind;
-pub const CaretDiagnostic = layout.ClusterCaretDiagnostic;
-pub const CaretConsistencyReport = layout.ClusterCaretConsistencyReport;
+pub const FontFallbackDecision = diagnostic_types.FontFallbackDecision;
+pub const MissingGlyphDiagnostic = diagnostic_types.MissingGlyphDiagnostic;
+pub const QualityFontRunDiagnostic =
+    diagnostic_types.ShapeQualityFontRunDiagnostic;
+pub const QualityScriptRunDiagnostic =
+    diagnostic_types.ShapeQualityScriptRunDiagnostic;
+pub const QualityReport = diagnostic_types.ShapeQualityReport;
+pub const CaretIssueKind = diagnostic_types.ClusterCaretIssueKind;
+pub const CaretDiagnostic = diagnostic_types.ClusterCaretDiagnostic;
+pub const CaretConsistencyReport =
+    diagnostic_types.ClusterCaretConsistencyReport;
 
 pub const diagnostics = struct {
     pub fn fontFallback(
@@ -60,7 +70,8 @@ pub const diagnostics = struct {
         font_size: f32,
         options: Options,
     ) !CaretConsistencyReport {
-        return layout.diagnoseClusterCaretConsistencyUtf8(
+        return shaping_diagnostics.orchestration.clusterCaretConsistency(
+            ordinary_shaper,
             allocator,
             internalCascade(cascade),
             text,
@@ -76,7 +87,8 @@ pub const diagnostics = struct {
         font_size: f32,
         options: Options,
     ) !QualityReport {
-        return layout.diagnoseShapeQualityUtf8(
+        return shaping_diagnostics.orchestration.shapeQuality(
+            ordinary_shaper,
             allocator,
             internalCascade(cascade),
             text,
@@ -85,7 +97,7 @@ pub const diagnostics = struct {
         );
     }
 
-    fn internalCascade(cascade: face_mod.Cascade) layout.FontCascade {
+    fn internalCascade(cascade: face_mod.Cascade) font_fallback.Cascade {
         return .init(face_mod.backend.fonts(cascade.faces));
     }
 };

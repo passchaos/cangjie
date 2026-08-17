@@ -1,23 +1,28 @@
 //! Width-independent paragraph shaping and repeatable visual reflow.
 
-const layout = @import("../../layout.zig");
+const paragraph_options = @import("../../layout/paragraph/options.zig");
+const retained = @import("../../layout/paragraph/retained.zig");
+const styled_buffer = @import("../../layout/styled_buffer.zig");
+const styled_paragraph = @import("../../layout/styled_paragraph.zig");
+const paragraph_types = @import("../../layout/types/paragraph.zig");
+const reflow = @import("../../layout/line_break/reflow/root.zig");
 const context = @import("../../shaping/context/root.zig");
 
-pub const Options = layout.ParagraphOptions;
+pub const Options = paragraph_options.Options;
 pub const Request = context.ParagraphRequest;
 pub const StyledRequest = context.StyledParagraphRequest;
 pub const StyledResult = context.Engine.StyledParagraph;
-pub const Align = layout.TextAlign;
-pub const WrapMode = layout.WrapMode;
-pub const BaselineMetrics = layout.BaselineMetrics;
-pub const TextMetrics = layout.TextMetrics;
+pub const Align = paragraph_types.TextAlign;
+pub const WrapMode = paragraph_types.WrapMode;
+pub const BaselineMetrics = reflow.BaselineMetrics;
+pub const TextMetrics = paragraph_types.TextMetrics;
 
-pub const Shaped = layout.ShapedParagraph;
-pub const ReflowBuffer = layout.ReflowBuffer;
-pub const Layout = layout.ParagraphLayout;
-pub const Line = layout.ParagraphLine;
-pub const Position = layout.TextPosition;
-pub const Rect = layout.TextRect;
+pub const Shaped = retained.ShapedParagraph;
+pub const ReflowBuffer = retained.ReflowBuffer;
+pub const Layout = paragraph_types.ParagraphLayout;
+pub const Line = paragraph_types.ParagraphLine;
+pub const Position = paragraph_types.TextPosition;
+pub const Rect = paragraph_types.TextRect;
 
-pub const StyledSpan = layout.StyledParagraphSpan;
-pub const StyledGlyphMetadata = layout.StyledGlyphMetadata;
+pub const StyledSpan = styled_paragraph.Span;
+pub const StyledGlyphMetadata = styled_buffer.Metadata;

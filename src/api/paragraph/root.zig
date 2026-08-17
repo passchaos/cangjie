@@ -54,6 +54,9 @@ pub const TextGeometryOptions = text_geometry.Options;
 pub const TextGeometryAffinity = text_geometry.Affinity;
 pub const TextGeometryCaretPosition = text_geometry.CaretPosition;
 pub const TextGeometryCaret = text_geometry.CaretGeometry;
+pub const TextGeometrySelectionRange = text_geometry.SelectionRange;
+pub const TextGeometrySelectionFragment = text_geometry.SelectionFragment;
+pub const TextGeometrySelectionError = text_geometry.SelectionError;
 
 /// Build owned, platform-neutral text-run geometry from a final paragraph.
 ///

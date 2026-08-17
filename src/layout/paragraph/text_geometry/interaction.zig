@@ -8,12 +8,7 @@ const CaretGeometry = records.CaretGeometry;
 const CaretPosition = records.CaretPosition;
 const Grapheme = records.Grapheme;
 
-pub const View = struct {
-    source_byte_len: usize,
-    lines: []const records.Line,
-    spans: []const records.Span,
-    graphemes: []const Grapheme,
-};
+pub const View = records.GeometryView;
 
 const LocatedGrapheme = struct {
     span_index: usize,

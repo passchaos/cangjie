@@ -4,6 +4,7 @@ const std = @import("std");
 
 const interaction = @import("interaction.zig");
 const records = @import("records.zig");
+const selection = @import("selection.zig");
 
 pub const TextGeometry = struct {
     allocator: std.mem.Allocator,
@@ -47,7 +48,21 @@ pub const TextGeometry = struct {
         return interaction.hitTest(self.interactionView(), x, y);
     }
 
+    /// Build allocator-owned visual fragments for one exact logical UTF-8
+    /// range. Invalid, partial-grapheme, or truncated-away ranges are rejected.
+    pub fn selectionFragments(
+        self: TextGeometry,
+        allocator: std.mem.Allocator,
+        range: records.SelectionRange,
+    ) selection.Error![]records.SelectionFragment {
+        return selection.build(allocator, self.geometryView(), range);
+    }
+
     fn interactionView(self: TextGeometry) interaction.View {
+        return self.geometryView();
+    }
+
+    fn geometryView(self: TextGeometry) records.GeometryView {
         return .{
             .source_byte_len = self.source_byte_len,
             .lines = self.lines,

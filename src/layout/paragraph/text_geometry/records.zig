@@ -30,6 +30,29 @@ pub const CaretGeometry = struct {
     rect: paragraph_types.TextRect,
 };
 
+/// Half-open logical UTF-8 source range used by selection geometry.
+pub const SelectionRange = struct {
+    byte_start: usize,
+    byte_end: usize,
+};
+
+/// One physically contiguous selected fragment on a visual line.
+///
+/// A logical selection can produce several fragments on one line when bidi
+/// reordering places unselected source between selected source visually.
+pub const SelectionFragment = struct {
+    line_index: usize,
+    rect: paragraph_types.TextRect,
+};
+
+/// Borrowed concrete view shared by interaction algorithms.
+pub const GeometryView = struct {
+    source_byte_len: usize,
+    lines: []const Line,
+    spans: []const Span,
+    graphemes: []const Grapheme,
+};
+
 /// Stable identity and font properties copied from one final paragraph run.
 ///
 /// `run_index` is the original index in the `ParagraphLayout.runs` slice

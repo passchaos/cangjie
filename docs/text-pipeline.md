@@ -751,6 +751,14 @@ coarser positioned-glyph midpoint API. These queries remain layout primitives:
 document mutation, cursor movement policy, selection state, and IME ownership
 stay in the application/editor layer.
 
+`TextGeometry.selectionFragments` maps one strict half-open logical UTF-8 range
+to allocator-owned visual fragments. Both endpoints must be grapheme
+boundaries, and truncated-away or otherwise unavailable source is rejected
+rather than silently approximated. Physically adjacent selected graphemes are
+merged per line, while mixed-bidi visual gaps remain separate fragments. This
+lets platform adapters paint accurate selections inside GDEF-authored
+ligatures and across wraps without reconstructing bidi geometry themselves.
+
 Paragraph shaping now retains glyph atoms in logical source order and applies
 bidi visual ordering only after line ranges are known. Each line builds its own
 bidi map from `ParagraphLine.byte_start/byte_len`; mixed LTR/RTL text therefore

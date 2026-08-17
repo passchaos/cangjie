@@ -34,6 +34,12 @@ pub const Hyphenation = struct {
 
 /// Optional optical punctuation treatment applied after line selection.
 pub const Punctuation = struct {
+    /// Maximum fraction of CLREQ's half-advance punctuation shrinkability.
+    ///
+    /// Zero disables compression. One permits at most half a glyph advance per
+    /// eligible punctuation side, and compression occurs only when needed to
+    /// keep an otherwise overfull selected line within its measure.
+    max_compression_fraction: f32 = 0,
     /// Fraction of eligible line-end punctuation advance that may protrude past
     /// the inline-end measure. Zero disables hanging; one permits a full
     /// advance. Cangjie currently applies this to East Asian closing,
@@ -100,6 +106,12 @@ pub fn validate(options: Options) !void {
     {
         return error.InvalidParagraphOptions;
     }
+    if (!std.math.isFinite(options.punctuation.max_compression_fraction) or
+        options.punctuation.max_compression_fraction < 0 or
+        options.punctuation.max_compression_fraction > 1)
+    {
+        return error.InvalidParagraphOptions;
+    }
     if (options.hyphenation.character) |character| {
         if (!std.unicode.utf8ValidCodepoint(character)) {
             return error.InvalidParagraphOptions;
@@ -161,5 +173,21 @@ test "punctuation hanging fraction stays normalized" {
     try validate(.{
         .max_width = 100,
         .punctuation = .{ .end_hanging_fraction = 1 },
+    });
+}
+
+test "punctuation compression fraction stays normalized" {
+    for ([_]f32{ -0.01, 1.01, std.math.inf(f32), std.math.nan(f32) }) |value| {
+        try std.testing.expectError(
+            error.InvalidParagraphOptions,
+            validate(.{
+                .max_width = 100,
+                .punctuation = .{ .max_compression_fraction = value },
+            }),
+        );
+    }
+    try validate(.{
+        .max_width = 100,
+        .punctuation = .{ .max_compression_fraction = 1 },
     });
 }

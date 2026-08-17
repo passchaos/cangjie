@@ -215,6 +215,142 @@ test "punctuation hanging enlarges line fit but not source ranges" {
     );
 }
 
+test "punctuation compression fits only the required overfull amount" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCodepointSetTtf(
+        allocator,
+        &.{ 0x3001, 0x3002, 0x4e00, 0x4e01 },
+    );
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = font_fallback.Cascade.init(&.{&font});
+    var buffer = context_output.Buffer.init(allocator);
+    defer buffer.deinit();
+    const text = "一。、丁";
+
+    const natural = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{ .max_width = 42 },
+    );
+    try std.testing.expectEqual(@as(usize, 2), natural.lines[0].glyph_len);
+    const natural_punctuation_advance = natural.glyphs[1].x_advance;
+
+    const compressed = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{
+            .max_width = 42,
+            .punctuation = .{ .max_compression_fraction = 1 },
+        },
+    );
+    const first = compressed.lines[0];
+    try std.testing.expectEqual(@as(usize, 3), first.glyph_len);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 42),
+        first.width,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 42),
+        lineAdvance(first.glyphs(compressed)),
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 6),
+        48 - lineAdvance(first.glyphs(compressed)),
+        0.001,
+    );
+    try std.testing.expect(
+        compressed.glyphs[1].x_advance < natural_punctuation_advance or
+            compressed.glyphs[2].x_advance < natural_punctuation_advance,
+    );
+    try std.testing.expectEqual("一。、".len, first.byte_len);
+    const selection = compressed.selectionRectForBytes(0, "一。、".len);
+    try std.testing.expectApproxEqAbs(
+        first.width,
+        selection.width,
+        0.001,
+    );
+}
+
+test "partial compression limit declines an otherwise overfull candidate" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCodepointSetTtf(
+        allocator,
+        &.{ 0x3001, 0x3002, 0x4e00, 0x4e01 },
+    );
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = font_fallback.Cascade.init(&.{&font});
+    var buffer = context_output.Buffer.init(allocator);
+    defer buffer.deinit();
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        "一。、丁",
+        20,
+        .{
+            .max_width = 42,
+            .punctuation = .{ .max_compression_fraction = 0.25 },
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines[0].glyph_len);
+    for (paragraph.glyphs) |glyph| {
+        try std.testing.expectApproxEqAbs(
+            @as(f32, 16),
+            glyph.x_advance,
+            0.001,
+        );
+    }
+}
+
+test "compression and hanging combine without double-counting capacity" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCodepointSetTtf(
+        allocator,
+        &.{ 0x3001, 0x3002, 0x4e00, 0x4e01 },
+    );
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = font_fallback.Cascade.init(&.{&font});
+    var buffer = context_output.Buffer.init(allocator);
+    defer buffer.deinit();
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        "一。、丁",
+        20,
+        .{
+            .max_width = 38,
+            .punctuation = .{
+                .max_compression_fraction = 1,
+                .end_hanging_fraction = 0.5,
+            },
+        },
+    );
+    const first = paragraph.lines[0];
+    try std.testing.expectEqual(@as(usize, 3), first.glyph_len);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 38),
+        first.width,
+        0.001,
+    );
+    try std.testing.expect(first.hang_end > 0);
+    try std.testing.expectApproxEqAbs(
+        first.width + first.hang_end,
+        lineAdvance(first.glyphs(paragraph)),
+        0.001,
+    );
+}
+
 test "retained CJK reflow restores and reapplies inter-character expansion" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildNamedCjkTtfWithKern(allocator, false);
@@ -261,6 +397,58 @@ test "retained CJK reflow restores and reapplies inter-character expansion" {
         glyph_position.GlyphPosition,
         paragraph.glyphs,
         shape_buffer.glyphs.items,
+    );
+}
+
+test "retained reflow restores and reapplies punctuation compression" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCodepointSetTtf(
+        allocator,
+        &.{ 0x3001, 0x3002, 0x4e00, 0x4e01 },
+    );
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = font_fallback.Cascade.init(&.{&font});
+    var shape_buffer = context_output.Buffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try shaping_orchestrator.TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        "一。、丁",
+        20,
+        .{ .max_width = 100 },
+    );
+    defer paragraph.deinit();
+    const pristine = try allocator.dupe(
+        glyph_position.GlyphPosition,
+        paragraph.glyphs,
+    );
+    defer allocator.free(pristine);
+
+    var reflow = retained_paragraph.ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const compressed = try paragraph.layout(&reflow, .{
+        .max_width = 42,
+        .punctuation = .{ .max_compression_fraction = 1 },
+    });
+    try std.testing.expectEqual(@as(usize, 3), compressed.lines[0].glyph_len);
+    try std.testing.expect(compressed.glyphs[1].x_advance < 16);
+
+    const natural = try paragraph.layout(&reflow, .{ .max_width = 42 });
+    try std.testing.expectEqual(@as(usize, 2), natural.lines[0].glyph_len);
+    for (natural.glyphs) |glyph| {
+        try std.testing.expectApproxEqAbs(
+            @as(f32, 16),
+            glyph.x_advance,
+            0.001,
+        );
+    }
+    try std.testing.expectEqualSlices(
+        glyph_position.GlyphPosition,
+        pristine,
+        paragraph.glyphs,
     );
 }
 
@@ -417,6 +605,101 @@ test "styled paragraph retains punctuation hanging metadata alignment" {
         @as(u32, 4),
         styled.glyphMetadata()[1].style_index,
     );
+}
+
+test "styled paragraph keeps metadata aligned after punctuation compression" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCodepointSetTtf(
+        allocator,
+        &.{ 0x3001, 0x3002, 0x4e00, 0x4e01 },
+    );
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = font_fallback.Cascade.init(&.{&font});
+    var buffer = context_output.Buffer.init(allocator);
+    defer buffer.deinit();
+    var styled = styled_buffer.Buffer.init(allocator);
+    defer styled.deinit();
+    const text = "一。、丁";
+    const spans = [_]styled_paragraph.Span{
+        .{
+            .byte_start = 0,
+            .byte_len = "一。".len,
+            .style_index = 3,
+            .font_size = 20,
+        },
+        .{
+            .byte_start = "一。".len,
+            .byte_len = text.len - "一。".len,
+            .style_index = 6,
+            .font_size = 20,
+        },
+    };
+    const paragraph =
+        try shaping_orchestrator.TextShaper.layoutStyledParagraphUtf8(
+            cascade,
+            &buffer,
+            &styled,
+            text,
+            20,
+            &spans,
+            .{
+                .max_width = 42,
+                .punctuation = .{ .max_compression_fraction = 1 },
+            },
+        );
+    try std.testing.expectEqual(@as(usize, 3), paragraph.lines[0].glyph_len);
+    try std.testing.expectEqual(
+        paragraph.glyphs.len,
+        styled.glyphMetadata().len,
+    );
+    try std.testing.expectEqual(
+        @as(u32, 3),
+        styled.glyphMetadata()[1].style_index,
+    );
+    try std.testing.expectEqual(
+        @as(u32, 6),
+        styled.glyphMetadata()[2].style_index,
+    );
+}
+
+test "RTL compression preserves physical punctuation placement" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCodepointSetTtf(
+        allocator,
+        &.{ 0x05d0, 0x05d1, 0x3001, 0x3002 },
+    );
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = font_fallback.Cascade.init(&.{&font});
+    var buffer = context_output.Buffer.init(allocator);
+    defer buffer.deinit();
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        "אב。、",
+        20,
+        .{
+            .max_width = 60,
+            .direction = .rtl,
+            .punctuation = .{ .max_compression_fraction = 1 },
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 4), paragraph.lines[0].glyph_len);
+    try std.testing.expect(
+        paragraph.lines[0].glyphs(paragraph)[0].codepoint == 0x3001,
+    );
+    var saw_compressed_punctuation = false;
+    for (paragraph.glyphs) |glyph| {
+        if ((glyph.codepoint == 0x3001 or glyph.codepoint == 0x3002) and
+            glyph.x_advance < 16)
+        {
+            saw_compressed_punctuation = true;
+        }
+    }
+    try std.testing.expect(saw_compressed_punctuation);
 }
 
 test "ellipsis replaces terminal hanging punctuation without stale width" {

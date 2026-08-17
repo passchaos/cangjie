@@ -10,6 +10,7 @@ const line_break_opportunity = @import("../line_break/opportunity.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 const run_types = @import("../types/runs.zig");
 const paragraph_reflow = @import("../line_break/reflow/root.zig");
+const punctuation_compression = @import("../punctuation/compression.zig");
 const punctuation_hanging = @import("../punctuation/hanging.zig");
 const shaping_output = @import("../../shaping/context/output.zig");
 const shaping_plan = @import("../../shaping/plan/root.zig");
@@ -88,6 +89,7 @@ pub const ShapedParagraph = struct {
             self.word_break_dictionary,
             self.hyphenation_dictionary,
         );
+        try punctuation_compression.apply(&reflow.buffer, options);
         if (self.needs_bidi_reorder) {
             try bidi_reorder.applyLines(
                 &reflow.buffer,

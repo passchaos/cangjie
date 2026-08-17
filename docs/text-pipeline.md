@@ -461,6 +461,17 @@ share one explicit optical geometry contract. The default fraction is zero.
 Language-specific inter-punctuation compression remains separate from this
 portable line-edge feature.
 
+`ParagraphOptions.punctuation.max_compression_fraction` adds a separate
+CLREQ-style overfull-line stage. Eligible East Asian opening, closing,
+exclamation, nonstarter, and infix punctuation contributes up to one half of
+its glyph advance, scaled by the configured `0...1` limit. Compression first
+uses adjacent punctuation gaps, then any remaining eligible side, and applies
+only the minimum reduction needed to fit the already selected line. The
+resulting advance/offset changes are explicit glyph geometry, so rendering,
+caret, selection, bidi, retained reflow, attributed metadata, and ellipsis
+remain synchronized. The default is zero; language/region-specific GB, CNS,
+and JIS preference tables remain future policy rather than an inferred locale.
+
 Arabic kashida insertion remains a separate future tailoring rather than being
 guessed by the generic path.
 
@@ -853,9 +864,9 @@ Future changes must preserve these rules:
 3. Keep public and test consumers on owning domain modules; do not recreate a
    broad aggregate layout façade as new shaping or paragraph capabilities are
    added.
-4. Add Arabic kashida and language-specific CJK punctuation compression where
-   portable references exist, without changing the generic inter-word,
-   inter-character, or line-edge hanging contracts.
+4. Add Arabic kashida and language/region-specific GB, CNS, and JIS punctuation
+   priority tables where portable references exist, without changing the
+   generic compression-capacity or line-edge hanging contracts.
 5. Add fuzz and CI matrices for stage boundaries, cache reuse, malformed font
    data, mixed-script fallback, vertical text, and retained reflow, alongside
    the existing Unicode and HarfBuzz parity gates.

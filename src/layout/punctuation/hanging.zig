@@ -27,6 +27,20 @@ pub fn logicalEndAmount(
     return @max(0, glyph.x_advance) * fraction;
 }
 
+pub fn visualEndAmount(
+    glyphs: []const GlyphPosition,
+    direction: anytype,
+    fraction: f32,
+) f32 {
+    if (fraction <= 0 or glyphs.len <= 1) return 0;
+    const glyph = if (direction == .rtl)
+        glyphs[0]
+    else
+        glyphs[glyphs.len - 1];
+    if (!isEligible(glyph)) return 0;
+    return @max(0, glyph.x_advance) * fraction;
+}
+
 /// Recompute physical hanging sides after bidi and truncation have established
 /// each line's final visual edge.
 pub fn apply(buffer: anytype, options: anytype) void {
@@ -49,13 +63,12 @@ pub fn apply(buffer: anytype, options: anytype) void {
         line.hang_end = 0;
         var amount: f32 = 0;
         if (fraction > 0 and line_end > line.glyph_start + 1) {
-            const glyph_index = if (options.direction == .rtl)
-                line.glyph_start
-            else
-                line_end - 1;
-            const glyph = buffer.glyphs.items[glyph_index];
-            if (isEligible(glyph)) {
-                amount = @max(0, glyph.x_advance) * fraction;
+            amount = visualEndAmount(
+                buffer.glyphs.items[line.glyph_start..line_end],
+                options.direction,
+                fraction,
+            );
+            if (amount > 0) {
                 if (options.direction == .rtl) {
                     line.hang_start = amount;
                 } else {

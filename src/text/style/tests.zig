@@ -95,7 +95,10 @@ test "paragraph style converts to paragraph options" {
             .character = 0x2022,
             .max_consecutive_lines = 2,
         },
-        .punctuation = .{ .end_hanging_fraction = 0.5 },
+        .punctuation = .{
+            .max_compression_fraction = 0.75,
+            .end_hanging_fraction = 0.5,
+        },
     };
     const options = style.paragraphOptions(80);
 
@@ -122,6 +125,11 @@ test "paragraph style converts to paragraph options" {
     try std.testing.expectApproxEqAbs(
         @as(f32, 0.5),
         options.punctuation.end_hanging_fraction,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0.75),
+        options.punctuation.max_compression_fraction,
         0.001,
     );
     try std.testing.expectApproxEqAbs(@as(f32, 10), options.first_line_indent, 0.001);

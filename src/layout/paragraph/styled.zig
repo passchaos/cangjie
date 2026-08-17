@@ -7,6 +7,7 @@ const Font = @import("../../font.zig").Font;
 const bidi_reorder = @import("../bidi/reorder/root.zig");
 const inline_object = @import("../inline_object/root.zig");
 const paragraph_reflow = @import("../line_break/reflow/root.zig");
+const punctuation_compression = @import("../punctuation/compression.zig");
 const punctuation_hanging = @import("../punctuation/hanging.zig");
 const paragraph_options = @import("options.zig");
 const paragraph_types = @import("../types/paragraph.zig");
@@ -252,6 +253,7 @@ const Driver = struct {
             self.buffer.glyphs.items.len,
             self.buffer.lines.items,
         );
+        try punctuation_compression.apply(self.buffer, self.options);
         if (plan_bidi.paragraphNeedsReorder(
             self.text,
             self.options.direction,

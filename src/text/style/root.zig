@@ -255,6 +255,8 @@ pub const ParagraphStyle = struct {
     punctuation: paragraph_options.Punctuation = .{},
     /// Arabic elongation policy for justified soft-wrapped lines.
     kashida: paragraph_options.Kashida = .{},
+    /// Variable-font width adaptation before discrete expansion.
+    font_expansion: paragraph_options.FontExpansion = .{},
 
     pub fn paragraphOptions(self: ParagraphStyle, max_width: f32) paragraph_options.Options {
         return .{
@@ -274,6 +276,7 @@ pub const ParagraphStyle = struct {
             .hyphenation = self.hyphenation,
             .punctuation = self.punctuation,
             .kashida = self.kashida,
+            .font_expansion = self.font_expansion,
         };
     }
 };

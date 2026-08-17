@@ -5,6 +5,7 @@ const std = @import("std");
 const face_mod = @import("../../font/face/root.zig");
 const bidi_reorder = @import("../bidi/reorder/root.zig");
 const inline_object = @import("../inline_object/root.zig");
+const font_expansion = @import("../justification/font_expansion.zig");
 const kashida_justification = @import("../justification/kashida.zig");
 const paragraph_reflow = @import("../line_break/reflow/root.zig");
 const styled_reshape = @import("reshape/styled.zig");
@@ -259,6 +260,11 @@ const Driver = struct {
             .spans = spans,
             .options = self.options,
         };
+        try font_expansion.apply(
+            self.buffer,
+            self.options,
+            recipe,
+        );
         try kashida_justification.apply(
             self.buffer,
             self.text,

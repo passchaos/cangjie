@@ -685,6 +685,60 @@ test "styled CJK justification preserves metadata and geometry" {
     try std.testing.expectApproxEqAbs(@as(f32, 24), selection.width, 0.001);
 }
 
+test "styled variable width expansion preserves metadata and run coordinates" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildWidthVariationTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = font_fallback.Cascade.init(&.{&font});
+    var buffer = context_output.Buffer.init(allocator);
+    defer buffer.deinit();
+    var styled = styled_buffer.Buffer.init(allocator);
+    defer styled.deinit();
+    const text = "A A A A";
+    const spans = [_]styled_paragraph.Span{.{
+        .byte_start = 0,
+        .byte_len = text.len,
+        .style_index = 7,
+        .font_size = 20,
+    }};
+
+    const paragraph =
+        try shaping_orchestrator.TextShaper.layoutStyledParagraphUtf8(
+            cascade,
+            &buffer,
+            &styled,
+            text,
+            20,
+            &spans,
+            .{
+                .max_width = 50,
+                .alignment = .justify,
+                .kashida = .{ .enabled = false },
+            },
+        );
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines.len);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 50),
+        paragraph.lines[0].width,
+        0.001,
+    );
+    try std.testing.expectEqual(
+        paragraph.glyphs.len,
+        styled.glyphMetadata().len,
+    );
+    for (styled.glyphMetadata()) |metadata| {
+        try std.testing.expectEqual(@as(u32, 7), metadata.style_index);
+    }
+    try std.testing.expectEqual(@as(usize, 1), paragraph.runs[0].variation_coord_len);
+    try std.testing.expect(
+        paragraph.normalized_variation_coords[
+            paragraph.runs[0].variation_coord_start
+        ] > 0,
+    );
+}
+
 test "styled paragraph retains punctuation hanging metadata alignment" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildCodepointSetTtf(

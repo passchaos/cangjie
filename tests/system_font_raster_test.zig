@@ -6,6 +6,8 @@ const system_font_path = "/System/Library/Fonts/SFNSMono.ttf";
 const linux_noto_sans_arabic_path = "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf";
 const linux_noto_naskh_arabic_path = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf";
 const linux_noto_sans_cjk_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc";
+const local_estedad_variable_path =
+    "../../Work/harfbuzz/test/api/fonts/Estedad-VF.ttf";
 const known_sfns_mono_sha256 = hexToBytes("55caaed55254a28ac793847e8976be16c5ba7cbad1ec2ee2d5d86d4e6b3fa0c1");
 const known_raster_sha256 = hexToBytes("76440f37e0266d38bf0fc4a65e399dc527f81ef76f963470fe796bc895356a6c");
 
@@ -296,6 +298,72 @@ fn expectShapedKashidaLayout(
         );
     }
     try std.testing.expect(kashida_count > 0);
+}
+
+test "local Estedad width axis justifies and reaches renderer requests" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const font_bytes = std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        local_estedad_variable_path,
+        allocator,
+        .limited(16 * 1024 * 1024),
+    ) catch |err| switch (err) {
+        error.FileNotFound, error.AccessDenied => return error.SkipZigTest,
+        else => return err,
+    };
+    defer allocator.free(font_bytes);
+    var font = try cangjie.font.Face.parse(allocator, font_bytes);
+    defer font.deinit();
+
+    var engine = cangjie.shaping.Engine.init(allocator, .{});
+    defer engine.deinit();
+    const text = "بب بب بب بب بب";
+    const layout = try engine.layout(
+        cangjie.font.Cascade.init(&.{&font}),
+        .{
+            .text = text,
+            .font_size = 32,
+            .options = .{
+                .max_width = 200,
+                .direction = .rtl,
+                .alignment = .justify,
+                .kashida = .{ .enabled = false },
+            },
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 2), layout.lines.len);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 200),
+        layout.lines[0].width,
+        0.01,
+    );
+    const shaped = cangjie.shaping.Text{
+        .glyphs = layout.glyphs,
+        .runs = layout.runs,
+        .normalized_variation_coords = layout.normalized_variation_coords,
+    };
+    const run_coords = layout.runs[0].normalizedVariationCoords(shaped);
+    try std.testing.expectEqual(@as(usize, 2), run_coords.len);
+    try std.testing.expect(run_coords[1] > 0 and run_coords[1] < 1);
+
+    var draw_list = try cangjie.render.buildGlyphDrawList(
+        allocator,
+        layout,
+        .{},
+    );
+    defer draw_list.deinit();
+    try std.testing.expectEqualSlices(
+        f32,
+        run_coords,
+        draw_list.runs[0].normalized_variation_coords,
+    );
+    try std.testing.expectEqualSlices(
+        f32,
+        run_coords,
+        draw_list.atlas_requests[0].normalized_variation_coords,
+    );
 }
 
 test "Linux Noto Sans CJK vertical shaping uses real vert substitutions and vmtx" {

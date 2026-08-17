@@ -614,6 +614,66 @@ test "truncated terminal line is not justified" {
     try std.testing.expect(paragraph.lines[0].width < 50);
 }
 
+test "justification expands a variable width axis before spacing" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildWidthVariationTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const text = "A A A A";
+    const expanded = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{
+            .max_width = 50,
+            .alignment = .justify,
+            .kashida = .{ .enabled = false },
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 2), expanded.lines.len);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 50),
+        expanded.lines[0].width,
+        0.001,
+    );
+    try std.testing.expect(expanded.runs[0].variation_coord_len == 1);
+    const expanded_shaped = support.ShapedText{
+        .glyphs = expanded.glyphs,
+        .runs = expanded.runs,
+        .normalized_variation_coords = expanded.normalized_variation_coords,
+    };
+    const axis_value =
+        expanded.runs[0].normalizedVariationCoords(expanded_shaped)[0];
+    try std.testing.expect(axis_value > 0 and axis_value <= 1);
+    const expanded_space_advance = expanded.glyphs[1].x_advance;
+
+    const spacing_only = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{
+            .max_width = 50,
+            .alignment = .justify,
+            .kashida = .{ .enabled = false },
+            .font_expansion = .{ .enabled = false },
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 0), spacing_only.runs[0].variation_coord_len);
+    try std.testing.expect(
+        spacing_only.glyphs[1].x_advance >
+            expanded_space_advance,
+    );
+}
+
 test "right-to-left justification keeps line origin and survives bidi reorder" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

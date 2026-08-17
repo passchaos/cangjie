@@ -12,6 +12,7 @@ const context = @import("../../shaping/context/root.zig");
 pub const Options = paragraph_options.Options;
 pub const Hyphenation = paragraph_options.Hyphenation;
 pub const Kashida = paragraph_options.Kashida;
+pub const FontExpansion = paragraph_options.FontExpansion;
 pub const Punctuation = paragraph_options.Punctuation;
 pub const PunctuationConvention =
     paragraph_options.PunctuationConvention;

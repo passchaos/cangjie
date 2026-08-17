@@ -33,6 +33,21 @@ pub fn buildMetricVariationTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try metricVariationTtfTables(allocator));
 }
 
+pub fn buildWidthVariationTtf(allocator: std.mem.Allocator) ![]u8 {
+    const tables = try metricVariationTtfTables(allocator);
+    for (tables) |*table| {
+        if (!std.mem.eql(u8, table.tag, "fvar")) continue;
+        // Reuse the HVAR fixture but expose its single dimension through the
+        // registered width tag used by line-level font expansion.
+        writeTag(table.data, 16, "wdth");
+        writeF16Dot16(table.data, 20, 50.0);
+        writeF16Dot16(table.data, 24, 100.0);
+        writeF16Dot16(table.data, 28, 200.0);
+        break;
+    }
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
 pub fn buildCvarTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try cvarTtfTables(allocator));
 }

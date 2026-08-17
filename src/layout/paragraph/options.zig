@@ -77,6 +77,17 @@ pub const Kashida = struct {
     max_insertions_per_line: usize = 8,
 };
 
+/// Variable-font expansion policy for justified soft-wrapped lines.
+///
+/// Cangjie prefers a custom `jstf` variation axis, matching HarfBuzz's
+/// experimental convention, then falls back to the registered `wdth` axis.
+/// This is distinct from the OpenType `JSTF` table.
+pub const FontExpansion = struct {
+    /// Shape a single-font line at a bounded wider variation coordinate before
+    /// trying Kashida or generic spacing expansion.
+    enabled: bool = true,
+};
+
 pub const Options = struct {
     max_width: f32,
     wrap_mode: paragraph_types.WrapMode = .word,
@@ -107,6 +118,8 @@ pub const Options = struct {
     punctuation: Punctuation = .{},
     /// Optional Arabic Kashida insertion for justified soft-wrapped lines.
     kashida: Kashida = .{},
+    /// Optional variable-font width adaptation before discrete expansion.
+    font_expansion: FontExpansion = .{},
     /// Shaping controls resolved before line breaking.
     script_tag: ?unicode.OpenTypeScriptTag = null,
     language_tag: ?unicode.OpenTypeLanguageTag = null,

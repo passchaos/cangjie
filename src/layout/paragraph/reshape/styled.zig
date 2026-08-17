@@ -46,6 +46,18 @@ pub const Recipe = struct {
         return boundary > span.byte_start and boundary < span.byteEnd();
     }
 
+    pub fn canExpandSourceRange(
+        self: Recipe,
+        start: usize,
+        end: usize,
+    ) bool {
+        const span = styled_paragraph.spanForCluster(
+            self.spans,
+            start,
+        ) orelse return false;
+        return end <= span.byteEnd();
+    }
+
     pub fn shapeLine(
         self: Recipe,
         buffer: *context_output.Buffer,
@@ -117,6 +129,64 @@ pub const Recipe = struct {
             }
         }
         try bidi_reorder.normalizeLogical(buffer);
+    }
+
+    pub fn shapeLineAtCoords(
+        self: Recipe,
+        buffer: *context_output.Buffer,
+        original_byte_start: usize,
+        original_byte_len: usize,
+        font: *const @import("../../../font.zig").Font,
+        font_index: usize,
+        normalized_variation_coords: []const f32,
+    ) !void {
+        const original_byte_end = original_byte_start + original_byte_len;
+        const span = styled_paragraph.spanForCluster(
+            self.spans,
+            original_byte_start,
+        ) orelse return error.InvalidStyleSpans;
+        std.debug.assert(span.byteEnd() >= original_byte_end);
+        buffer.clear();
+        const line_text =
+            self.text[original_byte_start..original_byte_end];
+        const script = unicode.inferOpenTypeScript(line_text);
+        var context = SegmentContext{
+            .buffer = buffer,
+            .font_size = span.font_size,
+            .lookup_options = .{
+                .lookup = .{
+                    .script = script,
+                    .script_tag = span.script_tag orelse
+                        unicode.openTypeScriptTag(script),
+                    .script_tag_explicit = span.script_tag != null,
+                    .language_tag = span.language_tag orelse
+                        unicode.inferOpenTypeLanguageTag(line_text),
+                    .direction = self.options.direction,
+                    .reorder_bidi = false,
+                    .native_direction_shaping = true,
+                    .features = span.features,
+                    .normalized_variation_coords = normalized_variation_coords,
+                    .context_before = self.text[0..original_byte_start],
+                    .context_after = self.text[original_byte_end..],
+                    .beginning_of_text = original_byte_start == 0,
+                    .end_of_text = original_byte_end == self.text.len,
+                },
+                .all_ascii = false,
+            },
+        };
+        _ = try context.appendSegment(
+            font_fallback.Cascade.init(&.{font}),
+            0,
+            line_text,
+            original_byte_start,
+            .{},
+        );
+        if (buffer.runs.items.len != 0) {
+            buffer.runs.items[0].font_index = font_index;
+        }
+        try bidi_reorder.normalizeLogical(buffer);
+        try self.finishLine(buffer);
+        try self.saveCandidate();
     }
 
     fn shapeItem(

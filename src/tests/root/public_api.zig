@@ -135,6 +135,9 @@ test "public facade uses domain names without legacy aliases" {
         @typeInfo(cangjie.paragraph.Kashida) == .@"struct",
     );
     try std.testing.expect(
+        @typeInfo(cangjie.paragraph.FontExpansion) == .@"struct",
+    );
+    try std.testing.expect(
         @typeInfo(cangjie.paragraph.Punctuation) == .@"struct",
     );
     try std.testing.expect(

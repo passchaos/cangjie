@@ -510,6 +510,17 @@ GPOS, HVAR/VVAR advances, and line geometry; callers no longer have to repeat a
 single paragraph-wide coordinate slice at the rendering boundary. Explicit
 renderer-coordinate overrides remain available for low-level callers.
 
+Before discrete Kashida or spacing expansion, a justified non-terminal line
+may also reshape through one variable-font expansion axis. Cangjie prefers an
+fvar `jstf` axis (the convention used by HarfBuzz's experimental API), then the
+registered `wdth` axis; this is not an implementation of the unrelated
+OpenType `JSTF` table. A bounded F2Dot14 search accepts only shapes that widen
+the line without crossing its target. The selected per-run coordinates travel
+with the committed line into retained/styled output and rendering, while any
+remaining width proceeds through Kashida and then ordinary space/CJK
+expansion. Multi-font or shaping-style-spanning lines conservatively skip the
+axis stage rather than imposing one font's axis on another run.
+
 Paragraph alignment distinguishes logical and physical edges:
 `TextAlign.start`/`end` resolve through the paragraph direction, while
 `left`/`right` always name physical edges. `start` is the default, preserving
@@ -899,10 +910,9 @@ Future changes must preserve these rules:
 3. Keep public and test consumers on owning domain modules; do not recreate a
    broad aggregate layout façade as new shaping or paragraph capabilities are
    added.
-4. Extend Arabic justification beyond discrete U+0640 insertion when portable
-   font mechanisms such as JSTF or a `wdth` variation axis provide a
-   higher-quality bounded expansion, while retaining U+0640 source insertion
-   as the interoperable fallback.
+4. Implement the actual OpenType `JSTF` table's priority lists, GSUB/GPOS
+   enable/disable sets, extender glyphs, and JstfMax lookups independently from
+   the now-supported fvar `jstf`/`wdth` axis convention.
 5. Add fuzz and CI matrices for stage boundaries, cache reuse, malformed font
    data, mixed-script fallback, vertical text, and retained reflow, alongside
    the existing Unicode and HarfBuzz parity gates.

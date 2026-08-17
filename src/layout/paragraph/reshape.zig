@@ -32,6 +32,10 @@ pub const Uniform = struct {
         return true;
     }
 
+    pub fn canExpandSourceRange(_: Uniform, _: usize, _: usize) bool {
+        return true;
+    }
+
     pub fn saveCandidate(_: Uniform) !void {}
 
     pub fn prepareCommit(
@@ -90,6 +94,51 @@ pub const Uniform = struct {
             .font_overrides = font_overrides,
         });
         try bidi_reorder.normalizeLogical(buffer);
+    }
+
+    pub fn shapeLineAtCoords(
+        self: Uniform,
+        buffer: *context_output.Buffer,
+        original_byte_start: usize,
+        original_byte_len: usize,
+        font: *const @import("../../font.zig").Font,
+        font_index: usize,
+        normalized_variation_coords: []const f32,
+    ) !void {
+        buffer.clear();
+        const original_byte_end = original_byte_start + original_byte_len;
+        var shape_options = paragraph_options.shapeOptions(self.options);
+        shape_options.normalized_variation_coords =
+            normalized_variation_coords;
+        shape_options.context_before = self.text[0..original_byte_start];
+        shape_options.context_after = self.text[original_byte_end..];
+        shape_options.beginning_of_text = original_byte_start == 0;
+        shape_options.end_of_text = original_byte_end == self.text.len;
+        const line_text =
+            self.text[original_byte_start..original_byte_end];
+        const lookup_options = plan_resolution.forText(
+            line_text,
+            shape_options,
+        );
+        var driver = Driver{
+            .buffer = buffer,
+            .metrics_cache = self.metrics_cache,
+            .glyph_index_cache = self.glyph_index_cache,
+            .font_size = self.font_size,
+            .lookup_options = lookup_options,
+        };
+        _ = try driver.appendSegment(
+            font_fallback.Cascade.init(&.{font}),
+            0,
+            line_text,
+            original_byte_start,
+            .{},
+        );
+        if (buffer.runs.items.len != 0) {
+            buffer.runs.items[0].font_index = font_index;
+        }
+        try bidi_reorder.normalizeLogical(buffer);
+        try self.finishLine(buffer);
     }
 
     pub fn finishLine(

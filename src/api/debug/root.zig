@@ -45,7 +45,7 @@ pub fn dumpFontFallback(
 ) !void {
     return impl.dumpFontFallback(
         writer,
-        .{ .fonts = face_mod.backend.fonts(cascade.faces) },
+        .init(face_mod.backend.fonts(cascade.faces)),
         text,
     );
 }

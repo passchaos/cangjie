@@ -11,11 +11,7 @@ const space_fallback = @import("../../../space_fallback.zig");
 const unicode = @import("../../../unicode.zig");
 const unicode_glyph_fallback = @import("../../../unicode_glyph_fallback.zig");
 
-pub const ArabicCompositionMatch = struct {
-    codepoint: u21,
-    glyph_id: GlyphId,
-    byte_end: usize,
-};
+pub const ArabicCompositionMatch = arabic_normalization.CompositionMatch;
 
 pub fn arabicCompositionForFontAt(
     font: *const Font,
@@ -24,25 +20,13 @@ pub fn arabicCompositionForFontAt(
     text: []const u8,
     mark_byte_start: usize,
 ) !?ArabicCompositionMatch {
-    if (!arabic_normalization.canStartComposition(starter) or
-        mark_byte_start >= text.len)
-    {
-        return null;
-    }
-    var lookahead =
-        std.unicode.Utf8Iterator{ .bytes = text, .i = mark_byte_start };
-    const mark = lookahead.nextCodepoint() orelse return null;
-    const composition = try arabic_normalization.composePairForFont(
+    return try arabic_normalization.composeAtForFont(
         font,
         glyph_index_cache,
         starter,
-        mark,
-    ) orelse return null;
-    return .{
-        .codepoint = composition.codepoint,
-        .glyph_id = composition.glyph_id,
-        .byte_end = lookahead.i,
-    };
+        text,
+        mark_byte_start,
+    );
 }
 
 pub fn glyphIndex(

@@ -297,5 +297,5 @@ pub const Engine = struct {
 };
 
 fn internalCascade(cascade: face_mod.Cascade) layout_mod.FontCascade {
-    return .{ .fonts = face_mod.backend.fonts(cascade.faces) };
+    return .init(face_mod.backend.fonts(cascade.faces));
 }

@@ -59,6 +59,53 @@ test "engine optionally retains complete cascade runs" {
     try std.testing.expectEqual(@as(usize, 1), cache_stats.misses);
 }
 
+test "engine fallback cache separates reordered cascades" {
+    const test_font = @import("../../test_font.zig");
+    const allocator = std.testing.allocator;
+    const primary_bytes =
+        try test_font.buildCodepointSetTtf(allocator, &.{'A'});
+    defer allocator.free(primary_bytes);
+    const complete_bytes =
+        try test_font.buildCodepointSetTtf(allocator, &.{ 'A', 0x0301 });
+    defer allocator.free(complete_bytes);
+
+    var primary = try Font.parse(allocator, primary_bytes);
+    defer primary.deinit();
+    var complete = try Font.parse(allocator, complete_bytes);
+    defer complete.deinit();
+
+    const primary_first_fonts = [_]*const Font{ &primary, &complete };
+    const complete_first_fonts = [_]*const Font{ &complete, &primary };
+    const primary_first = face_mod.Cascade.init(
+        face_mod.backend.faces(&primary_first_fonts),
+    );
+    const complete_first = face_mod.Cascade.init(
+        face_mod.backend.faces(&complete_first_fonts),
+    );
+    var engine = context_mod.Engine.init(allocator, .{});
+    defer engine.deinit();
+
+    const first = try engine.shapeText(primary_first, .{
+        .text = "A\u{0301}",
+        .font_size = 20,
+    });
+    try std.testing.expectEqual(@as(usize, 1), first.runs.len);
+    try std.testing.expectEqual(@as(usize, 1), first.runs[0].font_index);
+    for (first.glyphs) |glyph| try std.testing.expect(glyph.glyph_id != 0);
+
+    const second = try engine.shapeText(complete_first, .{
+        .text = "A\u{0301}",
+        .font_size = 20,
+    });
+    try std.testing.expectEqual(@as(usize, 1), second.runs.len);
+    try std.testing.expectEqual(@as(usize, 0), second.runs[0].font_index);
+    for (second.glyphs) |glyph| try std.testing.expect(glyph.glyph_id != 0);
+
+    const fallback_stats = engine.stats().font_fallback;
+    try std.testing.expectEqual(@as(usize, 0), fallback_stats.hits);
+    try std.testing.expectEqual(@as(usize, 2), fallback_stats.misses);
+}
+
 test "engine can bypass all font-derived caches" {
     const test_font = @import("../../test_font.zig");
     const bytes = try test_font.buildMinimalTtf(std.testing.allocator);

@@ -40,6 +40,7 @@ const diagnostics = @import("shaping/diagnostics/root.zig");
 const diagnostic_caret = diagnostics.caret;
 const diagnostic_quality = diagnostics.quality;
 const diagnostic_types = diagnostics.types;
+const font_fallback = @import("shaping/fallback/font/root.zig");
 const stch_feature = @import("shaping/features/stch/root.zig");
 const bidi_reorder = @import("layout/bidi/reorder/root.zig");
 const glyph_position = @import("layout/glyph_position.zig");
@@ -233,36 +234,7 @@ pub const ReflowBuffer = struct {
     }
 };
 
-pub const FontCascade = struct {
-    fonts: []const *const Font,
-
-    pub fn init(fonts: []const *const Font) FontCascade {
-        return .{ .fonts = fonts };
-    }
-
-    /// Pick the first font that maps the codepoint to a non-zero glyph id.
-    /// Glyph id 0 is treated as `.notdef`, so it does not count as coverage.
-    pub fn selectFont(self: FontCascade, codepoint: u21) !usize {
-        if (self.fonts.len == 0) return error.EmptyFontCascade;
-        for (self.fonts, 0..) |font, index| {
-            if (try font.glyphIndex(codepoint) != 0) return index;
-        }
-        return 0;
-    }
-
-    /// Pick one font for an entire extended grapheme cluster.
-    ///
-    /// Modern layout engines keep combining sequences, emoji ZWJ sequences,
-    /// and Indic conjunct requests atomic while choosing fallback. Splitting at
-    /// scalar boundaries prevents GSUB/GPOS from seeing the sequence and can
-    /// strand marks in a font unrelated to their base. Default-ignorables do
-    /// not require nominal cmap coverage, but a variation selector requires an
-    /// explicit/default UVS record in the same font as its base.
-    pub fn selectFontForCluster(self: FontCascade, cluster: []const u8) !usize {
-        if (!std.unicode.utf8ValidateSlice(cluster)) return error.InvalidUtf8;
-        return try selectFontForClusterWithGlyphCache(self, null, cluster);
-    }
-};
+pub const FontCascade = font_fallback.Cascade;
 
 pub const FontFallbackDecision = diagnostic_types.FontFallbackDecision;
 pub const MissingGlyphDiagnostic = diagnostic_types.MissingGlyphDiagnostic;
@@ -290,14 +262,20 @@ pub fn diagnoseFontFallbackUtf8(allocator: std.mem.Allocator, cascade: FontCasca
     while (clusters.next()) |cluster| {
         const cluster_end = cluster.byte_start + cluster.byte_len;
         const cluster_text = text[cluster.byte_start..cluster_end];
-        const font_index = try selectFontForClusterWithGlyphCache(cascade, null, cluster_text);
+        const font_index = try font_fallback.selectFontForClusterFrom(
+            cascade.fonts,
+            null,
+            cluster_text,
+        );
         const font = cascade.fonts[font_index];
 
         var it = std.unicode.Utf8Iterator{ .bytes = cluster_text, .i = 0 };
         while (it.i < cluster_text.len) {
             const local_start = it.i;
             const codepoint = it.nextCodepoint() orelse break;
-            if (unicode.isVariationSelector(codepoint) or isClusterCoverageIgnorable(codepoint)) {
+            if (unicode.isVariationSelector(codepoint) or
+                font_fallback.isClusterCoverageIgnorable(codepoint))
+            {
                 // Detached selectors and join controls participate in cluster
                 // selection but do not produce visible fallback decisions.
                 continue;
@@ -403,81 +381,7 @@ const diagnoseClusterCaretConsistencyForLayout = diagnostic_caret.analyze;
 /// Caches codepoint-to-font decisions for a cascade. This is separate from the
 /// glyph-id cache because the same codepoint can map to different glyph ids in
 /// different fonts, while fallback only needs the winning font index.
-pub const FontFallbackCache = struct {
-    allocator: std.mem.Allocator,
-    entries: std.AutoHashMap(u21, usize),
-    cluster_entries: std.StringHashMap(usize),
-    hits: usize = 0,
-    misses: usize = 0,
-
-    pub fn init(allocator: std.mem.Allocator) FontFallbackCache {
-        return .{
-            .allocator = allocator,
-            .entries = std.AutoHashMap(u21, usize).init(allocator),
-            .cluster_entries = std.StringHashMap(usize).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *FontFallbackCache) void {
-        self.freeClusterKeys();
-        self.cluster_entries.deinit();
-        self.entries.deinit();
-        self.* = undefined;
-    }
-
-    pub fn clear(self: *FontFallbackCache) void {
-        self.freeClusterKeys();
-        self.cluster_entries.clearRetainingCapacity();
-        self.entries.clearRetainingCapacity();
-        self.hits = 0;
-        self.misses = 0;
-    }
-
-    pub fn selectFont(self: *FontFallbackCache, cascade: FontCascade, codepoint: u21) !usize {
-        if (self.entries.get(codepoint)) |font_index| {
-            self.hits += 1;
-            return font_index;
-        }
-        self.misses += 1;
-        const font_index = try cascade.selectFont(codepoint);
-        try self.entries.put(codepoint, font_index);
-        return font_index;
-    }
-
-    pub fn selectFontWithGlyphCache(self: *FontFallbackCache, cascade: FontCascade, glyph_index_cache: *GlyphIndexCache, codepoint: u21) !usize {
-        if (self.entries.get(codepoint)) |font_index| {
-            self.hits += 1;
-            return font_index;
-        }
-        self.misses += 1;
-        const font_index = try selectFontUsingGlyphCache(cascade, glyph_index_cache, codepoint);
-        try self.entries.put(codepoint, font_index);
-        return font_index;
-    }
-
-    pub fn selectFontForCluster(self: *FontFallbackCache, cascade: FontCascade, glyph_index_cache: ?*GlyphIndexCache, cluster: []const u8) !usize {
-        if (cluster.len == 1 and cluster[0] < 0x80) {
-            if (glyph_index_cache) |cache| return try self.selectFontWithGlyphCache(cascade, cache, cluster[0]);
-            return try self.selectFont(cascade, cluster[0]);
-        }
-        if (self.cluster_entries.get(cluster)) |font_index| {
-            self.hits += 1;
-            return font_index;
-        }
-
-        self.misses += 1;
-        const font_index = try selectFontForClusterWithGlyphCache(cascade, glyph_index_cache, cluster);
-        const owned_cluster = try self.allocator.dupe(u8, cluster);
-        errdefer self.allocator.free(owned_cluster);
-        try self.cluster_entries.put(owned_cluster, font_index);
-        return font_index;
-    }
-
-    fn freeClusterKeys(self: *FontFallbackCache) void {
-        var iterator = self.cluster_entries.iterator();
-        while (iterator.next()) |entry| self.allocator.free(entry.key_ptr.*);
-    }
-};
+pub const FontFallbackCache = layout_cache.FontFallbackCache;
 
 fn gdefMetadataForShaping(font: *const Font, allocator: std.mem.Allocator, cache: ?*GdefMetadataCache, out_owned: *?GdefLookupMetadata) !*const GdefLookupMetadata {
     if (cache) |metadata_cache| {
@@ -1363,9 +1267,17 @@ fn selectFontForCluster(
     }
 
     if (fallback_cache) |cache| {
-        return try cache.selectFontForCluster(cascade, glyph_index_cache, cluster);
+        return try cache.selectFontForCluster(
+            cascade,
+            glyph_index_cache,
+            cluster,
+        );
     }
-    return try selectFontForClusterWithGlyphCache(cascade, glyph_index_cache, cluster);
+    return try font_fallback.selectFontForClusterFrom(
+        cascade.fonts,
+        glyph_index_cache,
+        cluster,
+    );
 }
 
 fn textIsAscii(text: []const u8) bool {
@@ -1375,92 +1287,22 @@ fn textIsAscii(text: []const u8) bool {
     return true;
 }
 
-fn selectFontForClusterWithGlyphCache(
-    cascade: FontCascade,
-    glyph_index_cache: ?*GlyphIndexCache,
-    cluster: []const u8,
-) !usize {
-    if (cascade.fonts.len == 0) return error.EmptyFontCascade;
-
-    const has_variation_selector = clusterHasVariationSelector(cluster);
-    if (has_variation_selector) {
-        // Prefer a font that explicitly supports every UVS in the cluster.
-        // Only if no such font exists do we apply OpenType's normal fallback of
-        // ignoring an unsupported selector and using the base cmap glyph.
-        for (cascade.fonts, 0..) |font, index| {
-            if (try fontCoversCluster(font, glyph_index_cache, cluster, true)) return index;
-        }
-    }
-    for (cascade.fonts, 0..) |font, index| {
-        if (try fontCoversCluster(font, glyph_index_cache, cluster, false)) return index;
-    }
-
-    // No font covers every visible scalar. Keep the cluster atomic in the font
-    // selected for its first visible scalar; missing continuations remain
-    // explicit `.notdef` glyphs for diagnostics instead of being silently
-    // detached into another font run.
-    var it = std.unicode.Utf8Iterator{ .bytes = cluster, .i = 0 };
-    while (it.nextCodepoint()) |codepoint| {
-        if (unicode.isVariationSelector(codepoint) or isClusterCoverageIgnorable(codepoint)) continue;
-        if (glyph_index_cache) |cache| return try selectFontUsingGlyphCache(cascade, cache, codepoint);
-        return try cascade.selectFont(codepoint);
-    }
-    return 0;
-}
-
-fn clusterHasVariationSelector(cluster: []const u8) bool {
-    var it = std.unicode.Utf8Iterator{ .bytes = cluster, .i = 0 };
-    while (it.nextCodepoint()) |codepoint| {
-        if (unicode.isVariationSelector(codepoint)) return true;
-    }
-    return false;
-}
-
-fn fontCoversCluster(font: *const Font, glyph_index_cache: ?*GlyphIndexCache, cluster: []const u8, require_variation_mapping: bool) !bool {
-    var it = std.unicode.Utf8Iterator{ .bytes = cluster, .i = 0 };
-    var previous_visible: ?u21 = null;
-    while (it.nextCodepoint()) |codepoint| {
-        if (unicode.isVariationSelector(codepoint)) {
-            if (!require_variation_mapping) continue;
-            const base = previous_visible orelse return false;
-            const glyph_id = (try font.variationGlyphIndex(base, codepoint)) orelse return false;
-            if (glyph_id == 0) return false;
-            continue;
-        }
-        if (isClusterCoverageIgnorable(codepoint)) continue;
-        if (try arabicCompositionForFontAt(font, glyph_index_cache, codepoint, cluster, it.i)) |composition| {
-            it.i = composition.byte_end;
-            previous_visible = composition.codepoint;
-            continue;
-        }
-        if (try glyphIndexWithOptionalCache(font, glyph_index_cache, codepoint) == 0) return false;
-        previous_visible = codepoint;
-    }
-    return true;
-}
-
-fn isClusterCoverageIgnorable(codepoint: u21) bool {
-    // Join controls and other default-ignorables participate in shaping but do
-    // not need nominal cmap glyphs. Variation selectors are handled separately
-    // because they refine the preceding scalar through cmap format 14.
-    return !unicode.isVariationSelector(codepoint) and unicode.isDefaultIgnorableForShaping(codepoint);
-}
-
-fn selectFontUsingGlyphCache(cascade: FontCascade, glyph_index_cache: *GlyphIndexCache, codepoint: u21) !usize {
-    if (cascade.fonts.len == 0) return error.EmptyFontCascade;
-    for (cascade.fonts, 0..) |font, index| {
-        if (try glyph_index_cache.glyphIndex(font, codepoint) != 0) return index;
-    }
-    return 0;
-}
-
 fn selectFontWithOptionalCache(cascade: FontCascade, cache: ?*FontFallbackCache, glyph_index_cache: ?*GlyphIndexCache, codepoint: u21) !usize {
     if (cache) |fallback_cache| {
-        if (glyph_index_cache) |glyph_cache| return try fallback_cache.selectFontWithGlyphCache(cascade, glyph_cache, codepoint);
+        if (glyph_index_cache) |glyph_cache| {
+            return try fallback_cache.selectFontWithGlyphCache(
+                cascade,
+                glyph_cache,
+                codepoint,
+            );
+        }
         return try fallback_cache.selectFont(cascade, codepoint);
     }
-    if (glyph_index_cache) |glyph_cache| return try selectFontUsingGlyphCache(cascade, glyph_cache, codepoint);
-    return try cascade.selectFont(codepoint);
+    return try font_fallback.selectFontFrom(
+        cascade.fonts,
+        glyph_index_cache,
+        codepoint,
+    );
 }
 
 fn buildScriptRuns(buffer: *LayoutBuffer, text: []const u8, direction: TextDirection, language_tag: ?unicode.OpenTypeLanguageTag) !void {

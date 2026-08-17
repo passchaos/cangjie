@@ -1,11 +1,18 @@
 const std = @import("std");
 const Font = @import("font.zig").Font;
 const GlyphId = @import("glyph.zig").GlyphId;
-const GlyphIndexCache = @import("shaping/context/cache/root.zig").GlyphIndexCache;
+const GlyphIndexCache =
+    @import("shaping/context/cache/glyph.zig").GlyphIndexCache;
 
 pub const Composition = struct {
     codepoint: u21,
     glyph_id: GlyphId,
+};
+
+pub const CompositionMatch = struct {
+    codepoint: u21,
+    glyph_id: GlyphId,
+    byte_end: usize,
 };
 
 pub fn composePair(starter: u21, mark: u21) ?u21 {
@@ -40,6 +47,34 @@ pub fn composePairForFont(font: *const Font, cache: ?*GlyphIndexCache, starter: 
         try font.glyphIndex(composed);
     if (glyph_id == 0) return null;
     return .{ .codepoint = composed, .glyph_id = glyph_id };
+}
+
+/// Compose the starter with the scalar beginning at `mark_byte_start` when the
+/// selected font contains the canonical precomposed glyph.
+pub fn composeAtForFont(
+    font: *const Font,
+    cache: ?*GlyphIndexCache,
+    starter: u21,
+    text: []const u8,
+    mark_byte_start: usize,
+) !?CompositionMatch {
+    if (!canStartComposition(starter) or mark_byte_start >= text.len) {
+        return null;
+    }
+    var lookahead =
+        std.unicode.Utf8Iterator{ .bytes = text, .i = mark_byte_start };
+    const mark = lookahead.nextCodepoint() orelse return null;
+    const composition = try composePairForFont(
+        font,
+        cache,
+        starter,
+        mark,
+    ) orelse return null;
+    return .{
+        .codepoint = composition.codepoint,
+        .glyph_id = composition.glyph_id,
+        .byte_end = lookahead.i,
+    };
 }
 
 test "Arabic canonical pairs compose to Unicode precomposed scalars" {

@@ -241,7 +241,7 @@ pub const TextBuffer = struct {
     pub fn ensureLayout(self: *TextBuffer, config: LayoutConfig) !layout.ParagraphLayout {
         if (!self.layout_valid) {
             _ = try layout.TextShaper.layoutParagraphUtf8(
-                .{ .fonts = face_mod.backend.fonts(config.cascade.faces) },
+                .init(face_mod.backend.fonts(config.cascade.faces)),
                 &self.layout_buffer,
                 self.text.items,
                 config.font_size,

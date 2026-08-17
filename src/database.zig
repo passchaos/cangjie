@@ -560,7 +560,7 @@ pub const FontDatabase = struct {
     }
 
     pub fn cascadeForText(self: *const FontDatabase, allocator: std.mem.Allocator, query: FontQuery, text: []const u8) !layout.FontCascade {
-        return .{ .fonts = try self.buildCascadeForText(allocator, query, text) };
+        return .init(try self.buildCascadeForText(allocator, query, text));
     }
 
     /// Resolve per-style font queries and lay out one unified attributed

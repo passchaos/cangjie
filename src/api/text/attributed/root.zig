@@ -81,5 +81,5 @@ pub fn layoutParagraph(
 }
 
 fn internalCascade(cascade: face_mod.Cascade) layout.FontCascade {
-    return .{ .fonts = face_mod.backend.fonts(cascade.faces) };
+    return .init(face_mod.backend.fonts(cascade.faces));
 }

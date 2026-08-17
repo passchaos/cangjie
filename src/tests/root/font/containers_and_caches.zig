@@ -355,7 +355,7 @@ test "caches font fallback coverage by codepoint" {
     try std.testing.expectEqual(@as(usize, 1), try fallback_cache.selectFont(cascade, 'B'));
     try std.testing.expectEqual(@as(usize, 1), fallback_cache.hits);
     try std.testing.expectEqual(@as(usize, 2), fallback_cache.misses);
-    try std.testing.expectEqual(@as(usize, 2), fallback_cache.entries.count());
+    try std.testing.expectEqual(@as(usize, 2), fallback_cache.scalarEntryCount());
     fallback_cache.clear();
 
     try std.testing.expectEqual(@as(usize, 1), try fallback_cache.selectFontWithGlyphCache(cascade, &glyph_cache, 'B'));
@@ -373,10 +373,10 @@ test "caches font fallback coverage by codepoint" {
     try std.testing.expectEqual(@as(usize, 4), shaped.runs.len);
     try std.testing.expect(fallback_cache.hits >= 3);
     try std.testing.expectEqual(@as(usize, 2), fallback_cache.misses);
-    try std.testing.expectEqual(@as(usize, 2), fallback_cache.entries.count());
+    try std.testing.expectEqual(@as(usize, 2), fallback_cache.scalarEntryCount());
 
     fallback_cache.clear();
-    try std.testing.expectEqual(@as(usize, 0), fallback_cache.entries.count());
+    try std.testing.expectEqual(@as(usize, 0), fallback_cache.scalarEntryCount());
     try std.testing.expectEqual(@as(usize, 0), fallback_cache.hits);
     try std.testing.expectEqual(@as(usize, 0), fallback_cache.misses);
 }

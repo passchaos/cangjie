@@ -501,6 +501,15 @@ their existing behavior, and `ParagraphOptions.kashida` can disable or bound
 the per-line insertion search. Cangjie never inserts an unshaped Tatweel glyph
 into an already positioned run.
 
+Font runs retain a range into their result owner's normalized-variation
+coordinate pool. Shaped text, paragraph layouts, retained paragraphs, complete
+shaped-run cache entries, attributed results, bidi-split runs, glyph draw lists,
+and direct shaped-text rasterization all preserve that range. A renderer
+therefore uses the same per-run fvar instance that supplied glyph selection,
+GPOS, HVAR/VVAR advances, and line geometry; callers no longer have to repeat a
+single paragraph-wide coordinate slice at the rendering boundary. Explicit
+renderer-coordinate overrides remain available for low-level callers.
+
 Paragraph alignment distinguishes logical and physical edges:
 `TextAlign.start`/`end` resolve through the paragraph direction, while
 `left`/`right` always name physical edges. `start` is the default, preserving

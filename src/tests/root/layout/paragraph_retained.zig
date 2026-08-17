@@ -139,6 +139,59 @@ test "shaped paragraphs restore advances between justified reflows" {
     try std.testing.expectEqualSlices(GlyphPosition, paragraph.glyphs, shape_buffer.glyphs.items);
 }
 
+test "retained paragraphs own run variation coordinates" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildMetricVariationTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        "A A",
+        20,
+        .{
+            .max_width = 200,
+            .normalized_variation_coords = &.{0.5},
+        },
+    );
+    defer paragraph.deinit();
+    // Reuse the shaping buffer with unrelated output; retained ownership must
+    // keep the coordinate pool and run ranges intact.
+    _ = try TextShaper.shapeUtf8WithOptions(
+        &font,
+        &shape_buffer,
+        "A",
+        20,
+        .{},
+    );
+
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const layout = try paragraph.layout(&reflow, .{
+        .max_width = 200,
+        .normalized_variation_coords = &.{0.5},
+    });
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0.5},
+        layout.normalized_variation_coords,
+    );
+    const shaped = paragraph.shapedText();
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0.5},
+        shaped.runs[0].normalizedVariationCoords(shaped),
+    );
+}
+
 test "shaped paragraph reflow restores content after ellipsis truncation" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

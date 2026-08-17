@@ -43,7 +43,8 @@ test "rasterizer renders variable outlines at normalized coordinates" {
         .source_byte_len = 1,
         .x_advance = 200,
     }};
-    const run = initGlyphRun(&font, 200, &glyphs);
+    const run = initGlyphRun(&font, 200, &glyphs, &.{});
+    const varied_run = initGlyphRun(&font, 200, &glyphs, &.{0.5});
 
     var default_target = try RenderTarget.init(allocator, 220, 220);
     defer default_target.deinit();
@@ -54,9 +55,64 @@ test "rasterizer renders variable outlines at normalized coordinates" {
     rasterizer.hint_size_px = 200;
     rasterizer.embolden_small_glyphs = false;
     try rasterizer.renderRun(&default_target, run, 20, 180);
-    try rasterizer.renderRunAtCoords(&varied_target, run, 20, 180, &.{0.5});
+    try rasterizer.renderRun(&varied_target, varied_run, 20, 180);
 
     try std.testing.expect(renderTargetPixelDifference(&default_target, &varied_target) > 0);
+}
+
+test "shaped text rendering uses each cascade run's coordinates" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildGvarCompoundTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const glyphs = [_]GlyphPosition{.{
+        .glyph_id = 2,
+        .codepoint = 'A',
+        .cluster = 0,
+        .source_byte_len = 1,
+        .x_advance = 200,
+    }};
+    const default_run = [_]@import("../../../layout/types/runs.zig").CascadeRun{.{
+        .font = @import("../../../font/face/root.zig").backend.face(&font),
+        .font_index = 0,
+        .font_size = 200,
+        .glyph_start = 0,
+        .glyph_len = 1,
+        .x_offset = 0,
+    }};
+    var varied_run = default_run;
+    varied_run[0].variation_coord_len = 1;
+
+    var default_target = try RenderTarget.init(allocator, 220, 220);
+    defer default_target.deinit();
+    var varied_target = try RenderTarget.init(allocator, 220, 220);
+    defer varied_target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    rasterizer.hint_size_px = 200;
+    rasterizer.embolden_small_glyphs = false;
+    try rasterizer.renderShapedText(
+        &default_target,
+        .{ .glyphs = &glyphs, .runs = &default_run },
+        20,
+        180,
+    );
+    try rasterizer.renderShapedText(
+        &varied_target,
+        .{
+            .glyphs = &glyphs,
+            .runs = &varied_run,
+            .normalized_variation_coords = &.{0.5},
+        },
+        20,
+        180,
+    );
+    try std.testing.expect(
+        renderTargetPixelDifference(&default_target, &varied_target) > 0,
+    );
 }
 
 test "color rasterizer renders variable outlines at normalized coordinates" {

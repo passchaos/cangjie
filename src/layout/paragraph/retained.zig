@@ -31,6 +31,7 @@ pub const ShapedParagraph = struct {
     text: []const u8,
     glyphs: []const glyph_position.GlyphPosition,
     runs: []const run_types.CascadeRun,
+    normalized_variation_coords: []const f32,
     grapheme_clusters: []const unicode.GraphemeCluster,
     line_breaks: []const line_break_opportunity.Opportunity,
     inline_object_indexes: []const usize,
@@ -52,13 +53,18 @@ pub const ShapedParagraph = struct {
         self.allocator.free(self.grapheme_clusters);
         self.allocator.free(self.runs);
         self.allocator.free(self.glyphs);
+        self.allocator.free(self.normalized_variation_coords);
         self.allocator.free(self.cascade_fonts);
         self.allocator.free(self.text);
         self.* = undefined;
     }
 
     pub fn shapedText(self: *const ShapedParagraph) run_types.ShapedText {
-        return .{ .glyphs = self.glyphs, .runs = self.runs };
+        return .{
+            .glyphs = self.glyphs,
+            .runs = self.runs,
+            .normalized_variation_coords = self.normalized_variation_coords,
+        };
     }
 
     /// Rebuild visual lines without repeating whole-paragraph shaping or
@@ -151,6 +157,10 @@ pub const ReflowBuffer = struct {
         paragraph: *const ShapedParagraph,
     ) !void {
         self.buffer.clear();
+        try self.buffer.variation_coords.appendSlice(
+            self.buffer.allocator,
+            paragraph.normalized_variation_coords,
+        );
         try self.buffer.glyphs.appendSlice(
             self.buffer.allocator,
             paragraph.glyphs,

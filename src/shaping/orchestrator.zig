@@ -108,6 +108,10 @@ pub const TextShaper = struct {
                 buffer.clear();
                 try buffer.glyphs.appendSlice(buffer.allocator, entry.glyphs);
                 try buffer.runs.appendSlice(buffer.allocator, entry.runs);
+                try buffer.variation_coords.appendSlice(
+                    buffer.allocator,
+                    entry.variation_coords,
+                );
                 return buffer.shapedText();
             }
         }
@@ -199,6 +203,11 @@ pub const TextShaper = struct {
         errdefer allocator.free(owned_glyphs);
         const owned_runs = try allocator.dupe(CascadeRun, logical_shaped.runs);
         errdefer allocator.free(owned_runs);
+        const owned_variation_coords = try allocator.dupe(
+            f32,
+            logical_shaped.normalized_variation_coords,
+        );
+        errdefer allocator.free(owned_variation_coords);
         const grapheme_clusters = try unicode.itemizeGraphemeClusters(allocator, text);
         errdefer allocator.free(grapheme_clusters);
         const line_breaks = try line_break_analysis.itemizeWithHyphenation(
@@ -228,6 +237,7 @@ pub const TextShaper = struct {
             .text = owned_text,
             .glyphs = owned_glyphs,
             .runs = owned_runs,
+            .normalized_variation_coords = owned_variation_coords,
             .grapheme_clusters = grapheme_clusters,
             .line_breaks = line_breaks,
             .inline_object_indexes = inline_object_indexes,
@@ -526,7 +536,11 @@ fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, gl
         try applyBidiVisualOrder(buffer, text, options.direction, font);
     }
     if (shape_profile) |p| p.bidi_ns += shape_profile_mod.elapsed(bidi_start, profile_io);
-    return buffer.run(font, font_size);
+    return try buffer.run(
+        font,
+        font_size,
+        options.normalized_variation_coords,
+    );
 }
 
 fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen: PenPosition, lookup_options: ResolvedLookupOptions) !PenPosition {
@@ -725,6 +739,9 @@ fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     // has no owner in the flat glyph stream and destabilizes diagnostics and
     // line-to-run range calculations.
     if (glyph_len == 0) return pen;
+    const variation_range = try buffer.internVariationCoords(
+        lookup_options.lookup.normalized_variation_coords,
+    );
     try buffer.runs.append(buffer.allocator, .{
         .font = face_mod.backend.face(font),
         .font_index = font_index,
@@ -733,6 +750,8 @@ fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .glyph_len = glyph_len,
         .x_offset = pen.x,
         .y_offset = pen.y,
+        .variation_coord_start = variation_range.start,
+        .variation_coord_len = variation_range.len,
     });
     var next_pen = pen;
     for (buffer.glyphs.items[glyph_start..]) |glyph| {

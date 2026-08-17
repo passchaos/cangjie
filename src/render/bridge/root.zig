@@ -131,6 +131,7 @@ pub const PositionedGlyph = struct {
 pub const GlyphRunDrawCommand = struct {
     font: *const face_mod.Face,
     font_size: f32,
+    normalized_variation_coords: []const f32 = &.{},
     glyph_start: usize,
     glyph_len: usize,
     x: f32,
@@ -242,14 +243,12 @@ const BridgeBuilder = struct {
     selection: std.ArrayList(TextSelectionGeometry) = .empty,
     inline_objects: std.ArrayList(InlineObjectDrawCommand) = .empty,
     cursor: ?TextCursorGeometry = null,
-    variation_hash: u64,
 
     fn init(allocator: std.mem.Allocator, paragraph: paragraph_types.ParagraphLayout, options: BridgeOptions) BridgeBuilder {
         return .{
             .allocator = allocator,
             .paragraph = paragraph,
             .options = options,
-            .variation_hash = normalizedVariationHash(options.normalized_variation_coords),
         };
     }
 
@@ -316,6 +315,11 @@ const BridgeBuilder = struct {
             try self.runs.append(self.allocator, .{
                 .font = run.font,
                 .font_size = run.font_size,
+                .normalized_variation_coords = runVariationCoords(
+                    self.paragraph,
+                    run,
+                    self.options.normalized_variation_coords,
+                ),
                 .glyph_start = command_start,
                 .glyph_len = self.glyphs.items.len - command_start,
                 .x = self.options.origin_x + line.x + advanceBefore(self.paragraph.glyphs[line.glyph_start..line_glyph_end], start - line.glyph_start),
@@ -328,12 +332,26 @@ const BridgeBuilder = struct {
 
     fn appendGlyphsInRange(self: *BridgeBuilder, run: run_types.CascadeRun, start: usize, end: usize, line: paragraph_types.ParagraphLine, baseline_y: f32) !void {
         const font = face_mod.backend.font(run.font);
+        const run_variation_coords = runVariationCoords(
+            self.paragraph,
+            run,
+            self.options.normalized_variation_coords,
+        );
+        const run_variation_hash =
+            normalizedVariationHash(run_variation_coords);
         const line_glyph_end = line.glyph_start + line.glyph_len;
         var pen_x = self.options.origin_x + line.x + advanceBefore(self.paragraph.glyphs[line.glyph_start..line_glyph_end], start - line.glyph_start);
         for (self.paragraph.glyphs[start..end]) |glyph| {
             const output_index = self.glyphs.items.len;
             const color_index: ?usize = if (self.options.include_color_glyphs)
-                try self.appendColorGlyph(font, run.font_size, glyph.glyph_id, output_index)
+                try self.appendColorGlyph(
+                    font,
+                    run.font_size,
+                    glyph.glyph_id,
+                    output_index,
+                    run_variation_coords,
+                    run_variation_hash,
+                )
             else
                 null;
             const embedded_png = if (color_index) |index| self.color_glyphs.items[index].embedded_png else null;
@@ -343,8 +361,8 @@ const BridgeBuilder = struct {
                     .font = run.font,
                     .glyph_id = glyph.glyph_id,
                     .font_size = run.font_size,
-                    .normalized_variation_coords = self.options.normalized_variation_coords,
-                    .variation_hash = self.variation_hash,
+                    .normalized_variation_coords = run_variation_coords,
+                    .variation_hash = run_variation_hash,
                     .render_mode = self.options.render_mode,
                     .content = atlas_content,
                 })
@@ -360,8 +378,8 @@ const BridgeBuilder = struct {
                     .font = run.font,
                     .glyph_id = glyph.glyph_id,
                     .font_size = run.font_size,
-                    .normalized_variation_coords = self.options.normalized_variation_coords,
-                    .variation_hash = self.variation_hash,
+                    .normalized_variation_coords = run_variation_coords,
+                    .variation_hash = run_variation_hash,
                     .render_mode = pathRequestMode(self.options.render_mode),
                     .source = .{
                         .glyph_index = output_index,
@@ -390,7 +408,15 @@ const BridgeBuilder = struct {
         }
     }
 
-    fn appendColorGlyph(self: *BridgeBuilder, font: *const font_mod.Font, font_size: f32, glyph_id: glyph_mod.GlyphId, glyph_index: usize) !?usize {
+    fn appendColorGlyph(
+        self: *BridgeBuilder,
+        font: *const font_mod.Font,
+        font_size: f32,
+        glyph_id: glyph_mod.GlyphId,
+        glyph_index: usize,
+        variation_coords: []const f32,
+        variation_hash: u64,
+    ) !?usize {
         const layer_start = self.color_layers.items.len;
         const layers = try font.colorLayers(self.allocator, glyph_id);
         defer self.allocator.free(layers);
@@ -400,8 +426,8 @@ const BridgeBuilder = struct {
                 .glyph_id = layer.glyph_id,
                 .font_size = font_size,
                 .palette_index = layer.palette_index,
-                .normalized_variation_coords = self.options.normalized_variation_coords,
-                .variation_hash = self.variation_hash,
+                .normalized_variation_coords = variation_coords,
+                .variation_hash = variation_hash,
                 .render_mode = self.options.render_mode,
             });
             try self.color_layers.append(self.allocator, .{
@@ -412,7 +438,10 @@ const BridgeBuilder = struct {
             });
         }
 
-        const color_paint = try font.colorPaintAtCoords(glyph_id, self.options.normalized_variation_coords);
+        const color_paint = try font.colorPaintAtCoords(
+            glyph_id,
+            variation_coords,
+        );
         // COLR has priority over SVG. Avoid decoding a lower-priority gzip SVG
         // document when the same glyph already selected a COLR source.
         var resolved_svg = if (layer_start == self.color_layers.items.len and color_paint == null)
@@ -424,7 +453,11 @@ const BridgeBuilder = struct {
         const color_stop_start = self.color_stops.items.len;
         if (color_paint) |paint| {
             if (colorPaintLine(paint)) |color_line| {
-                const resolved = try font.colorStopsAtCoords(self.allocator, color_line, self.options.normalized_variation_coords);
+                const resolved = try font.colorStopsAtCoords(
+                    self.allocator,
+                    color_line,
+                    variation_coords,
+                );
                 defer self.allocator.free(resolved);
                 try self.color_stops.appendSlice(self.allocator, resolved);
             }
@@ -492,7 +525,55 @@ const BridgeBuilder = struct {
     }
 
     fn toOwnedList(self: *BridgeBuilder) !GlyphDrawList {
-        const normalized_variation_coords = try self.allocator.dupe(f32, self.options.normalized_variation_coords);
+        var coord_pool = std.ArrayList(f32).empty;
+        defer coord_pool.deinit(self.allocator);
+        var atlas_coord_ranges = std.ArrayList(CoordRange).empty;
+        defer atlas_coord_ranges.deinit(self.allocator);
+        var path_coord_ranges = std.ArrayList(CoordRange).empty;
+        defer path_coord_ranges.deinit(self.allocator);
+        var run_coord_ranges = std.ArrayList(CoordRange).empty;
+        defer run_coord_ranges.deinit(self.allocator);
+        try run_coord_ranges.ensureTotalCapacity(
+            self.allocator,
+            self.runs.items.len,
+        );
+        for (self.runs.items) |run| {
+            run_coord_ranges.appendAssumeCapacity(
+                try internCoordRange(
+                    &coord_pool,
+                    self.allocator,
+                    run.normalized_variation_coords,
+                ),
+            );
+        }
+        try atlas_coord_ranges.ensureTotalCapacity(
+            self.allocator,
+            self.atlas_requests.items.len,
+        );
+        for (self.atlas_requests.items) |request| {
+            atlas_coord_ranges.appendAssumeCapacity(
+                try internCoordRange(
+                    &coord_pool,
+                    self.allocator,
+                    request.normalized_variation_coords,
+                ),
+            );
+        }
+        try path_coord_ranges.ensureTotalCapacity(
+            self.allocator,
+            self.path_requests.items.len,
+        );
+        for (self.path_requests.items) |request| {
+            path_coord_ranges.appendAssumeCapacity(
+                try internCoordRange(
+                    &coord_pool,
+                    self.allocator,
+                    request.normalized_variation_coords,
+                ),
+            );
+        }
+        const normalized_variation_coords =
+            try coord_pool.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(normalized_variation_coords);
         const glyphs = try self.glyphs.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(glyphs);
@@ -532,14 +613,63 @@ const BridgeBuilder = struct {
             .selection = selection,
             .inline_objects = inline_objects,
         };
-        // Requests live as long as the draw list, not as long as the caller's
-        // BridgeOptions. Rebind every borrowed location to the single owned
-        // coordinate copy after all request slices have reached stable storage.
-        for (result.atlas_requests) |*request| request.normalized_variation_coords = normalized_variation_coords;
-        for (result.path_requests) |*request| request.normalized_variation_coords = normalized_variation_coords;
+        // Requests live as long as the draw list, not as long as paragraph or
+        // BridgeOptions storage. Rebind each request to its interned range.
+        for (result.atlas_requests, atlas_coord_ranges.items) |*request, range| {
+            request.normalized_variation_coords =
+                range.slice(normalized_variation_coords);
+        }
+        for (result.path_requests, path_coord_ranges.items) |*request, range| {
+            request.normalized_variation_coords =
+                range.slice(normalized_variation_coords);
+        }
+        for (result.runs, run_coord_ranges.items) |*run, range| {
+            run.normalized_variation_coords =
+                range.slice(normalized_variation_coords);
+        }
         return result;
     }
 };
+
+const CoordRange = struct {
+    start: usize,
+    len: usize,
+
+    fn slice(self: CoordRange, pool: []const f32) []const f32 {
+        return pool[self.start .. self.start + self.len];
+    }
+};
+
+fn internCoordRange(
+    pool: *std.ArrayList(f32),
+    allocator: std.mem.Allocator,
+    coords: []const f32,
+) !CoordRange {
+    if (coords.len == 0) return .{ .start = 0, .len = 0 };
+    var start: usize = 0;
+    while (start + coords.len <= pool.items.len) : (start += 1) {
+        if (variationCoordinatesEqual(
+            pool.items[start..][0..coords.len],
+            coords,
+        )) {
+            return .{ .start = start, .len = coords.len };
+        }
+    }
+    const range_start = pool.items.len;
+    try pool.appendSlice(allocator, coords);
+    return .{ .start = range_start, .len = coords.len };
+}
+
+fn runVariationCoords(
+    paragraph: paragraph_types.ParagraphLayout,
+    run: run_types.CascadeRun,
+    fallback: []const f32,
+) []const f32 {
+    if (run.variation_coord_len == 0) return fallback;
+    const end = run.variation_coord_start + run.variation_coord_len;
+    std.debug.assert(end <= paragraph.normalized_variation_coords.len);
+    return paragraph.normalized_variation_coords[run.variation_coord_start..end];
+}
 
 fn colorPaintLine(paint: font_mod.ColorPaint) ?font_mod.ColorPaint.ColorLine {
     return switch (paint) {

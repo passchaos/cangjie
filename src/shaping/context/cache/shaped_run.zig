@@ -80,6 +80,7 @@ pub const ShapedRunCacheEntry = struct {
     key: ShapedRunCacheKey,
     glyphs: []glyph_position.GlyphPosition,
     runs: []run_types.CascadeRun,
+    variation_coords: []f32,
     hits: usize = 0,
 };
 
@@ -109,6 +110,7 @@ pub const ShapedRunCache = struct {
             self.allocator.free(entry.key.context_after);
             self.allocator.free(entry.glyphs);
             self.allocator.free(entry.runs);
+            self.allocator.free(entry.variation_coords);
         }
         self.entries.clearRetainingCapacity();
         self.hits = 0;
@@ -175,6 +177,11 @@ pub const ShapedRunCache = struct {
         errdefer self.allocator.free(glyphs);
         const runs = try self.allocator.dupe(run_types.CascadeRun, shaped.runs);
         errdefer self.allocator.free(runs);
+        const variation_coords = try self.allocator.dupe(
+            f32,
+            shaped.normalized_variation_coords,
+        );
+        errdefer self.allocator.free(variation_coords);
 
         var owned_key = key_value;
         owned_key.fonts = fonts;
@@ -187,6 +194,7 @@ pub const ShapedRunCache = struct {
             .key = owned_key,
             .glyphs = glyphs,
             .runs = runs,
+            .variation_coords = variation_coords,
         });
     }
 };

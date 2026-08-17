@@ -115,12 +115,13 @@ pub fn dumpFontFallback(writer: *std.Io.Writer, cascade: font_fallback.Cascade, 
 pub fn dumpShapeRuns(writer: *std.Io.Writer, shaped: run_types.ShapedText) !void {
     try writer.print("shape.runs count={d} glyphs={d} width={d:.3}\n", .{ shaped.runs.len, shaped.glyphs.len, shaped.width() });
     for (shaped.runs, 0..) |run, index| {
-        try writer.print("  run[{d}] font_index={d} glyphs={d}..{d} font_size={d:.3} x_offset={d:.3}\n", .{
+        try writer.print("  run[{d}] font_index={d} glyphs={d}..{d} font_size={d:.3} variation_coords={d} x_offset={d:.3}\n", .{
             index,
             run.font_index,
             run.glyph_start,
             run.glyph_start + run.glyph_len,
             run.font_size,
+            run.variation_coord_len,
             run.x_offset,
         });
     }

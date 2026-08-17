@@ -157,7 +157,11 @@ fn shapeValidated(
         gsub_options.language_tag,
         options,
     );
-    return buffer.run(font, font_size);
+    return try buffer.run(
+        font,
+        font_size,
+        options.normalized_variation_coords,
+    );
 }
 
 fn validateInput(

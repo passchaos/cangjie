@@ -52,6 +52,8 @@ pub fn apply(
     defer adopted_glyphs.deinit(buffer.allocator);
     var adopted_runs = std.ArrayList(run_types.CascadeRun).empty;
     defer adopted_runs.deinit(buffer.allocator);
+    var adopted_variation_coords = std.ArrayList(f32).empty;
+    defer adopted_variation_coords.deinit(buffer.allocator);
 
     var line_index: usize = 0;
     while (line_index < buffer.lines.items.len) : (line_index += 1) {
@@ -78,6 +80,7 @@ pub fn apply(
 
         adopted_glyphs.clearRetainingCapacity();
         adopted_runs.clearRetainingCapacity();
+        adopted_variation_coords.clearRetainingCapacity();
         var adopted_width = geometry.lineWidth(
             buffer.glyphs.items[line.glyph_start .. line.glyph_start + line.glyph_len],
         );
@@ -119,6 +122,7 @@ pub fn apply(
 
             adopted_glyphs.clearRetainingCapacity();
             adopted_runs.clearRetainingCapacity();
+            adopted_variation_coords.clearRetainingCapacity();
             try adopted_glyphs.appendSlice(
                 buffer.allocator,
                 work.glyphs.items,
@@ -126,6 +130,10 @@ pub fn apply(
             try adopted_runs.appendSlice(
                 buffer.allocator,
                 work.runs.items,
+            );
+            try adopted_variation_coords.appendSlice(
+                buffer.allocator,
+                work.variation_coords.items,
             );
             try recipe.saveCandidate();
             adopted_width = candidate_width;
@@ -143,6 +151,7 @@ pub fn apply(
             line_index,
             adopted_glyphs.items,
             adopted_runs.items,
+            adopted_variation_coords.items,
             adopted_width,
         );
         recipe.commit(
@@ -362,6 +371,7 @@ fn replaceLine(
     line_index: usize,
     new_glyphs: []const GlyphPosition,
     new_runs: []const run_types.CascadeRun,
+    new_variation_coords: []const f32,
     width: f32,
 ) !void {
     const line = buffer.lines.items[line_index];
@@ -391,7 +401,17 @@ fn replaceLine(
     }
     for (new_runs) |run| {
         var adjusted = run;
+        const coord_end =
+            run.variation_coord_start + run.variation_coord_len;
+        if (coord_end > new_variation_coords.len) {
+            return error.InvalidKashidaMap;
+        }
+        const variation_range = try buffer.internVariationCoords(
+            new_variation_coords[run.variation_coord_start..coord_end],
+        );
         adjusted.glyph_start += line.glyph_start;
+        adjusted.variation_coord_start = variation_range.start;
+        adjusted.variation_coord_len = variation_range.len;
         rebuilt_runs.appendAssumeCapacity(adjusted);
     }
     for (buffer.runs.items) |run| {

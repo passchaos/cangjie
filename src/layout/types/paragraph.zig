@@ -125,6 +125,8 @@ pub const TextRect = struct {
 pub const ParagraphLayout = struct {
     glyphs: []const GlyphPosition,
     runs: []const CascadeRun,
+    /// Flat owner for each run's normalized fvar coordinate range.
+    normalized_variation_coords: []const f32 = &.{},
     lines: []const ParagraphLine,
     inline_objects: []const inline_object.Positioned = &.{},
     width: f32,

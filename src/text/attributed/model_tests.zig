@@ -16,6 +16,8 @@ const measureAttributedTextUtf8 = attributed_model.measureAttributedTextUtf8;
 const measureAttributedRunsUtf8 = attributed_model.measureAttributedRunsUtf8;
 const layoutAttributedRunsUtf8 = attributed_model.layoutAttributedRunsUtf8;
 const layoutAttributedGlyphRunsUtf8 = attributed_model.layoutAttributedGlyphRunsUtf8;
+const layoutAttributedParagraphUtf8 =
+    attributed_model.layoutAttributedParagraphUtf8;
 
 test "core ranges and attributed text validate byte units" {
     const text = "A一B";
@@ -123,6 +125,28 @@ test "attributed text forwards normalized variation metrics" {
     const varied_metrics = try measureAttributedTextUtf8(cascade, &layout_buffer, .{ .text = "A", .spans = &varied_spans }, 100);
     try std.testing.expectApproxEqAbs(@as(f32, 16.0), default_metrics.width, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 16.08), varied_metrics.width, 0.001);
+
+    var paragraph = try layoutAttributedParagraphUtf8(
+        allocator,
+        cascade,
+        .{ .text = "A", .spans = &varied_spans },
+        100,
+    );
+    defer paragraph.deinit();
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0.5},
+        paragraph.normalized_variation_coords,
+    );
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0.5},
+        paragraph.paragraph.runs[0].normalizedVariationCoords(.{
+            .glyphs = paragraph.paragraph.glyphs,
+            .runs = paragraph.paragraph.runs,
+            .normalized_variation_coords = paragraph.paragraph.normalized_variation_coords,
+        }),
+    );
 
     var glyph_runs = try layoutAttributedGlyphRunsUtf8(allocator, cascade, .{ .text = "A", .spans = &varied_spans });
     defer glyph_runs.deinit();

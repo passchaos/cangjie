@@ -53,6 +53,8 @@ pub fn rebuild(
             .glyph_len = index - start,
             .x_offset = 0,
             .y_offset = 0,
+            .variation_coord_start = source_run.variation_coord_start,
+            .variation_coord_len = source_run.variation_coord_len,
         });
     }
 }

@@ -361,6 +361,9 @@ const SegmentContext = struct {
         const glyph_len = self.buffer.glyphs.items.len - glyph_start;
         if (glyph_len == 0) return pen;
 
+        const variation_range = try self.buffer.internVariationCoords(
+            self.lookup_options.lookup.normalized_variation_coords,
+        );
         try self.buffer.runs.append(self.buffer.allocator, .{
             .font = face_mod.backend.face(font),
             .font_index = font_index,
@@ -369,6 +372,8 @@ const SegmentContext = struct {
             .glyph_len = glyph_len,
             .x_offset = pen.x,
             .y_offset = pen.y,
+            .variation_coord_start = variation_range.start,
+            .variation_coord_len = variation_range.len,
         });
         var next_pen = pen;
         for (self.buffer.glyphs.items[glyph_start..]) |glyph| {

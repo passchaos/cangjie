@@ -1,5 +1,6 @@
 //! Public shaped glyph and run records.
 
+const std = @import("std");
 const face_mod = @import("../../font/face/root.zig");
 const Face = face_mod.Face;
 const Font = @import("../../font.zig").Font;
@@ -11,6 +12,10 @@ pub const GlyphRun = struct {
     font: *const Face,
     font_size: f32,
     glyphs: []const GlyphPosition,
+    /// Normalized fvar coordinates in the owning font's axis order.
+    ///
+    /// Like `glyphs`, this slice borrows the shaping output owner.
+    normalized_variation_coords: []const f32 = &.{},
 
     pub fn width(self: GlyphRun) f32 {
         var total: f32 = 0;
@@ -29,11 +34,13 @@ pub fn initGlyphRun(
     font: *const Font,
     font_size: f32,
     glyphs: []const GlyphPosition,
+    normalized_variation_coords: []const f32,
 ) GlyphRun {
     return .{
         .font = face_mod.backend.face(font),
         .font_size = font_size,
         .glyphs = glyphs,
+        .normalized_variation_coords = normalized_variation_coords,
     };
 }
 
@@ -47,13 +54,30 @@ pub const CascadeRun = struct {
     glyph_len: usize,
     x_offset: f32,
     y_offset: f32 = 0,
+    /// Range in `ShapedText.normalized_variation_coords`.
+    variation_coord_start: usize = 0,
+    variation_coord_len: usize = 0,
 
     pub fn glyphs(self: CascadeRun, shaped: ShapedText) []const GlyphPosition {
         return shaped.glyphs[self.glyph_start .. self.glyph_start + self.glyph_len];
     }
 
     pub fn glyphRun(self: CascadeRun, shaped: ShapedText) GlyphRun {
-        return .{ .font = self.font, .font_size = self.font_size, .glyphs = self.glyphs(shaped) };
+        return .{
+            .font = self.font,
+            .font_size = self.font_size,
+            .glyphs = self.glyphs(shaped),
+            .normalized_variation_coords = self.normalizedVariationCoords(shaped),
+        };
+    }
+
+    pub fn normalizedVariationCoords(
+        self: CascadeRun,
+        shaped: ShapedText,
+    ) []const f32 {
+        const end = self.variation_coord_start + self.variation_coord_len;
+        std.debug.assert(end <= shaped.normalized_variation_coords.len);
+        return shaped.normalized_variation_coords[self.variation_coord_start..end];
     }
 };
 
@@ -69,6 +93,8 @@ pub fn fontForBackend(run: CascadeRun) *const Font {
 pub const ShapedText = struct {
     glyphs: []const GlyphPosition,
     runs: []const CascadeRun,
+    /// Flat owner for every run's normalized variation coordinate range.
+    normalized_variation_coords: []const f32 = &.{},
 
     pub fn width(self: ShapedText) f32 {
         var total: f32 = 0;
@@ -101,4 +127,5 @@ pub const ScriptedText = struct {
     glyphs: []const GlyphPosition,
     font_runs: []const CascadeRun,
     script_runs: []const ScriptedRun,
+    normalized_variation_coords: []const f32 = &.{},
 };

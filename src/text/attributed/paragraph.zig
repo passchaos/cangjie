@@ -26,6 +26,7 @@ pub fn Result(comptime TextStyle: type) type {
         allocator: std.mem.Allocator,
         glyphs: []glyph_position.GlyphPosition,
         font_runs: []run_types.CascadeRun,
+        normalized_variation_coords: []f32,
         lines: []paragraph_types.ParagraphLine,
         inline_objects: []inline_object.Positioned,
         style_runs: []StyleRun(TextStyle),
@@ -39,6 +40,7 @@ pub fn Result(comptime TextStyle: type) type {
             self.allocator.free(self.inline_objects);
             self.allocator.free(self.lines);
             self.allocator.free(self.font_runs);
+            self.allocator.free(self.normalized_variation_coords);
             self.allocator.free(self.glyphs);
             self.* = undefined;
         }
@@ -98,6 +100,11 @@ pub fn layoutResolved(
     errdefer allocator.free(glyphs);
     const font_runs = try allocator.dupe(run_types.CascadeRun, paragraph.runs);
     errdefer allocator.free(font_runs);
+    const normalized_variation_coords = try allocator.dupe(
+        f32,
+        paragraph.normalized_variation_coords,
+    );
+    errdefer allocator.free(normalized_variation_coords);
     const lines = try allocator.dupe(paragraph_types.ParagraphLine, paragraph.lines);
     errdefer allocator.free(lines);
     const inline_objects =
@@ -117,12 +124,14 @@ pub fn layoutResolved(
         .allocator = allocator,
         .glyphs = glyphs,
         .font_runs = font_runs,
+        .normalized_variation_coords = normalized_variation_coords,
         .lines = lines,
         .inline_objects = inline_objects,
         .style_runs = style_runs,
         .paragraph = .{
             .glyphs = glyphs,
             .runs = font_runs,
+            .normalized_variation_coords = normalized_variation_coords,
             .lines = lines,
             .inline_objects = inline_objects,
             .width = paragraph.width,

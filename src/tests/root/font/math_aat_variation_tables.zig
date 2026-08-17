@@ -547,6 +547,11 @@ test "shaping applies normalized variation metric coordinates" {
 
     const varied_run = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .normalized_variation_coords = &.{0.5} });
     try std.testing.expectApproxEqAbs(@as(f32, 16.08), varied_run.width(), 0.001);
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0.5},
+        varied_run.normalized_variation_coords,
+    );
     try std.testing.expectError(error.BadSfnt, TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .normalized_variation_coords = &.{1.1} }));
 
     const vertical_default = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .writing_mode = .vertical_rl });
@@ -566,6 +571,16 @@ test "shaping applies normalized variation metric coordinates" {
     try std.testing.expectApproxEqAbs(@as(f32, 16.0), first_width, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 16.08), second_width, 0.001);
     try std.testing.expectApproxEqAbs(second_width, third.width(), 0.001);
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0.5},
+        third.normalized_variation_coords,
+    );
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0.5},
+        third.runs[0].normalizedVariationCoords(third),
+    );
     try std.testing.expectEqual(@as(usize, 2), shaped_cache.entries.items.len);
     try std.testing.expectEqual(@as(usize, 1), shaped_cache.hits);
 }

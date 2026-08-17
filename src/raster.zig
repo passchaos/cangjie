@@ -853,7 +853,13 @@ pub const Rasterizer = struct {
     }
 
     pub fn renderRun(self: *Rasterizer, target: *RenderTarget, run: run_types.GlyphRun, x: f32, baseline_y: f32) !void {
-        return try self.renderRunAtCoords(target, run, x, baseline_y, &.{});
+        return try self.renderRunAtCoords(
+            target,
+            run,
+            x,
+            baseline_y,
+            run.normalized_variation_coords,
+        );
     }
 
     pub fn renderRunAtCoords(self: *Rasterizer, target: *RenderTarget, run: run_types.GlyphRun, x: f32, baseline_y: f32, normalized_variation_coords: []const f32) !void {
@@ -876,7 +882,15 @@ pub const Rasterizer = struct {
     }
 
     pub fn renderShapedText(self: *Rasterizer, target: *RenderTarget, shaped: run_types.ShapedText, x: f32, baseline_y: f32) !void {
-        return try self.renderShapedTextAtCoords(target, shaped, x, baseline_y, &.{});
+        for (shaped.runs) |run| {
+            try self.renderRunAtCoords(
+                target,
+                run.glyphRun(shaped),
+                x + run.x_offset,
+                baseline_y,
+                run.normalizedVariationCoords(shaped),
+            );
+        }
     }
 
     pub fn renderShapedTextAtCoords(self: *Rasterizer, target: *RenderTarget, shaped: run_types.ShapedText, x: f32, baseline_y: f32, normalized_variation_coords: []const f32) !void {
@@ -886,7 +900,14 @@ pub const Rasterizer = struct {
     }
 
     pub fn renderColorRun(self: *Rasterizer, target: *ColorRenderTarget, run: run_types.GlyphRun, x: f32, baseline_y: f32, palette_index: u16) !void {
-        return try self.renderColorRunAtCoords(target, run, x, baseline_y, palette_index, &.{});
+        return try self.renderColorRunAtCoords(
+            target,
+            run,
+            x,
+            baseline_y,
+            palette_index,
+            run.normalized_variation_coords,
+        );
     }
 
     pub fn renderColorRunAtCoords(self: *Rasterizer, target: *ColorRenderTarget, run: run_types.GlyphRun, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
@@ -902,7 +923,16 @@ pub const Rasterizer = struct {
     }
 
     pub fn renderColorShapedText(self: *Rasterizer, target: *ColorRenderTarget, shaped: run_types.ShapedText, x: f32, baseline_y: f32, palette_index: u16) !void {
-        return try self.renderColorShapedTextAtCoords(target, shaped, x, baseline_y, palette_index, &.{});
+        for (shaped.runs) |run| {
+            try self.renderColorRunAtCoords(
+                target,
+                run.glyphRun(shaped),
+                x + run.x_offset,
+                baseline_y,
+                palette_index,
+                run.normalizedVariationCoords(shaped),
+            );
+        }
     }
 
     pub fn renderColorShapedTextAtCoords(self: *Rasterizer, target: *ColorRenderTarget, shaped: run_types.ShapedText, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {

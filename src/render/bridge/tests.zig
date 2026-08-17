@@ -430,9 +430,9 @@ test "render bridge resolves variable COLR paint and color stops" {
         .normalized_variation_coords = &.{0.5},
     });
 
-    var draw_list = try buildGlyphDrawList(allocator, paragraph, .{
-        .normalized_variation_coords = &.{0.5},
-    });
+    // Run-owned coordinates are authoritative; callers no longer need to
+    // repeat the shaping coordinates in bridge options.
+    var draw_list = try buildGlyphDrawList(allocator, paragraph, .{});
     defer draw_list.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), draw_list.color_glyphs.len);
@@ -448,6 +448,11 @@ test "render bridge resolves variable COLR paint and color stops" {
     try std.testing.expectEqual(@as(usize, 1), draw_list.atlas_requests[0].cacheKey().variation_coord_count);
     try std.testing.expectEqual(@as(usize, 1), draw_list.path_requests[0].cacheKey().variation_coord_count);
     try std.testing.expectEqual(@as(f32, 0.5), draw_list.normalized_variation_coords[0]);
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0.5},
+        draw_list.runs[0].normalized_variation_coords,
+    );
     try std.testing.expectEqual(draw_list.normalized_variation_coords.ptr, draw_list.atlas_requests[0].normalized_variation_coords.ptr);
     try std.testing.expectEqual(draw_list.normalized_variation_coords.ptr, draw_list.path_requests[0].normalized_variation_coords.ptr);
     const gradient = command.paint.colr_v1_glyph.brush.linear_gradient;

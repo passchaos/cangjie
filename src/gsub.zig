@@ -837,150 +837,6 @@ fn readU32(table: Table, relative: usize) GsubError!u32 {
     return table.readU32(relative);
 }
 
-test "GSUB chaining class substitution applies nested lookup" {
-    const allocator = std.testing.allocator;
-    const bytes = try allocator.alloc(u8, 112);
-    defer allocator.free(bytes);
-    @memset(bytes, 0);
-
-    writeU32Test(bytes, 0, 0x00010000);
-    writeU16Test(bytes, 8, 10);
-    writeU16Test(bytes, 10, 2);
-    writeU16Test(bytes, 12, 6);
-    writeU16Test(bytes, 14, 82);
-
-    writeU16Test(bytes, 16, 6);
-    writeU16Test(bytes, 20, 1);
-    writeU16Test(bytes, 22, 8);
-
-    const chain = 24;
-    writeU16Test(bytes, chain + 0, 2);
-    writeU16Test(bytes, chain + 2, 38);
-    writeU16Test(bytes, chain + 4, 44);
-    writeU16Test(bytes, chain + 6, 52);
-    writeU16Test(bytes, chain + 8, 60);
-    writeU16Test(bytes, chain + 10, 2);
-    writeU16Test(bytes, chain + 14, 16);
-
-    const set = chain + 16;
-    writeU16Test(bytes, set + 0, 1);
-    writeU16Test(bytes, set + 2, 4);
-    const rule = set + 4;
-    writeU16Test(bytes, rule + 0, 1);
-    writeU16Test(bytes, rule + 2, 1);
-    writeU16Test(bytes, rule + 4, 1);
-    writeU16Test(bytes, rule + 6, 1);
-    writeU16Test(bytes, rule + 8, 1);
-    writeU16Test(bytes, rule + 10, 1);
-    writeU16Test(bytes, rule + 12, 0);
-    writeU16Test(bytes, rule + 14, 1);
-
-    writeCoverage1(bytes, chain + 38, 1);
-    writeClassDef1(bytes, chain + 44, 1, 1);
-    writeClassDef1(bytes, chain + 52, 1, 1);
-    writeClassDef1(bytes, chain + 60, 1, 1);
-
-    writeSingleDeltaLookup(bytes, 92, 1, 2);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 1, 1 });
-    try applyLookup(.{ .data = bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, allocator, .{});
-
-    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 3, 1 }, glyphs.items);
-}
-
-test "GSUB chaining coverage substitution applies nested lookup" {
-    const allocator = std.testing.allocator;
-    const bytes = try allocator.alloc(u8, 82);
-    defer allocator.free(bytes);
-    @memset(bytes, 0);
-
-    writeU32Test(bytes, 0, 0x00010000);
-    writeU16Test(bytes, 8, 10);
-    writeU16Test(bytes, 10, 2);
-    writeU16Test(bytes, 12, 6);
-    writeU16Test(bytes, 14, 52);
-
-    writeU16Test(bytes, 16, 6);
-    writeU16Test(bytes, 20, 1);
-    writeU16Test(bytes, 22, 8);
-
-    const chain = 24;
-    writeU16Test(bytes, chain + 0, 3);
-    writeU16Test(bytes, chain + 2, 1);
-    writeU16Test(bytes, chain + 4, 20);
-    writeU16Test(bytes, chain + 6, 1);
-    writeU16Test(bytes, chain + 8, 26);
-    writeU16Test(bytes, chain + 10, 1);
-    writeU16Test(bytes, chain + 12, 32);
-    writeU16Test(bytes, chain + 14, 1);
-    writeU16Test(bytes, chain + 16, 0);
-    writeU16Test(bytes, chain + 18, 1);
-    writeCoverage1(bytes, chain + 20, 1);
-    writeCoverage1(bytes, chain + 26, 1);
-    writeCoverage1(bytes, chain + 32, 1);
-
-    writeSingleDeltaLookup(bytes, 62, 1, 2);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 1, 1 });
-    try applyLookup(.{ .data = bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, allocator, .{});
-
-    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 3, 1 }, glyphs.items);
-}
-
-test "GSUB source syllable matching blocks cross-syllable chaining context" {
-    const allocator = std.testing.allocator;
-    const bytes = try allocator.alloc(u8, 82);
-    defer allocator.free(bytes);
-    @memset(bytes, 0);
-
-    writeU32Test(bytes, 0, 0x00010000);
-    writeU16Test(bytes, 8, 10);
-    writeU16Test(bytes, 10, 2);
-    writeU16Test(bytes, 12, 6);
-    writeU16Test(bytes, 14, 52);
-
-    writeU16Test(bytes, 16, 6);
-    writeU16Test(bytes, 20, 1);
-    writeU16Test(bytes, 22, 8);
-
-    const chain = 24;
-    writeU16Test(bytes, chain + 0, 3);
-    writeU16Test(bytes, chain + 2, 1);
-    writeU16Test(bytes, chain + 4, 20);
-    writeU16Test(bytes, chain + 6, 1);
-    writeU16Test(bytes, chain + 8, 26);
-    writeU16Test(bytes, chain + 10, 1);
-    writeU16Test(bytes, chain + 12, 32);
-    writeU16Test(bytes, chain + 14, 1);
-    writeU16Test(bytes, chain + 16, 0);
-    writeU16Test(bytes, chain + 18, 1);
-    writeCoverage1(bytes, chain + 20, 1);
-    writeCoverage1(bytes, chain + 26, 1);
-    writeCoverage1(bytes, chain + 32, 1);
-
-    writeSingleDeltaLookup(bytes, 62, 1, 2);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 1, 1 });
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(allocator);
-    try sources.appendSlice(allocator, &.{ 0, 1, 2 });
-    const source_syllables = [_]u8{ 1, 2, 2 };
-
-    try applyLookup(.{ .data = bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, allocator, .{
-        .glyph_source_indices = &sources,
-        .source_syllables = &source_syllables,
-        .match_source_syllable = true,
-    });
-
-    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 1, 1 }, glyphs.items);
-}
-
 test "GSUB chaining coverage lookup tries subtables per position" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 150;
@@ -2835,6 +2691,12 @@ const ContextExecutionIntegrationTestBindings = struct {
     pub const Executor = ContextualRecordExecutor;
 };
 
+const chainingTestApplyLookup = applyLookup;
+
+const ChainingExecutionIntegrationTestBindings = struct {
+    pub const applyLookup = chainingTestApplyLookup;
+};
+
 const GlyphBoundsTestBindings = struct {
     pub const validate = validateGlyphBounds;
     pub const validateForShaping = validateGlyphBoundsForShaping;
@@ -2855,6 +2717,8 @@ const TopologyTestBindings = struct {
 test {
     _ = @import("gsub/tests/accelerator/root.zig");
     _ = @import("gsub/tests/execution/root.zig");
+    _ = @import("gsub/tests/execution/contextual/chaining/integration.zig")
+        .suite(ChainingExecutionIntegrationTestBindings);
     _ = @import("gsub/tests/execution/contextual/context/integration.zig")
         .suite(ContextExecutionIntegrationTestBindings);
     _ = @import("gsub/tests/feature/root.zig");

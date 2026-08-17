@@ -5,6 +5,7 @@ const imx = @import("imx");
 const font_mod = @import("font.zig");
 const glyph_mod = @import("glyph.zig");
 const run_types = @import("layout/types/runs.zig");
+const composite_mod = @import("raster/composite.zig");
 const curves = @import("raster/curves.zig");
 const outline_raster = @import("raster/outline.zig");
 const prepared_mod = @import("raster/prepared.zig");
@@ -915,7 +916,7 @@ pub const Rasterizer = struct {
                     defer clipped.deinit();
                     try self.renderColorPaint(&clipped, font, paint, glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords);
                     applyColrClipBox(&clipped, clip, font.units_per_em, x, baseline_y, font_size);
-                    blendColorTarget(target, &clipped);
+                    composite_mod.blendPixels(target.pixels, clipped.pixels);
                 } else {
                     try self.renderColorPaint(target, font, paint, glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords);
                 }
@@ -1101,7 +1102,7 @@ pub const Rasterizer = struct {
                 defer mask.deinit();
                 try self.renderColorGlyphMask(&mask, &outline, x, baseline_y, font_size, font.units_per_em, transform);
                 applyMaskToColorTarget(&clipped, &mask);
-                blendColorTarget(target, &clipped);
+                composite_mod.blendPixels(target.pixels, clipped.pixels);
             },
             .layers => |layers| {
                 for (0..layers.layer_count) |offset| {
@@ -1129,7 +1130,7 @@ pub const Rasterizer = struct {
                     defer clipped.deinit();
                     try self.renderColorPaintTransformed(&clipped, font, child, colr_glyph.glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform, guard);
                     applyColrClipBoxTransformed(&clipped, clip, transform, font.units_per_em, x, baseline_y, font_size);
-                    blendColorTarget(target, &clipped);
+                    composite_mod.blendPixels(target.pixels, clipped.pixels);
                 } else {
                     try self.renderColorPaintTransformed(target, font, child, colr_glyph.glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform, guard);
                 }
@@ -1143,8 +1144,12 @@ pub const Rasterizer = struct {
                 const source_paint = try font.colorPaintChildAtCoords(composite.source, normalized_variation_coords);
                 try self.renderColorPaintTransformed(&backdrop, font, backdrop_paint, fallback_glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform, guard);
                 try self.renderColorPaintTransformed(&source, font, source_paint, fallback_glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform, guard);
-                compositeColorTargets(&source, &backdrop, composite.mode);
-                blendColorTarget(target, &backdrop);
+                composite_mod.compositePixels(
+                    source.pixels,
+                    backdrop.pixels,
+                    composite.mode,
+                );
+                composite_mod.blendPixels(target.pixels, backdrop.pixels);
             },
         }
     }
@@ -1509,23 +1514,6 @@ fn applyColrClipBoxTransformed(
     }
 }
 
-fn blendColorTarget(target: *ColorRenderTarget, source: *const ColorRenderTarget) void {
-    for (target.pixels[0..@min(target.pixels.len, source.pixels.len)], source.pixels) |*dst, src| {
-        blendPremultipliedPixel(dst, src);
-    }
-}
-
-fn blendPremultipliedPixel(dst: *Rgba, src: Rgba) void {
-    if (src.a == 0) return;
-    const inv_a = 255 - @as(u32, src.a);
-    // ColorRenderTarget stores premultiplied channels, so the source is added
-    // directly rather than multiplied by alpha a second time.
-    dst.r = @intCast(@min(@as(u32, 255), @as(u32, src.r) + (@as(u32, dst.r) * inv_a) / 255));
-    dst.g = @intCast(@min(@as(u32, 255), @as(u32, src.g) + (@as(u32, dst.g) * inv_a) / 255));
-    dst.b = @intCast(@min(@as(u32, 255), @as(u32, src.b) + (@as(u32, dst.b) * inv_a) / 255));
-    dst.a = @intCast(@min(@as(u32, 255), @as(u32, src.a) + (@as(u32, dst.a) * inv_a) / 255));
-}
-
 fn blendScaledRgba8(
     target: *ColorRenderTarget,
     source: []const u8,
@@ -1589,7 +1577,12 @@ fn blendScaledRgba8(
                 x_fraction,
             );
             const sample = lerpPremultipliedColor(top_sample, bottom_sample, y_fraction);
-            blendPremultipliedPixel(&target.pixels[dest_y * @as(usize, target.width) + dest_x], sample);
+            composite_mod.blendPixel(
+                &target.pixels[
+                    dest_y * @as(usize, target.width) + dest_x
+                ],
+                sample,
+            );
         }
     }
 }
@@ -1620,278 +1613,6 @@ fn lerpPremultipliedColor(a: Rgba, b: Rgba, t: f32) Rgba {
 
 fn lerpPremultipliedByte(a: f32, b: f32, t: f32) u8 {
     return @intFromFloat(@round(std.math.clamp(a + (b - a) * t, 0, 255)));
-}
-
-fn compositeColorTargets(source: *const ColorRenderTarget, backdrop: *ColorRenderTarget, mode: font_mod.ColorPaint.CompositeMode) void {
-    for (source.pixels[0..@min(source.pixels.len, backdrop.pixels.len)], backdrop.pixels) |src, *dst| {
-        dst.* = compositeColorPixel(src, dst.*, mode);
-    }
-}
-
-const PremultipliedColor = struct {
-    r: f32,
-    g: f32,
-    b: f32,
-    a: f32,
-
-    fn fromRgba(pixel: Rgba) PremultipliedColor {
-        return .{
-            .r = @as(f32, @floatFromInt(pixel.r)) / 255.0,
-            .g = @as(f32, @floatFromInt(pixel.g)) / 255.0,
-            .b = @as(f32, @floatFromInt(pixel.b)) / 255.0,
-            .a = @as(f32, @floatFromInt(pixel.a)) / 255.0,
-        };
-    }
-
-    fn toRgba(self: PremultipliedColor) Rgba {
-        return .{
-            .r = floatUnitToByte(self.r),
-            .g = floatUnitToByte(self.g),
-            .b = floatUnitToByte(self.b),
-            .a = floatUnitToByte(self.a),
-        };
-    }
-
-    fn scale(self: PremultipliedColor, factor: f32) PremultipliedColor {
-        return .{
-            .r = self.r * factor,
-            .g = self.g * factor,
-            .b = self.b * factor,
-            .a = self.a * factor,
-        };
-    }
-
-    fn add(a: PremultipliedColor, b: PremultipliedColor) PremultipliedColor {
-        return .{
-            .r = a.r + b.r,
-            .g = a.g + b.g,
-            .b = a.b + b.b,
-            .a = a.a + b.a,
-        };
-    }
-};
-
-fn compositeColorPixel(src_pixel: Rgba, dst_pixel: Rgba, mode: font_mod.ColorPaint.CompositeMode) Rgba {
-    const src = PremultipliedColor.fromRgba(src_pixel);
-    const dst = PremultipliedColor.fromRgba(dst_pixel);
-    return switch (mode) {
-        .clear => Rgba{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .src => src_pixel,
-        .dest => dst_pixel,
-        // Match HarfBuzz's byte-domain Porter-Duff arithmetic exactly. Its
-        // alpha multiplication truncates each term before saturated addition;
-        // computing the equivalent expression in floats and rounding at the
-        // end differs by one for common semi-transparent inputs.
-        .src_over => compositePorterDuffBytes(src_pixel, dst_pixel, 255, 255 - src_pixel.a),
-        .dest_over => compositePorterDuffBytes(src_pixel, dst_pixel, 255 - dst_pixel.a, 255),
-        .src_in => compositePorterDuffBytes(src_pixel, dst_pixel, dst_pixel.a, 0),
-        .dest_in => compositePorterDuffBytes(src_pixel, dst_pixel, 0, src_pixel.a),
-        .src_out => compositePorterDuffBytes(src_pixel, dst_pixel, 255 - dst_pixel.a, 0),
-        .dest_out => compositePorterDuffBytes(src_pixel, dst_pixel, 0, 255 - src_pixel.a),
-        .src_atop => compositePorterDuffBytes(src_pixel, dst_pixel, dst_pixel.a, 255 - src_pixel.a),
-        .dest_atop => compositePorterDuffBytes(src_pixel, dst_pixel, 255 - dst_pixel.a, src_pixel.a),
-        .xor => compositePorterDuffBytes(src_pixel, dst_pixel, 255 - dst_pixel.a, 255 - src_pixel.a),
-        .plus => (PremultipliedColor{
-            .r = @min(1, src.r + dst.r),
-            .g = @min(1, src.g + dst.g),
-            .b = @min(1, src.b + dst.b),
-            .a = @min(1, src.a + dst.a),
-        }).toRgba(),
-        .screen, .overlay, .darken, .lighten, .color_dodge, .color_burn, .hard_light, .soft_light, .difference, .exclusion, .multiply => compositeSeparable(src, dst, mode),
-        .hsl_hue, .hsl_saturation, .hsl_color, .hsl_luminosity => compositeHsl(src, dst, mode),
-    };
-}
-
-fn compositePorterDuffBytes(src: Rgba, dst: Rgba, source_factor: u8, backdrop_factor: u8) Rgba {
-    const source = scaleRgbaByte(src, source_factor);
-    const backdrop = scaleRgbaByte(dst, backdrop_factor);
-    return .{
-        .r = saturatingAddByte(source.r, backdrop.r),
-        .g = saturatingAddByte(source.g, backdrop.g),
-        .b = saturatingAddByte(source.b, backdrop.b),
-        .a = saturatingAddByte(source.a, backdrop.a),
-    };
-}
-
-fn scaleRgbaByte(pixel: Rgba, factor: u8) Rgba {
-    return .{
-        .r = @intCast((@as(u16, pixel.r) * factor) / 255),
-        .g = @intCast((@as(u16, pixel.g) * factor) / 255),
-        .b = @intCast((@as(u16, pixel.b) * factor) / 255),
-        .a = @intCast((@as(u16, pixel.a) * factor) / 255),
-    };
-}
-
-fn saturatingAddByte(a: u8, b: u8) u8 {
-    return @intCast(@min(@as(u16, 255), @as(u16, a) + b));
-}
-
-fn compositeSeparable(src: PremultipliedColor, dst: PremultipliedColor, mode: font_mod.ColorPaint.CompositeMode) Rgba {
-    const source = unpremultipliedRgb(src);
-    const backdrop = unpremultipliedRgb(dst);
-    const blend = [3]f32{
-        separableBlend(source[0], backdrop[0], mode),
-        separableBlend(source[1], backdrop[1], mode),
-        separableBlend(source[2], backdrop[2], mode),
-    };
-    return compositeBlendResult(src, dst, source, backdrop, blend);
-}
-
-fn separableBlend(source: f32, backdrop: f32, mode: font_mod.ColorPaint.CompositeMode) f32 {
-    return switch (mode) {
-        .multiply => source * backdrop,
-        .screen => source + backdrop - source * backdrop,
-        .overlay => if (backdrop <= 0.5) 2 * source * backdrop else 1 - 2 * (1 - source) * (1 - backdrop),
-        .darken => @min(source, backdrop),
-        .lighten => @max(source, backdrop),
-        .color_dodge => if (backdrop <= 0) 0 else if (source >= 1) 1 else @min(1, backdrop / (1 - source)),
-        .color_burn => if (backdrop >= 1) 1 else if (source <= 0) 0 else 1 - @min(1, (1 - backdrop) / source),
-        .hard_light => if (source <= 0.5) 2 * source * backdrop else 1 - 2 * (1 - source) * (1 - backdrop),
-        .soft_light => softLight(source, backdrop),
-        .difference => @abs(source - backdrop),
-        .exclusion => source + backdrop - 2 * source * backdrop,
-        else => unreachable,
-    };
-}
-
-fn softLight(source: f32, backdrop: f32) f32 {
-    if (source <= 0.5) return backdrop - (1 - 2 * source) * backdrop * (1 - backdrop);
-    const d = if (backdrop <= 0.25)
-        ((16 * backdrop - 12) * backdrop + 4) * backdrop
-    else
-        @sqrt(backdrop);
-    return backdrop + (2 * source - 1) * (d - backdrop);
-}
-
-fn compositeHsl(src: PremultipliedColor, dst: PremultipliedColor, mode: font_mod.ColorPaint.CompositeMode) Rgba {
-    const source = unpremultipliedRgb(src);
-    const backdrop = unpremultipliedRgb(dst);
-    var blend = backdrop;
-    switch (mode) {
-        .hsl_hue => {
-            blend = source;
-            setSaturation(&blend, hslSaturation(backdrop));
-            setLuminosity(&blend, luminosity(backdrop));
-        },
-        .hsl_saturation => {
-            setSaturation(&blend, hslSaturation(source));
-            setLuminosity(&blend, luminosity(backdrop));
-        },
-        .hsl_color => {
-            blend = source;
-            setLuminosity(&blend, luminosity(backdrop));
-        },
-        .hsl_luminosity => setLuminosity(&blend, luminosity(source)),
-        else => unreachable,
-    }
-    return compositeBlendResult(src, dst, source, backdrop, blend);
-}
-
-fn unpremultipliedRgb(color: PremultipliedColor) [3]f32 {
-    if (color.a <= 0) return .{ 0, 0, 0 };
-    return .{ color.r / color.a, color.g / color.a, color.b / color.a };
-}
-
-fn compositeBlendResult(src: PremultipliedColor, dst: PremultipliedColor, source: [3]f32, backdrop: [3]f32, blend: [3]f32) Rgba {
-    const overlap = src.a * dst.a;
-    return (PremultipliedColor{
-        .r = overlap * blend[0] + src.a * (1 - dst.a) * source[0] + (1 - src.a) * dst.a * backdrop[0],
-        .g = overlap * blend[1] + src.a * (1 - dst.a) * source[1] + (1 - src.a) * dst.a * backdrop[1],
-        .b = overlap * blend[2] + src.a * (1 - dst.a) * source[2] + (1 - src.a) * dst.a * backdrop[2],
-        .a = src.a + dst.a - overlap,
-    }).toRgba();
-}
-
-fn luminosity(color: [3]f32) f32 {
-    return 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2];
-}
-
-fn hslSaturation(color: [3]f32) f32 {
-    return @max(color[0], @max(color[1], color[2])) - @min(color[0], @min(color[1], color[2]));
-}
-
-fn setLuminosity(color: *[3]f32, target: f32) void {
-    const delta = target - luminosity(color.*);
-    for (color) |*channel| channel.* += delta;
-    clipHslColor(color);
-}
-
-fn clipHslColor(color: *[3]f32) void {
-    const light = luminosity(color.*);
-    const minimum = @min(color[0], @min(color[1], color[2]));
-    const maximum = @max(color[0], @max(color[1], color[2]));
-    if (minimum < 0 and light > minimum) {
-        for (color) |*channel| channel.* = light + (channel.* - light) * light / (light - minimum);
-    }
-    if (maximum > 1 and maximum > light) {
-        for (color) |*channel| channel.* = light + (channel.* - light) * (1 - light) / (maximum - light);
-    }
-}
-
-fn setSaturation(color: *[3]f32, target: f32) void {
-    var order = [_]usize{ 0, 1, 2 };
-    for (1..order.len) |index| {
-        const current = order[index];
-        var destination = index;
-        while (destination > 0 and color[current] < color[order[destination - 1]]) : (destination -= 1) {
-            order[destination] = order[destination - 1];
-        }
-        order[destination] = current;
-    }
-    const minimum = order[0];
-    const middle = order[1];
-    const maximum = order[2];
-    if (color[maximum] > color[minimum]) {
-        color[middle] = (color[middle] - color[minimum]) * target / (color[maximum] - color[minimum]);
-        color[maximum] = target;
-    } else {
-        color[middle] = 0;
-        color[maximum] = 0;
-    }
-    color[minimum] = 0;
-}
-
-test "COLR composite modes match HarfBuzz premultiplied raster oracle" {
-    // Expected ARGB words come from HarfBuzz's current hb-raster-image.cc
-    // `composite_pixel` for these same premultiplied source/backdrop pixels.
-    const source = Rgba{ .r = 100, .g = 70, .b = 40, .a = 170 };
-    const backdrop = Rgba{ .r = 30, .g = 60, .b = 90, .a = 140 };
-    const expected = [_]u32{
-        0x00000000, 0xaa644628, 0x8c1e3c5a, 0xd86e5a46,
-        0xd84b5b6c, 0x5d362615, 0x5d14283c, 0x4c2d1f12,
-        0x2e0a141e, 0x8b403a33, 0xa941474e, 0x7a373330,
-        0xff828282, 0xd9767274, 0xd94f555a, 0xd94b5a46,
-        0xd96e5c6c, 0xd968787f, 0xd9373430, 0xd958554c,
-        0xd94f5861, 0xd95a3556, 0xd96a6166, 0xd943443e,
-        0xd96c543d, 0xd94e5b68, 0xd9695541, 0xd9506171,
-    };
-    for (expected, 0..) |expected_pixel, raw_mode| {
-        const mode: font_mod.ColorPaint.CompositeMode = @enumFromInt(raw_mode);
-        const actual = compositeColorPixel(source, backdrop, mode);
-        const actual_packed = (@as(u32, actual.a) << 24) |
-            (@as(u32, actual.r) << 16) |
-            (@as(u32, actual.g) << 8) |
-            actual.b;
-        try std.testing.expectEqual(expected_pixel, actual_packed);
-    }
-}
-
-test "COLR composite operator invariants cover transparent and opaque edges" {
-    const transparent = Rgba{ .r = 0, .g = 0, .b = 0, .a = 0 };
-    const red = Rgba{ .r = 255, .g = 0, .b = 0, .a = 255 };
-    const blue = Rgba{ .r = 0, .g = 0, .b = 255, .a = 255 };
-
-    try std.testing.expectEqual(red, compositeColorPixel(red, transparent, .src_over));
-    try std.testing.expectEqual(blue, compositeColorPixel(transparent, blue, .src_over));
-    try std.testing.expectEqual(red, compositeColorPixel(red, blue, .src));
-    try std.testing.expectEqual(blue, compositeColorPixel(red, blue, .dest));
-    try std.testing.expectEqual(transparent, compositeColorPixel(red, blue, .xor));
-    try std.testing.expectEqual(Rgba{ .r = 255, .g = 0, .b = 255, .a = 255 }, compositeColorPixel(red, blue, .plus));
-
-    // W3C's degenerate dodge/burn branches are backdrop-dominant. The order
-    // matters at exactly (source=1, backdrop=0) and (source=0, backdrop=1).
-    try std.testing.expectEqual(Rgba{ .r = 0, .g = 0, .b = 0, .a = 255 }, compositeColorPixel(red, Rgba{ .r = 0, .g = 0, .b = 0, .a = 255 }, .color_dodge));
-    try std.testing.expectEqual(Rgba{ .r = 255, .g = 255, .b = 255, .a = 255 }, compositeColorPixel(Rgba{ .r = 0, .g = 0, .b = 0, .a = 255 }, Rgba{ .r = 255, .g = 255, .b = 255, .a = 255 }, .color_burn));
 }
 
 fn applyMaskToColorTarget(target: *ColorRenderTarget, mask: *const RenderTarget) void {

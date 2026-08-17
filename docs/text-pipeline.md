@@ -534,6 +534,10 @@ SVG, COLR, or scan-conversion policy.
 `outline.zig` separately owns adaptive font-outline flattening, transformed
 geometry, capacity bounds, and conservative small-size pixel alignment; its
 focused tests do not require color or SVG rendering state.
+`composite.zig` owns premultiplied source-over, Porter-Duff, separable blend,
+and HSL composite math over RGBA slices. HarfBuzz-oracle and edge-invariant
+tests remain beside that pure numerical boundary rather than inside the
+rasterizer engine.
 
 The shaping integration suite is similarly rooted at
 `src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,

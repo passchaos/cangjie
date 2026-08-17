@@ -48,6 +48,7 @@ const kerning_tables = @import("font/tables/kerning/root.zig");
 const kern_mod = kerning_tables.kern;
 const layout_tables = @import("font/tables/layout/root.zig");
 const gdef_mod = layout_tables.gdef;
+const jstf_mod = layout_tables.jstf;
 const core_tables = @import("font/tables/core/root.zig");
 const head_mod = core_tables.head;
 const maxp_mod = core_tables.maxp;
@@ -249,6 +250,12 @@ pub const AnkrInfo = ankr_mod.Info;
 pub const BaseAxisInfo = base_mod.Axis;
 pub const BaseInfo = base_mod.Info;
 pub const BaseScriptInfo = base_mod.Script;
+pub const JstfInfo = jstf_mod.Info;
+pub const JstfLanguageInfo = jstf_mod.Language;
+pub const JstfLookupListInfo = jstf_mod.LookupList;
+pub const JstfMaxLookupInfo = jstf_mod.MaxLookup;
+pub const JstfPriorityInfo = jstf_mod.Priority;
+pub const JstfScriptInfo = jstf_mod.Script;
 
 pub const GaspRange = gasp_mod.Range;
 pub const GaspInfo = gasp_mod.Info;
@@ -630,6 +637,7 @@ pub const Font = struct {
     gdef: ?TableRecord,
     gpos: ?TableRecord,
     gsub: ?TableRecord,
+    jstf: ?TableRecord,
     ankr: ?TableRecord,
     feat: ?TableRecord,
     trak: ?TableRecord,
@@ -781,6 +789,7 @@ pub const Font = struct {
         const gdef = sfnt.find(records, "GDEF");
         const gpos = sfnt.find(records, "GPOS");
         const gsub = sfnt.find(records, "GSUB");
+        const jstf = sfnt.find(records, "JSTF");
         const ankr = sfnt.find(records, "ankr");
         const feat = sfnt.find(records, "feat");
         const trak = sfnt.find(records, "trak");
@@ -978,6 +987,15 @@ pub const Font = struct {
         }
         if (gsub) |gsub_table| try gsub_mod.validateGlyphBoundsForShaping(data, gsub_table.offset, gsub_table.length, glyph_count);
         if (gpos) |gpos_table| try gpos_mod.validateGlyphBounds(data, gpos_table.offset, gpos_table.length, glyph_count);
+        if (jstf) |jstf_table| {
+            try jstf_mod.validate(
+                data,
+                jstf_table,
+                gsub,
+                gpos,
+                glyph_count,
+            );
+        }
         if (cpal) |cpal_table| {
             _ = cpal_mod.validate(
                 data,
@@ -1052,6 +1070,7 @@ pub const Font = struct {
             .gdef = gdef,
             .gpos = gpos,
             .gsub = gsub,
+            .jstf = jstf,
             .ankr = ankr,
             .feat = feat,
             .trak = trak,
@@ -1662,6 +1681,31 @@ pub const Font = struct {
 
     pub fn freeBaseInfo(_: *const Font, allocator: std.mem.Allocator, info_value: BaseInfo) void {
         base_mod.free(allocator, info_value);
+    }
+
+    /// Read validated OpenType `JSTF` scripts, languages, and priorities.
+    pub fn jstfInfo(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+    ) FontError!?JstfInfo {
+        const jstf = self.jstf orelse return null;
+        try sfnt.checksum.validate(self.data, jstf);
+        return try jstf_mod.info(
+            allocator,
+            self.data,
+            jstf,
+            self.gsub,
+            self.gpos,
+            self.glyph_count,
+        );
+    }
+
+    pub fn freeJstfInfo(
+        _: *const Font,
+        allocator: std.mem.Allocator,
+        info_value: JstfInfo,
+    ) void {
+        jstf_mod.free(allocator, info_value);
     }
 
     /// Borrow the raw bytes of an SFNT table by four-byte tag.

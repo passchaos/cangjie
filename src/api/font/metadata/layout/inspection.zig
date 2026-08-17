@@ -65,6 +65,21 @@ pub const View = struct {
         self.implementation().freeKernInfo(allocator, info);
     }
 
+    pub fn justification(
+        self: View,
+        allocator: std.mem.Allocator,
+    ) font.FontError!?font.JstfInfo {
+        return self.implementation().jstfInfo(allocator);
+    }
+
+    pub fn freeJustification(
+        self: View,
+        allocator: std.mem.Allocator,
+        info: font.JstfInfo,
+    ) void {
+        self.implementation().freeJstfInfo(allocator, info);
+    }
+
     pub fn cff2(self: View) font.FontError!?font.Cff2Info {
         return self.implementation().cff2Info();
     }

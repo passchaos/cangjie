@@ -521,6 +521,17 @@ remaining width proceeds through Kashida and then ordinary space/CJK
 expansion. Multi-font or shaping-style-spanning lines conservatively skip the
 axis stage rather than imposing one font's axis on another run.
 
+The actual OpenType `JSTF` table is now parsed and exposed independently
+through `font.metadata.layout.inspect(face).justification(allocator)`.
+Validation covers ordered script/language records, extender glyph bounds,
+priority arrays, sorted GSUB/GPOS modification indexes cross-checked against
+the corresponding LookupLists, and embedded JstfMax GPOS lookup payloads.
+Inspection returns owned scripts, default/tagged language systems, priority
+lists, lookup indexes, and maximum-lookup descriptors. This parser/inspection
+surface does not yet apply JSTF priority actions during paragraph layout; that
+runtime step remains explicit rather than being conflated with fvar-axis
+expansion.
+
 Paragraph alignment distinguishes logical and physical edges:
 `TextAlign.start`/`end` resolve through the paragraph direction, while
 `left`/`right` always name physical edges. `start` is the default, preserving

@@ -301,6 +301,7 @@ test "layout inspection covers cross-platform and AAT metadata" {
     try std.testing.expect((try layout.cff2()) == null);
     const language_tags = try layout.languageTags(allocator);
     defer allocator.free(language_tags);
+    try std.testing.expect((try layout.justification(allocator)) == null);
 
     const aat = cangjie.font.metadata.layout.aat.inspect(&face);
     try std.testing.expect((try aat.anchors(allocator)) == null);

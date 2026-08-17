@@ -25,6 +25,16 @@ pub fn buildBaseTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try baseTtfTables(allocator));
 }
 
+pub fn buildJstfTtf(allocator: std.mem.Allocator) ![]u8 {
+    const base = try minimalTtfTables(allocator);
+    const tables = try allocator.alloc(Table, base.len + 1);
+    errdefer allocator.free(tables);
+    @memcpy(tables[0..base.len], base);
+    allocator.free(base);
+    tables[base.len] = .{ .tag = "JSTF", .data = try jstfTable(allocator) };
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
 pub fn buildMvarTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try mvarTtfTables(allocator));
 }
@@ -3821,6 +3831,57 @@ fn fvarTable(allocator: std.mem.Allocator) ![]u8 {
     writeF16Dot16(bytes, 74, 700.0);
     writeF16Dot16(bytes, 78, 150.0);
     writeU16(bytes, 82, 261);
+    return bytes;
+}
+
+fn jstfTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 82);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 1);
+    writeTag(bytes, 6, "latn");
+    writeU16(bytes, 10, 12);
+
+    const script = 12;
+    writeU16(bytes, script, 12);
+    writeU16(bytes, script + 2, 16);
+    writeU16(bytes, script + 4, 0);
+
+    const extenders = 24;
+    writeU16(bytes, extenders, 1);
+    writeU16(bytes, extenders + 2, 1);
+
+    const language = 28;
+    writeU16(bytes, language, 1);
+    writeU16(bytes, language + 2, 4);
+
+    const priority = 32;
+    writeU16(bytes, priority, 20);
+    writeU16(bytes, priority + 8, 24);
+
+    const gsub_list = 52;
+    writeU16(bytes, gsub_list, 0);
+
+    const max_list = 56;
+    writeU16(bytes, max_list, 1);
+    writeU16(bytes, max_list + 2, 4);
+
+    const lookup = 60;
+    writeU16(bytes, lookup, 1);
+    writeU16(bytes, lookup + 2, 0);
+    writeU16(bytes, lookup + 4, 1);
+    writeU16(bytes, lookup + 6, 8);
+
+    const single_pos = 68;
+    writeU16(bytes, single_pos, 1);
+    writeU16(bytes, single_pos + 2, 8);
+    writeU16(bytes, single_pos + 4, 0x0004);
+    writeI16(bytes, single_pos + 6, 50);
+
+    const coverage = 76;
+    writeU16(bytes, coverage, 1);
+    writeU16(bytes, coverage + 2, 1);
+    writeU16(bytes, coverage + 4, 1);
     return bytes;
 }
 

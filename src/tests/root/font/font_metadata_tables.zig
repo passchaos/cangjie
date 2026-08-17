@@ -134,6 +134,60 @@ test "lazy BASE metadata revalidates borrowed table bytes" {
     try std.testing.expectError(error.BadSfnt, font.baseInfo(allocator));
 }
 
+test "JSTF justification metadata exposes priorities and maximum lookups" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildJstfTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.jstfInfo(allocator)).?;
+    defer font.freeJstfInfo(allocator, info);
+    try std.testing.expectEqual(@as(u32, 0x00010000), info.version);
+    try std.testing.expectEqual(@as(usize, 1), info.scripts.len);
+    const script = info.scripts[0];
+    try std.testing.expectEqualStrings("latn", &script.tag);
+    try std.testing.expectEqualSlices(
+        @import("../../../glyph.zig").GlyphId,
+        &.{1},
+        script.extender_glyphs,
+    );
+    try std.testing.expect(script.default_language != null);
+    try std.testing.expectEqual(@as(usize, 0), script.languages.len);
+    const priority = script.default_language.?.priorities[0];
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        priority.shrinkage_enable_gsub.indices.len,
+    );
+    try std.testing.expectEqual(@as(usize, 1), priority.shrinkage_max.len);
+    try std.testing.expectEqual(
+        @as(u16, 1),
+        priority.shrinkage_max[0].lookup_type,
+    );
+    try std.testing.expectEqual(
+        @as(u16, 1),
+        priority.shrinkage_max[0].subtable_count,
+    );
+    try std.testing.expectEqual(@as(usize, 60), priority.shrinkage_max[0].offset);
+
+    const view = @import("../../../api/font/metadata/layout/inspection.zig")
+        .inspect(@import("../../../font/face/root.zig").backend.face(&font));
+    const inspected = (try view.justification(allocator)).?;
+    defer view.freeJustification(allocator, inspected);
+    try std.testing.expectEqualStrings("latn", &inspected.scripts[0].tag);
+
+    const tables = try font.tables(allocator);
+    defer allocator.free(tables);
+    var jstf_offset: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "JSTF")) jstf_offset = table.offset;
+    }
+    bytes[jstf_offset orelse return error.MissingTable] +%= 1;
+    try std.testing.expectError(error.BadSfnt, font.jstfInfo(allocator));
+}
+
 test "AAT trak records are exposed when present" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

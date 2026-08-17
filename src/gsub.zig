@@ -840,26 +840,6 @@ fn readU32(table: Table, relative: usize) GsubError!u32 {
     return table.readU32(relative);
 }
 
-test "GSUB rejects malformed coverage ordering before substitution" {
-    var bytes = [_]u8{0} ** 18;
-    writeU16Test(&bytes, 0, 2); // SingleSubst format 2.
-    writeU16Test(&bytes, 2, 10); // Coverage table.
-    writeU16Test(&bytes, 4, 1); // Substitute array has one entry.
-    writeU16Test(&bytes, 6, 20);
-    writeU16Test(&bytes, 10, 1); // Coverage format 1.
-    writeU16Test(&bytes, 12, 2);
-    writeU16Test(&bytes, 14, 10);
-    writeU16Test(&bytes, 16, 5); // Out-of-order; binary search would be unsound.
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(std.testing.allocator);
-    try glyphs.append(std.testing.allocator, 10);
-
-    try std.testing.expectError(error.BadGsub, direct_single.subtable(table, 0, &glyphs, 0, .{}));
-    try std.testing.expectEqual(@as(GlyphId, 10), glyphs.items[0]);
-}
-
 test "GSUB parse-time contextual records avoid recursively validating lookup payloads" {
     var bytes = [_]u8{0} ** 120;
     writeU32Test(&bytes, 0, 0x00010000);
@@ -1228,118 +1208,6 @@ test "GSUB accelerated context class matching keeps shorter rules at syllable en
     try std.testing.expect(source_boundaries.isUnsafeBeforeByte(1));
     try std.testing.expect(source_boundaries.isUnsafeBeforeByte(2));
     try std.testing.expect(!source_boundaries.isUnsafeBeforeByte(3));
-}
-
-test "GSUB MultipleSubst rejects null Sequence offsets" {
-    var bytes = [_]u8{0} ** 44;
-    const subtable = writeSingleLookupGsubTest(&bytes, 2);
-    writeU16Test(&bytes, subtable + 0, 1); // MultipleSubst format 1.
-    writeU16Test(&bytes, subtable + 2, 8); // Coverage after SequenceOffset array.
-    writeU16Test(&bytes, subtable + 4, 1); // One SequenceOffset.
-    writeU16Test(&bytes, subtable + 6, 0); // Invalid: Sequence offsets are not nullable.
-    writeCoverage1(&bytes, subtable + 8, 1);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGsub, validation.direct.set_sequence.multiple(table, subtable));
-    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(std.testing.allocator);
-    try glyphs.append(std.testing.allocator, 1);
-    try std.testing.expectError(error.BadGsub, direct_multiple.subtable(table, subtable, &glyphs, std.testing.allocator, 0, .{}));
-    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
-
-    // An empty Sequence can still be represented explicitly; only the child
-    // pointer itself is required to name a real Sequence table.
-    writeU16Test(&bytes, subtable + 6, 14);
-    writeU16Test(&bytes, subtable + 14, 0); // Sequence.GlyphCount.
-    try validation.direct.set_sequence.multiple(table, subtable);
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-}
-
-test "GSUB AlternateSubst rejects null AlternateSet offsets" {
-    var bytes = [_]u8{0} ** 44;
-    const subtable = writeSingleLookupGsubTest(&bytes, 3);
-    writeU16Test(&bytes, subtable + 0, 1); // AlternateSubst format 1.
-    writeU16Test(&bytes, subtable + 2, 8); // Coverage after AlternateSetOffset array.
-    writeU16Test(&bytes, subtable + 4, 1); // One AlternateSetOffset.
-    writeU16Test(&bytes, subtable + 6, 0); // Invalid: AlternateSet offsets are not nullable.
-    writeCoverage1(&bytes, subtable + 8, 1);
-
-    const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-    try std.testing.expectError(error.BadGsub, validation.direct.set_sequence.alternate(table, subtable));
-    try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(std.testing.allocator);
-    try glyphs.append(std.testing.allocator, 1);
-    try std.testing.expectError(error.BadGsub, direct_alternate.subtable(table, subtable, &glyphs, 0, .{}));
-    try std.testing.expectEqualSlices(GlyphId, &.{1}, glyphs.items);
-
-    // A real AlternateSet may still be empty and produce no substitution; only
-    // the child pointer itself is required to name an actual AlternateSet.
-    writeU16Test(&bytes, subtable + 6, 14);
-    writeU16Test(&bytes, subtable + 14, 0); // AlternateSet.GlyphCount.
-    try validation.direct.set_sequence.alternate(table, subtable);
-    try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-}
-
-test "GSUB LigatureSubst rejects null required offsets" {
-    {
-        var bytes = [_]u8{0} ** 44;
-        const subtable = writeSingleLookupGsubTest(&bytes, 4);
-        writeU16Test(&bytes, subtable + 0, 1); // LigatureSubst format 1.
-        writeU16Test(&bytes, subtable + 2, 8); // Coverage after LigatureSetOffset array.
-        writeU16Test(&bytes, subtable + 4, 1); // One covered first glyph.
-        writeU16Test(&bytes, subtable + 6, 0); // Invalid: LigatureSet offsets are not nullable.
-        writeCoverage1(&bytes, subtable + 8, 1);
-
-        const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-        try std.testing.expectError(error.BadGsub, validation.direct.ligature.validate(table, subtable, .strict));
-        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-
-        var glyphs = std.ArrayList(GlyphId).empty;
-        defer glyphs.deinit(std.testing.allocator);
-        try glyphs.append(std.testing.allocator, 1);
-        try glyphs.append(std.testing.allocator, 2);
-        try direct_ligature.subtable(table, subtable, &glyphs, std.testing.allocator, 0, .{});
-        try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
-        try std.testing.expectEqual(null, try contextual_nested.direct.ligature(table, subtable, &glyphs, 0, std.testing.allocator, 0, .{}));
-        try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
-
-        // A present but empty LigatureSet is still structurally valid; only the
-        // offset itself is required to name a real child table.
-        writeU16Test(&bytes, subtable + 6, 14);
-        writeU16Test(&bytes, subtable + 14, 0); // LigatureSet.LigatureCount.
-        try validation.direct.ligature.validate(table, subtable, .strict);
-        try validateGlyphBounds(&bytes, 0, bytes.len, 4);
-    }
-
-    {
-        var bytes = [_]u8{0} ** 44;
-        const subtable = writeSingleLookupGsubTest(&bytes, 4);
-        writeU16Test(&bytes, subtable + 0, 1); // LigatureSubst format 1.
-        writeU16Test(&bytes, subtable + 2, 12); // Coverage after the LigatureSet.
-        writeU16Test(&bytes, subtable + 4, 1);
-        writeU16Test(&bytes, subtable + 6, 8); // Non-null LigatureSet.
-        const ligature_set = subtable + 8;
-        writeU16Test(&bytes, ligature_set + 0, 1); // One Ligature offset follows.
-        writeU16Test(&bytes, ligature_set + 2, 0); // Invalid: Ligature offsets are not nullable.
-        writeCoverage1(&bytes, subtable + 12, 1);
-
-        const table = Table{ .data = &bytes, .offset = 0, .length = bytes.len };
-        try std.testing.expectError(error.BadGsub, validation.direct.ligature.validate(table, subtable, .strict));
-        try std.testing.expectError(error.BadGsub, validateGlyphBounds(&bytes, 0, bytes.len, 4));
-
-        var glyphs = std.ArrayList(GlyphId).empty;
-        defer glyphs.deinit(std.testing.allocator);
-        try glyphs.append(std.testing.allocator, 1);
-        try glyphs.append(std.testing.allocator, 2);
-        try direct_ligature.subtable(table, subtable, &glyphs, std.testing.allocator, 0, .{});
-        try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
-        try std.testing.expectEqual(null, try contextual_nested.direct.ligature(table, subtable, &glyphs, 0, std.testing.allocator, 0, .{}));
-        try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, glyphs.items);
-    }
 }
 
 test "GSUB chaining class substitution applies nested lookup" {
@@ -3235,22 +3103,6 @@ fn writeSingleDeltaLookup(bytes: []u8, lookup_offset: usize, glyph: GlyphId, del
     writeCoverage1(bytes, subtable + 6, glyph);
 }
 
-fn writeSingleLookupGsubTest(bytes: []u8, lookup_type: u16) usize {
-    writeU32Test(bytes, 0, 0x00010000);
-    writeU16Test(bytes, 4, 10);
-    writeU16Test(bytes, 6, 12);
-    writeU16Test(bytes, 8, 14);
-    writeU16Test(bytes, 10, 0);
-    writeU16Test(bytes, 12, 0);
-    writeU16Test(bytes, 14, 1);
-    writeU16Test(bytes, 16, 4);
-    writeU16Test(bytes, 18, lookup_type);
-    writeU16Test(bytes, 20, 0);
-    writeU16Test(bytes, 22, 1);
-    writeU16Test(bytes, 24, 8);
-    return 26;
-}
-
 fn writeCoverage1(bytes: []u8, offset: usize, glyph: GlyphId) void {
     writeU16Test(bytes, offset + 0, 1);
     writeU16Test(bytes, offset + 2, 1);
@@ -3335,6 +3187,18 @@ const ExtensionIntegrationTestBindings = struct {
     }
 };
 
+const DirectValidationIntegrationTestBindings = struct {
+    pub const applySingle = direct_single.subtable;
+    pub const validateMultiple = validation.direct.set_sequence.multiple;
+    pub const applyMultiple = direct_multiple.subtable;
+    pub const validateAlternate = validation.direct.set_sequence.alternate;
+    pub const applyAlternate = direct_alternate.subtable;
+    pub const validateLigature = validation.direct.ligature.validate;
+    pub const applyLigature = direct_ligature.subtable;
+    pub const applyNestedLigature = contextual_nested.direct.ligature;
+    pub const validateTable = validateGlyphBounds;
+};
+
 const GlyphBoundsTestBindings = struct {
     pub const validate = validateGlyphBounds;
     pub const validateForShaping = validateGlyphBoundsForShaping;
@@ -3368,6 +3232,8 @@ test {
         .suite(MetadataIntegrationTestBindings);
     _ = @import("gsub/tests/runtime/root.zig");
     _ = @import("gsub/tests/table/root.zig");
+    _ = @import("gsub/tests/validation/direct/integration.zig")
+        .suite(DirectValidationIntegrationTestBindings);
     _ = @import("gsub/tests/validation/table/glyph_bounds.zig")
         .suite(GlyphBoundsTestBindings);
     _ = @import("gsub/tests/validation/lookup/extension_integration.zig")

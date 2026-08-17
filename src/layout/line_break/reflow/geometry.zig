@@ -153,6 +153,7 @@ pub fn appendLine(
         .byte_len = byte_end - byte_start,
         .x = x,
         .y = y,
+        .indent = indent,
         .width = width,
         .height = metrics.lineHeight(),
         .baseline = metrics.ascent,

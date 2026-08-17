@@ -170,6 +170,12 @@ pub fn appendEllipsis(
         max_width
     else
         std.math.inf(f32);
+    // Optical punctuation hanging is invalid once ellipsis changes the
+    // terminal glyph. Restore the full advance sum before fitting the dots.
+    line.width = 0;
+    for (buffer.glyphs.items[line.glyph_start .. line.glyph_start + line.glyph_len]) |glyph| {
+        line.width += glyph.x_advance;
+    }
     // Capture paint and minimum-line-height state before the fit loop can
     // remove every visible glyph. Synthetic dots intentionally do not inherit
     // source letter/word spacing.

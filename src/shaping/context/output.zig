@@ -77,7 +77,13 @@ pub const Buffer = struct {
         var max_width: f32 = 0;
         var height: f32 = 0;
         for (self.lines.items) |line| {
-            max_width = @max(max_width, line.x + line.width);
+            // `line.x` is the first glyph origin. `width` starts after any
+            // physical-start hanging, so add that optical offset back when
+            // reporting the occupied paragraph measure.
+            max_width = @max(
+                max_width,
+                line.x + line.hang_start + line.width,
+            );
             height = @max(height, line.y + line.height);
         }
         return .{

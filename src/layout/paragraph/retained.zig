@@ -10,6 +10,7 @@ const line_break_opportunity = @import("../line_break/opportunity.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 const run_types = @import("../types/runs.zig");
 const paragraph_reflow = @import("../line_break/reflow/root.zig");
+const punctuation_hanging = @import("../punctuation/hanging.zig");
 const shaping_output = @import("../../shaping/context/output.zig");
 const shaping_plan = @import("../../shaping/plan/root.zig");
 const segmentation = @import("../../text/segmentation/root.zig");
@@ -94,6 +95,7 @@ pub const ShapedParagraph = struct {
                 options.direction == .rtl,
             );
         }
+        punctuation_hanging.apply(&reflow.buffer, options);
         try inline_object.position(
             &reflow.buffer,
             options.inline_objects,

@@ -62,6 +62,16 @@ pub const ParagraphLine = struct {
     byte_len: usize,
     x: f32,
     y: f32,
+    /// First-line or paragraph-segment indentation reserved before alignment.
+    indent: f32 = 0,
+    /// Portion of edge glyph advance protruding before the physical line box.
+    ///
+    /// Glyph positions and caret geometry still include this ink. `x` remains
+    /// the first glyph origin, while `width` reports occupied measure after
+    /// subtracting both hanging portions.
+    hang_start: f32 = 0,
+    /// Portion of edge glyph advance protruding after the physical line box.
+    hang_end: f32 = 0,
     width: f32,
     height: f32,
     baseline: f32,

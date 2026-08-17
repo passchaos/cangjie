@@ -449,6 +449,18 @@ The expansion is stored in glyph advances, so rendering, hit testing,
 selection geometry, bidi visual reordering, and debug overlays consume one
 consistent layout result. Retained reflow restores pristine advances before
 every width/alignment change, preventing justification from accumulating.
+
+`ParagraphOptions.punctuation.end_hanging_fraction` and the corresponding
+`ParagraphStyle` policy optionally let East Asian closing, exclamation, and
+nonstarter punctuation protrude from the logical inline-end margin. Reflow
+uses the reduced occupied measure for fitting and justification, while
+`ParagraphLine.hang_start`/`hang_end` record the final physical side after bidi.
+Glyph advances and source ranges remain unchanged, so rendering, selection,
+caret, retained reflow, attributed metadata, alignment, and paragraph metrics
+share one explicit optical geometry contract. The default fraction is zero.
+Language-specific inter-punctuation compression remains separate from this
+portable line-edge feature.
+
 Arabic kashida insertion remains a separate future tailoring rather than being
 guessed by the generic path.
 
@@ -841,9 +853,9 @@ Future changes must preserve these rules:
 3. Keep public and test consumers on owning domain modules; do not recreate a
    broad aggregate layout façade as new shaping or paragraph capabilities are
    added.
-4. Add Arabic kashida and language-specific CJK punctuation
-   compression/hanging where portable references exist, without changing the
-   generic inter-word and inter-character contracts.
+4. Add Arabic kashida and language-specific CJK punctuation compression where
+   portable references exist, without changing the generic inter-word,
+   inter-character, or line-edge hanging contracts.
 5. Add fuzz and CI matrices for stage boundaries, cache reuse, malformed font
    data, mixed-script fallback, vertical text, and retained reflow, alongside
    the existing Unicode and HarfBuzz parity gates.

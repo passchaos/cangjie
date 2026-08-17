@@ -80,6 +80,11 @@ fn appendEllipsisToLastLine(
         max_width
     else
         std.math.inf(f32);
+    // Reflow may have selected this line using optical punctuation hanging.
+    // Ellipsis changes the terminal glyph and therefore invalidates that
+    // discount. Restore the complete advance sum before fitting synthetic
+    // dots; the final punctuation pass will reapply any still-valid hanging.
+    line.width = geometry.lineWidth(buffer.glyphs.items[line.glyph_start .. line.glyph_start + line.glyph_len]);
 
     // An ellipsis terminates visible content rather than continuing the word,
     // so a discretionary line-end hyphen is no longer semantically active.

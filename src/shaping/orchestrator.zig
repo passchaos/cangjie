@@ -31,6 +31,7 @@ const line_break_analysis = @import("../layout/line_break/analysis.zig");
 const line_break_opportunity =
     @import("../layout/line_break/opportunity.zig");
 const paragraph_reflow = @import("../layout/line_break/reflow/root.zig");
+const punctuation_hanging = @import("../layout/punctuation/hanging.zig");
 const segmentation = @import("../text/segmentation/root.zig");
 const unicode = @import("../unicode.zig");
 const shape_profile_mod = @import("../shape_profile.zig");
@@ -278,6 +279,7 @@ pub const TextShaper = struct {
         if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
             try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
         }
+        punctuation_hanging.apply(buffer, options);
         try inline_object.position(buffer, options.inline_objects);
         return buffer.paragraphLayout();
     }
@@ -310,6 +312,7 @@ pub const TextShaper = struct {
         if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
             try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
         }
+        punctuation_hanging.apply(buffer, options);
         try inline_object.position(buffer, options.inline_objects);
         return buffer.paragraphLayout();
     }

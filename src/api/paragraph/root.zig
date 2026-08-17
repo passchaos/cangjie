@@ -11,6 +11,7 @@ const context = @import("../../shaping/context/root.zig");
 
 pub const Options = paragraph_options.Options;
 pub const Hyphenation = paragraph_options.Hyphenation;
+pub const Punctuation = paragraph_options.Punctuation;
 pub const Request = context.ParagraphRequest;
 pub const StyledRequest = context.StyledParagraphRequest;
 pub const StyledResult = context.Engine.StyledParagraph;

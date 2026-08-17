@@ -13,6 +13,7 @@ const horizontal_justification =
     @import("../../justification/horizontal.zig");
 const inline_object = @import("../../inline_object/root.zig");
 const opportunities = @import("opportunities.zig");
+const punctuation_hanging = @import("../../punctuation/hanging.zig");
 const segmentation = @import("../../../text/segmentation/root.zig");
 const shaped_boundary = @import("../shaped_boundary.zig");
 const truncation = @import("truncation.zig");
@@ -182,7 +183,22 @@ pub fn build(
             wrap_width,
             options,
         );
-        if (line_width > current_line_limit and index + 1 > line_start) {
+        // A hanging punctuation glyph may cross the inline-end measure while
+        // remaining on this line. Delay overflow until the occupied portion,
+        // rather than the complete glyph advance, exceeds the limit. The
+        // opportunity after this source atom is recorded below and becomes the
+        // preferred boundary if a following glyph overflows.
+        const current_hanging_amount = punctuation_hanging.logicalEndAmount(
+            buffer.glyphs.items,
+            line_start,
+            index + 1,
+            options.punctuation.end_hanging_fraction,
+        );
+        const occupied_line_width =
+            @max(0, line_width - current_hanging_amount);
+        if (occupied_line_width > current_line_limit and
+            index + 1 > line_start)
+        {
             // Discretionary opportunities include visible hyphen width. Reject
             // a candidate that would overflow even after taking the break.
             const automatic_limit_reached =
@@ -219,6 +235,13 @@ pub fn build(
                 geometry.lineWidth(
                     buffer.glyphs.items[line_start..break_end],
                 );
+            const hanging_amount = punctuation_hanging.logicalEndAmount(
+                buffer.glyphs.items,
+                line_start,
+                break_end,
+                options.punctuation.end_hanging_fraction,
+            );
+            break_width = @max(0, break_width - hanging_amount);
             var selected_visible_hyphen = false;
             if (uses_last_break) {
                 if (last_break.hyphen) |candidate| {
@@ -258,7 +281,8 @@ pub fn build(
                 break_width = horizontal_justification.apply(
                     buffer.glyphs.items[line_start..break_end],
                     break_width,
-                    geometry.lineWidthLimitForIndent(max_width, indent),
+                    geometry.lineWidthLimitForIndent(max_width, indent) -
+                        hanging_amount,
                 );
             }
             const line_info = geometry.lineRunInfo(

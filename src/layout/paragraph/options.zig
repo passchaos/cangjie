@@ -32,6 +32,15 @@ pub const Hyphenation = struct {
     max_consecutive_lines: ?usize = null,
 };
 
+/// Optional optical punctuation treatment applied after line selection.
+pub const Punctuation = struct {
+    /// Fraction of eligible line-end punctuation advance that may protrude past
+    /// the inline-end measure. Zero disables hanging; one permits a full
+    /// advance. Cangjie currently applies this to East Asian closing,
+    /// exclamation, and nonstarter classes.
+    end_hanging_fraction: f32 = 0,
+};
+
 pub const Options = struct {
     max_width: f32,
     wrap_mode: paragraph_types.WrapMode = .word,
@@ -58,6 +67,8 @@ pub const Options = struct {
     word_break_dictionary: ?*const segmentation.WordBreakDictionary = null,
     /// Optional automatic-hyphenation data and line-level policy.
     hyphenation: Hyphenation = .{},
+    /// Optional optical punctuation policy.
+    punctuation: Punctuation = .{},
     /// Shaping controls resolved before line breaking.
     script_tag: ?unicode.OpenTypeScriptTag = null,
     language_tag: ?unicode.OpenTypeLanguageTag = null,
@@ -80,6 +91,12 @@ pub fn validate(options: Options) !void {
         !std.math.isFinite(options.word_spacing) or
         !std.math.isFinite(options.first_line_indent) or
         !std.math.isFinite(options.paragraph_spacing))
+    {
+        return error.InvalidParagraphOptions;
+    }
+    if (!std.math.isFinite(options.punctuation.end_hanging_fraction) or
+        options.punctuation.end_hanging_fraction < 0 or
+        options.punctuation.end_hanging_fraction > 1)
     {
         return error.InvalidParagraphOptions;
     }
@@ -128,5 +145,21 @@ test "hyphenation character must be a Unicode scalar" {
     try validate(.{
         .max_width = 100,
         .hyphenation = .{ .character = 0x10ffff },
+    });
+}
+
+test "punctuation hanging fraction stays normalized" {
+    for ([_]f32{ -0.01, 1.01, std.math.inf(f32), std.math.nan(f32) }) |value| {
+        try std.testing.expectError(
+            error.InvalidParagraphOptions,
+            validate(.{
+                .max_width = 100,
+                .punctuation = .{ .end_hanging_fraction = value },
+            }),
+        );
+    }
+    try validate(.{
+        .max_width = 100,
+        .punctuation = .{ .end_hanging_fraction = 1 },
     });
 }

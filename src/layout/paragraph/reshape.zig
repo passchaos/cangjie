@@ -36,6 +36,26 @@ pub const Uniform = struct {
         return true;
     }
 
+    pub fn jstfTags(
+        self: Uniform,
+        start: usize,
+        end: usize,
+    ) struct {
+        script: @import("../../unicode.zig").OpenTypeScriptTag,
+        language: @import("../../unicode.zig").OpenTypeLanguageTag,
+    } {
+        const unicode_mod = @import("../../unicode.zig");
+        const line_text = self.text[start..end];
+        return .{
+            .script = self.options.script_tag orelse
+                unicode_mod.openTypeScriptTag(
+                    unicode_mod.inferOpenTypeScript(line_text),
+                ),
+            .language = self.options.language_tag orelse
+                unicode_mod.inferOpenTypeLanguageTag(line_text),
+        };
+    }
+
     pub fn saveCandidate(_: Uniform) !void {}
 
     pub fn prepareCommit(
@@ -120,6 +140,52 @@ pub const Uniform = struct {
             line_text,
             shape_options,
         );
+        var driver = Driver{
+            .buffer = buffer,
+            .metrics_cache = self.metrics_cache,
+            .glyph_index_cache = self.glyph_index_cache,
+            .font_size = self.font_size,
+            .lookup_options = lookup_options,
+        };
+        _ = try driver.appendSegment(
+            font_fallback.Cascade.init(&.{font}),
+            0,
+            line_text,
+            original_byte_start,
+            .{},
+        );
+        if (buffer.runs.items.len != 0) {
+            buffer.runs.items[0].font_index = font_index;
+        }
+        try bidi_reorder.normalizeLogical(buffer);
+        try self.finishLine(buffer);
+    }
+
+    pub fn shapeLineWithJstfMax(
+        self: Uniform,
+        buffer: *context_output.Buffer,
+        original_byte_start: usize,
+        original_byte_len: usize,
+        font: *const @import("../../font.zig").Font,
+        font_index: usize,
+        lookup_offsets: []const usize,
+    ) !void {
+        buffer.clear();
+        const original_byte_end = original_byte_start + original_byte_len;
+        var shape_options = paragraph_options.shapeOptions(self.options);
+        shape_options.context_before = self.text[0..original_byte_start];
+        shape_options.context_after = self.text[original_byte_end..];
+        shape_options.beginning_of_text = original_byte_start == 0;
+        shape_options.end_of_text = original_byte_end == self.text.len;
+        const line_text =
+            self.text[original_byte_start..original_byte_end];
+        var lookup_options = plan_resolution.forText(
+            line_text,
+            shape_options,
+        );
+        lookup_options.lookup.jstf_max = .{
+            .lookup_offsets = lookup_offsets,
+        };
         var driver = Driver{
             .buffer = buffer,
             .metrics_cache = self.metrics_cache,

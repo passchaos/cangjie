@@ -7,6 +7,7 @@ const font_fallback = @import("../../shaping/fallback/font/root.zig");
 const glyph_position = @import("../glyph_position.zig");
 const inline_object = @import("../inline_object/root.zig");
 const font_expansion = @import("../justification/font_expansion.zig");
+const jstf_justification = @import("../justification/jstf.zig");
 const kashida_justification = @import("../justification/kashida.zig");
 const paragraph_options = @import("options.zig");
 const line_break_opportunity = @import("../line_break/opportunity.zig");
@@ -116,6 +117,11 @@ pub const ShapedParagraph = struct {
             .font_size = self.font_size,
             .options = options,
         };
+        try jstf_justification.apply(
+            &reflow.buffer,
+            options,
+            recipe,
+        );
         try font_expansion.apply(
             &reflow.buffer,
             options,

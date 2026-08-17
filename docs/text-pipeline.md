@@ -532,6 +532,16 @@ surface does not yet apply JSTF priority actions during paragraph layout; that
 runtime step remains explicit rather than being conflated with fvar-axis
 expansion.
 
+Paragraph justification now also consumes `extensionJstfMax` positioning
+lookups for the selected script/language. Each priority level is treated as an
+independent suggestion, as required by the OpenType specification. Cangjie
+reshapes an untouched logical line with the priority's detached GPOS lookups;
+if the authored maximum would overshoot the measure, it interpolates complete
+positioned-glyph geometry between the natural and maximum shapes. The accepted
+candidate is committed transactionally before later fvar-axis, Kashida, and
+generic spacing stages. Main GSUB/GPOS enable/disable modification lists remain
+the next JSTF runtime stage.
+
 Paragraph alignment distinguishes logical and physical edges:
 `TextAlign.start`/`end` resolve through the paragraph direction, while
 `left`/`right` always name physical edges. `start` is the default, preserving

@@ -674,6 +674,50 @@ test "justification expands a variable width axis before spacing" {
     );
 }
 
+test "JSTF maximum positioning is scaled to the line target" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildJstfExpansionTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const paragraph = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        "A A A A",
+        20,
+        .{
+            .max_width = 50,
+            .alignment = .justify,
+            .font_expansion = .{ .enabled = false },
+            .kashida = .{ .enabled = false },
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines.len);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 50),
+        paragraph.lines[0].width,
+        0.001,
+    );
+    // Natural "A A" is 42px. The JSTF maximum adds 12px to the space, but
+    // line-local interpolation consumes only the 8px needed by this measure.
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 18),
+        paragraph.glyphs[1].x_advance,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 10),
+        paragraph.glyphs[3].x_advance,
+        0.001,
+    );
+}
+
 test "right-to-left justification keeps line origin and survives bidi reorder" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

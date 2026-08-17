@@ -495,6 +495,38 @@ pub fn run(input: Input) !void {
     });
     const gpos_unsafe_glyphs = position_collection.unsafe_glyphs;
     const use_kerx_positioning = position_collection.use_kerx_positioning;
+    if (lookup_options.jstf_max) |jstf_max| {
+        if (!use_kerx_positioning and jstf_max.lookup_offsets.len != 0) {
+            const jstf_options = gpos.LookupOptions{
+                .script_tag = gpos_script_tag,
+                .language_tag = lookup_options.language_tag,
+                .direction = if (lookup_options.shapingDirection() == .rtl)
+                    .rtl
+                else
+                    .ltr,
+                .vertical = lookup_options.writing_mode.isVertical(),
+                .normalized_variation_coords = lookup_options.normalized_variation_coords,
+                .apply_all_if_unselected = false,
+                .run_may_have_mark_attachments = position_policy.runMayHaveMarkAttachments(
+                    glyph_ids.items,
+                    codepoints.items,
+                    glyph_source_indices.items,
+                    gdef_metadata.*,
+                ),
+                .run_has_default_ignorables = has_default_ignorable,
+                .visible_variation_selectors = lookup_options.not_found_variation_selector_glyph != null,
+            };
+            try font_shaping.collectJstfMaxAdjustmentsForShaping(
+                font,
+                jstf_max.lookup_offsets,
+                glyph_ids.items,
+                gpos_adjustments,
+                buffer.allocator,
+                jstf_options,
+                gdef_metadata.*,
+            );
+        }
+    }
     if (shape_profile) |p| p.gpos_ns += shape_profile_mod.elapsed(gpos_start, profile_io);
 
     const position_start = shape_profile_mod.now(shape_profile, profile_io);

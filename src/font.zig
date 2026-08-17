@@ -2889,6 +2889,35 @@ pub const Font = struct {
         try gpos_mod.collectAdjustmentsWithOptions(self.data, gpos.offset, gpos.length, glyphs, adjustments, allocator, gpos_options);
     }
 
+    fn collectJstfMaxAdjustmentsForShaping(
+        self: *const Font,
+        lookup_offsets: []const usize,
+        glyphs: []const glyph_mod.GlyphId,
+        adjustments: *std.ArrayList(gpos_mod.Adjustment),
+        allocator: std.mem.Allocator,
+        options: gpos_mod.LookupOptions,
+        gdef_metadata: GdefLookupMetadata,
+    ) FontError!void {
+        try self.validateGlyphRun(glyphs);
+        const jstf = self.jstf orelse return;
+        try sfnt.checksum.validate(self.data, jstf);
+        var gpos_options = options;
+        gpos_options.assume_validated = true;
+        gpos_options.lookup_accelerators = null;
+        gpos_options.selected_lookups = null;
+        gdef_metadata.applyToGposOptions(&gpos_options);
+        try gpos_mod.collectDetachedLookups(
+            self.data,
+            jstf.offset,
+            jstf.length,
+            lookup_offsets,
+            glyphs,
+            adjustments,
+            allocator,
+            gpos_options,
+        );
+    }
+
     fn selectGposLookupsForShaping(self: *const Font, allocator: std.mem.Allocator, options: gpos_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError![]u16 {
         const gpos = self.gpos orelse return try allocator.alloc(u16, 0);
         try sfnt.checksum.validate(self.data, gpos);
@@ -4837,6 +4866,7 @@ pub const shaping = struct {
     pub const applyAatSubstitutionForShaping = Font.applyAatSubstitutionForShaping;
     pub const applyMorxForShaping = Font.applyMorxForShaping;
     pub const collectGposAdjustmentsWithOptionsUsingGdefAfterProof = Font.collectGposAdjustmentsWithOptionsUsingGdefAfterProof;
+    pub const collectJstfMaxAdjustmentsForShaping = Font.collectJstfMaxAdjustmentsForShaping;
     pub const selectGposLookupsForShaping = Font.selectGposLookupsForShaping;
     pub const gposLookupAcceleratorsForShaping = Font.gposLookupAcceleratorsForShaping;
     pub const gdefLookupMetadataForShaping = Font.gdefLookupMetadataForShaping;

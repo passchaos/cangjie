@@ -58,6 +58,44 @@ pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: us
     );
 }
 
+/// Execute GPOS Lookup tables embedded directly in an OpenType JSTF table.
+///
+/// Offsets are relative to the supplied JSTF table range and were structurally
+/// validated when the face was parsed. A detached lookup has no LookupList
+/// index or accelerator identity, but otherwise uses the same filtering,
+/// attachment, variation, and output accumulation semantics as ordinary GPOS.
+pub fn collectDetachedLookups(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    lookup_offsets: []const usize,
+    glyphs: []const GlyphId,
+    adjustments: *std.ArrayList(Adjustment),
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GposError || std.mem.Allocator.Error)!void {
+    if (offset > data.len or length > data.len - offset) {
+        return error.BadGpos;
+    }
+    try runtime.matching.validate(options, glyphs.len);
+    const view = @import("gpos/table/root.zig").View{
+        .data = data,
+        .offset = offset,
+        .length = length,
+        .assume_validated = true,
+    };
+    for (lookup_offsets) |lookup_offset| {
+        try @import("gpos/runtime/lookup/dispatcher/root.zig").collect(
+            view,
+            lookup_offset,
+            glyphs,
+            adjustments,
+            allocator,
+            options,
+        );
+    }
+}
+
 pub fn selectedLookupIndicesForOptions(data: []const u8, offset: usize, length: usize, allocator: std.mem.Allocator, options: LookupOptions) (GposError || std.mem.Allocator.Error)![]u16 {
     return runtime_run.lookupIndicesForOptions(
         data,

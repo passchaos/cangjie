@@ -24,6 +24,8 @@ const glyph_position = @import("../layout/glyph_position.zig");
 const inline_object = @import("../layout/inline_object/root.zig");
 const font_expansion =
     @import("../layout/justification/font_expansion.zig");
+const jstf_justification =
+    @import("../layout/justification/jstf.zig");
 const kashida_justification =
     @import("../layout/justification/kashida.zig");
 const paragraph_options = @import("../layout/paragraph/options.zig");
@@ -712,6 +714,11 @@ fn reshapeUniformParagraph(
         .font_size = font_size,
         .options = options,
     };
+    try jstf_justification.apply(
+        buffer,
+        options,
+        recipe,
+    );
     try font_expansion.apply(
         buffer,
         options,

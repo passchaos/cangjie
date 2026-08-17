@@ -58,6 +58,33 @@ pub const Recipe = struct {
         return end <= span.byteEnd();
     }
 
+    pub fn jstfTags(
+        self: Recipe,
+        start: usize,
+        end: usize,
+    ) struct {
+        script: unicode.OpenTypeScriptTag,
+        language: unicode.OpenTypeLanguageTag,
+    } {
+        const line_text = self.text[start..end];
+        const span = styled_paragraph.spanForCluster(
+            self.spans,
+            start,
+        ) orelse return .{
+            .script = unicode.openTypeScriptTag(
+                unicode.inferOpenTypeScript(line_text),
+            ),
+            .language = unicode.inferOpenTypeLanguageTag(line_text),
+        };
+        return .{
+            .script = span.script_tag orelse unicode.openTypeScriptTag(
+                unicode.inferOpenTypeScript(line_text),
+            ),
+            .language = span.language_tag orelse
+                unicode.inferOpenTypeLanguageTag(line_text),
+        };
+    }
+
     pub fn shapeLine(
         self: Recipe,
         buffer: *context_output.Buffer,
@@ -166,6 +193,65 @@ pub const Recipe = struct {
                     .native_direction_shaping = true,
                     .features = span.features,
                     .normalized_variation_coords = normalized_variation_coords,
+                    .context_before = self.text[0..original_byte_start],
+                    .context_after = self.text[original_byte_end..],
+                    .beginning_of_text = original_byte_start == 0,
+                    .end_of_text = original_byte_end == self.text.len,
+                },
+                .all_ascii = false,
+            },
+        };
+        _ = try context.appendSegment(
+            font_fallback.Cascade.init(&.{font}),
+            0,
+            line_text,
+            original_byte_start,
+            .{},
+        );
+        if (buffer.runs.items.len != 0) {
+            buffer.runs.items[0].font_index = font_index;
+        }
+        try bidi_reorder.normalizeLogical(buffer);
+        try self.finishLine(buffer);
+        try self.saveCandidate();
+    }
+
+    pub fn shapeLineWithJstfMax(
+        self: Recipe,
+        buffer: *context_output.Buffer,
+        original_byte_start: usize,
+        original_byte_len: usize,
+        font: *const @import("../../../font.zig").Font,
+        font_index: usize,
+        lookup_offsets: []const usize,
+    ) !void {
+        const original_byte_end = original_byte_start + original_byte_len;
+        const span = styled_paragraph.spanForCluster(
+            self.spans,
+            original_byte_start,
+        ) orelse return error.InvalidStyleSpans;
+        std.debug.assert(span.byteEnd() >= original_byte_end);
+        buffer.clear();
+        const line_text =
+            self.text[original_byte_start..original_byte_end];
+        const script = unicode.inferOpenTypeScript(line_text);
+        var context = SegmentContext{
+            .buffer = buffer,
+            .font_size = span.font_size,
+            .lookup_options = .{
+                .lookup = .{
+                    .script = script,
+                    .script_tag = span.script_tag orelse
+                        unicode.openTypeScriptTag(script),
+                    .script_tag_explicit = span.script_tag != null,
+                    .language_tag = span.language_tag orelse
+                        unicode.inferOpenTypeLanguageTag(line_text),
+                    .direction = self.options.direction,
+                    .reorder_bidi = false,
+                    .native_direction_shaping = true,
+                    .features = span.features,
+                    .normalized_variation_coords = span.normalized_variation_coords,
+                    .jstf_max = .{ .lookup_offsets = lookup_offsets },
                     .context_before = self.text[0..original_byte_start],
                     .context_after = self.text[original_byte_end..],
                     .beginning_of_text = original_byte_start == 0,

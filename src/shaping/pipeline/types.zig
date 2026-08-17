@@ -36,6 +36,12 @@ pub const ScriptPosition = enum {
     subscript,
 };
 
+/// Optional OpenType JSTF suggestion applied during one isolated line reshape.
+pub const JstfMax = struct {
+    /// Lookup offsets relative to the owning JSTF table.
+    lookup_offsets: []const usize,
+};
+
 /// Fully resolved properties for one homogeneous shaping run.
 ///
 /// Public `ShapeOptions` still carries optional script/language requests.
@@ -55,6 +61,7 @@ pub const LookupOptions = struct {
     writing_mode: WritingMode = .horizontal_tb,
     text_orientation: TextOrientation = .mixed,
     normalized_variation_coords: []const f32 = &.{},
+    jstf_max: ?JstfMax = null,
     not_found_variation_selector_glyph: ?u32 = null,
     remove_default_ignorables: bool = false,
     context_before: []const u8 = &.{},

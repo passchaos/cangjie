@@ -22,6 +22,10 @@ pub const Candidate = struct {
     pub fn reset(self: *Candidate) void {
         self.* = .{};
     }
+
+    pub fn hasVisibleHyphen(self: Candidate) bool {
+        return self.hyphen != null or self.automatic_hyphen != null;
+    }
 };
 
 pub const AutomaticHyphen = struct {
@@ -90,6 +94,7 @@ pub fn recordSoft(
     candidate: *Candidate,
     normalized_variation_coords: []const f32,
     automatic_hyphen: bool,
+    hyphen_character: ?u21,
 ) !void {
     if (glyphs.len == 0) return;
     if (shaped_boundary.sourceBoundaryIsUnsafe(
@@ -126,6 +131,7 @@ pub fn recordSoft(
                     runs,
                     index,
                     normalized_variation_coords,
+                    hyphen_character,
                 ) orelse return;
                 candidate.* = .{
                     .glyph_index = break_index,
@@ -138,15 +144,27 @@ pub fn recordSoft(
                     },
                 };
             } else {
+                const discretionary =
+                    discretionary_hyphen.isCandidate(current.codepoint);
                 const resolved_hyphen =
-                    if (discretionary_hyphen.isCandidate(current.codepoint))
+                    if (discretionary)
                         try discretionary_hyphen.resolveForGlyph(
                             runs,
                             index,
                             normalized_variation_coords,
+                            hyphen_character,
                         )
                     else
                         null;
+                // A requested replacement is an exact policy, not a hint.
+                // Silently taking the break with an invisible U+00AD would
+                // violate line fitting and the caller's visible-line limit.
+                if (discretionary and
+                    hyphen_character != null and
+                    resolved_hyphen == null)
+                {
+                    return;
+                }
                 candidate.* = .{
                     .glyph_index = break_index,
                     .width = line_width +
@@ -177,6 +195,7 @@ pub fn recordSoft(
                 runs,
                 owner_index,
                 normalized_variation_coords,
+                hyphen_character,
             ) orelse return;
             candidate.* = .{
                 .glyph_index = break_index,
@@ -233,6 +252,7 @@ test "soft opportunity never splits a shaped source atom" {
         &candidate,
         &.{},
         false,
+        null,
     );
     try std.testing.expectEqual(@as(?usize, null), candidate.glyph_index);
 
@@ -246,6 +266,7 @@ test "soft opportunity never splits a shaped source atom" {
         &candidate,
         &.{},
         false,
+        null,
     );
     try std.testing.expectEqual(@as(?usize, 2), candidate.glyph_index);
     try std.testing.expectApproxEqAbs(@as(f32, 15), candidate.width, 0.001);
@@ -280,6 +301,7 @@ test "soft opportunity rejects contextual unsafe boundary" {
         &candidate,
         &.{},
         false,
+        null,
     );
     try std.testing.expectEqual(@as(?usize, null), candidate.glyph_index);
 
@@ -295,6 +317,7 @@ test "soft opportunity rejects contextual unsafe boundary" {
         &candidate,
         &.{},
         true,
+        null,
     );
     try std.testing.expectEqual(@as(?usize, null), candidate.glyph_index);
 }

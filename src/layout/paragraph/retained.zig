@@ -61,7 +61,7 @@ pub const ShapedParagraph = struct {
         try paragraph_options.validate(options);
         try inline_object.validate(self.text, options.inline_objects);
         if (options.word_break_dictionary != self.word_break_dictionary or
-            options.hyphenation_dictionary != self.hyphenation_dictionary or
+            options.hyphenation.dictionary != self.hyphenation_dictionary or
             !inline_object.indexesMatch(
                 self.inline_object_indexes,
                 options.inline_objects,

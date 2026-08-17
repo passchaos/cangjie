@@ -51,6 +51,7 @@ pub fn build(
     var y: f32 = 0;
     var index: usize = 0;
     var line_in_paragraph: usize = 0;
+    var consecutive_hyphenated_lines: usize = 0;
     var terminal_emergency_line_committed = false;
     const max_lines = options.max_lines orelse std.math.maxInt(usize);
     var selected_automatic_hyphens =
@@ -160,6 +161,7 @@ pub fn build(
             line_byte_start = line_byte_end;
             line_width = 0;
             last_break.reset();
+            consecutive_hyphenated_lines = 0;
             line_in_paragraph = 0;
             index = break_end_index - 1;
             continue :glyph_loop;
@@ -183,8 +185,17 @@ pub fn build(
         if (line_width > current_line_limit and index + 1 > line_start) {
             // Discretionary opportunities include visible hyphen width. Reject
             // a candidate that would overflow even after taking the break.
+            const automatic_limit_reached =
+                if (options.hyphenation.max_consecutive_lines) |limit|
+                    consecutive_hyphenated_lines >= limit
+                else
+                    false;
+            const candidate_is_limited_hyphen =
+                last_break.hasVisibleHyphen() and
+                automatic_limit_reached;
             const fitting_last_break =
                 if (last_break.glyph_index != null and
+                !candidate_is_limited_hyphen and
                 last_break.width <= current_line_limit)
                     last_break.glyph_index
                 else
@@ -198,23 +209,24 @@ pub fn build(
             );
             if (overflow_break.defer_break) continue;
             const break_end = overflow_break.index;
+            const uses_last_break = fitting_last_break != null and
+                break_end == fitting_last_break.?;
             var break_width = if (overflow_break.uses_current_discardable)
                 line_width - glyph.x_advance
-            else if (last_break.glyph_index != null and
-                break_end == last_break.glyph_index.?)
+            else if (uses_last_break)
                 last_break.width
             else
                 geometry.lineWidth(
                     buffer.glyphs.items[line_start..break_end],
                 );
-            if (last_break.glyph_index != null and
-                break_end == last_break.glyph_index.?)
-            {
+            var selected_visible_hyphen = false;
+            if (uses_last_break) {
                 if (last_break.hyphen) |candidate| {
                     discretionary_hyphen.materialize(
                         &buffer.glyphs.items[candidate.glyph_index],
                         candidate.resolved,
                     );
+                    selected_visible_hyphen = true;
                 } else if (last_break.automatic_hyphen) |candidate| {
                     try automatic_hyphens.appendSelected(
                         &selected_automatic_hyphens,
@@ -223,6 +235,7 @@ pub fn build(
                         break_end,
                         candidate,
                     );
+                    selected_visible_hyphen = true;
                 }
             }
             var next_line_start = break_end;
@@ -287,6 +300,11 @@ pub fn build(
             }
             y += line_info.metrics.lineHeight();
             line_in_paragraph += 1;
+            consecutive_hyphenated_lines =
+                if (selected_visible_hyphen)
+                    consecutive_hyphenated_lines + 1
+                else
+                    0;
             line_start = next_line_start;
             line_byte_start = shaped_boundary.byteEndForGlyphPrefix(
                 buffer.glyphs.items,
@@ -335,6 +353,7 @@ pub fn build(
                         &last_break,
                         options.normalized_variation_coords,
                         line_break.automatic_hyphen,
+                        options.hyphenation.character,
                     ),
                     .hard => {},
                 }

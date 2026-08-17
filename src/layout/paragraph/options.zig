@@ -11,6 +11,27 @@ const plan_validation = @import("../../shaping/plan/validation.zig");
 const segmentation = @import("../../text/segmentation/root.zig");
 const unicode = @import("../../unicode.zig");
 
+/// Optional language-aware discretionary line-breaking policy.
+///
+/// The dictionary determines width-independent source opportunities. The
+/// character and line limit are reflow-only policy and may change between
+/// layouts of one retained paragraph.
+pub const Hyphenation = struct {
+    /// Borrowed Liang-pattern dictionary. Null disables automatic boundaries
+    /// while retaining explicit U+00AD soft-hyphen behavior.
+    dictionary: ?*const hyphenation.Dictionary = null,
+    /// Visible scalar drawn for a selected discretionary break.
+    ///
+    /// Null selects U+2010, then U+002D, then the font's U+00AD glyph. An
+    /// explicit scalar is used only when the owning font contains it.
+    character: ?u21 = null,
+    /// Maximum immediately consecutive lines ending in a visible hyphen.
+    ///
+    /// Null is unlimited. Zero suppresses visible discretionary hyphens while
+    /// preserving emergency wrapping.
+    max_consecutive_lines: ?usize = null,
+};
+
 pub const Options = struct {
     max_width: f32,
     wrap_mode: paragraph_types.WrapMode = .word,
@@ -35,11 +56,8 @@ pub const Options = struct {
     /// The dictionary is borrowed and must outlive the layout call or retained
     /// paragraph. Its boundaries still pass grapheme and shaping safety checks.
     word_break_dictionary: ?*const segmentation.WordBreakDictionary = null,
-    /// Optional language-specific Liang-pattern automatic hyphenation.
-    ///
-    /// The dictionary is borrowed and must outlive layout or retained reflow.
-    /// It only adds discretionary opportunities; UAX #14 remains authoritative.
-    hyphenation_dictionary: ?*const hyphenation.Dictionary = null,
+    /// Optional automatic-hyphenation data and line-level policy.
+    hyphenation: Hyphenation = .{},
     /// Shaping controls resolved before line breaking.
     script_tag: ?unicode.OpenTypeScriptTag = null,
     language_tag: ?unicode.OpenTypeLanguageTag = null,
@@ -64,6 +82,11 @@ pub fn validate(options: Options) !void {
         !std.math.isFinite(options.paragraph_spacing))
     {
         return error.InvalidParagraphOptions;
+    }
+    if (options.hyphenation.character) |character| {
+        if (!std.unicode.utf8ValidCodepoint(character)) {
+            return error.InvalidParagraphOptions;
+        }
     }
     try plan_validation.features(options.features);
     try plan_validation.variationCoords(options.normalized_variation_coords);
@@ -92,4 +115,18 @@ pub fn matchesShapeKey(
         text,
         shapeOptions(options),
     ).eql(key);
+}
+
+test "hyphenation character must be a Unicode scalar" {
+    try std.testing.expectError(
+        error.InvalidParagraphOptions,
+        validate(.{
+            .max_width = 100,
+            .hyphenation = .{ .character = 0xd800 },
+        }),
+    );
+    try validate(.{
+        .max_width = 100,
+        .hyphenation = .{ .character = 0x10ffff },
+    });
 }

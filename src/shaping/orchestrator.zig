@@ -199,7 +199,7 @@ pub const TextShaper = struct {
             text,
             grapheme_clusters,
             options.word_break_dictionary,
-            options.hyphenation_dictionary,
+            options.hyphenation.dictionary,
         );
         errdefer allocator.free(line_breaks);
         const inline_object_indexes = try allocator.alloc(
@@ -220,7 +220,7 @@ pub const TextShaper = struct {
             .line_breaks = line_breaks,
             .inline_object_indexes = inline_object_indexes,
             .word_break_dictionary = options.word_break_dictionary,
-            .hyphenation_dictionary = options.hyphenation_dictionary,
+            .hyphenation_dictionary = options.hyphenation.dictionary,
             .default_metrics = defaultBaselineMetrics(cascade.fonts[0], font_size),
             .shape_key = ShapePlanKey.fromText(text, shape_options),
             .needs_bidi_reorder = plan_bidi.paragraphNeedsReorder(text, options.direction),
@@ -273,7 +273,7 @@ pub const TextShaper = struct {
             null,
             null,
             options.word_break_dictionary,
-            options.hyphenation_dictionary,
+            options.hyphenation.dictionary,
         );
         if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
             try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
@@ -305,7 +305,7 @@ pub const TextShaper = struct {
             null,
             null,
             options.word_break_dictionary,
-            options.hyphenation_dictionary,
+            options.hyphenation.dictionary,
         );
         if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
             try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);

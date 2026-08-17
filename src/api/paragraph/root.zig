@@ -10,6 +10,7 @@ const reflow = @import("../../layout/line_break/reflow/root.zig");
 const context = @import("../../shaping/context/root.zig");
 
 pub const Options = paragraph_options.Options;
+pub const Hyphenation = paragraph_options.Hyphenation;
 pub const Request = context.ParagraphRequest;
 pub const StyledRequest = context.StyledParagraphRequest;
 pub const StyledResult = context.Engine.StyledParagraph;

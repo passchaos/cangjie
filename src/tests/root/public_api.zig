@@ -128,6 +128,9 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(
         @typeInfo(cangjie.text.hyphenation.Dictionary.Mapping) == .@"struct",
     );
+    try std.testing.expect(
+        @typeInfo(cangjie.paragraph.Hyphenation) == .@"struct",
+    );
 }
 
 test "concrete face views cover the normal application workflow" {

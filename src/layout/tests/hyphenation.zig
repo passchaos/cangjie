@@ -25,9 +25,12 @@ const latin_codepoints = [_]u32{
     'n',
     'o',
     'p',
+    'r',
     't',
     'y',
+    0x00ad,
     0x2010,
+    0x2022,
 };
 
 test "selected Liang boundary inserts one source-neutral line-end glyph" {
@@ -52,7 +55,7 @@ test "selected Liang boundary inserts one source-neutral line-end glyph" {
         20,
         .{
             .max_width = 1000,
-            .hyphenation_dictionary = &dictionary,
+            .hyphenation = .{ .dictionary = &dictionary },
         },
     );
     try std.testing.expectEqual(@as(usize, 1), wide.lines.len);
@@ -69,7 +72,7 @@ test "selected Liang boundary inserts one source-neutral line-end glyph" {
         .{
             .max_width = wide.glyphs[0].x_advance * 2 +
                 try hyphenAdvance(&font, 20) + 0.5,
-            .hyphenation_dictionary = &dictionary,
+            .hyphenation = .{ .dictionary = &dictionary },
         },
     );
     try std.testing.expect(wrapped.lines.len >= 2);
@@ -130,7 +133,7 @@ test "automatic hyphenation cannot bypass shaped boundary safety" {
         20,
         .{
             .max_width = 1,
-            .hyphenation_dictionary = &dictionary,
+            .hyphenation = .{ .dictionary = &dictionary },
         },
     );
     try std.testing.expectEqual(@as(usize, 1), paragraph.lines.len);
@@ -171,7 +174,7 @@ test "automatic hyphen follows the RTL visual line end" {
         .{
             .max_width = 1000,
             .direction = .rtl,
-            .hyphenation_dictionary = &dictionary,
+            .hyphenation = .{ .dictionary = &dictionary },
         },
     );
     const wrapped = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
@@ -183,7 +186,7 @@ test "automatic hyphen follows the RTL visual line end" {
             .max_width = unwrapped.glyphs[0].x_advance * 2 +
                 try hyphenAdvance(&font, 20) + 0.5,
             .direction = .rtl,
-            .hyphenation_dictionary = &dictionary,
+            .hyphenation = .{ .dictionary = &dictionary },
         },
     );
     try std.testing.expect(wrapped.lines.len >= 2);
@@ -217,7 +220,7 @@ test "ellipsis removes an automatic continuation hyphen" {
             .max_width = 16 * 2 + try hyphenAdvance(&font, 20) + 0.5,
             .max_lines = 1,
             .ellipsis = true,
-            .hyphenation_dictionary = &dictionary,
+            .hyphenation = .{ .dictionary = &dictionary },
         },
     );
     try std.testing.expectEqual(@as(usize, 1), paragraph.lines.len);
@@ -251,7 +254,7 @@ test "retained automatic hyphenation is repeatable across widths" {
         20,
         .{
             .max_width = 1000,
-            .hyphenation_dictionary = &dictionary,
+            .hyphenation = .{ .dictionary = &dictionary },
         },
     );
     defer paragraph.deinit();
@@ -267,7 +270,7 @@ test "retained automatic hyphenation is repeatable across widths" {
     defer reflow.deinit();
     const narrow = try paragraph.layout(&reflow, .{
         .max_width = narrow_width,
-        .hyphenation_dictionary = &dictionary,
+        .hyphenation = .{ .dictionary = &dictionary },
     });
     try std.testing.expect(narrow.lines.len >= 2);
     try std.testing.expect(
@@ -276,9 +279,33 @@ test "retained automatic hyphenation is repeatable across widths" {
         ].isAutomaticHyphen(),
     );
 
+    const custom = try paragraph.layout(&reflow, .{
+        .max_width = narrow_width,
+        .hyphenation = .{
+            .dictionary = &dictionary,
+            .character = 0x2022,
+        },
+    });
+    const custom_hyphen = custom.lines[0].glyphs(custom)[
+        custom.lines[0].glyph_len - 1
+    ];
+    try std.testing.expect(custom_hyphen.isAutomaticHyphen());
+    try std.testing.expectEqual(@as(u21, 0x2022), custom_hyphen.codepoint);
+
+    const suppressed = try paragraph.layout(&reflow, .{
+        .max_width = narrow_width,
+        .hyphenation = .{
+            .dictionary = &dictionary,
+            .max_consecutive_lines = 0,
+        },
+    });
+    for (suppressed.glyphs) |glyph| {
+        try std.testing.expect(!glyph.isAutomaticHyphen());
+    }
+
     const wide = try paragraph.layout(&reflow, .{
         .max_width = 1000,
-        .hyphenation_dictionary = &dictionary,
+        .hyphenation = .{ .dictionary = &dictionary },
     });
     try std.testing.expectEqual(@as(usize, 1), wide.lines.len);
     try std.testing.expectEqual(pristine.len, wide.glyphs.len);
@@ -347,7 +374,10 @@ test "styled automatic hyphen inherits the preceding fragment style" {
                 .max_width = 2 * (16 + 3) +
                     try hyphenAdvance(&font, 20) + 0.5,
                 .max_lines = 1,
-                .hyphenation_dictionary = &dictionary,
+                .hyphenation = .{
+                    .dictionary = &dictionary,
+                    .character = 0x2022,
+                },
             },
         );
     // Two retained source glyphs plus one insertion deliberately equal the
@@ -358,6 +388,10 @@ test "styled automatic hyphen inherits the preceding fragment style" {
     const automatic_index =
         paragraph.lines[0].glyph_start + paragraph.lines[0].glyph_len - 1;
     try std.testing.expect(paragraph.glyphs[automatic_index].isAutomaticHyphen());
+    try std.testing.expectEqual(
+        @as(u21, 0x2022),
+        paragraph.glyphs[automatic_index].codepoint,
+    );
     try std.testing.expectEqual(
         paragraph.glyphs.len,
         styled.glyphMetadata().len,
@@ -372,6 +406,102 @@ test "styled automatic hyphen inherits the preceding fragment style" {
     try std.testing.expectEqual(@as(?f32, 30), metadata.minimum_line_height);
 }
 
+test "consecutive hyphenated line limit resets after an unhyphenated line" {
+    const allocator = std.testing.allocator;
+    const codepoints = [_]u32{
+        0x002d,
+        'a',
+        'b',
+        'c',
+        'd',
+        'e',
+        'f',
+        'g',
+        'h',
+        'i',
+        'j',
+        'k',
+        'l',
+        'm',
+        'n',
+        0x2010,
+    };
+    const bytes = try test_font.buildCodepointSetTtf(allocator, &codepoints);
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = font_fallback.Cascade.init(&.{&font});
+    var dictionary = try Dictionary.init(
+        allocator,
+        "a1b",
+        "abc-def-ghi-jkl-mn",
+        .{ .left_min = 1, .right_min = 1 },
+    );
+    defer dictionary.deinit();
+    const width = 16 * 3 + try hyphenAdvance(&font, 20) + 0.5;
+
+    var buffer = context_output.Buffer.init(allocator);
+    defer buffer.deinit();
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        "abcdefghijklmn",
+        20,
+        .{
+            .max_width = width,
+            .hyphenation = .{
+                .dictionary = &dictionary,
+                .max_consecutive_lines = 1,
+            },
+        },
+    );
+
+    var hyphenated_count: usize = 0;
+    var previous_hyphenated = false;
+    for (paragraph.lines) |line| {
+        const glyphs = line.glyphs(paragraph);
+        const hyphenated = glyphs.len != 0 and
+            glyphs[glyphs.len - 1].isAutomaticHyphen();
+        try std.testing.expect(!(previous_hyphenated and hyphenated));
+        hyphenated_count += @intFromBool(hyphenated);
+        previous_hyphenated = hyphenated;
+    }
+    try std.testing.expect(hyphenated_count >= 2);
+}
+
+test "unsupported requested hyphen character does not become invisible" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCodepointSetTtf(
+        allocator,
+        &latin_codepoints,
+    );
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = font_fallback.Cascade.init(&.{&font});
+    var dictionary = try englishDictionary(allocator);
+    defer dictionary.deinit();
+
+    var buffer = context_output.Buffer.init(allocator);
+    defer buffer.deinit();
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        "hyphenation",
+        20,
+        .{
+            .max_width = 16 * 2 + try hyphenAdvance(&font, 20) + 0.5,
+            .hyphenation = .{
+                .dictionary = &dictionary,
+                .character = 0x2603,
+            },
+        },
+    );
+    for (paragraph.glyphs) |glyph| {
+        try std.testing.expect(!glyph.isAutomaticHyphen());
+    }
+}
+
 fn englishDictionary(allocator: std.mem.Allocator) !Dictionary {
     return Dictionary.init(
         allocator,
@@ -382,7 +512,15 @@ fn englishDictionary(allocator: std.mem.Allocator) !Dictionary {
 }
 
 fn hyphenAdvance(font: *const font_mod.Font, font_size: f32) !f32 {
-    const metrics = try font.horizontalMetrics(try font.glyphIndex(0x2010));
+    return codepointAdvance(font, font_size, 0x2010);
+}
+
+fn codepointAdvance(
+    font: *const font_mod.Font,
+    font_size: f32,
+    codepoint: u21,
+) !f32 {
+    const metrics = try font.horizontalMetrics(try font.glyphIndex(codepoint));
     return @as(f32, @floatFromInt(metrics.advance_width)) *
         (font_size / @as(f32, @floatFromInt(font.units_per_em)));
 }

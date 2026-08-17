@@ -90,7 +90,11 @@ test "paragraph style converts to paragraph options" {
         .first_line_indent = 10,
         .paragraph_spacing = 4,
         .word_break_dictionary = &dictionary,
-        .hyphenation_dictionary = &hyphenation_dictionary,
+        .hyphenation = .{
+            .dictionary = &hyphenation_dictionary,
+            .character = 0x2022,
+            .max_consecutive_lines = 2,
+        },
     };
     const options = style.paragraphOptions(80);
 
@@ -104,7 +108,15 @@ test "paragraph style converts to paragraph options" {
     try std.testing.expectEqual(&dictionary, options.word_break_dictionary.?);
     try std.testing.expectEqual(
         &hyphenation_dictionary,
-        options.hyphenation_dictionary.?,
+        options.hyphenation.dictionary.?,
+    );
+    try std.testing.expectEqual(
+        @as(?u21, 0x2022),
+        options.hyphenation.character,
+    );
+    try std.testing.expectEqual(
+        @as(?usize, 2),
+        options.hyphenation.max_consecutive_lines,
     );
     try std.testing.expectApproxEqAbs(@as(f32, 10), options.first_line_indent, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 4), options.paragraph_spacing, 0.001);

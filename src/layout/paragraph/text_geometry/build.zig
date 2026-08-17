@@ -69,6 +69,8 @@ fn buildInternal(
     const word_start_bytes = try source.collectWordStarts(allocator, text);
     defer allocator.free(word_start_bytes);
 
+    var output_lines = std.ArrayList(types.Line).empty;
+    errdefer output_lines.deinit(allocator);
     var output_spans = std.ArrayList(types.Span).empty;
     errdefer output_spans.deinit(allocator);
     var output_graphemes = std.ArrayList(types.Grapheme).empty;
@@ -79,6 +81,7 @@ fn buildInternal(
     defer drafts.deinit(allocator);
 
     for (layout.lines, 0..) |line, line_index| {
+        const line_span_start = output_spans.items.len;
         drafts.clearRetainingCapacity();
         const source_range = source.graphemeRangeForLine(
             source_graphemes,
@@ -144,8 +147,22 @@ fn buildInternal(
             &output_graphemes,
             &output_word_starts,
         );
+        try output_lines.append(allocator, .{
+            .byte_start = line.byte_start,
+            .byte_len = line.byte_len,
+            .bounds = .{
+                .x = line.x,
+                .y = line.y,
+                .width = line.width,
+                .height = line.height,
+            },
+            .span_start = line_span_start,
+            .span_len = output_spans.items.len - line_span_start,
+        });
     }
 
+    const owned_lines = try output_lines.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_lines);
     const owned_spans = try output_spans.toOwnedSlice(allocator);
     errdefer allocator.free(owned_spans);
     const owned_graphemes = try output_graphemes.toOwnedSlice(allocator);
@@ -154,6 +171,7 @@ fn buildInternal(
     return .{
         .allocator = allocator,
         .source_byte_len = text.len,
+        .lines = owned_lines,
         .spans = owned_spans,
         .graphemes = owned_graphemes,
         .word_starts = owned_word_starts,

@@ -46,10 +46,14 @@ pub const StyledGlyphMetadata = styled_buffer.Metadata;
 
 pub const TextGeometry = text_geometry.TextGeometry;
 pub const TextGeometrySpan = text_geometry.Span;
+pub const TextGeometryLine = text_geometry.Line;
 pub const GraphemeGeometry = text_geometry.Grapheme;
 pub const TextGeometryFontRun = text_geometry.FontRun;
 pub const TextGeometryDirection = text_geometry.Direction;
 pub const TextGeometryOptions = text_geometry.Options;
+pub const TextGeometryAffinity = text_geometry.Affinity;
+pub const TextGeometryCaretPosition = text_geometry.CaretPosition;
+pub const TextGeometryCaret = text_geometry.CaretGeometry;
 
 /// Build owned, platform-neutral text-run geometry from a final paragraph.
 ///

@@ -740,6 +740,17 @@ and its arrays remain valid after the shaping output buffer is reused. Platform
 adapters can translate this stable data to AccessKit, UI Automation, AT-SPI, or
 native application semantics.
 
+The geometry owner also retains every final line independently from its spans,
+including empty trailing-hard-break and empty-paragraph lines.
+`TextGeometry.caret` maps an exact UTF-8 boundary plus upstream/downstream
+affinity to a zero-width paragraph-space rectangle; the affinity distinguishes
+the two visual positions that a soft wrap or bidi transition can assign to one
+logical boundary. `TextGeometry.hitTest` performs the inverse using final
+grapheme partitions, including authored GDEF ligature carets, rather than the
+coarser positioned-glyph midpoint API. These queries remain layout primitives:
+document mutation, cursor movement policy, selection state, and IME ownership
+stay in the application/editor layer.
+
 Paragraph shaping now retains glyph atoms in logical source order and applies
 bidi visual ordering only after line ranges are known. Each line builds its own
 bidi map from `ParagraphLine.byte_start/byte_len`; mixed LTR/RTL text therefore

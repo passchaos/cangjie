@@ -1,0 +1,126 @@
+//! Platform-neutral text-run, grapheme, line, and caret records.
+
+const Face = @import("../../../font/face/root.zig").Face;
+const paragraph_types = @import("../../types/paragraph.zig");
+
+pub const Direction = enum {
+    ltr,
+    rtl,
+};
+
+/// Selects which logical neighbor owns a caret at a shared source boundary.
+///
+/// This distinction is observable at soft wraps and bidi transitions, where
+/// one UTF-8 byte offset can have two valid paragraph-space positions.
+pub const Affinity = enum {
+    /// Attach to the grapheme logically preceding the byte offset.
+    upstream,
+    /// Attach to the grapheme logically following the byte offset.
+    downstream,
+};
+
+pub const CaretPosition = struct {
+    byte_offset: usize,
+    affinity: Affinity = .downstream,
+};
+
+pub const CaretGeometry = struct {
+    position: CaretPosition,
+    line_index: usize,
+    rect: paragraph_types.TextRect,
+};
+
+/// Stable identity and font properties copied from one final paragraph run.
+///
+/// `run_index` is the original index in the `ParagraphLayout.runs` slice
+/// supplied to the builder and remains a numeric identity inside this owner.
+/// Do not use it to index a layout after that layout's reusable buffer changes.
+/// The face itself remains caller-owned and must outlive consumers that inspect
+/// it through this record.
+pub const FontRun = struct {
+    run_index: usize,
+    font: *const Face,
+    cascade_index: usize,
+    font_size: f32,
+};
+
+/// Geometry for one extended grapheme cluster.
+///
+/// Positions are relative to the owning span's `bounds.x`, matching the
+/// character-position convention used by platform text-run accessibility
+/// APIs. Logical-order graphemes in an RTL span therefore normally have
+/// decreasing positions.
+pub const Grapheme = struct {
+    byte_start: usize,
+    byte_len: usize,
+    inline_position: f32,
+    width: f32,
+    /// True when this grapheme's width partition came from an authored GDEF
+    /// LigCaretList rather than equal division of a shaped glyph advance.
+    authored_ligature_caret: bool = false,
+
+    pub fn byteEnd(self: Grapheme) usize {
+        return self.byte_start + self.byte_len;
+    }
+};
+
+/// One logical-order text span with uniform layout ownership.
+///
+/// Spans split whenever the line, final font run, resolved bidi direction, or
+/// optional style index changes. A span without `font_run` represents source
+/// such as an inline-object anchor that deliberately has no font ownership.
+pub const Span = struct {
+    line_index: usize,
+    font_run: ?FontRun,
+    style_index: ?u32,
+    direction: Direction,
+    byte_start: usize,
+    byte_len: usize,
+    bounds: paragraph_types.TextRect,
+    grapheme_start: usize,
+    grapheme_len: usize,
+    /// Range in `TextGeometry.word_starts`.
+    ///
+    /// Each value is a grapheme index relative to this span. Only UAX #29
+    /// segments classified as words are listed.
+    word_start_start: usize,
+    word_start_len: usize,
+    previous_on_line: ?usize = null,
+    next_on_line: ?usize = null,
+
+    pub fn byteEnd(self: Span) usize {
+        return self.byte_start + self.byte_len;
+    }
+
+    pub fn graphemes(
+        self: Span,
+        items: []const Grapheme,
+    ) []const Grapheme {
+        return items[self.grapheme_start .. self.grapheme_start + self.grapheme_len];
+    }
+
+    pub fn wordStarts(self: Span, items: []const usize) []const usize {
+        return items[self.word_start_start .. self.word_start_start + self.word_start_len];
+    }
+};
+
+/// One final visual line retained independently from its text spans.
+///
+/// Empty lines still own a box and source boundary, allowing a trailing hard
+/// break or an empty paragraph to expose a stable caret without fabricating a
+/// font run.
+pub const Line = struct {
+    byte_start: usize,
+    byte_len: usize,
+    bounds: paragraph_types.TextRect,
+    span_start: usize,
+    span_len: usize,
+
+    pub fn byteEnd(self: Line) usize {
+        return self.byte_start + self.byte_len;
+    }
+
+    pub fn spans(self: Line, items: []const Span) []const Span {
+        return items[self.span_start .. self.span_start + self.span_len];
+    }
+};

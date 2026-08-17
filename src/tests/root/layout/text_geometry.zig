@@ -74,7 +74,7 @@ test "text geometry divides a shaped ligature over source graphemes" {
     try std.testing.expectEqualSlices(
         usize,
         &.{ 0, 3 },
-        span.wordStarts(geometry),
+        span.wordStarts(geometry.word_starts),
     );
 
     // Geometry owns its flat arrays rather than borrowing the reusable layout
@@ -131,6 +131,24 @@ test "text geometry prefers authored GDEF ligature carets" {
     );
     try std.testing.expect(geometry.graphemes[0].authored_ligature_caret);
     try std.testing.expect(geometry.graphemes[1].authored_ligature_caret);
+
+    const internal = geometry.caret(.{
+        .byte_offset = 1,
+        .affinity = .downstream,
+    }).?;
+    try std.testing.expectApproxEqAbs(@as(f32, 6), internal.rect.x, 0.001);
+    const hit_before = geometry.hitTest(5, 8).?;
+    try std.testing.expectEqual(@as(usize, 1), hit_before.position.byte_offset);
+    try std.testing.expectEqual(
+        paragraph.TextGeometryAffinity.upstream,
+        hit_before.position.affinity,
+    );
+    const hit_after = geometry.hitTest(8, 8).?;
+    try std.testing.expectEqual(@as(usize, 1), hit_after.position.byte_offset);
+    try std.testing.expectEqual(
+        paragraph.TextGeometryAffinity.downstream,
+        hit_after.position.affinity,
+    );
 }
 
 test "text geometry applies GDEF caret variation at the final run instance" {
@@ -358,7 +376,7 @@ test "RTL ligature geometry reverses authored GDEF component assignment" {
         .{ .direction = .rtl },
     );
     defer geometry.deinit();
-    const graphemes = geometry.spans[0].graphemes(geometry);
+    const graphemes = geometry.spans[0].graphemes(geometry.graphemes);
     try std.testing.expectApproxEqAbs(@as(f32, 14), graphemes[0].width, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 6), graphemes[1].width, 0.001);
     try std.testing.expectApproxEqAbs(
@@ -428,7 +446,7 @@ test "text geometry keeps bidi spans logical and positions RTL graphemes visuall
     try std.testing.expectEqual(@as(?usize, 1), geometry.spans[2].previous_on_line);
     try std.testing.expectEqual(@as(?usize, null), geometry.spans[2].next_on_line);
 
-    const rtl = geometry.spans[1].graphemes(geometry);
+    const rtl = geometry.spans[1].graphemes(geometry.graphemes);
     try std.testing.expectEqual(@as(usize, 1), rtl[0].byte_start);
     try std.testing.expectEqual(@as(usize, 3), rtl[1].byte_start);
     try std.testing.expectApproxEqAbs(@as(f32, 10), rtl[0].inline_position, 0.001);
@@ -439,6 +457,26 @@ test "text geometry keeps bidi spans logical and positions RTL graphemes visuall
         0.001,
     );
     try std.testing.expectApproxEqAbs(@as(f32, 20), geometry.spans[1].bounds.width, 0.001);
+
+    const rtl_start = geometry.caret(.{
+        .byte_offset = 1,
+        .affinity = .downstream,
+    }).?;
+    const rtl_end = geometry.caret(.{
+        .byte_offset = 5,
+        .affinity = .upstream,
+    }).?;
+    try std.testing.expect(rtl_start.rect.x > rtl_end.rect.x);
+
+    const rtl_right_hit = geometry.hitTest(rtl_start.rect.x - 1, 8).?;
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        rtl_right_hit.position.byte_offset,
+    );
+    try std.testing.expectEqual(
+        paragraph.TextGeometryAffinity.downstream,
+        rtl_right_hit.position.affinity,
+    );
 }
 
 test "text geometry honors an explicit RTL paragraph base direction" {
@@ -476,7 +514,7 @@ test "text geometry honors an explicit RTL paragraph base direction" {
         paragraph.TextGeometryDirection.rtl,
         geometry.spans[0].direction,
     );
-    const graphemes = geometry.spans[0].graphemes(geometry);
+    const graphemes = geometry.spans[0].graphemes(geometry.graphemes);
     try std.testing.expectEqual(@as(usize, 0), graphemes[0].byte_start);
     try std.testing.expectEqual(@as(usize, 2), graphemes[1].byte_start);
     try std.testing.expect(graphemes[0].inline_position >
@@ -537,13 +575,13 @@ test "styled text geometry splits style identities and links only within a line"
     try std.testing.expectEqualSlices(
         usize,
         &.{0},
-        geometry.spans[0].wordStarts(geometry),
+        geometry.spans[0].wordStarts(geometry.word_starts),
     );
     try std.testing.expectEqual(@as(usize, 0), geometry.spans[1].word_start_len);
     try std.testing.expectEqualSlices(
         usize,
         &.{0},
-        geometry.spans[2].wordStarts(geometry),
+        geometry.spans[2].wordStarts(geometry.word_starts),
     );
 }
 
@@ -608,4 +646,151 @@ test "text geometry preserves fallback ownership and fontless inline objects" {
         run.cascade_index
     else
         null);
+}
+
+test "text geometry affinity distinguishes both sides of a soft wrap" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+
+    const text = "A A";
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const layout = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&fonts),
+        &layout_buffer,
+        text,
+        20,
+        .{ .max_width = 20 },
+    );
+    try std.testing.expectEqual(@as(usize, 2), layout.lines.len);
+
+    var geometry = try paragraph.buildGeometry(
+        allocator,
+        text,
+        layout,
+        .{},
+    );
+    defer geometry.deinit();
+    try std.testing.expectEqual(layout.lines.len, geometry.lines.len);
+
+    const boundary = layout.lines[1].byte_start;
+    const upstream = geometry.caret(.{
+        .byte_offset = boundary,
+        .affinity = .upstream,
+    }).?;
+    const downstream = geometry.caret(.{
+        .byte_offset = boundary,
+        .affinity = .downstream,
+    }).?;
+    try std.testing.expectEqual(@as(usize, 0), upstream.line_index);
+    try std.testing.expectEqual(@as(usize, 1), downstream.line_index);
+    try std.testing.expect(upstream.rect.y < downstream.rect.y);
+
+    const second_line_hit = geometry.hitTest(
+        downstream.rect.x,
+        downstream.rect.y + 1,
+    ).?;
+    try std.testing.expectEqual(@as(usize, 1), second_line_hit.line_index);
+}
+
+test "text geometry retains trailing hard-break and empty paragraph carets" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const cascade = FontCascade.init(&fonts);
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+
+    const text = "A\n";
+    const trailing_layout = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &layout_buffer,
+        text,
+        20,
+        .{ .max_width = 100 },
+    );
+    var trailing = try paragraph.buildGeometry(
+        allocator,
+        text,
+        trailing_layout,
+        .{},
+    );
+    defer trailing.deinit();
+    try std.testing.expectEqual(@as(usize, 2), trailing.lines.len);
+    try std.testing.expectEqual(@as(usize, 0), trailing.lines[1].span_len);
+    const final_caret = trailing.caret(.{
+        .byte_offset = text.len,
+        .affinity = .downstream,
+    }).?;
+    try std.testing.expectEqual(@as(usize, 1), final_caret.line_index);
+    try std.testing.expectApproxEqAbs(
+        trailing.lines[1].bounds.y,
+        final_caret.rect.y,
+        0.001,
+    );
+    const final_hit = trailing.hitTest(
+        final_caret.rect.x + 50,
+        final_caret.rect.y + 1,
+    ).?;
+    try std.testing.expectEqual(text.len, final_hit.position.byte_offset);
+
+    const empty_layout = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &layout_buffer,
+        "",
+        20,
+        .{ .max_width = 100 },
+    );
+    var empty = try paragraph.buildGeometry(
+        allocator,
+        "",
+        empty_layout,
+        .{},
+    );
+    defer empty.deinit();
+    try std.testing.expectEqual(@as(usize, 1), empty.lines.len);
+    try std.testing.expectEqual(@as(usize, 0), empty.spans.len);
+    const empty_caret = empty.caret(.{ .byte_offset = 0 }).?;
+    try std.testing.expectEqual(@as(usize, 0), empty_caret.position.byte_offset);
+    try std.testing.expect(empty_caret.rect.height > 0);
+}
+
+test "text geometry rejects non-boundary caret offsets" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const text = "A\u{0301}";
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const layout = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&fonts),
+        &layout_buffer,
+        text,
+        20,
+        .{ .max_width = 100 },
+    );
+    var geometry = try paragraph.buildGeometry(
+        allocator,
+        text,
+        layout,
+        .{},
+    );
+    defer geometry.deinit();
+    try std.testing.expect(geometry.caret(.{ .byte_offset = 1 }) == null);
+    try std.testing.expect(geometry.caret(.{
+        .byte_offset = text.len + 1,
+    }) == null);
 }

@@ -72,9 +72,8 @@ pub const ShapedParagraph = struct {
     /// Rebuild visual lines without repeating whole-paragraph shaping or
     /// Unicode analysis.
     ///
-    /// Justified Arabic lines may perform bounded line-local reshaping after
-    /// inserting U+0640 at retained safe boundaries. All other lines reuse the
-    /// pristine glyph stream directly.
+    /// Justified lines may perform bounded JSTF shrink/extension reshaping, and
+    /// Arabic lines may additionally insert U+0640 at retained safe boundaries.
     /// Returned slices borrow `reflow` until its next layout call. Separate
     /// buffers may reflow the same immutable paragraph concurrently.
     pub fn layout(
@@ -101,7 +100,13 @@ pub const ShapedParagraph = struct {
 
         try reflow.restore(self);
         errdefer reflow.buffer.clear();
-        try paragraph_reflow.build(
+        const recipe = reshape.Uniform{
+            .cascade = font_fallback.Cascade.init(self.cascade_fonts),
+            .text = self.text,
+            .font_size = self.font_size,
+            .options = options,
+        };
+        try paragraph_reflow.buildWithJstfShrinkage(
             &reflow.buffer,
             self.text,
             options,
@@ -110,13 +115,8 @@ pub const ShapedParagraph = struct {
             self.line_breaks,
             self.word_break_dictionary,
             self.hyphenation_dictionary,
+            recipe,
         );
-        const recipe = reshape.Uniform{
-            .cascade = font_fallback.Cascade.init(self.cascade_fonts),
-            .text = self.text,
-            .font_size = self.font_size,
-            .options = options,
-        };
         try jstf_justification.apply(
             &reflow.buffer,
             options,

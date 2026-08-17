@@ -788,9 +788,9 @@ test "JSTF priorities rebuild enabled and disabled GSUB GPOS lookups in order" {
         0.001,
     );
 
-    // Repeat through Engine's retained lookup-selection/proof caches. JSTF
-    // enablement must merge with the cached active set before execution rather
-    // than mutating cache-owned slices or appending a second pass.
+    // Repeat through Engine's lookup-selection/proof caches. JSTF enablement
+    // must merge with the cached active set before execution rather than
+    // mutating cache-owned slices or appending a second pass.
     var engine = support.Engine.init(allocator, .{});
     defer engine.deinit();
     const cached = try engine.layout(
@@ -815,6 +815,228 @@ test "JSTF priorities rebuild enabled and disabled GSUB GPOS lookups in order" {
         0.001,
     );
     try std.testing.expect(engine.stats().lookup_selection.hits > 0);
+}
+
+test "JSTF shrinkage keeps an overflowing source prefix on the line" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildJstfShrinkageTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const paragraph = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        "AAA AAA",
+        20,
+        .{
+            .max_width = 44,
+            .alignment = .justify,
+            .letter_spacing = 1,
+            .font_expansion = .{ .enabled = false },
+            .kashida = .{ .enabled = false },
+        },
+    );
+
+    // Natural "AAA" is 51px after letter spacing and would emergency-wrap.
+    // Priority zero still cannot fit. Priority one restarts from source,
+    // reaches glyph 3 through ordered GSUB, disables the final GPOS lookup,
+    // then interpolates shrinkageJstfMax to the exact 44px measure.
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines.len);
+    try std.testing.expectEqual(@as(usize, 3), paragraph.lines[0].glyph_len);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 44),
+        paragraph.lines[0].width,
+        0.001,
+    );
+    for (paragraph.glyphs[0..3]) |glyph| {
+        try std.testing.expectEqual(@as(u32, 3), glyph.glyph_id);
+        try std.testing.expectApproxEqAbs(
+            @as(f32, 1),
+            glyph.x_offset,
+            0.001,
+        );
+        try std.testing.expectApproxEqAbs(
+            @as(f32, 44.0 / 3.0),
+            glyph.x_advance,
+            0.001,
+        );
+    }
+    try std.testing.expectEqual(@as(u32, 2), paragraph.glyphs[3].glyph_id);
+    try std.testing.expectEqual(@as(usize, 4), paragraph.lines[1].glyph_start);
+
+    // The retained paragraph path owns pristine source geometry and must make
+    // the same shrinkage decision on every reflow without accumulating it.
+    var retained = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &buffer,
+        "AAA AAA",
+        20,
+        .{
+            .max_width = 100,
+            .alignment = .justify,
+            .letter_spacing = 1,
+            .font_expansion = .{ .enabled = false },
+            .kashida = .{ .enabled = false },
+        },
+    );
+    defer retained.deinit();
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const first = try retained.layout(
+        &reflow,
+        .{
+            .max_width = 44,
+            .alignment = .justify,
+            .letter_spacing = 1,
+            .font_expansion = .{ .enabled = false },
+            .kashida = .{ .enabled = false },
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 2), first.lines.len);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 44),
+        first.lines[0].width,
+        0.001,
+    );
+    const repeated = try retained.layout(
+        &reflow,
+        .{
+            .max_width = 44,
+            .alignment = .justify,
+            .letter_spacing = 1,
+            .font_expansion = .{ .enabled = false },
+            .kashida = .{ .enabled = false },
+        },
+    );
+    try std.testing.expectEqual(@as(u32, 3), repeated.glyphs[0].glyph_id);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 44),
+        repeated.lines[0].width,
+        0.001,
+    );
+
+    // Engine's one-shot layout binds lookup-selection and proof caches to the
+    // candidate buffer without changing the retained public API.
+    var engine = support.Engine.init(allocator, .{});
+    defer engine.deinit();
+    const cached = try engine.layout(
+        @import("../../../font/face/root.zig").Cascade.init(
+            &.{@import("../../../font/face/root.zig").backend.face(&font)},
+        ),
+        .{
+            .text = "AAA AAA",
+            .font_size = 20,
+            .options = .{
+                .max_width = 44,
+                .alignment = .justify,
+                .letter_spacing = 1,
+                .font_expansion = .{ .enabled = false },
+                .kashida = .{ .enabled = false },
+            },
+        },
+    );
+    try std.testing.expectEqual(@as(u32, 3), cached.glyphs[0].glyph_id);
+    try std.testing.expect(engine.stats().lookup_selection.hits > 0);
+}
+
+test "JSTF shrinkage preserves styled glyph metadata alignment" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildJstfShrinkageTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    var styled = support.StyledParagraphBuffer.init(allocator);
+    defer styled.deinit();
+    const text = "AAA AAA";
+    const spans = [_]support.StyledParagraphSpan{.{
+        .byte_start = 0,
+        .byte_len = text.len,
+        .style_index = 17,
+        .font_size = 20,
+        .letter_spacing = 1,
+    }};
+
+    const paragraph = try TextShaper.layoutStyledParagraphUtf8(
+        cascade,
+        &buffer,
+        &styled,
+        text,
+        20,
+        &spans,
+        .{
+            .max_width = 44,
+            .alignment = .justify,
+            .font_expansion = .{ .enabled = false },
+            .kashida = .{ .enabled = false },
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines.len);
+    try std.testing.expectEqual(
+        paragraph.glyphs.len,
+        styled.glyphMetadata().len,
+    );
+    for (styled.glyphMetadata()) |metadata| {
+        try std.testing.expectEqual(@as(u32, 17), metadata.style_index);
+    }
+    try std.testing.expectEqual(@as(u32, 3), paragraph.glyphs[0].glyph_id);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 44),
+        paragraph.lines[0].width,
+        0.001,
+    );
+}
+
+test "JSTF shrinkage updates later line and run indexes after ligature collapse" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildJstfCardinalityShrinkageTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const paragraph = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        "AA AA",
+        20,
+        .{
+            .max_width = 30,
+            .alignment = .justify,
+            .font_expansion = .{ .enabled = false },
+            .kashida = .{ .enabled = false },
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines.len);
+    try std.testing.expectEqual(@as(usize, 1), paragraph.lines[0].glyph_len);
+    try std.testing.expectEqual(@as(u32, 3), paragraph.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines[1].glyph_start);
+    var run_coverage: usize = 0;
+    for (paragraph.runs) |run| {
+        try std.testing.expectEqual(run_coverage, run.glyph_start);
+        run_coverage += run.glyph_len;
+    }
+    try std.testing.expectEqual(paragraph.glyphs.len, run_coverage);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 24),
+        paragraph.lines[0].width,
+        0.001,
+    );
 }
 
 test "right-to-left justification keeps line origin and survives bidi reorder" {

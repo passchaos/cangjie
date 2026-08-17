@@ -202,49 +202,10 @@ const Driver = struct {
             self.buffer.glyphs.items,
         );
 
-        const shaped_glyph_count = self.buffer.glyphs.items.len;
         var line_options = self.options;
         // Build the truncated prefix first. Synthetic dots are appended after
         // the sidecar has captured the terminal visible style.
         line_options.ellipsis = false;
-        try paragraph_reflow.build(
-            self.buffer,
-            self.text,
-            line_options,
-            paragraph_reflow.defaultBaselineMetrics(
-                self.cascade.fonts[0],
-                self.default_font_size,
-            ),
-            null,
-            null,
-            self.options.word_break_dictionary,
-            self.options.hyphenation.dictionary,
-        );
-        try styled_buffer.insertAutomaticHyphenMetadata(
-            &self.styled.metadata,
-            self.styled.allocator,
-            self.buffer.glyphs.items,
-            spans,
-        );
-        const content_omitted =
-            self.buffer.glyphs.items.len < shaped_glyph_count or
-            (self.buffer.lines.items.len != 0 and
-                self.buffer.lines.items[
-                    self.buffer.lines.items.len - 1
-                ].byteEnd() < self.text.len);
-        if (content_omitted and self.buffer.lines.items.len != 0) {
-            // Styled layout suppresses ellipsis during reflow so metadata can
-            // be synchronized first. Clear the terminal target here as well:
-            // the later styled ellipsis pass must never receive an already
-            // justified/Kashida-expanded line.
-            self.buffer.lines.items[
-                self.buffer.lines.items.len - 1
-            ].justification_target = null;
-        }
-        try styled_buffer.synchronizeAfterTruncation(
-            &self.styled.metadata,
-            self.buffer.glyphs.items.len,
-        );
         var candidate_metadata =
             std.ArrayList(styled_buffer.Metadata).empty;
         defer candidate_metadata.deinit(self.buffer.allocator);
@@ -261,6 +222,44 @@ const Driver = struct {
             .spans = spans,
             .options = self.options,
         };
+        try paragraph_reflow.buildWithJstfShrinkage(
+            self.buffer,
+            self.text,
+            line_options,
+            paragraph_reflow.defaultBaselineMetrics(
+                self.cascade.fonts[0],
+                self.default_font_size,
+            ),
+            null,
+            null,
+            self.options.word_break_dictionary,
+            self.options.hyphenation.dictionary,
+            recipe,
+        );
+        try styled_buffer.insertAutomaticHyphenMetadata(
+            &self.styled.metadata,
+            self.styled.allocator,
+            self.buffer.glyphs.items,
+            spans,
+        );
+        const content_omitted =
+            self.buffer.lines.items.len != 0 and
+            self.buffer.lines.items[
+                self.buffer.lines.items.len - 1
+            ].byteEnd() < self.text.len;
+        if (content_omitted and self.buffer.lines.items.len != 0) {
+            // Styled layout suppresses ellipsis during reflow so metadata can
+            // be synchronized first. Clear the terminal target here as well:
+            // the later styled ellipsis pass must never receive an already
+            // justified/Kashida-expanded line.
+            self.buffer.lines.items[
+                self.buffer.lines.items.len - 1
+            ].justification_target = null;
+        }
+        try styled_buffer.synchronizeAfterTruncation(
+            &self.styled.metadata,
+            self.buffer.glyphs.items.len,
+        );
         try jstf_justification.apply(
             self.buffer,
             self.options,

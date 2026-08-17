@@ -21,7 +21,64 @@ pub fn replace(
 ) !void {
     const line = buffer.lines.items[line_index];
     const old_glyph_len = line.glyph_len;
-    const old_line_end = line.glyph_start + old_glyph_len;
+    const glyph_delta = try replaceStorageRange(
+        buffer,
+        line.glyph_start,
+        old_glyph_len,
+        new_glyphs,
+        new_runs,
+        new_variation_coords,
+    );
+
+    var current = &buffer.lines.items[line_index];
+    current.glyph_len = new_glyphs.len;
+    current.width = width;
+    for (buffer.lines.items[line_index + 1 ..]) |*later| {
+        later.glyph_start = addSigned(later.glyph_start, glyph_delta);
+    }
+    refreshLineRunRanges(buffer);
+}
+
+/// Atomically replace an uncommitted glyph range during line selection.
+///
+/// Existing paragraph lines before the range remain valid. Any later line
+/// starts are shifted, while font runs crossing either boundary are split in
+/// exactly the same way as a completed-line replacement.
+pub fn replaceRange(
+    buffer: anytype,
+    glyph_start: usize,
+    old_glyph_len: usize,
+    new_glyphs: []const GlyphPosition,
+    new_runs: []const run_types.CascadeRun,
+    new_variation_coords: []const f32,
+) !isize {
+    const old_line_end = glyph_start + old_glyph_len;
+    const glyph_delta = try replaceStorageRange(
+        buffer,
+        glyph_start,
+        old_glyph_len,
+        new_glyphs,
+        new_runs,
+        new_variation_coords,
+    );
+    for (buffer.lines.items) |*line| {
+        if (line.glyph_start >= old_line_end) {
+            line.glyph_start = addSigned(line.glyph_start, glyph_delta);
+        }
+    }
+    refreshLineRunRanges(buffer);
+    return glyph_delta;
+}
+
+fn replaceStorageRange(
+    buffer: anytype,
+    glyph_start: usize,
+    old_glyph_len: usize,
+    new_glyphs: []const GlyphPosition,
+    new_runs: []const run_types.CascadeRun,
+    new_variation_coords: []const f32,
+) !isize {
+    const old_line_end = glyph_start + old_glyph_len;
     const glyph_delta: isize =
         @as(isize, @intCast(new_glyphs.len)) -
         @as(isize, @intCast(old_glyph_len));
@@ -37,7 +94,7 @@ pub fn replace(
     );
     for (buffer.runs.items) |run| {
         const run_end = run.glyph_start + run.glyph_len;
-        const prefix_end = @min(run_end, line.glyph_start);
+        const prefix_end = @min(run_end, glyph_start);
         if (run.glyph_start < prefix_end) {
             var prefix = run;
             prefix.glyph_len = prefix_end - run.glyph_start;
@@ -54,7 +111,7 @@ pub fn replace(
         const variation_range = try buffer.internVariationCoords(
             new_variation_coords[run.variation_coord_start..coord_end],
         );
-        adjusted.glyph_start += line.glyph_start;
+        adjusted.glyph_start += glyph_start;
         adjusted.variation_coord_start = variation_range.start;
         adjusted.variation_coord_len = variation_range.len;
         rebuilt_runs.appendAssumeCapacity(adjusted);
@@ -80,19 +137,16 @@ pub fn replace(
     );
 
     buffer.glyphs.replaceRangeAssumeCapacity(
-        line.glyph_start,
+        glyph_start,
         old_glyph_len,
         new_glyphs,
     );
     buffer.runs.clearRetainingCapacity();
     buffer.runs.appendSliceAssumeCapacity(rebuilt_runs.items);
+    return glyph_delta;
+}
 
-    var current = &buffer.lines.items[line_index];
-    current.glyph_len = new_glyphs.len;
-    current.width = width;
-    for (buffer.lines.items[line_index + 1 ..]) |*later| {
-        later.glyph_start = addSigned(later.glyph_start, glyph_delta);
-    }
+fn refreshLineRunRanges(buffer: anytype) void {
     for (buffer.lines.items) |*affected| {
         const range = geometry.runRangeForGlyphs(
             buffer.runs.items,

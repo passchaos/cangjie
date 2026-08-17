@@ -543,6 +543,16 @@ overshoot the measure, Cangjie interpolates complete positioned-glyph geometry
 between natural and maximum shapes. The accepted candidate is committed
 transactionally before later fvar-axis, Kashida, and generic spacing stages.
 
+Shrinkage-side priorities participate directly in greedy line selection. When
+the current source atom would overflow, Cangjie reshapes that complete
+single-font/style prefix from source with the priority's shrinkage
+enable/disable lists. If needed, `shrinkageJstfMax` supplies the bounded
+zero-to-maximum adjustment interval. A fitting candidate replaces the
+uncommitted glyph/run range transactionally and line selection continues;
+otherwise the ordinary soft/emergency break remains authoritative. Retained
+reflow, Engine-backed one-shot cache reuse, styled glyph metadata, and later
+line/run indexes all follow the same replacement contract.
+
 Paragraph alignment distinguishes logical and physical edges:
 `TextAlign.start`/`end` resolve through the paragraph direction, while
 `left`/`right` always name physical edges. `start` is the default, preserving
@@ -932,9 +942,9 @@ Future changes must preserve these rules:
 3. Keep public and test consumers on owning domain modules; do not recreate a
    broad aggregate layout façade as new shaping or paragraph capabilities are
    added.
-4. Complete OpenType `JSTF` shrinkage priorities and extender-glyph runtime;
-   extension priorities already apply GSUB/GPOS enable-disable sets and
-   JstfMax lookups independently from the fvar `jstf`/`wdth` convention.
+4. Complete OpenType `JSTF` extender-glyph runtime; shrinkage and extension
+   priorities already apply GSUB/GPOS enable-disable sets and JstfMax lookups
+   independently from the fvar `jstf`/`wdth` convention.
 5. Add fuzz and CI matrices for stage boundaries, cache reuse, malformed font
    data, mixed-script fallback, vertical text, and retained reflow, alongside
    the existing Unicode and HarfBuzz parity gates.

@@ -11,6 +11,8 @@ const discretionary_hyphen = @import("../../discretionary_hyphen.zig");
 const geometry = @import("geometry.zig");
 const horizontal_justification =
     @import("../../justification/horizontal.zig");
+const jstf_shrinkage =
+    @import("../../justification/jstf/shrinkage.zig");
 const inline_object = @import("../../inline_object/root.zig");
 const opportunities = @import("opportunities.zig");
 const punctuation_compression = @import("../../punctuation/compression.zig");
@@ -35,6 +37,32 @@ pub fn build(
     analyzed_line_breaks: ?[]const @import("../opportunity.zig").Opportunity,
     dictionary: ?*const segmentation.WordBreakDictionary,
     hyphenation_dictionary: ?*const @import("../../../text/hyphenation/root.zig").Dictionary,
+) !void {
+    return buildWithJstfShrinkage(
+        buffer,
+        text,
+        options,
+        default_metrics,
+        analyzed_graphemes,
+        analyzed_line_breaks,
+        dictionary,
+        hyphenation_dictionary,
+        NoShrinkageRecipe{},
+    );
+}
+
+/// Build lines while allowing an OpenType JSTF recipe to shrink an overflowing
+/// source prefix before the greedy breaker commits a wrap.
+pub fn buildWithJstfShrinkage(
+    buffer: anytype,
+    text: []const u8,
+    options: anytype,
+    default_metrics: BaselineMetrics,
+    analyzed_graphemes: ?[]const unicode.GraphemeCluster,
+    analyzed_line_breaks: ?[]const @import("../opportunity.zig").Opportunity,
+    dictionary: ?*const segmentation.WordBreakDictionary,
+    hyphenation_dictionary: ?*const @import("../../../text/hyphenation/root.zig").Dictionary,
+    recipe: anytype,
 ) !void {
     buffer.lines.clearRetainingCapacity();
     const max_width = if (options.max_width > 0)
@@ -196,8 +224,6 @@ pub fn build(
             index + 1,
             options.punctuation.end_hanging_fraction,
         );
-        const occupied_line_width =
-            @max(0, line_width - current_hanging_amount);
         const current_compression_capacity =
             punctuation_compression.effectiveCapacity(
                 buffer.glyphs.items,
@@ -207,10 +233,50 @@ pub fn build(
                 options.punctuation.end_hanging_fraction,
                 options.punctuation.convention,
             );
-        if (occupied_line_width >
-            current_line_limit + current_compression_capacity and
+        const overflow_allowance = @max(
+            current_compression_capacity,
+            current_hanging_amount,
+        );
+        if (line_width > current_line_limit + overflow_allowance and
             index + 1 > line_start)
         {
+            const shrinkage = try jstf_shrinkage.tryFit(
+                buffer,
+                recipe,
+                line_start,
+                index + 1,
+                current_line_limit + overflow_allowance,
+            );
+            if (shrinkage.applied) {
+                const old_range_end = index + 1;
+                const glyph_delta: isize =
+                    @as(isize, @intCast(shrinkage.glyph_len)) -
+                    @as(isize, @intCast(old_range_end - line_start));
+                automatic_hyphens.shiftAfterReplacement(
+                    selected_automatic_hyphens.items,
+                    old_range_end,
+                    glyph_delta,
+                    buffer.runs.items,
+                );
+                line_width = shrinkage.width;
+                index = line_start + shrinkage.glyph_len - 1;
+                last_break.reset();
+                line_breaks = opportunities.Cursor.init(
+                    text,
+                    effective_line_breaks,
+                );
+                line_breaks.discardThrough(line_byte_start);
+                try rebuildLastBreak(
+                    &line_breaks,
+                    buffer,
+                    options,
+                    line_start,
+                    index,
+                    line_width,
+                    &last_break,
+                );
+                continue :glyph_loop;
+            }
             // Discretionary opportunities include visible hyphen width. Reject
             // a candidate that would overflow even after taking the break.
             const automatic_limit_reached =
@@ -466,6 +532,80 @@ pub fn build(
         buffer,
         selected_automatic_hyphens.items,
     );
+}
+
+const NoShrinkageRecipe = struct {
+    pub fn canShrinkSourceRange(_: @This(), _: usize, _: usize) bool {
+        return false;
+    }
+
+    pub fn jstfTags(
+        _: @This(),
+        _: usize,
+        _: usize,
+    ) struct {
+        script: unicode.OpenTypeScriptTag,
+        language: unicode.OpenTypeLanguageTag,
+    } {
+        return .{ .script = .dflt, .language = .dflt };
+    }
+
+    pub fn shapeRangeWithJstfPriority(
+        _: @This(),
+        _: anytype,
+        _: usize,
+        _: usize,
+        _: anytype,
+        _: usize,
+        _: anytype,
+        _: []const usize,
+    ) !void {
+        unreachable;
+    }
+
+    pub fn prepareCommit(
+        _: @This(),
+        _: usize,
+        _: usize,
+        _: usize,
+    ) !void {
+        unreachable;
+    }
+
+    pub fn commit(_: @This(), _: usize, _: usize, _: usize) void {
+        unreachable;
+    }
+};
+
+fn rebuildLastBreak(
+    line_breaks: *opportunities.Cursor,
+    buffer: anytype,
+    options: anytype,
+    line_start: usize,
+    index: usize,
+    line_width: f32,
+    candidate: *opportunities.Candidate,
+) !void {
+    const glyph_source_end = shaped_boundary.glyphSourceEnd(
+        buffer.glyphs.items[index],
+    );
+    while (line_breaks.nextThrough(glyph_source_end)) |line_break| {
+        switch (line_break.kind) {
+            .soft => try opportunities.recordSoft(
+                buffer.glyphs.items,
+                buffer.runs.items,
+                line_break.byte_offset,
+                index,
+                line_start,
+                line_width,
+                candidate,
+                options.normalized_variation_coords,
+                line_break.automatic_hyphen,
+                options.hyphenation.character,
+            ),
+            .hard => {},
+        }
+    }
 }
 
 /// Apply generic spacing after any source-level line reshaping has finished.

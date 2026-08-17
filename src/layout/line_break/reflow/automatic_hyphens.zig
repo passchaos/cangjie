@@ -38,6 +38,29 @@ pub fn appendSelected(
     });
 }
 
+/// Shift pending absolute indexes after a still-uncommitted glyph replacement.
+pub fn shiftAfterReplacement(
+    selected: []Selected,
+    old_range_end: usize,
+    glyph_delta: isize,
+    runs: anytype,
+) void {
+    if (glyph_delta == 0) return;
+    for (selected) |*item| {
+        if (item.insert_index >= old_range_end) {
+            item.insert_index = addSigned(item.insert_index, glyph_delta);
+        }
+        // `line_transaction.replaceRange` may split/rebuild runs. Resolve the
+        // owner again from the shifted insertion boundary rather than carrying
+        // a stale run-array index into materialization.
+        if (item.insert_index == 0) continue;
+        item.run_index = runIndexForGlyph(
+            runs,
+            item.insert_index - 1,
+        ) orelse item.run_index;
+    }
+}
+
 /// Materialize selected hyphens without exposing a partially updated buffer on
 /// allocation failure. The selection list is monotone in logical glyph order;
 /// debug assertions guard that reflow invariant before in-place index updates.
@@ -102,6 +125,48 @@ pub fn materialize(buffer: anytype, selected: []const Selected) !void {
         line.run_start = range.start;
         line.run_len = range.len;
     }
+}
+
+fn runIndexForGlyph(runs: anytype, glyph_index: usize) ?usize {
+    for (runs, 0..) |run, run_index| {
+        if (glyph_index >= run.glyph_start and
+            glyph_index < run.glyph_start + run.glyph_len)
+        {
+            return run_index;
+        }
+    }
+    return null;
+}
+
+fn addSigned(value: usize, delta: isize) usize {
+    if (delta >= 0) return value + @as(usize, @intCast(delta));
+    return value - @as(usize, @intCast(-delta));
+}
+
+test "pending hyphen indexes follow a prior glyph replacement" {
+    const Run = struct {
+        glyph_start: usize,
+        glyph_len: usize,
+    };
+    var selected = [_]Selected{.{
+        .line_index = 0,
+        .insert_index = 4,
+        .run_index = 1,
+        .glyph = .{
+            .glyph_id = 1,
+            .codepoint = '-',
+            .cluster = 4,
+            .x_advance = 3,
+        },
+    }};
+    const runs = [_]Run{
+        .{ .glyph_start = 0, .glyph_len = 2 },
+        .{ .glyph_start = 2, .glyph_len = 3 },
+    };
+
+    shiftAfterReplacement(&selected, 3, -1, &runs);
+    try std.testing.expectEqual(@as(usize, 3), selected[0].insert_index);
+    try std.testing.expectEqual(@as(usize, 1), selected[0].run_index);
 }
 
 test "materialization shifts glyph run and line ranges atomically" {

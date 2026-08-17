@@ -58,6 +58,19 @@ pub const Recipe = struct {
         return end <= span.byteEnd();
     }
 
+    pub fn canShrinkSourceRange(
+        self: Recipe,
+        start: usize,
+        end: usize,
+    ) bool {
+        if (self.options.alignment != .justify) return false;
+        const span = styled_paragraph.spanForCluster(
+            self.spans,
+            start,
+        ) orelse return false;
+        return end <= span.byteEnd();
+    }
+
     pub fn jstfTags(
         self: Recipe,
         start: usize,
@@ -280,6 +293,70 @@ pub const Recipe = struct {
         try self.saveCandidate();
     }
 
+    pub fn shapeRangeWithJstfPriority(
+        self: Recipe,
+        buffer: *context_output.Buffer,
+        original_byte_start: usize,
+        original_byte_len: usize,
+        font: *const @import("../../../font.zig").Font,
+        font_index: usize,
+        modifications: pipeline_types.JstfModifications,
+        maximum_lookup_offsets: []const usize,
+    ) !void {
+        const original_byte_end = original_byte_start + original_byte_len;
+        const span = styled_paragraph.spanForCluster(
+            self.spans,
+            original_byte_start,
+        ) orelse return error.InvalidStyleSpans;
+        std.debug.assert(span.byteEnd() >= original_byte_end);
+        buffer.clear();
+        const range_text =
+            self.text[original_byte_start..original_byte_end];
+        const script = unicode.inferOpenTypeScript(range_text);
+        var context = SegmentContext{
+            .buffer = buffer,
+            .font_size = span.font_size,
+            .lookup_options = .{
+                .lookup = .{
+                    .script = script,
+                    .script_tag = span.script_tag orelse
+                        unicode.openTypeScriptTag(script),
+                    .script_tag_explicit = span.script_tag != null,
+                    .language_tag = span.language_tag orelse
+                        unicode.inferOpenTypeLanguageTag(range_text),
+                    .direction = self.options.direction,
+                    .reorder_bidi = false,
+                    .native_direction_shaping = true,
+                    .features = span.features,
+                    .normalized_variation_coords = span.normalized_variation_coords,
+                    .jstf_modifications = modifications,
+                    .jstf_max = if (maximum_lookup_offsets.len == 0)
+                        null
+                    else
+                        .{ .lookup_offsets = maximum_lookup_offsets },
+                    .context_before = self.text[0..original_byte_start],
+                    .context_after = self.text[original_byte_end..],
+                    .beginning_of_text = original_byte_start == 0,
+                    .end_of_text = original_byte_end == self.text.len,
+                },
+                .all_ascii = false,
+            },
+        };
+        _ = try context.appendSegment(
+            font_fallback.Cascade.init(&.{font}),
+            0,
+            range_text,
+            original_byte_start,
+            .{},
+        );
+        if (buffer.runs.items.len != 0) {
+            buffer.runs.items[0].font_index = font_index;
+        }
+        try bidi_reorder.normalizeLogical(buffer);
+        try self.finishLine(buffer);
+        try self.saveCandidate();
+    }
+
     fn shapeItem(
         self: Recipe,
         buffer: *context_output.Buffer,
@@ -355,6 +432,16 @@ pub const Recipe = struct {
         self: Recipe,
         buffer: *context_output.Buffer,
     ) !void {
+        try self.buildCandidateMetadata(buffer);
+        for (buffer.glyphs.items, self.candidate_metadata.items) |*glyph, item| {
+            glyph.x_advance += item.layout_spacing;
+        }
+    }
+
+    fn buildCandidateMetadata(
+        self: Recipe,
+        buffer: *context_output.Buffer,
+    ) !void {
         self.candidate_metadata.clearRetainingCapacity();
         try self.candidate_metadata.ensureTotalCapacity(
             buffer.allocator,
@@ -369,7 +456,6 @@ pub const Recipe = struct {
                 span.word_spacing
             else
                 span.letter_spacing;
-            glyph.x_advance += spacing;
             self.candidate_metadata.appendAssumeCapacity(.{
                 .style_index = span.style_index,
                 .layout_spacing = spacing,

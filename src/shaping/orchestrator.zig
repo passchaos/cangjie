@@ -293,6 +293,15 @@ pub const TextShaper = struct {
             options.inline_objects,
         );
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
+        const recipe = paragraph_reshape.Uniform{
+            .cascade = cascade,
+            .fallback_cache = fallback_cache,
+            .metrics_cache = metrics_cache,
+            .glyph_index_cache = glyph_index_cache,
+            .text = text,
+            .font_size = font_size,
+            .options = options,
+        };
         try buildParagraphLines(
             buffer,
             text,
@@ -302,6 +311,7 @@ pub const TextShaper = struct {
             null,
             options.word_break_dictionary,
             options.hyphenation.dictionary,
+            recipe,
         );
         try reshapeUniformParagraph(
             cascade,
@@ -337,6 +347,15 @@ pub const TextShaper = struct {
             options.inline_objects,
         );
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
+        const recipe = paragraph_reshape.Uniform{
+            .cascade = cascade,
+            .fallback_cache = fallback_cache,
+            .metrics_cache = metrics_cache,
+            .glyph_index_cache = glyph_index_cache,
+            .text = text,
+            .font_size = font_size,
+            .options = options,
+        };
         try buildParagraphLines(
             buffer,
             text,
@@ -346,6 +365,7 @@ pub const TextShaper = struct {
             null,
             options.word_break_dictionary,
             options.hyphenation.dictionary,
+            recipe,
         );
         try reshapeUniformParagraph(
             cascade,
@@ -682,8 +702,9 @@ fn buildParagraphLines(
     analyzed_line_breaks: ?[]const line_break_opportunity.Opportunity,
     dictionary: ?*const segmentation.WordBreakDictionary,
     hyphenation_dictionary: ?*const @import("../text/hyphenation/root.zig").Dictionary,
+    recipe: anytype,
 ) !void {
-    return try paragraph_reflow.build(
+    return try paragraph_reflow.buildWithJstfShrinkage(
         buffer,
         text,
         options,
@@ -692,6 +713,7 @@ fn buildParagraphLines(
         analyzed_line_breaks,
         dictionary,
         hyphenation_dictionary,
+        recipe,
     );
 }
 

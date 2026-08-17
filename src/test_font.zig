@@ -102,6 +102,100 @@ pub fn buildJstfModificationTtf(
     return buildSfnt(allocator, 0x00010000, tables);
 }
 
+/// Build a JSTF shrinkage fixture whose first priority cannot fit and whose
+/// second priority combines GSUB/GPOS modification lists with shrinkage Max.
+pub fn buildJstfShrinkageTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const tables = try allocator.alloc(Table, 10);
+    errdefer allocator.free(tables);
+    tables[0] = .{
+        .tag = "GPOS",
+        .data = try jstfShrinkageGposTable(allocator),
+    };
+    tables[1] = .{
+        .tag = "GSUB",
+        .data = try jstfShrinkageGsubTable(allocator),
+    };
+    tables[2] = .{
+        .tag = "JSTF",
+        .data = try jstfShrinkageTable(allocator),
+    };
+    tables[3] = .{
+        .tag = "cmap",
+        .data = try cmapFormat12RangesTable(allocator, &.{
+            .{ .start = ' ', .end = ' ', .glyph_id = 2 },
+            .{ .start = 'A', .end = 'A', .glyph_id = 1 },
+        }),
+    };
+    tables[4] = .{
+        .tag = "glyf",
+        .data = try emptyGlyfTable(allocator, 5),
+    };
+    tables[5] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[6] = .{
+        .tag = "hhea",
+        .data = try hheaTableWithMetrics(allocator, 5),
+    };
+    tables[7] = .{
+        .tag = "hmtx",
+        .data = try jstfModificationHmtxTable(allocator),
+    };
+    tables[8] = .{
+        .tag = "loca",
+        .data = try emptyLocaTable(allocator, 5),
+    };
+    tables[9] = .{
+        .tag = "maxp",
+        .data = try maxpTableWithGlyphs(allocator, 5),
+    };
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
+pub fn buildJstfCardinalityShrinkageTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{
+        .tag = "GSUB",
+        .data = try jstfCardinalityGsubTable(allocator),
+    };
+    tables[1] = .{
+        .tag = "JSTF",
+        .data = try jstfCardinalityTable(allocator),
+    };
+    tables[2] = .{
+        .tag = "cmap",
+        .data = try cmapFormat12RangesTable(allocator, &.{
+            .{ .start = ' ', .end = ' ', .glyph_id = 2 },
+            .{ .start = 'A', .end = 'A', .glyph_id = 1 },
+        }),
+    };
+    tables[3] = .{
+        .tag = "glyf",
+        .data = try emptyGlyfTable(allocator, 4),
+    };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{
+        .tag = "hhea",
+        .data = try hheaTableWithMetrics(allocator, 4),
+    };
+    tables[6] = .{
+        .tag = "hmtx",
+        .data = try jstfCardinalityHmtxTable(allocator),
+    };
+    tables[7] = .{
+        .tag = "loca",
+        .data = try emptyLocaTable(allocator, 4),
+    };
+    tables[8] = .{
+        .tag = "maxp",
+        .data = try maxpTableWithGlyphs(allocator, 4),
+    };
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
 pub fn buildMvarTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try mvarTtfTables(allocator));
 }
@@ -4178,6 +4272,193 @@ fn writeSinglePositionLookup(
 
 fn jstfModificationHmtxTable(allocator: std.mem.Allocator) ![]u8 {
     const advances = [_]u16{ 500, 800, 400, 700, 1200 };
+    const bytes = try allocator.alloc(u8, advances.len * 4);
+    for (advances, 0..) |advance, glyph_index| {
+        writeU16(bytes, glyph_index * 4, advance);
+        writeI16(bytes, glyph_index * 4 + 2, 0);
+    }
+    return bytes;
+}
+
+fn jstfShrinkageTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 110);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 1);
+    writeTag(bytes, 6, "latn");
+    writeU16(bytes, 10, 12);
+
+    const script = 12;
+    writeU16(bytes, script, 0);
+    writeU16(bytes, script + 2, 6);
+    writeU16(bytes, script + 4, 0);
+
+    const language = 18;
+    writeU16(bytes, language, 2);
+    writeU16(bytes, language + 2, 8);
+    writeU16(bytes, language + 4, 28);
+
+    // Priority zero disables the first active GSUB/GPOS lookup. It remains too
+    // wide, so priority one must restart from the untouched source.
+    const priority_zero = 26;
+    writeU16(bytes, priority_zero + 2, 48);
+    writeU16(bytes, priority_zero + 6, 48);
+
+    // Priority one enables lookup zero, disables lookup two, and applies an
+    // embedded maximum -200 advance per glyph.
+    const priority_one = 46;
+    writeU16(bytes, priority_one + 0, 20);
+    writeU16(bytes, priority_one + 2, 24);
+    writeU16(bytes, priority_one + 4, 20);
+    writeU16(bytes, priority_one + 6, 24);
+    writeU16(bytes, priority_one + 8, 32);
+
+    writeU16(bytes, 66, 1);
+    writeU16(bytes, 68, 0);
+    writeU16(bytes, 70, 1);
+    writeU16(bytes, 72, 2);
+    writeU16(bytes, 74, 1);
+    writeU16(bytes, 76, 1);
+
+    const max_list = 78;
+    writeU16(bytes, max_list, 1);
+    writeU16(bytes, max_list + 2, 4);
+    const lookup = 82;
+    writeU16(bytes, lookup, 1);
+    writeU16(bytes, lookup + 2, 0);
+    writeU16(bytes, lookup + 4, 1);
+    writeU16(bytes, lookup + 6, 8);
+    const single_pos = 90;
+    writeU16(bytes, single_pos, 1);
+    writeU16(bytes, single_pos + 2, 8);
+    writeU16(bytes, single_pos + 4, 0x0004);
+    writeI16(bytes, single_pos + 6, -200);
+    const coverage = 98;
+    writeU16(bytes, coverage, 1);
+    writeU16(bytes, coverage + 2, 1);
+    writeU16(bytes, coverage + 4, 3);
+    return bytes;
+}
+
+fn jstfShrinkageGsubTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try jstfModificationGsubTable(allocator);
+    // lookup 0: 1 -> 4; lookup 1: 4 -> 3; lookup 2: 3 -> 1.
+    // Thus the normal active set leaves glyph 1 unchanged, while priority one
+    // executes 0 -> 1 and disables lookup two, ending at narrow glyph 3.
+    writeI16(bytes, 92, 3);
+    writeU16(bytes, 98, 1);
+    writeI16(bytes, 122, -1);
+    writeU16(bytes, 128, 4);
+    writeI16(bytes, 152, -2);
+    writeU16(bytes, 158, 3);
+    return bytes;
+}
+
+fn jstfShrinkageGposTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 166);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 10);
+    writeU16(bytes, 6, 34);
+    writeU16(bytes, 8, 72);
+    writeU16(bytes, 10, 1);
+    writeTag(bytes, 12, "DFLT");
+    writeU16(bytes, 16, 8);
+    writeU16(bytes, 18, 4);
+    writeU16(bytes, 24, 0xffff);
+    writeU16(bytes, 26, 2);
+    writeU16(bytes, 28, 1);
+    writeU16(bytes, 30, 2);
+
+    writeU16(bytes, 34, 3);
+    writeTag(bytes, 36, "ss01");
+    writeU16(bytes, 40, 20);
+    writeTag(bytes, 42, "kern");
+    writeU16(bytes, 46, 26);
+    writeTag(bytes, 48, "dist");
+    writeU16(bytes, 52, 32);
+    for (0..3) |feature_index| {
+        const feature = 54 + feature_index * 6;
+        writeU16(bytes, feature + 2, 1);
+        writeU16(bytes, feature + 4, @intCast(feature_index));
+    }
+
+    writeU16(bytes, 72, 3);
+    writeU16(bytes, 74, 8);
+    writeU16(bytes, 76, 40);
+    writeU16(bytes, 78, 72);
+    // Priority one reaches glyph 3. Lookup one adds +100 advance, lookup two
+    // would add another +100 but is disabled, and lookup zero adds placement.
+    writeSinglePositionLookup(bytes, 80, 3, 0x0001, 50);
+    writeSinglePositionLookup(bytes, 112, 3, 0x0004, 100);
+    writeSinglePositionLookup(bytes, 144, 3, 0x0004, 100);
+    return bytes;
+}
+
+fn jstfCardinalityTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 48);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 1);
+    writeTag(bytes, 6, "latn");
+    writeU16(bytes, 10, 12);
+    const script = 12;
+    writeU16(bytes, script + 2, 6);
+    const language = 18;
+    writeU16(bytes, language, 1);
+    writeU16(bytes, language + 2, 4);
+    const priority = 22;
+    writeU16(bytes, priority, 20);
+    const enable = 42;
+    writeU16(bytes, enable, 1);
+    writeU16(bytes, enable + 2, 0);
+    return bytes;
+}
+
+fn jstfCardinalityGsubTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 80);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 10);
+    writeU16(bytes, 6, 30);
+    writeU16(bytes, 8, 44);
+    writeU16(bytes, 10, 1);
+    writeTag(bytes, 12, "DFLT");
+    writeU16(bytes, 16, 8);
+    writeU16(bytes, 18, 4);
+    writeU16(bytes, 24, 0xffff);
+    writeU16(bytes, 26, 0);
+    writeU16(bytes, 30, 1);
+    writeTag(bytes, 32, "ss01");
+    writeU16(bytes, 36, 8);
+    writeU16(bytes, 40, 1);
+    writeU16(bytes, 42, 0);
+    writeU16(bytes, 44, 1);
+    writeU16(bytes, 46, 4);
+    const lookup = 48;
+    writeU16(bytes, lookup, 4);
+    writeU16(bytes, lookup + 4, 1);
+    writeU16(bytes, lookup + 6, 8);
+    const ligature = 56;
+    writeU16(bytes, ligature, 1);
+    writeU16(bytes, ligature + 2, 18);
+    writeU16(bytes, ligature + 4, 1);
+    writeU16(bytes, ligature + 6, 8);
+    const set = 64;
+    writeU16(bytes, set, 1);
+    writeU16(bytes, set + 2, 4);
+    writeU16(bytes, set + 4, 3);
+    writeU16(bytes, set + 6, 2);
+    writeU16(bytes, set + 8, 1);
+    const coverage = 74;
+    writeU16(bytes, coverage, 1);
+    writeU16(bytes, coverage + 2, 1);
+    writeU16(bytes, coverage + 4, 1);
+    return bytes;
+}
+
+fn jstfCardinalityHmtxTable(allocator: std.mem.Allocator) ![]u8 {
+    const advances = [_]u16{ 500, 800, 400, 1200 };
     const bytes = try allocator.alloc(u8, advances.len * 4);
     for (advances, 0..) |advance, glyph_index| {
         writeU16(bytes, glyph_index * 4, advance);

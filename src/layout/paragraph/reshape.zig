@@ -36,6 +36,14 @@ pub const Uniform = struct {
         return true;
     }
 
+    pub fn canShrinkSourceRange(
+        self: Uniform,
+        _: usize,
+        _: usize,
+    ) bool {
+        return self.options.alignment == .justify;
+    }
+
     pub fn jstfTags(
         self: Uniform,
         start: usize,
@@ -201,6 +209,61 @@ pub const Uniform = struct {
             font_fallback.Cascade.init(&.{font}),
             0,
             line_text,
+            original_byte_start,
+            .{},
+        );
+        if (buffer.runs.items.len != 0) {
+            buffer.runs.items[0].font_index = font_index;
+        }
+        try bidi_reorder.normalizeLogical(buffer);
+        try self.finishLine(buffer);
+    }
+
+    /// Rebuild one overflowing source prefix with its JSTF shrinkage plan.
+    ///
+    /// `finishLine` reapplies the same paragraph spacing already present in the
+    /// retained stream so candidate widths and committed geometry stay in one
+    /// coordinate system during JstfMax interpolation.
+    pub fn shapeRangeWithJstfPriority(
+        self: Uniform,
+        buffer: *context_output.Buffer,
+        original_byte_start: usize,
+        original_byte_len: usize,
+        font: *const @import("../../font.zig").Font,
+        font_index: usize,
+        modifications: pipeline_types.JstfModifications,
+        maximum_lookup_offsets: []const usize,
+    ) !void {
+        buffer.clear();
+        const original_byte_end = original_byte_start + original_byte_len;
+        var shape_options = paragraph_options.shapeOptions(self.options);
+        shape_options.context_before = self.text[0..original_byte_start];
+        shape_options.context_after = self.text[original_byte_end..];
+        shape_options.beginning_of_text = original_byte_start == 0;
+        shape_options.end_of_text = original_byte_end == self.text.len;
+        const range_text =
+            self.text[original_byte_start..original_byte_end];
+        var lookup_options = plan_resolution.forText(
+            range_text,
+            shape_options,
+        );
+        lookup_options.lookup.jstf_modifications = modifications;
+        if (maximum_lookup_offsets.len != 0) {
+            lookup_options.lookup.jstf_max = .{
+                .lookup_offsets = maximum_lookup_offsets,
+            };
+        }
+        var driver = Driver{
+            .buffer = buffer,
+            .metrics_cache = self.metrics_cache,
+            .glyph_index_cache = self.glyph_index_cache,
+            .font_size = self.font_size,
+            .lookup_options = lookup_options,
+        };
+        _ = try driver.appendSegment(
+            font_fallback.Cascade.init(&.{font}),
+            0,
+            range_text,
             original_byte_start,
             .{},
         );

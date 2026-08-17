@@ -4,7 +4,9 @@ const std = @import("std");
 
 const core = @import("../../../core.zig");
 const face_mod = @import("../../../font/face/root.zig");
-const layout = @import("../../../layout.zig");
+const paragraph_types = @import("../../../layout/types/paragraph.zig");
+const context_output = @import("../../../shaping/context/output.zig");
+const font_fallback = @import("../../../shaping/fallback/font/root.zig");
 
 pub const Text = core.AttributedText;
 pub const Run = core.AttributedRun;
@@ -19,8 +21,8 @@ pub fn measure(
     cascade: face_mod.Cascade,
     attributed: Text,
     max_width: f32,
-) !layout.TextMetrics {
-    var buffer = layout.LayoutBuffer.init(allocator);
+) !paragraph_types.TextMetrics {
+    var buffer = context_output.Buffer.init(allocator);
     defer buffer.deinit();
     return core.measureAttributedTextUtf8(
         internalCascade(cascade),
@@ -34,7 +36,7 @@ pub fn measureRuns(
     allocator: std.mem.Allocator,
     cascade: face_mod.Cascade,
     attributed: Text,
-) !layout.TextMetrics {
+) !paragraph_types.TextMetrics {
     return core.measureAttributedRunsUtf8(
         allocator,
         internalCascade(cascade),
@@ -80,6 +82,6 @@ pub fn layoutParagraph(
     );
 }
 
-fn internalCascade(cascade: face_mod.Cascade) layout.FontCascade {
+fn internalCascade(cascade: face_mod.Cascade) font_fallback.Cascade {
     return .init(face_mod.backend.fonts(cascade.faces));
 }

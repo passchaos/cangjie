@@ -1,6 +1,13 @@
 const std = @import("std");
-const layout = @import("layout.zig");
+const glyph_position = @import("layout/glyph_position.zig");
+const paragraph_options = @import("layout/paragraph/options.zig");
+const paragraph_reflow = @import("layout/line_break/reflow/root.zig");
+const paragraph_types = @import("layout/types/paragraph.zig");
 const raster = @import("raster.zig");
+const context_output = @import("shaping/context/output.zig");
+const font_fallback = @import("shaping/fallback/font/root.zig");
+const shaping_orchestrator = @import("shaping/orchestrator.zig");
+const pipeline_types = @import("shaping/pipeline/types.zig");
 const segmentation = @import("text/segmentation/root.zig");
 const unicode = @import("unicode.zig");
 const attributed_paragraph = @import("text/attributed/paragraph.zig");
@@ -220,7 +227,7 @@ pub const VerticalAlign = enum {
     bottom,
 };
 
-pub const WrapMode = layout.WrapMode;
+pub const WrapMode = paragraph_types.WrapMode;
 
 pub const OverflowMode = enum {
     clip,
@@ -229,8 +236,8 @@ pub const OverflowMode = enum {
 };
 
 pub const ParagraphStyle = struct {
-    direction: layout.TextDirection = .ltr,
-    text_align: layout.TextAlign = .start,
+    direction: pipeline_types.TextDirection = .ltr,
+    text_align: paragraph_types.TextAlign = .start,
     vertical_align: VerticalAlign = .baseline,
     line_height: ?f32 = null,
     max_lines: ?usize = null,
@@ -246,7 +253,7 @@ pub const ParagraphStyle = struct {
     /// paragraph created from these options.
     word_break_dictionary: ?*const segmentation.WordBreakDictionary = null,
 
-    pub fn paragraphOptions(self: ParagraphStyle, max_width: f32) layout.ParagraphOptions {
+    pub fn paragraphOptions(self: ParagraphStyle, max_width: f32) paragraph_options.Options {
         return .{
             .max_width = max_width,
             .wrap_mode = self.wrap_mode,
@@ -275,8 +282,8 @@ pub const TextSpan = struct {
     text: []const u8,
 };
 
-pub const TextMetrics = layout.TextMetrics;
-pub const CoreBaselineMetrics = layout.BaselineMetrics;
+pub const TextMetrics = paragraph_types.TextMetrics;
+pub const CoreBaselineMetrics = paragraph_reflow.BaselineMetrics;
 
 pub const AttributedRun = struct {
     byte_range: ByteRange,
@@ -295,7 +302,7 @@ pub const AttributedGlyphRun = struct {
     run: AttributedRun,
     x: f32,
     baseline: f32,
-    glyphs: []layout.GlyphPosition,
+    glyphs: []glyph_position.GlyphPosition,
     metrics: TextMetrics,
 
     pub fn deinit(self: *AttributedGlyphRun) void {
@@ -334,7 +341,7 @@ pub const AttributedText = struct {
         return .{};
     }
 
-    pub fn paragraphOptions(self: AttributedText, max_width: f32) layout.ParagraphOptions {
+    pub fn paragraphOptions(self: AttributedText, max_width: f32) paragraph_options.Options {
         const style = self.primaryTextStyle();
         var options = self.paragraph_style.paragraphOptions(max_width);
         if (style.line_height) |line_height| options.line_height = line_height;
@@ -374,7 +381,7 @@ pub const AttributedText = struct {
     }
 };
 
-pub fn measureAttributedTextUtf8(cascade: layout.FontCascade, buffer: *layout.LayoutBuffer, attributed: AttributedText, max_width: f32) !TextMetrics {
+pub fn measureAttributedTextUtf8(cascade: font_fallback.Cascade, buffer: *context_output.Buffer, attributed: AttributedText, max_width: f32) !TextMetrics {
     return try attributed_paragraph.measureAttributed(
         cascade,
         buffer,
@@ -383,13 +390,13 @@ pub fn measureAttributedTextUtf8(cascade: layout.FontCascade, buffer: *layout.La
     );
 }
 
-pub fn measureAttributedRunsUtf8(allocator: std.mem.Allocator, cascade: layout.FontCascade, attributed: AttributedText) !TextMetrics {
+pub fn measureAttributedRunsUtf8(allocator: std.mem.Allocator, cascade: font_fallback.Cascade, attributed: AttributedText) !TextMetrics {
     var positioned = try layoutAttributedRunsUtf8(allocator, cascade, attributed);
     defer positioned.deinit();
     return positioned.metrics;
 }
 
-fn paragraphOptionsForStyle(style: TextStyle) layout.ParagraphOptions {
+fn paragraphOptionsForStyle(style: TextStyle) paragraph_options.Options {
     return .{
         .max_width = std.math.inf(f32),
         .line_height = style.line_height,
@@ -430,7 +437,7 @@ pub const AttributedParagraphLayout = attributed_paragraph.Result(TextStyle);
 
 pub fn layoutAttributedParagraphUtf8(
     allocator: std.mem.Allocator,
-    cascade: layout.FontCascade,
+    cascade: font_fallback.Cascade,
     attributed: AttributedText,
     max_width: f32,
 ) !AttributedParagraphLayout {
@@ -442,10 +449,10 @@ pub fn layoutAttributedParagraphUtf8(
     );
 }
 
-pub fn layoutAttributedRunsUtf8(allocator: std.mem.Allocator, cascade: layout.FontCascade, attributed: AttributedText) !AttributedRunLayout {
+pub fn layoutAttributedRunsUtf8(allocator: std.mem.Allocator, cascade: font_fallback.Cascade, attributed: AttributedText) !AttributedRunLayout {
     const runs = try attributed.runs(allocator);
     defer allocator.free(runs);
-    var buffer = layout.LayoutBuffer.init(allocator);
+    var buffer = context_output.Buffer.init(allocator);
     defer buffer.deinit();
 
     var positioned = std.ArrayList(PositionedAttributedRun).empty;
@@ -459,7 +466,7 @@ pub fn layoutAttributedRunsUtf8(allocator: std.mem.Allocator, cascade: layout.Fo
     for (runs) |run| {
         const run_text = attributed.text[run.byte_range.start..run.byte_range.end()];
         const options = paragraphOptionsForStyle(run.style);
-        const paragraph = try layout.TextShaper.layoutParagraphUtf8WithOptions(cascade, &buffer, run_text, run.style.font_size, options);
+        const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8WithOptions(cascade, &buffer, run_text, run.style.font_size, options);
         const metrics = textMetricsFromParagraph(paragraph);
         try positioned.append(allocator, .{
             .run = run,
@@ -481,10 +488,10 @@ pub fn layoutAttributedRunsUtf8(allocator: std.mem.Allocator, cascade: layout.Fo
     };
 }
 
-pub fn layoutAttributedGlyphRunsUtf8(allocator: std.mem.Allocator, cascade: layout.FontCascade, attributed: AttributedText) !AttributedGlyphRunLayout {
+pub fn layoutAttributedGlyphRunsUtf8(allocator: std.mem.Allocator, cascade: font_fallback.Cascade, attributed: AttributedText) !AttributedGlyphRunLayout {
     const runs = try attributed.runs(allocator);
     defer allocator.free(runs);
-    var buffer = layout.LayoutBuffer.init(allocator);
+    var buffer = context_output.Buffer.init(allocator);
     defer buffer.deinit();
 
     var positioned = std.ArrayList(AttributedGlyphRun).empty;
@@ -501,9 +508,9 @@ pub fn layoutAttributedGlyphRunsUtf8(allocator: std.mem.Allocator, cascade: layo
     for (runs) |run| {
         const run_text = attributed.text[run.byte_range.start..run.byte_range.end()];
         const options = paragraphOptionsForStyle(run.style);
-        const paragraph = try layout.TextShaper.layoutParagraphUtf8WithOptions(cascade, &buffer, run_text, run.style.font_size, options);
+        const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8WithOptions(cascade, &buffer, run_text, run.style.font_size, options);
         const metrics = textMetricsFromParagraph(paragraph);
-        const glyphs = try allocator.dupe(layout.GlyphPosition, paragraph.glyphs);
+        const glyphs = try allocator.dupe(glyph_position.GlyphPosition, paragraph.glyphs);
         errdefer allocator.free(glyphs);
         try positioned.append(allocator, .{
             .allocator = allocator,
@@ -527,7 +534,7 @@ pub fn layoutAttributedGlyphRunsUtf8(allocator: std.mem.Allocator, cascade: layo
     };
 }
 
-fn textMetricsFromParagraph(paragraph: layout.ParagraphLayout) TextMetrics {
+fn textMetricsFromParagraph(paragraph: paragraph_types.ParagraphLayout) TextMetrics {
     if (paragraph.lines.len == 0) {
         return .{ .width = 0, .height = 0, .baseline = 0, .ascent = 0, .descent = 0, .leading = 0 };
     }
@@ -764,9 +771,9 @@ test "paragraph style converts to paragraph options" {
     };
     const options = style.paragraphOptions(80);
 
-    try std.testing.expectEqual(layout.TextDirection.rtl, options.direction);
-    try std.testing.expectEqual(layout.TextAlign.center, options.alignment);
-    try std.testing.expectEqual(layout.WrapMode.no_wrap, options.wrap_mode);
+    try std.testing.expectEqual(pipeline_types.TextDirection.rtl, options.direction);
+    try std.testing.expectEqual(paragraph_types.TextAlign.center, options.alignment);
+    try std.testing.expectEqual(paragraph_types.WrapMode.no_wrap, options.wrap_mode);
     try std.testing.expectApproxEqAbs(@as(f32, 24), options.line_height.?, 0.001);
     try std.testing.expectEqual(@as(usize, 2), options.max_lines.?);
     try std.testing.expect(options.ellipsis);
@@ -776,7 +783,7 @@ test "paragraph style converts to paragraph options" {
     try std.testing.expectApproxEqAbs(@as(f32, 4), options.paragraph_spacing, 0.001);
 
     const defaults = (ParagraphStyle{}).paragraphOptions(80);
-    try std.testing.expectEqual(layout.TextAlign.start, defaults.alignment);
+    try std.testing.expectEqual(paragraph_types.TextAlign.start, defaults.alignment);
 }
 
 test "measures attributed text with primary style" {
@@ -790,8 +797,8 @@ test "measures attributed text with primary style" {
     defer font.deinit();
 
     const fonts = [_]*const @import("font.zig").Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
-    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    const cascade = font_fallback.Cascade.init(&fonts);
+    var layout_buffer = context_output.Buffer.init(allocator);
     defer layout_buffer.deinit();
 
     const spans = [_]StyleSpan{
@@ -820,8 +827,8 @@ test "attributed text forwards normalized variation metrics" {
     defer font.deinit();
 
     const fonts = [_]*const @import("font.zig").Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
-    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    const cascade = font_fallback.Cascade.init(&fonts);
+    var layout_buffer = context_output.Buffer.init(allocator);
     defer layout_buffer.deinit();
 
     const default_spans = [_]StyleSpan{
@@ -853,7 +860,7 @@ test "attributed text forwards OpenType feature styling" {
     defer font.deinit();
 
     const fonts = [_]*const @import("font.zig").Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
+    const cascade = font_fallback.Cascade.init(&fonts);
     const enable_sups = [_]unicode.FeatureOverride{.{ .tag = unicode.tag("sups"), .enabled = true }};
     const spans = [_]StyleSpan{
         .{ .byte_range = .{ .start = 0, .len = 1 }, .style = .{ .font_size = 20, .font_features = &enable_sups } },
@@ -878,7 +885,7 @@ test "attributed text forwards locale language styling" {
     defer font.deinit();
 
     const fonts = [_]*const @import("font.zig").Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
+    const cascade = font_fallback.Cascade.init(&fonts);
     const default_spans = [_]StyleSpan{
         .{ .byte_range = .{ .start = 0, .len = "一".len }, .style = .{ .font_size = 20 } },
     };
@@ -906,7 +913,7 @@ test "measures attributed runs with per span style" {
     defer font.deinit();
 
     const fonts = [_]*const @import("font.zig").Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
+    const cascade = font_fallback.Cascade.init(&fonts);
     const spans = [_]StyleSpan{
         .{ .byte_range = .{ .start = 0, .len = 1 }, .style = .{ .font_size = 20 } },
         .{ .byte_range = .{ .start = 1, .len = 1 }, .style = .{ .font_size = 40 } },
@@ -932,7 +939,7 @@ test "layouts attributed runs with x offsets and metrics" {
     defer font.deinit();
 
     const fonts = [_]*const @import("font.zig").Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
+    const cascade = font_fallback.Cascade.init(&fonts);
     const spans = [_]StyleSpan{
         .{ .byte_range = .{ .start = 0, .len = 1 }, .style = .{ .font_size = 20 } },
         .{ .byte_range = .{ .start = 1, .len = 1 }, .style = .{ .font_size = 40 } },
@@ -961,7 +968,7 @@ test "layouts attributed glyph runs for rendering" {
     defer font.deinit();
 
     const fonts = [_]*const @import("font.zig").Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
+    const cascade = font_fallback.Cascade.init(&fonts);
     const spans = [_]StyleSpan{
         .{ .byte_range = .{ .start = 0, .len = 1 }, .style = .{ .font_size = 20 } },
         .{ .byte_range = .{ .start = 1, .len = 1 }, .style = .{ .font_size = 40 } },

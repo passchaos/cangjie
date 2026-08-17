@@ -1,7 +1,9 @@
 const std = @import("std");
 const face_mod = @import("../../font/face/root.zig");
 const Font = @import("../../font.zig").Font;
-const layout = @import("../../layout.zig");
+const paragraph_types = @import("../../layout/types/paragraph.zig");
+const context_output = @import("../../shaping/context/output.zig");
+const font_fallback = @import("../../shaping/fallback/font/root.zig");
 const paragraph = @import("paragraph.zig");
 
 pub fn ResultType(comptime Attributed: type) type {
@@ -49,7 +51,7 @@ pub fn measureAttributed(
     attributed: anytype,
     default_query: anytype,
     max_width: f32,
-) !layout.TextMetrics {
+) !paragraph_types.TextMetrics {
     const runs = try attributed.runs(allocator);
     defer allocator.free(runs);
     var resolved = try ResolvedFonts.init(
@@ -66,7 +68,7 @@ pub fn measureAttributed(
         resolved.run_fonts,
     );
     defer allocator.free(spans);
-    var buffer = layout.LayoutBuffer.init(allocator);
+    var buffer = context_output.Buffer.init(allocator);
     defer buffer.deinit();
     return try paragraph.measureResolved(
         resolved.paragraphCascade(),
@@ -145,8 +147,8 @@ const ResolvedFonts = struct {
         self.* = undefined;
     }
 
-    fn paragraphCascade(self: *const ResolvedFonts) layout.FontCascade {
-        return layout.FontCascade.init(self.all_fonts.items);
+    fn paragraphCascade(self: *const ResolvedFonts) font_fallback.Cascade {
+        return font_fallback.Cascade.init(self.all_fonts.items);
     }
 };
 

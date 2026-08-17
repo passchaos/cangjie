@@ -3,7 +3,8 @@ const builtin = @import("builtin");
 const face_mod = @import("font/face/root.zig");
 const Font = @import("font.zig").Font;
 const font_container = @import("font_container.zig");
-const layout = @import("layout.zig");
+const paragraph_types = @import("layout/types/paragraph.zig");
+const font_fallback = @import("shaping/fallback/font/root.zig");
 const attributed_font_resolution = @import("text/attributed/font_resolution.zig");
 
 pub const FontStyle = enum {
@@ -559,7 +560,7 @@ pub const FontDatabase = struct {
         return try fonts.toOwnedSlice(allocator);
     }
 
-    pub fn cascadeForText(self: *const FontDatabase, allocator: std.mem.Allocator, query: FontQuery, text: []const u8) !layout.FontCascade {
+    pub fn cascadeForText(self: *const FontDatabase, allocator: std.mem.Allocator, query: FontQuery, text: []const u8) !font_fallback.Cascade {
         return .init(try self.buildCascadeForText(allocator, query, text));
     }
 
@@ -591,7 +592,7 @@ pub const FontDatabase = struct {
         attributed: anytype,
         default_query: FontQuery,
         max_width: f32,
-    ) !layout.TextMetrics {
+    ) !paragraph_types.TextMetrics {
         return try attributed_font_resolution.measureAttributed(
             self,
             allocator,

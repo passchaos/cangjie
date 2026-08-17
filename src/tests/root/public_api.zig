@@ -640,4 +640,56 @@ test "public database returns concrete faces and cascades" {
     defer allocator.free(cascade.faces);
     try std.testing.expectEqual(@as(usize, 1), cascade.len());
     try std.testing.expectEqual(matched.face, cascade.faces[0]);
+
+    const spans = [_]cangjie.text.style.Span{.{
+        .byte_range = .{ .start = 0, .len = 3 },
+        .style = .{ .font_family = "Cangjie Sans", .font_size = 20 },
+    }};
+    const attributed = cangjie.text.attributed.Text{
+        .text = "AAA",
+        .spans = &spans,
+    };
+
+    const standalone_metrics = try cangjie.text.attributed.measure(
+        allocator,
+        cascade,
+        attributed,
+        100,
+    );
+    try std.testing.expect(standalone_metrics.width > 0);
+
+    var standalone = try cangjie.text.attributed.layoutParagraph(
+        allocator,
+        cascade,
+        attributed,
+        100,
+    );
+    defer standalone.deinit();
+    try std.testing.expectEqual(@as(usize, 3), standalone.glyphs.len);
+    try std.testing.expectEqual(@as(usize, 1), standalone.style_runs.len);
+
+    const query = cangjie.font.database.Query{
+        .family = "Cangjie Sans",
+    };
+    const database_metrics = try database.measureAttributed(
+        allocator,
+        attributed,
+        query,
+        100,
+    );
+    try std.testing.expectApproxEqAbs(
+        standalone_metrics.width,
+        database_metrics.width,
+        0.001,
+    );
+
+    var resolved = try database.layoutAttributed(
+        allocator,
+        attributed,
+        query,
+        100,
+    );
+    defer resolved.deinit();
+    try std.testing.expectEqual(@as(usize, 3), resolved.glyphs.len);
+    try std.testing.expectEqual(matched.face, resolved.font_runs[0].font);
 }

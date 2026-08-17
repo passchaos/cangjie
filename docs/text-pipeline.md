@@ -719,11 +719,11 @@ Future changes must preserve these rules:
 2. Define bounded cache budgets and eviction policy for long-lived engines,
    while preserving exact cache-key comparisons, explicit lifetime rules, and
    observable hit/miss statistics.
-3. Continue routing the remaining public attributed-text and database APIs,
-   plus internal editor/database compatibility consumers, directly to their
-   domain modules; shaping, paragraph, rendering, and debug public paths are
-   already independent of `src/layout.zig`. Retire that façade once all
-   remaining consumers have migrated.
+3. Migrate the remaining editor `TextBuffer` compatibility consumer directly
+   to its shaping and paragraph domain modules. Shaping, paragraph, rendering,
+   debug, attributed-text, core-style, and database production paths are
+   already independent of `src/layout.zig`; retire that façade once tests and
+   compatibility consumers no longer require it.
 4. Add language-aware hyphenation as the next optional tailoring layer; keep
    dictionary segmentation and hyphenation outside the default UAX #14 state
    machine.

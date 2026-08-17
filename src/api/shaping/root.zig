@@ -4,6 +4,7 @@ const std = @import("std");
 
 const face_mod = @import("../../font/face/root.zig");
 const layout = @import("../../layout.zig");
+const shaping_diagnostics = @import("../../shaping/diagnostics/root.zig");
 const unicode = @import("../../unicode.zig");
 const context = @import("../../shaping/context/root.zig");
 
@@ -45,7 +46,7 @@ pub const diagnostics = struct {
         cascade: face_mod.Cascade,
         text: []const u8,
     ) ![]FontFallbackDecision {
-        return layout.diagnoseFontFallbackUtf8(
+        return shaping_diagnostics.fallback.analyze(
             allocator,
             internalCascade(cascade),
             text,

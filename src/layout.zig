@@ -38,6 +38,7 @@ const position_output = positioning.output;
 const position_policy = positioning.policy;
 const diagnostics = @import("shaping/diagnostics/root.zig");
 const diagnostic_caret = diagnostics.caret;
+const diagnostic_fallback = diagnostics.fallback;
 const diagnostic_quality = diagnostics.quality;
 const diagnostic_types = diagnostics.types;
 const font_fallback = @import("shaping/fallback/font/root.zig");
@@ -245,83 +246,7 @@ pub const ClusterCaretIssueKind = diagnostic_types.ClusterCaretIssueKind;
 pub const ClusterCaretDiagnostic = diagnostic_types.ClusterCaretDiagnostic;
 pub const ClusterCaretConsistencyReport = diagnostic_types.ClusterCaretConsistencyReport;
 
-/// Build a stable fallback trace for UTF-8 text without shaping, rasterizing,
-/// or consulting platform font APIs. Variation selectors are folded into the
-/// preceding scalar, matching the shaping path's cluster model, so the returned
-/// byte ranges can be compared directly against shaped glyph clusters.
-///
-/// The caller owns the returned slice and must free it with `allocator.free`.
-pub fn diagnoseFontFallbackUtf8(allocator: std.mem.Allocator, cascade: FontCascade, text: []const u8) ![]FontFallbackDecision {
-    try validateShapingUtf8(text);
-    if (cascade.fonts.len == 0) return error.EmptyFontCascade;
-
-    var decisions = std.ArrayList(FontFallbackDecision).empty;
-    errdefer decisions.deinit(allocator);
-
-    var clusters = unicode.graphemeClustersAssumeValid(text);
-    while (clusters.next()) |cluster| {
-        const cluster_end = cluster.byte_start + cluster.byte_len;
-        const cluster_text = text[cluster.byte_start..cluster_end];
-        const font_index = try font_fallback.selectFontForClusterFrom(
-            cascade.fonts,
-            null,
-            cluster_text,
-        );
-        const font = cascade.fonts[font_index];
-
-        var it = std.unicode.Utf8Iterator{ .bytes = cluster_text, .i = 0 };
-        while (it.i < cluster_text.len) {
-            const local_start = it.i;
-            const codepoint = it.nextCodepoint() orelse break;
-            if (unicode.isVariationSelector(codepoint) or
-                font_fallback.isClusterCoverageIgnorable(codepoint))
-            {
-                // Detached selectors and join controls participate in cluster
-                // selection but do not produce visible fallback decisions.
-                continue;
-            }
-
-            if (try arabicCompositionForFontAt(font, null, codepoint, cluster_text, it.i)) |composition| {
-                try decisions.append(allocator, .{
-                    .byte_start = cluster.byte_start + local_start,
-                    .byte_len = composition.byte_end - local_start,
-                    .codepoint = composition.codepoint,
-                    .font_index = font_index,
-                    .glyph_id = composition.glyph_id,
-                });
-                it.i = composition.byte_end;
-                continue;
-            }
-
-            var byte_len = it.i - local_start;
-            var variation_selector: ?u21 = null;
-            var used_variation_mapping = false;
-            if (nextVariationSelector(cluster_text, it.i)) |selector| {
-                variation_selector = selector;
-                _ = it.nextCodepoint();
-                byte_len = it.i - local_start;
-                used_variation_mapping = try font.variationGlyphIndex(codepoint, selector) != null;
-            }
-
-            const glyph_id = if (variation_selector) |selector|
-                try font.glyphIndexWithVariation(codepoint, selector)
-            else
-                try font.glyphIndex(codepoint);
-
-            try decisions.append(allocator, .{
-                .byte_start = cluster.byte_start + local_start,
-                .byte_len = byte_len,
-                .codepoint = codepoint,
-                .variation_selector = variation_selector,
-                .font_index = font_index,
-                .glyph_id = glyph_id,
-                .used_variation_mapping = used_variation_mapping,
-            });
-        }
-    }
-
-    return try decisions.toOwnedSlice(allocator);
-}
+pub const diagnoseFontFallbackUtf8 = diagnostic_fallback.analyze;
 
 /// Shape text and validate source cluster/caret invariants without depending on
 /// a renderer, platform text API, or UI layer.
@@ -371,7 +296,11 @@ pub fn diagnoseShapeQualityUtf8(
         font_size,
         options,
     );
-    const fallback = try diagnoseFontFallbackUtf8(allocator, cascade, text);
+    const fallback = try diagnostic_fallback.analyze(
+        allocator,
+        cascade,
+        text,
+    );
     defer allocator.free(fallback);
     return try diagnostic_quality.summarize(allocator, scripted, fallback);
 }
@@ -1174,16 +1103,6 @@ fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []
     }
     return next_pen;
 }
-
-fn nextVariationSelector(text: []const u8, byte_index: usize) ?u21 {
-    if (byte_index >= text.len) return null;
-    var lookahead = std.unicode.Utf8Iterator{ .bytes = text, .i = byte_index };
-    const selector = lookahead.nextCodepoint() orelse return null;
-    return if (unicode.isVariationSelector(selector)) selector else null;
-}
-
-const ArabicCompositionMatch = source_pipeline.ArabicCompositionMatch;
-const arabicCompositionForFontAt = source_pipeline.arabicCompositionForFontAt;
 
 fn selectFontForCluster(
     cascade: FontCascade,

@@ -3,6 +3,7 @@
 const std = @import("std");
 pub const execute = @import("execute.zig");
 const GlyphId = @import("../../../../glyph.zig").GlyphId;
+const lookup_order = @import("../../../../opentype/lookup_order.zig");
 const options = @import("../../options.zig");
 const positioning = @import("../../../positioning/root.zig");
 pub const prepare = @import("prepare.zig");
@@ -48,6 +49,9 @@ pub fn collectWithIndex(
     run: Options,
     run_digest_cache: ?*DigestCache,
 ) Error!void {
+    if (lookup_index) |index| {
+        if (lookup_order.contains(run.disabled_lookups, index)) return;
+    }
     const lookup_start = profileNow(run);
     defer {
         if (run.shape_profile) |profile| {

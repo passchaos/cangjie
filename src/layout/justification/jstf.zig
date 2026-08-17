@@ -13,6 +13,7 @@ const geometry = @import("../line_break/reflow/geometry.zig");
 const line_transaction = @import("line_transaction.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 const run_types = @import("../types/runs.zig");
+const pipeline_types = @import("../../shaping/pipeline/types.zig");
 const unicode = @import("../../unicode.zig");
 
 const width_epsilon: f32 = 0.001;
@@ -28,6 +29,12 @@ pub fn apply(
     defer work.deinit();
     var natural = @TypeOf(buffer.*).init(buffer.allocator);
     defer natural.deinit();
+    // Temporary candidates are separate output owners, but they shape the
+    // same borrowed fonts on the same thread. Reuse the caller's immutable
+    // font metadata, proof, and lookup-selection caches so Engine-backed
+    // paragraph layout does not silently drop to the uncached path.
+    inheritShapeCaches(buffer, &work);
+    inheritShapeCaches(buffer, &natural);
 
     var line_index: usize = 0;
     while (line_index < buffer.lines.items.len) : (line_index += 1) {
@@ -56,7 +63,6 @@ pub fn apply(
         if (target <= natural_width + width_epsilon) continue;
 
         for (language.priorities) |priority| {
-            if (priority.extension_max.len == 0) continue;
             var lookup_offsets_stack: [32]usize = undefined;
             if (priority.extension_max.len > lookup_offsets_stack.len) continue;
             for (
@@ -67,24 +73,33 @@ pub fn apply(
             }
             const lookup_offsets =
                 lookup_offsets_stack[0..priority.extension_max.len];
-            try recipe.shapeLineWithJstfMax(
+            const modifications = pipeline_types.JstfModifications{
+                .gsub_enable = priority.extension_enable_gsub.indices,
+                .gsub_disable = priority.extension_disable_gsub.indices,
+                .gpos_enable = priority.extension_enable_gpos.indices,
+                .gpos_disable = priority.extension_disable_gpos.indices,
+            };
+            if (allEmpty(modifications) and lookup_offsets.len == 0) continue;
+            try recipe.shapeLineWithJstfPriority(
                 &work,
                 source_range.start,
                 source_range.end - source_range.start,
                 font,
                 run.font_index,
+                modifications,
                 lookup_offsets,
             );
             const maximum_width = geometry.lineWidth(work.glyphs.items);
             if (maximum_width <= natural_width + width_epsilon) continue;
 
             if (maximum_width > target + width_epsilon) {
-                try recipe.shapeLineWithJstfMax(
+                try recipe.shapeLineWithJstfPriority(
                     &natural,
                     source_range.start,
                     source_range.end - source_range.start,
                     font,
                     run.font_index,
+                    .{},
                     &.{},
                 );
                 if (!sameStructure(natural, work)) continue;
@@ -129,6 +144,22 @@ pub fn apply(
             break;
         }
     }
+}
+
+fn inheritShapeCaches(source: anytype, destination: anytype) void {
+    destination.gdef_metadata_cache = source.gdef_metadata_cache;
+    destination.gsub_table_proof_cache = source.gsub_table_proof_cache;
+    destination.gpos_table_proof_cache = source.gpos_table_proof_cache;
+    destination.lookup_selection_cache = source.lookup_selection_cache;
+}
+
+fn allEmpty(
+    modifications: pipeline_types.JstfModifications,
+) bool {
+    return modifications.gsub_enable.len == 0 and
+        modifications.gsub_disable.len == 0 and
+        modifications.gpos_enable.len == 0 and
+        modifications.gpos_disable.len == 0;
 }
 
 fn selectLanguage(

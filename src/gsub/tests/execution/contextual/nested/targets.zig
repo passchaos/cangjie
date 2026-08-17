@@ -119,6 +119,32 @@ test "nested extension single targets one glyph without scanning the run" {
     try std.testing.expectEqualSlices(u16, &.{ 5, 6 }, glyphs.items);
 }
 
+test "JSTF-disabled nested substitution lookup is skipped" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 40;
+    writeHeader(&bytes, 10, 1);
+    writeLookup(&bytes, 14, 1, &.{8});
+    const single = 22;
+    writeU16(&bytes, single, 1);
+    writeU16(&bytes, single + 2, 6);
+    writeU16(&bytes, single + 4, 1);
+    writeCoverage(&bytes, single + 6, 5);
+
+    var glyphs = std.ArrayList(u16).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 5);
+    _ = try nested.apply(
+        Executor,
+        view(&bytes),
+        &glyphs,
+        0,
+        0,
+        allocator,
+        .{ .disabled_lookups = &.{0} },
+    );
+    try std.testing.expectEqualSlices(u16, &.{5}, glyphs.items);
+}
+
 fn writeHeader(bytes: []u8, lookup_list: u16, lookup_count: u16) void {
     writeU32(bytes, 0, 0x00010000);
     writeU16(bytes, 8, lookup_list);

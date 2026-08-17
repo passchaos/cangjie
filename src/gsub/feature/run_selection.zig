@@ -183,6 +183,23 @@ pub fn sortUniqueIndices(lookups: *std.ArrayList(u16)) void {
     lookups.shrinkRetainingCapacity(write);
 }
 
+/// Merge JSTF-enabled indexes into a value-aware active selection.
+///
+/// Existing records retain alternate values and random-feature state. Newly
+/// enabled lookups use the OpenType default value, and canonicalization merges
+/// duplicates without erasing richer state from an already-active feature.
+pub fn mergeEnabledRecords(
+    lookups: *std.ArrayList(SelectedLookup),
+    allocator: std.mem.Allocator,
+    enabled_lookups: []const u16,
+) std.mem.Allocator.Error!void {
+    try lookups.ensureUnusedCapacity(allocator, enabled_lookups.len);
+    for (enabled_lookups) |index| {
+        lookups.appendAssumeCapacity(.{ .index = index });
+    }
+    sortUniqueRecords(lookups);
+}
+
 fn appendFeatureLookups(
     view: View,
     feature_list: usize,

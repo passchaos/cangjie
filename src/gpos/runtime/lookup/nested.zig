@@ -11,6 +11,7 @@ const cursive = @import("cursive.zig");
 const extension = @import("extension/root.zig");
 const GlyphId = @import("../../../glyph.zig").GlyphId;
 const marks = @import("marks/root.zig");
+const lookup_order = @import("../../../opentype/lookup_order.zig");
 const options = @import("../options.zig");
 const pair = @import("pair/root.zig");
 const positioning = @import("../../positioning/root.zig");
@@ -62,6 +63,9 @@ pub fn apply(
     run: Options,
 ) Error!void {
     if (target_index >= glyphs.len) return error.BadGpos;
+    // PosLookupRecord recursion is part of the same modified JSTF plan. A
+    // disabled lookup must not re-enter through an active contextual parent.
+    if (lookup_order.contains(run.disabled_lookups, lookup_index)) return;
     if (run.context_depth > validation.lookup.max_context_depth) {
         return error.UnsupportedGpos;
     }

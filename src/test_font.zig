@@ -48,6 +48,60 @@ pub fn buildJstfExpansionTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, tables);
 }
 
+/// Build a focused JSTF runtime fixture with three GSUB and GPOS lookups.
+///
+/// Lookup zero is inactive by default, while one and two are active. The
+/// second extension priority enables zero and disables two. GSUB lookup zero
+/// feeds lookup one, so applying the enabled lookup after ordinary shaping
+/// produces a different glyph than rebuilding the plan in LookupList order.
+pub fn buildJstfModificationTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const tables = try allocator.alloc(Table, 10);
+    errdefer allocator.free(tables);
+    tables[0] = .{
+        .tag = "GPOS",
+        .data = try jstfModificationGposTable(allocator),
+    };
+    tables[1] = .{
+        .tag = "GSUB",
+        .data = try jstfModificationGsubTable(allocator),
+    };
+    tables[2] = .{
+        .tag = "JSTF",
+        .data = try jstfModificationTable(allocator),
+    };
+    tables[3] = .{
+        .tag = "cmap",
+        .data = try cmapFormat12RangesTable(allocator, &.{
+            .{ .start = ' ', .end = ' ', .glyph_id = 2 },
+            .{ .start = 'A', .end = 'A', .glyph_id = 1 },
+        }),
+    };
+    tables[4] = .{
+        .tag = "glyf",
+        .data = try emptyGlyfTable(allocator, 5),
+    };
+    tables[5] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[6] = .{
+        .tag = "hhea",
+        .data = try hheaTableWithMetrics(allocator, 5),
+    };
+    tables[7] = .{
+        .tag = "hmtx",
+        .data = try jstfModificationHmtxTable(allocator),
+    };
+    tables[8] = .{
+        .tag = "loca",
+        .data = try emptyLocaTable(allocator, 5),
+    };
+    tables[9] = .{
+        .tag = "maxp",
+        .data = try maxpTableWithGlyphs(allocator, 5),
+    };
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
 pub fn buildMvarTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try mvarTtfTables(allocator));
 }
@@ -3939,6 +3993,196 @@ fn jstfExpansionTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, coverage + 2, 1);
     // scriptFeatureGsub fixture maps space to glyph 4.
     writeU16(bytes, coverage + 4, 4);
+    return bytes;
+}
+
+fn jstfModificationTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 78);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 1);
+    writeTag(bytes, 6, "latn");
+    writeU16(bytes, 10, 12);
+
+    const script = 12;
+    writeU16(bytes, script, 0);
+    writeU16(bytes, script + 2, 6);
+    writeU16(bytes, script + 4, 0);
+
+    const language = 18;
+    writeU16(bytes, language, 2);
+    writeU16(bytes, language + 2, 8);
+    writeU16(bytes, language + 4, 28);
+
+    // Priority zero enables lookup zero but disables lookup one. It selects
+    // narrow glyph 3 and must be rejected, after which priority one starts
+    // again from the unmodified source.
+    const priority_zero = 26;
+    writeU16(bytes, priority_zero + 10, 40);
+    writeU16(bytes, priority_zero + 12, 48);
+    writeU16(bytes, priority_zero + 14, 40);
+    writeU16(bytes, priority_zero + 16, 48);
+
+    // Priority one enables lookup zero and disables lookup two. The four lists
+    // deliberately share offsets because GSUB and GPOS use the same indexes.
+    const priority_one = 46;
+    writeU16(bytes, priority_one + 10, 20);
+    writeU16(bytes, priority_one + 12, 24);
+    writeU16(bytes, priority_one + 14, 20);
+    writeU16(bytes, priority_one + 16, 24);
+    writeU16(bytes, 66, 1);
+    writeU16(bytes, 68, 0);
+    writeU16(bytes, 70, 1);
+    writeU16(bytes, 72, 2);
+    writeU16(bytes, 74, 1);
+    writeU16(bytes, 76, 1);
+    return bytes;
+}
+
+fn jstfModificationGsubTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 160);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 10);
+    writeU16(bytes, 6, 34);
+    writeU16(bytes, 8, 72);
+
+    // DFLT activates only features one and two. Feature zero exists solely so
+    // JSTF can enable its lookup by index.
+    writeU16(bytes, 10, 1);
+    writeTag(bytes, 12, "DFLT");
+    writeU16(bytes, 16, 8);
+    writeU16(bytes, 18, 4);
+    writeU16(bytes, 20, 0);
+    writeU16(bytes, 22, 0);
+    writeU16(bytes, 24, 0xffff);
+    writeU16(bytes, 26, 2);
+    writeU16(bytes, 28, 1);
+    writeU16(bytes, 30, 2);
+
+    writeU16(bytes, 34, 3);
+    writeTag(bytes, 36, "ss01");
+    writeU16(bytes, 40, 20);
+    writeTag(bytes, 42, "liga");
+    writeU16(bytes, 46, 26);
+    writeTag(bytes, 48, "calt");
+    writeU16(bytes, 52, 32);
+    for (0..3) |feature_index| {
+        const feature = 54 + feature_index * 6;
+        writeU16(bytes, feature, 0);
+        writeU16(bytes, feature + 2, 1);
+        writeU16(bytes, feature + 4, @intCast(feature_index));
+    }
+
+    writeU16(bytes, 72, 3);
+    writeU16(bytes, 74, 8);
+    writeU16(bytes, 76, 38);
+    writeU16(bytes, 78, 68);
+
+    // lookup 0: glyph 1 -> glyph 3
+    writeSingleSubstitutionLookup(bytes, 80, 1, 2);
+    // lookup 1: glyph 3 -> glyph 4. Correct JSTF ordering reaches glyph 4;
+    // executing lookup 0 after the normal plan would stop at glyph 3.
+    writeSingleSubstitutionLookup(bytes, 110, 3, 1);
+    // lookup 2: glyph 4 -> glyph 1, disabled by the accepted priority.
+    writeSingleSubstitutionLookup(bytes, 140, 4, -3);
+    return bytes;
+}
+
+fn writeSingleSubstitutionLookup(
+    bytes: []u8,
+    lookup: usize,
+    covered_glyph: u16,
+    delta: i16,
+) void {
+    writeU16(bytes, lookup, 1);
+    writeU16(bytes, lookup + 2, 0);
+    writeU16(bytes, lookup + 4, 1);
+    writeU16(bytes, lookup + 6, 8);
+    const subtable = lookup + 8;
+    writeU16(bytes, subtable, 1);
+    writeU16(bytes, subtable + 2, 6);
+    writeI16(bytes, subtable + 4, delta);
+    const coverage = subtable + 6;
+    writeU16(bytes, coverage, 1);
+    writeU16(bytes, coverage + 2, 1);
+    writeU16(bytes, coverage + 4, covered_glyph);
+}
+
+fn jstfModificationGposTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 166);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 10);
+    writeU16(bytes, 6, 34);
+    writeU16(bytes, 8, 72);
+
+    writeU16(bytes, 10, 1);
+    writeTag(bytes, 12, "DFLT");
+    writeU16(bytes, 16, 8);
+    writeU16(bytes, 18, 4);
+    writeU16(bytes, 20, 0);
+    writeU16(bytes, 22, 0);
+    writeU16(bytes, 24, 0xffff);
+    writeU16(bytes, 26, 2);
+    writeU16(bytes, 28, 1);
+    writeU16(bytes, 30, 2);
+
+    writeU16(bytes, 34, 3);
+    writeTag(bytes, 36, "ss01");
+    writeU16(bytes, 40, 20);
+    writeTag(bytes, 42, "kern");
+    writeU16(bytes, 46, 26);
+    writeTag(bytes, 48, "dist");
+    writeU16(bytes, 52, 32);
+    for (0..3) |feature_index| {
+        const feature = 54 + feature_index * 6;
+        writeU16(bytes, feature, 0);
+        writeU16(bytes, feature + 2, 1);
+        writeU16(bytes, feature + 4, @intCast(feature_index));
+    }
+
+    writeU16(bytes, 72, 3);
+    writeU16(bytes, 74, 8);
+    writeU16(bytes, 76, 40);
+    writeU16(bytes, 78, 72);
+    // lookup 0 is enabled by JSTF; lookup 2 is disabled. Distinct placement
+    // and advance fields make both effects independently observable.
+    writeSinglePositionLookup(bytes, 80, 4, 0x0001, 100);
+    writeSinglePositionLookup(bytes, 112, 4, 0x0004, 100);
+    writeSinglePositionLookup(bytes, 144, 4, 0x0004, -50);
+    return bytes;
+}
+
+fn writeSinglePositionLookup(
+    bytes: []u8,
+    lookup: usize,
+    covered_glyph: u16,
+    value_format: u16,
+    value: i16,
+) void {
+    writeU16(bytes, lookup, 1);
+    writeU16(bytes, lookup + 2, 0);
+    writeU16(bytes, lookup + 4, 1);
+    writeU16(bytes, lookup + 6, 8);
+    const subtable = lookup + 8;
+    writeU16(bytes, subtable, 1);
+    writeU16(bytes, subtable + 2, 8);
+    writeU16(bytes, subtable + 4, value_format);
+    writeI16(bytes, subtable + 6, value);
+    const coverage = subtable + 8;
+    writeU16(bytes, coverage, 1);
+    writeU16(bytes, coverage + 2, 1);
+    writeU16(bytes, coverage + 4, covered_glyph);
+}
+
+fn jstfModificationHmtxTable(allocator: std.mem.Allocator) ![]u8 {
+    const advances = [_]u16{ 500, 800, 400, 700, 1200 };
+    const bytes = try allocator.alloc(u8, advances.len * 4);
+    for (advances, 0..) |advance, glyph_index| {
+        writeU16(bytes, glyph_index * 4, advance);
+        writeI16(bytes, glyph_index * 4 + 2, 0);
+    }
     return bytes;
 }
 

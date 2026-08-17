@@ -161,14 +161,15 @@ pub const Uniform = struct {
         try self.finishLine(buffer);
     }
 
-    pub fn shapeLineWithJstfMax(
+    pub fn shapeLineWithJstfPriority(
         self: Uniform,
         buffer: *context_output.Buffer,
         original_byte_start: usize,
         original_byte_len: usize,
         font: *const @import("../../font.zig").Font,
         font_index: usize,
-        lookup_offsets: []const usize,
+        modifications: pipeline_types.JstfModifications,
+        maximum_lookup_offsets: []const usize,
     ) !void {
         buffer.clear();
         const original_byte_end = original_byte_start + original_byte_len;
@@ -183,9 +184,12 @@ pub const Uniform = struct {
             line_text,
             shape_options,
         );
-        lookup_options.lookup.jstf_max = .{
-            .lookup_offsets = lookup_offsets,
-        };
+        lookup_options.lookup.jstf_modifications = modifications;
+        if (maximum_lookup_offsets.len != 0) {
+            lookup_options.lookup.jstf_max = .{
+                .lookup_offsets = maximum_lookup_offsets,
+            };
+        }
         var driver = Driver{
             .buffer = buffer,
             .metrics_cache = self.metrics_cache,

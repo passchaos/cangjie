@@ -3,6 +3,7 @@
 const std = @import("std");
 const accelerator = @import("../../../../../accelerator/root.zig");
 const GlyphId = @import("../../../../../../glyph.zig").GlyphId;
+const lookup_order = @import("../../../../../../opentype/lookup_order.zig");
 const contextual_matching = @import("../../matching.zig");
 const matching = @import("matching.zig");
 const model = @import("../../model.zig");
@@ -240,6 +241,12 @@ fn applyFastSingleRecords(
         {
             return false;
         }
+        // Defer disabled records to the generic nested executor, which skips
+        // them while retaining the authored ordering of any remaining records.
+        if (lookup_order.contains(
+            run.disabled_lookups,
+            record.lookup_index,
+        )) return false;
         const target_index = input_indices[record.sequence_index];
         if (target_index >= glyphs.len) continue;
         const nested = accelerators[record.lookup_index];

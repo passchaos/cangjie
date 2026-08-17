@@ -5,6 +5,7 @@ const merge = @import("../merge.zig");
 const model = @import("../../model.zig");
 const metadata = @import("../../../runtime/metadata.zig");
 const options = @import("../../../runtime/options.zig");
+const lookup_order = @import("../../../../opentype/lookup_order.zig");
 const prefilter = @import("../../../runtime/prefilter/root.zig");
 const shared = @import("shared.zig");
 const state = @import("../../../runtime/state.zig");
@@ -87,6 +88,7 @@ pub fn merged(
     var cache = prefilter.Cache.init();
     for (plan.lookups, plan.lookup_offsets) |lookup, offset| {
         if (lookup.lookup >= lookup_count) return error.BadGsub;
+        if (lookup_order.contains(run.disabled_lookups, lookup.lookup)) continue;
         var selected = prepared;
         selected.active_source_feature = null;
         selected.active_source_feature_mask = lookup.source_mask;

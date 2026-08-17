@@ -16,6 +16,7 @@ const generic_lookup = @import("../../lookup/generic/root.zig");
 const model = @import("../model.zig");
 const filtering = @import("../../../runtime/filtering.zig");
 const limits = @import("../../../runtime/limits.zig");
+const lookup_order = @import("../../../../opentype/lookup_order.zig");
 const mutation = @import("../../../runtime/mutation.zig");
 const options = @import("../../../runtime/options.zig");
 const table = @import("../../../table/root.zig");
@@ -37,6 +38,10 @@ pub fn apply(
     allocator: std.mem.Allocator,
     run: Options,
 ) Error!Change {
+    // A JSTF disable set applies to the complete reassembled plan, including
+    // lookups reached through SequenceLookupRecord rather than a top-level
+    // feature edge.
+    if (lookup_order.contains(run.disabled_lookups, lookup_index)) return .{};
     try limits.consumeNested(run);
     const lookup_list = try table.offset.required16(
         view,

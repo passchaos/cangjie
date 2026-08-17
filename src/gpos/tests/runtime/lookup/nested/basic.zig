@@ -87,6 +87,45 @@ test "nested records reject a later invalid sequence atomically" {
     try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
 
+test "JSTF-disabled nested positioning lookup is skipped" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 48;
+    writeU16(&bytes, 8, 12);
+    writeU16(&bytes, 12, 1);
+    writeU16(&bytes, 14, 4);
+    writeU16(&bytes, 16, 1);
+    writeU16(&bytes, 18, 0);
+    writeU16(&bytes, 20, 1);
+    writeU16(&bytes, 22, 8);
+    writeU16(&bytes, 24, 1);
+    writeU16(&bytes, 26, 8);
+    writeU16(&bytes, 28, 0x0001);
+    writeI16(&bytes, 30, 33);
+    writeCoverage(&bytes, 32, 5);
+    writeU16(&bytes, 40, 0);
+    writeU16(&bytes, 42, 0);
+
+    const view = nested.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+    };
+    var adjustments = std.ArrayList(nested.Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try nested.records(
+        view,
+        40,
+        1,
+        &.{0},
+        &.{5},
+        &adjustments,
+        allocator,
+        .{ .disabled_lookups = &.{0} },
+    );
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
 fn writeCoverage(bytes: []u8, offset: usize, glyph: u16) void {
     writeU16(bytes, offset, 1);
     writeU16(bytes, offset + 2, 1);

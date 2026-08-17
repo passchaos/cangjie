@@ -26,6 +26,7 @@ const contextual_safety =
     @import("gsub/execution/contextual/safety.zig");
 const lookup_execution = @import("gsub/execution/lookup/root.zig");
 const GlyphId = @import("glyph.zig").GlyphId;
+const lookup_order = @import("opentype/lookup_order.zig");
 pub const runtime = @import("gsub/runtime/root.zig");
 const runtime_prefilter = @import("gsub/runtime/prefilter/root.zig");
 const table_core = @import("gsub/table/root.zig");
@@ -687,6 +688,7 @@ const ContextualRecordExecutor = struct {
         options: LookupOptions,
         run_digest_cache: *runtime_prefilter.Cache,
     ) (GsubError || std.mem.Allocator.Error)!void {
+        if (lookup_order.contains(options.disabled_lookups, lookup_index)) return;
         return applyLookupWithIndex(
             table,
             lookup_offset,

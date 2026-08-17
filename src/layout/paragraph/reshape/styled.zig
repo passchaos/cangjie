@@ -216,14 +216,15 @@ pub const Recipe = struct {
         try self.saveCandidate();
     }
 
-    pub fn shapeLineWithJstfMax(
+    pub fn shapeLineWithJstfPriority(
         self: Recipe,
         buffer: *context_output.Buffer,
         original_byte_start: usize,
         original_byte_len: usize,
         font: *const @import("../../../font.zig").Font,
         font_index: usize,
-        lookup_offsets: []const usize,
+        modifications: pipeline_types.JstfModifications,
+        maximum_lookup_offsets: []const usize,
     ) !void {
         const original_byte_end = original_byte_start + original_byte_len;
         const span = styled_paragraph.spanForCluster(
@@ -251,7 +252,11 @@ pub const Recipe = struct {
                     .native_direction_shaping = true,
                     .features = span.features,
                     .normalized_variation_coords = span.normalized_variation_coords,
-                    .jstf_max = .{ .lookup_offsets = lookup_offsets },
+                    .jstf_modifications = modifications,
+                    .jstf_max = if (maximum_lookup_offsets.len == 0)
+                        null
+                    else
+                        .{ .lookup_offsets = maximum_lookup_offsets },
                     .context_before = self.text[0..original_byte_start],
                     .context_after = self.text[original_byte_end..],
                     .beginning_of_text = original_byte_start == 0,

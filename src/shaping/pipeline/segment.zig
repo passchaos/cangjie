@@ -196,6 +196,14 @@ pub fn run(input: Input) !void {
         .visible_variation_selectors = lookup_options.not_found_variation_selector_glyph != null,
         .random_state = &gsub_random_state,
         .aat_buffer_reversed = shape_in_native_direction,
+        .enabled_lookups = if (lookup_options.jstf_modifications) |mods|
+            mods.gsub_enable
+        else
+            &.{},
+        .disabled_lookups = if (lookup_options.jstf_modifications) |mods|
+            mods.gsub_disable
+        else
+            &.{},
     };
     // Script shapers split one logical GSUB pass into several feature stages.
     // Keep HarfBuzz-style operation and growth limits shared across every
@@ -246,6 +254,7 @@ pub fn run(input: Input) !void {
         gsub_khmer.supports(lookup_options.script_tag) and
         codepoints.items.len != 0;
     const early_zero_mark_shape = use_shape or myanmar_shape;
+    var ran_generic_gsub = false;
     if (use_shape or myanmar_shape) {
         // Cluster ownership for source text must be established before vowel
         // constraints inject synthetic U+25CC sources that do not exist in the
@@ -427,6 +436,7 @@ pub fn run(input: Input) !void {
             .gdef_metadata = gdef_metadata.*,
         };
         if (indic_shape) try gsub_indic.prepare(indic_input);
+        ran_generic_gsub = true;
         try gsub_generic.run(.{
             .allocator = buffer.allocator,
             .font = font,
@@ -443,6 +453,27 @@ pub fn run(input: Input) !void {
             .gdef_metadata = gdef_metadata.*,
         });
         if (indic_shape) try gsub_indic.finish(indic_input);
+    }
+    // Generic shaping merges JSTF enable indexes into its selected plan before
+    // execution. Script shapers own several source-sensitive stages instead;
+    // enabled lookups that do not belong to one of those feature maps still
+    // need one execution after the script has established joining/syllable
+    // state. Disabled indexes remain suppressed in every staged dispatcher.
+    if (!ran_generic_gsub) {
+        if (lookup_options.jstf_modifications) |mods| {
+            if (mods.gsub_enable.len != 0) {
+                var enabled_options = gsub_options;
+                enabled_options.selected_lookups = mods.gsub_enable;
+                enabled_options.enabled_lookups = &.{};
+                try font_shaping.applyGsubWithOptionsUsingGdefAfterProof(
+                    font,
+                    glyph_ids,
+                    buffer.allocator,
+                    enabled_options,
+                    gdef_metadata.*,
+                );
+            }
+        }
     }
     if (gsub_fraction.hasRunnable(codepoints.items)) {
         try source_features.resize(buffer.allocator, codepoints.items.len);

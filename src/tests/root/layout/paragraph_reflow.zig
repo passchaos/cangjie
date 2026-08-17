@@ -718,6 +718,105 @@ test "JSTF maximum positioning is scaled to the line target" {
     );
 }
 
+test "JSTF priorities rebuild enabled and disabled GSUB GPOS lookups in order" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildJstfModificationTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    var natural = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &buffer,
+        "A A A",
+        20,
+        .{
+            .max_width = 60,
+            .alignment = .justify,
+            .font_expansion = .{ .enabled = false },
+            .kashida = .{ .enabled = false },
+        },
+    );
+    defer natural.deinit();
+    try std.testing.expectEqual(@as(u32, 1), natural.glyphs[0].glyph_id);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 16),
+        natural.glyphs[0].x_advance,
+        0.001,
+    );
+
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const paragraph = try natural.layout(
+        &reflow,
+        .{
+            .max_width = 60,
+            .alignment = .justify,
+            .font_expansion = .{ .enabled = false },
+            .kashida = .{ .enabled = false },
+        },
+    );
+
+    try std.testing.expectEqual(@as(usize, 2), paragraph.lines.len);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 60),
+        paragraph.lines[0].width,
+        0.001,
+    );
+    // Priority zero would leave glyph 3 and narrow the line, so the accepted
+    // priority must restart at source glyph 1. Reassembled GSUB lookups run
+    // 0 -> 1 while disabled lookup 2 stays out, yielding glyph 4. A naive
+    // post-shape enable would instead leave glyph 3.
+    try std.testing.expectEqual(@as(u32, 4), paragraph.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(u32, 4), paragraph.glyphs[2].glyph_id);
+    // GPOS lookup zero supplies placement, lookup one supplies +2px advance,
+    // and disabled lookup two must not subtract 1px.
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 2),
+        paragraph.glyphs[0].x_offset,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 26),
+        paragraph.glyphs[0].x_advance,
+        0.001,
+    );
+
+    // Repeat through Engine's retained lookup-selection/proof caches. JSTF
+    // enablement must merge with the cached active set before execution rather
+    // than mutating cache-owned slices or appending a second pass.
+    var engine = support.Engine.init(allocator, .{});
+    defer engine.deinit();
+    const cached = try engine.layout(
+        @import("../../../font/face/root.zig").Cascade.init(
+            &.{@import("../../../font/face/root.zig").backend.face(&font)},
+        ),
+        .{
+            .text = "A A A",
+            .font_size = 20,
+            .options = .{
+                .max_width = 60,
+                .alignment = .justify,
+                .font_expansion = .{ .enabled = false },
+                .kashida = .{ .enabled = false },
+            },
+        },
+    );
+    try std.testing.expectEqual(@as(u32, 4), cached.glyphs[0].glyph_id);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 26),
+        cached.glyphs[0].x_advance,
+        0.001,
+    );
+    try std.testing.expect(engine.stats().lookup_selection.hits > 0);
+}
+
 test "right-to-left justification keeps line origin and survives bidi reorder" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

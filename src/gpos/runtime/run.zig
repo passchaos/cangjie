@@ -8,6 +8,7 @@
 const std = @import("std");
 const feature = @import("../feature/root.zig");
 const GlyphId = @import("../../glyph.zig").GlyphId;
+const lookup_order = @import("../../opentype/lookup_order.zig");
 const lookup_dispatcher = @import("lookup/dispatcher/root.zig");
 const matching = @import("matching.zig");
 const options = @import("options.zig");
@@ -46,7 +47,20 @@ pub fn collect(
         profile.gpos_select_ns += profileElapsed(select_start, run);
     }
     defer selected_owned.deinit(allocator);
-    const selected = run.selected_lookups orelse selected_owned.items;
+    const base_selected = run.selected_lookups orelse selected_owned.items;
+    var enabled_selected_owned: ?[]u16 = null;
+    defer if (enabled_selected_owned) |selected| allocator.free(selected);
+    const selected = if (run.enabled_lookups.len == 0)
+        base_selected
+    else selected: {
+        const merged = try lookup_order.mergeEnabled(
+            allocator,
+            base_selected,
+            run.enabled_lookups,
+        );
+        enabled_selected_owned = merged;
+        break :selected merged;
+    };
     const has_feature_topology = try hasFeatureTopology(view);
 
     // An empty selection for a real feature topology means the requested

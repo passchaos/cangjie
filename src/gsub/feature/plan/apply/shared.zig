@@ -3,6 +3,7 @@
 const std = @import("std");
 const model = @import("../../model.zig");
 const options = @import("../../../runtime/options.zig");
+const lookup_order = @import("../../../../opentype/lookup_order.zig");
 const prefilter = @import("../../../runtime/prefilter/root.zig");
 const table = @import("../../../table/root.zig");
 const GlyphId = @import("../../../../glyph.zig").GlyphId;
@@ -29,6 +30,7 @@ pub fn entry(
     }
     for (plan_entry.lookups, plan_entry.lookup_offsets) |index, offset| {
         if (index >= lookup_count) return error.BadGsub;
+        if (lookup_order.contains(run.disabled_lookups, index)) continue;
         try Executor.applyLookup(
             view,
             offset,
@@ -54,6 +56,7 @@ pub fn indices(
 ) Error!void {
     for (selected) |index| {
         if (index >= lookup_count) return error.BadGsub;
+        if (lookup_order.contains(run.disabled_lookups, index)) continue;
         const offset = try table.offset.required16(
             view,
             lookup_list,

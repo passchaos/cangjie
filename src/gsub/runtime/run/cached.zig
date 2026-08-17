@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const accelerator = @import("../../accelerator/root.zig");
+const lookup_order = @import("../../../opentype/lookup_order.zig");
 const options = @import("../options.zig");
 const prefilter = @import("../prefilter/root.zig");
 const state = @import("../state.zig");
@@ -33,7 +34,20 @@ pub noinline fn apply(
     if (length < 10 or offset > data.len or length > data.len - offset) {
         return false;
     }
-    const selected = run.selected_lookups orelse return false;
+    const base_selected = run.selected_lookups orelse return false;
+    var enabled_selected_owned: ?[]u16 = null;
+    defer if (enabled_selected_owned) |selected| allocator.free(selected);
+    const selected = if (run.enabled_lookups.len == 0)
+        base_selected
+    else selected: {
+        const merged = try lookup_order.mergeEnabled(
+            allocator,
+            base_selected,
+            run.enabled_lookups,
+        );
+        enabled_selected_owned = merged;
+        break :selected merged;
+    };
     if (selected.len == 0) return false;
     const sidecars = run.lookup_accelerators orelse return false;
     _ = accelerator.feature_index.exact(
@@ -63,6 +77,7 @@ pub noinline fn apply(
     };
     var cache = prefilter.Cache.init();
     for (selected) |index| {
+        if (lookup_order.contains(run.disabled_lookups, index)) continue;
         try Executor.applyLookup(
             view,
             sidecars[index].lookup_offset,

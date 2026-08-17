@@ -70,6 +70,14 @@ pub fn run(input: Input) !Result {
         .shape_profile = input.profile,
         .profile_io = input.profile_io,
         .visible_variation_selectors = input.options.not_found_variation_selector_glyph != null,
+        .enabled_lookups = if (input.options.jstf_modifications) |mods|
+            mods.gpos_enable
+        else
+            &.{},
+        .disabled_lookups = if (input.options.jstf_modifications) |mods|
+            mods.gpos_disable
+        else
+            &.{},
     };
     const apply_aat_substitution =
         font_shaping.hasAatSubstitutionForShaping(

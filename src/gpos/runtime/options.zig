@@ -34,6 +34,11 @@ pub const Options = struct {
     visible_variation_selectors: bool = false,
     /// Preselected LookupList indexes owned by a caller-side cache.
     selected_lookups: ?[]const u16 = null,
+    /// Additional LookupList indexes enabled by one OpenType JSTF suggestion.
+    /// Font validation guarantees ascending, duplicate-free indexes.
+    enabled_lookups: []const u16 = &.{},
+    /// Ascending LookupList indexes suppressed by one JSTF suggestion.
+    disabled_lookups: []const u16 = &.{},
     unsafe_glyphs: ?*run_metadata.UnsafeGlyphs = null,
     /// Immutable per-lookup sidecars built for the exact validated table.
     lookup_accelerators: ?[]const accelerator.Lookup = null,

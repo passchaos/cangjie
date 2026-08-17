@@ -521,26 +521,27 @@ remaining width proceeds through Kashida and then ordinary space/CJK
 expansion. Multi-font or shaping-style-spanning lines conservatively skip the
 axis stage rather than imposing one font's axis on another run.
 
-The actual OpenType `JSTF` table is now parsed and exposed independently
+The actual OpenType `JSTF` table is parsed and exposed independently
 through `font.metadata.layout.inspect(face).justification(allocator)`.
 Validation covers ordered script/language records, extender glyph bounds,
 priority arrays, sorted GSUB/GPOS modification indexes cross-checked against
 the corresponding LookupLists, and embedded JstfMax GPOS lookup payloads.
 Inspection returns owned scripts, default/tagged language systems, priority
-lists, lookup indexes, and maximum-lookup descriptors. This parser/inspection
-surface does not yet apply JSTF priority actions during paragraph layout; that
-runtime step remains explicit rather than being conflated with fvar-axis
-expansion.
+lists, lookup indexes, and maximum-lookup descriptors.
 
-Paragraph justification now also consumes `extensionJstfMax` positioning
-lookups for the selected script/language. Each priority level is treated as an
-independent suggestion, as required by the OpenType specification. Cangjie
-reshapes an untouched logical line with the priority's detached GPOS lookups;
-if the authored maximum would overshoot the measure, it interpolates complete
-positioned-glyph geometry between the natural and maximum shapes. The accepted
-candidate is committed transactionally before later fvar-axis, Kashida, and
-generic spacing stages. Main GSUB/GPOS enable/disable modification lists remain
-the next JSTF runtime stage.
+Paragraph justification consumes each priority's extension-side GSUB/GPOS
+enable and disable lists as well as its `extensionJstfMax` positioning lookups.
+Every priority starts from untouched source text. Cangjie merges enabled
+lookups with generic GSUB and GPOS active plans, preserves value-aware feature
+state, suppresses disabled lookups even inside contextual dispatch, and
+reassembles each modified plan in LookupList order before execution. Cached
+base selections remain immutable. Script-specific GSUB retains its required
+feature stages and reordering; disabled indexes are guarded at every stage,
+while enabled indexes not reached by those stages execute after the shaper has
+established joining or syllable state. If the authored maximum geometry would
+overshoot the measure, Cangjie interpolates complete positioned-glyph geometry
+between natural and maximum shapes. The accepted candidate is committed
+transactionally before later fvar-axis, Kashida, and generic spacing stages.
 
 Paragraph alignment distinguishes logical and physical edges:
 `TextAlign.start`/`end` resolve through the paragraph direction, while
@@ -931,9 +932,9 @@ Future changes must preserve these rules:
 3. Keep public and test consumers on owning domain modules; do not recreate a
    broad aggregate layout façade as new shaping or paragraph capabilities are
    added.
-4. Implement the actual OpenType `JSTF` table's priority lists, GSUB/GPOS
-   enable/disable sets, extender glyphs, and JstfMax lookups independently from
-   the now-supported fvar `jstf`/`wdth` axis convention.
+4. Complete OpenType `JSTF` shrinkage priorities and extender-glyph runtime;
+   extension priorities already apply GSUB/GPOS enable-disable sets and
+   JstfMax lookups independently from the fvar `jstf`/`wdth` convention.
 5. Add fuzz and CI matrices for stage boundaries, cache reuse, malformed font
    data, mixed-script fallback, vertical text, and retained reflow, alongside
    the existing Unicode and HarfBuzz parity gates.

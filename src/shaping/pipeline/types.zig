@@ -42,6 +42,15 @@ pub const JstfMax = struct {
     lookup_offsets: []const usize,
 };
 
+pub const JstfModifications = struct {
+    /// Sorted LookupList indexes added to the active GSUB/GPOS plans.
+    gsub_enable: []const u16 = &.{},
+    /// Sorted LookupList indexes suppressed at top-level and nested dispatch.
+    gsub_disable: []const u16 = &.{},
+    gpos_enable: []const u16 = &.{},
+    gpos_disable: []const u16 = &.{},
+};
+
 /// Fully resolved properties for one homogeneous shaping run.
 ///
 /// Public `ShapeOptions` still carries optional script/language requests.
@@ -62,6 +71,7 @@ pub const LookupOptions = struct {
     text_orientation: TextOrientation = .mixed,
     normalized_variation_coords: []const f32 = &.{},
     jstf_max: ?JstfMax = null,
+    jstf_modifications: ?JstfModifications = null,
     not_found_variation_selector_glyph: ?u32 = null,
     remove_default_ignorables: bool = false,
     context_before: []const u8 = &.{},

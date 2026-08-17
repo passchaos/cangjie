@@ -4,6 +4,7 @@ const std = @import("std");
 pub const cached = @import("cached.zig");
 const feature = @import("../../feature/root.zig");
 const metadata = @import("../metadata.zig");
+const lookup_order = @import("../../../opentype/lookup_order.zig");
 const options = @import("../options.zig");
 const prefilter = @import("../prefilter/root.zig");
 const profile = @import("../../execution/lookup/profile.zig");
@@ -31,7 +32,7 @@ pub fn apply(
     }
     try metadata.validate(run, glyphs.items.len);
     var storage = state.Storage{};
-    const prepared = try state.prepare(run, glyphs.items.len, &storage);
+    var prepared = try state.prepare(run, glyphs.items.len, &storage);
     const view = View{
         .data = data,
         .offset = offset,
@@ -59,6 +60,25 @@ pub fn apply(
             return err;
         };
     } else std.ArrayList(feature.run_selection.SelectedLookup).empty;
+    var enabled_selected_owned: ?[]u16 = null;
+    defer if (enabled_selected_owned) |selected| allocator.free(selected);
+    if (prepared.enabled_lookups.len != 0) {
+        if (prepared.selected_lookups) |selected| {
+            const merged = try lookup_order.mergeEnabled(
+                allocator,
+                selected,
+                prepared.enabled_lookups,
+            );
+            enabled_selected_owned = merged;
+            prepared.selected_lookups = merged;
+        } else {
+            try feature.run_selection.mergeEnabledRecords(
+                &selected_owned,
+                allocator,
+                prepared.enabled_lookups,
+            );
+        }
+    }
     if (prepared.shape_profile) |active| {
         active.gsub_select_ns += profile.elapsed(
             select_start,
@@ -151,6 +171,7 @@ fn applyOne(
     run: Options,
     cache: *prefilter.Cache,
 ) Error!void {
+    if (lookup_order.contains(run.disabled_lookups, lookup_index)) return;
     const lookup_offset = try table.offset.required16(
         view,
         lookup_list,

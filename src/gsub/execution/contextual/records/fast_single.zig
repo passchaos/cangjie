@@ -4,6 +4,7 @@ const std = @import("std");
 const accelerator = @import("../../../accelerator/root.zig");
 const direct_single = @import("../../direct/single/root.zig");
 const filtering = @import("../../../runtime/filtering.zig");
+const lookup_order = @import("../../../../opentype/lookup_order.zig");
 const Options = @import("../../../runtime/options.zig").Options;
 const table = @import("../../../table/root.zig");
 const GlyphId = @import("../../../../glyph.zig").GlyphId;
@@ -48,6 +49,11 @@ pub fn apply(
         const lookup_index = try view.readU16(record + 2);
         if (sequence_index >= input_indices.len) return false;
         if (lookup_index >= lookup_count) return error.BadGsub;
+        // Fall back to the generic record executor so disabled nested lookups
+        // retain authored record ordering without duplicating its map logic.
+        if (lookup_order.contains(run.disabled_lookups, lookup_index)) {
+            return false;
+        }
 
         var single = Single{};
         var lookup_offset: usize = 0;
@@ -147,6 +153,9 @@ fn applyAccelerated(
         const lookup_index = try view.readU16(record + 2);
         if (sequence_index >= input_indices.len) return false;
         if (lookup_index >= lookups.len) return error.BadGsub;
+        if (lookup_order.contains(run.disabled_lookups, lookup_index)) {
+            return false;
+        }
         const single = lookups[lookup_index].single_subst;
         if (!single.enabled) return false;
         targets[record_index] = input_indices[sequence_index];

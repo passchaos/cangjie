@@ -833,66 +833,6 @@ fn readU32(table: Table, relative: usize) GsubError!u32 {
     return table.readU32(relative);
 }
 
-test "GSUB context nested lookup can apply ligature substitution" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 90;
-
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 8, 10);
-    writeU16Test(&bytes, 10, 2);
-    writeU16Test(&bytes, 12, 6);
-    writeU16Test(&bytes, 14, 42);
-
-    writeU16Test(&bytes, 16, 5);
-    writeU16Test(&bytes, 20, 1);
-    writeU16Test(&bytes, 22, 8);
-
-    const context = 24;
-    writeU16Test(&bytes, context + 0, 1);
-    writeU16Test(&bytes, context + 2, 22);
-    writeU16Test(&bytes, context + 4, 1);
-    writeU16Test(&bytes, context + 6, 8);
-
-    const set = context + 8;
-    writeU16Test(&bytes, set + 0, 1);
-    writeU16Test(&bytes, set + 2, 4);
-    const rule = set + 4;
-    writeU16Test(&bytes, rule + 0, 2);
-    writeU16Test(&bytes, rule + 2, 1);
-    writeU16Test(&bytes, rule + 4, 2);
-    // A nested LigatureSubst must see the real run after sequenceIndex 0.
-    // Running the nested lookup on a one-glyph scratch buffer cannot match
-    // component glyph 2 and leaves the contextual ligature unapplied.
-    writeU16Test(&bytes, rule + 6, 0);
-    writeU16Test(&bytes, rule + 8, 1);
-    writeCoverage1(&bytes, context + 22, 1);
-
-    writeU16Test(&bytes, 52, 4);
-    writeU16Test(&bytes, 56, 1);
-    writeU16Test(&bytes, 58, 8);
-    const lig_subst = 60;
-    writeU16Test(&bytes, lig_subst + 0, 1);
-    writeU16Test(&bytes, lig_subst + 2, 18);
-    writeU16Test(&bytes, lig_subst + 4, 1);
-    writeU16Test(&bytes, lig_subst + 6, 8);
-    const ligature_set = lig_subst + 8;
-    writeU16Test(&bytes, ligature_set + 0, 1);
-    writeU16Test(&bytes, ligature_set + 2, 4);
-    const ligature = ligature_set + 4;
-    writeU16Test(&bytes, ligature + 0, 40);
-    writeU16Test(&bytes, ligature + 2, 2);
-    writeU16Test(&bytes, ligature + 4, 2);
-    writeCoverage1(&bytes, lig_subst + 18, 1);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 2, 3 });
-
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, allocator, .{});
-
-    try std.testing.expectEqualSlices(GlyphId, &.{ 40, 3 }, glyphs.items);
-}
-
 test "GSUB chaining resumes after a nested ligature's adjusted match end" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 88;
@@ -950,71 +890,6 @@ test "GSUB chaining resumes after a nested ligature's adjusted match end" {
     // The first ligature shrinks the run, moving the second candidate to index
     // one. Resuming at the pre-substitution match end would skip it.
     try std.testing.expectEqualSlices(GlyphId, &.{ 10, 10 }, glyphs.items);
-}
-
-test "GSUB context nested extension ligature uses real glyph run" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 100;
-
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 8, 10);
-    writeU16Test(&bytes, 10, 2);
-    writeU16Test(&bytes, 12, 6);
-    writeU16Test(&bytes, 14, 42);
-
-    writeU16Test(&bytes, 16, 5);
-    writeU16Test(&bytes, 20, 1);
-    writeU16Test(&bytes, 22, 8);
-
-    const context = 24;
-    writeU16Test(&bytes, context + 0, 1);
-    writeU16Test(&bytes, context + 2, 22);
-    writeU16Test(&bytes, context + 4, 1);
-    writeU16Test(&bytes, context + 6, 8);
-
-    const set = context + 8;
-    writeU16Test(&bytes, set + 0, 1);
-    writeU16Test(&bytes, set + 2, 4);
-    const rule = set + 4;
-    writeU16Test(&bytes, rule + 0, 2);
-    writeU16Test(&bytes, rule + 2, 1);
-    writeU16Test(&bytes, rule + 4, 2);
-    writeU16Test(&bytes, rule + 6, 0);
-    writeU16Test(&bytes, rule + 8, 1);
-    writeCoverage1(&bytes, context + 22, 1);
-
-    writeU16Test(&bytes, 52, 7);
-    writeU16Test(&bytes, 56, 1);
-    writeU16Test(&bytes, 58, 8);
-    const extension = 60;
-    writeU16Test(&bytes, extension + 0, 1);
-    writeU16Test(&bytes, extension + 2, 4);
-    writeU32Test(&bytes, extension + 4, 8);
-
-    const lig_subst = extension + 8;
-    writeU16Test(&bytes, lig_subst + 0, 1);
-    writeU16Test(&bytes, lig_subst + 2, 18);
-    writeU16Test(&bytes, lig_subst + 4, 1);
-    writeU16Test(&bytes, lig_subst + 6, 8);
-    const ligature_set = lig_subst + 8;
-    writeU16Test(&bytes, ligature_set + 0, 1);
-    writeU16Test(&bytes, ligature_set + 2, 4);
-    const ligature = ligature_set + 4;
-    writeU16Test(&bytes, ligature + 0, 40);
-    writeU16Test(&bytes, ligature + 2, 2);
-    writeU16Test(&bytes, ligature + 4, 2);
-    writeCoverage1(&bytes, lig_subst + 18, 1);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 2, 3 });
-
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, allocator, .{});
-
-    // Contextual extension lookups must not fall back to a one-glyph scratch
-    // run when the wrapped subtable is LigatureSubst: the ligature needs to see
-    // and consume the following component in the original glyph buffer.
-    try std.testing.expectEqualSlices(GlyphId, &.{ 40, 3 }, glyphs.items);
 }
 
 test "GSUB context nested chaining lookup sees real lookahead" {
@@ -1438,6 +1313,8 @@ test {
     _ = @import("gsub/tests/execution/contextual/context/integration.zig")
         .suite(ContextExecutionIntegrationTestBindings);
     _ = @import("gsub/tests/execution/contextual/context/accelerator_integration.zig")
+        .suite(ContextExecutionIntegrationTestBindings);
+    _ = @import("gsub/tests/execution/contextual/nested/ligature_integration.zig")
         .suite(ContextExecutionIntegrationTestBindings);
     _ = @import("gsub/tests/execution/contextual/records/mutation_integration.zig")
         .suite(ChainingExecutionIntegrationTestBindings);

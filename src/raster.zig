@@ -4,7 +4,7 @@ const font_raster = @import("font.zig").raster_backend;
 const imx = @import("imx");
 const font_mod = @import("font.zig");
 const glyph_mod = @import("glyph.zig");
-const layout = @import("layout.zig");
+const run_types = @import("layout/types/runs.zig");
 const curves = @import("raster/curves.zig");
 const scanline = @import("raster/scanline.zig");
 const prepared_scanline = @import("raster/prepared_scanline.zig");
@@ -869,11 +869,11 @@ pub const Rasterizer = struct {
         try self.emboldenBounds(target, bounds);
     }
 
-    pub fn renderRun(self: *Rasterizer, target: *RenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32) !void {
+    pub fn renderRun(self: *Rasterizer, target: *RenderTarget, run: run_types.GlyphRun, x: f32, baseline_y: f32) !void {
         return try self.renderRunAtCoords(target, run, x, baseline_y, &.{});
     }
 
-    pub fn renderRunAtCoords(self: *Rasterizer, target: *RenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32, normalized_variation_coords: []const f32) !void {
+    pub fn renderRunAtCoords(self: *Rasterizer, target: *RenderTarget, run: run_types.GlyphRun, x: f32, baseline_y: f32, normalized_variation_coords: []const f32) !void {
         var pen_x = x;
         const font = face_mod.backend.font(run.font);
         const use_default_outline = normalizedVariationCoordinatesAreDefault(normalized_variation_coords);
@@ -888,21 +888,21 @@ pub const Rasterizer = struct {
         }
     }
 
-    pub fn renderShapedText(self: *Rasterizer, target: *RenderTarget, shaped: layout.ShapedText, x: f32, baseline_y: f32) !void {
+    pub fn renderShapedText(self: *Rasterizer, target: *RenderTarget, shaped: run_types.ShapedText, x: f32, baseline_y: f32) !void {
         return try self.renderShapedTextAtCoords(target, shaped, x, baseline_y, &.{});
     }
 
-    pub fn renderShapedTextAtCoords(self: *Rasterizer, target: *RenderTarget, shaped: layout.ShapedText, x: f32, baseline_y: f32, normalized_variation_coords: []const f32) !void {
+    pub fn renderShapedTextAtCoords(self: *Rasterizer, target: *RenderTarget, shaped: run_types.ShapedText, x: f32, baseline_y: f32, normalized_variation_coords: []const f32) !void {
         for (shaped.runs) |run| {
             try self.renderRunAtCoords(target, run.glyphRun(shaped), x + run.x_offset, baseline_y, normalized_variation_coords);
         }
     }
 
-    pub fn renderColorRun(self: *Rasterizer, target: *ColorRenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32, palette_index: u16) !void {
+    pub fn renderColorRun(self: *Rasterizer, target: *ColorRenderTarget, run: run_types.GlyphRun, x: f32, baseline_y: f32, palette_index: u16) !void {
         return try self.renderColorRunAtCoords(target, run, x, baseline_y, palette_index, &.{});
     }
 
-    pub fn renderColorRunAtCoords(self: *Rasterizer, target: *ColorRenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
+    pub fn renderColorRunAtCoords(self: *Rasterizer, target: *ColorRenderTarget, run: run_types.GlyphRun, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
         var pen_x = x;
         for (run.glyphs) |position| {
             try self.renderColorGlyphAtCoords(target, face_mod.backend.font(run.font), position.glyph_id, run.font_size, pen_x + position.x_offset, baseline_y + position.y_offset, palette_index, normalized_variation_coords);
@@ -910,11 +910,11 @@ pub const Rasterizer = struct {
         }
     }
 
-    pub fn renderColorShapedText(self: *Rasterizer, target: *ColorRenderTarget, shaped: layout.ShapedText, x: f32, baseline_y: f32, palette_index: u16) !void {
+    pub fn renderColorShapedText(self: *Rasterizer, target: *ColorRenderTarget, shaped: run_types.ShapedText, x: f32, baseline_y: f32, palette_index: u16) !void {
         return try self.renderColorShapedTextAtCoords(target, shaped, x, baseline_y, palette_index, &.{});
     }
 
-    pub fn renderColorShapedTextAtCoords(self: *Rasterizer, target: *ColorRenderTarget, shaped: layout.ShapedText, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
+    pub fn renderColorShapedTextAtCoords(self: *Rasterizer, target: *ColorRenderTarget, shaped: run_types.ShapedText, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
         for (shaped.runs) |run| {
             try self.renderColorRunAtCoords(target, run.glyphRun(shaped), x + run.x_offset, baseline_y, palette_index, normalized_variation_coords);
         }

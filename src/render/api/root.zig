@@ -7,7 +7,7 @@ const std = @import("std");
 
 const face_mod = @import("../../font/face/root.zig");
 const glyph_mod = @import("../../glyph.zig");
-const layout = @import("../../layout.zig");
+const run_types = @import("../../layout/types/runs.zig");
 const raster = @import("../../raster.zig");
 
 pub const Rasterizer = struct {
@@ -92,7 +92,7 @@ pub const Rasterizer = struct {
     pub fn drawRun(
         self: *Rasterizer,
         target: *raster.RenderTarget,
-        run: layout.GlyphRun,
+        run: run_types.GlyphRun,
         x: f32,
         baseline_y: f32,
     ) !void {
@@ -102,7 +102,7 @@ pub const Rasterizer = struct {
     pub fn drawRunAt(
         self: *Rasterizer,
         target: *raster.RenderTarget,
-        run: layout.GlyphRun,
+        run: run_types.GlyphRun,
         x: f32,
         baseline_y: f32,
         normalized_coords: []const f32,
@@ -119,7 +119,7 @@ pub const Rasterizer = struct {
     pub fn drawText(
         self: *Rasterizer,
         target: *raster.RenderTarget,
-        shaped: layout.ShapedText,
+        shaped: run_types.ShapedText,
         x: f32,
         baseline_y: f32,
     ) !void {
@@ -134,7 +134,7 @@ pub const Rasterizer = struct {
     pub fn drawColorRun(
         self: *Rasterizer,
         target: *raster.ColorRenderTarget,
-        run: layout.GlyphRun,
+        run: run_types.GlyphRun,
         x: f32,
         baseline_y: f32,
         palette_index: u16,

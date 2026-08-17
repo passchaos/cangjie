@@ -3,7 +3,12 @@ const face_mod = @import("font/face/root.zig");
 const font_raster = @import("font.zig").raster_backend;
 const font_mod = @import("font.zig");
 const glyph_mod = @import("glyph.zig");
-const layout = @import("layout.zig");
+const glyph_position = @import("layout/glyph_position.zig");
+const paragraph_types = @import("layout/types/paragraph.zig");
+const run_types = @import("layout/types/runs.zig");
+const context_output = @import("shaping/context/output.zig");
+const font_fallback = @import("shaping/fallback/font/root.zig");
+const shaping_orchestrator = @import("shaping/orchestrator.zig");
 
 pub const GlyphRenderMode = enum {
     atlas_mask,
@@ -30,7 +35,7 @@ pub const BridgeOptions = struct {
     include_path_requests: bool = true,
     include_color_glyphs: bool = true,
     render_mode: GlyphRenderMode = .atlas_mask,
-    cursor_position: ?layout.TextPosition = null,
+    cursor_position: ?paragraph_types.TextPosition = null,
     selection_start_glyph: ?usize = null,
     selection_end_glyph: ?usize = null,
 };
@@ -171,12 +176,12 @@ pub const ColorGlyphDrawCommand = struct {
 };
 
 pub const TextCursorGeometry = struct {
-    rect: layout.TextRect,
-    position: layout.TextPosition,
+    rect: paragraph_types.TextRect,
+    position: paragraph_types.TextPosition,
 };
 
 pub const TextSelectionGeometry = struct {
-    rect: layout.TextRect,
+    rect: paragraph_types.TextRect,
 };
 
 pub const GlyphDrawList = struct {
@@ -209,7 +214,7 @@ pub const GlyphDrawList = struct {
     }
 };
 
-pub fn buildGlyphDrawList(allocator: std.mem.Allocator, paragraph: layout.ParagraphLayout, options: BridgeOptions) !GlyphDrawList {
+pub fn buildGlyphDrawList(allocator: std.mem.Allocator, paragraph: paragraph_types.ParagraphLayout, options: BridgeOptions) !GlyphDrawList {
     for (options.normalized_variation_coords) |coord| {
         if (!std.math.isFinite(coord) or coord < -1 or coord > 1) return error.BadSfnt;
     }
@@ -221,7 +226,7 @@ pub fn buildGlyphDrawList(allocator: std.mem.Allocator, paragraph: layout.Paragr
 
 const BridgeBuilder = struct {
     allocator: std.mem.Allocator,
-    paragraph: layout.ParagraphLayout,
+    paragraph: paragraph_types.ParagraphLayout,
     options: BridgeOptions,
     glyphs: std.ArrayList(PositionedGlyph) = .empty,
     runs: std.ArrayList(GlyphRunDrawCommand) = .empty,
@@ -234,7 +239,7 @@ const BridgeBuilder = struct {
     cursor: ?TextCursorGeometry = null,
     variation_hash: u64,
 
-    fn init(allocator: std.mem.Allocator, paragraph: layout.ParagraphLayout, options: BridgeOptions) BridgeBuilder {
+    fn init(allocator: std.mem.Allocator, paragraph: paragraph_types.ParagraphLayout, options: BridgeOptions) BridgeBuilder {
         return .{
             .allocator = allocator,
             .paragraph = paragraph,
@@ -283,7 +288,7 @@ const BridgeBuilder = struct {
         }
     }
 
-    fn appendLine(self: *BridgeBuilder, line: layout.ParagraphLine, line_index: usize) !void {
+    fn appendLine(self: *BridgeBuilder, line: paragraph_types.ParagraphLine, line_index: usize) !void {
         const line_glyph_end = line.glyph_start + line.glyph_len;
         const baseline_y = self.options.origin_y + line.y + line.baseline;
         for (line.runs(self.paragraph)) |run| {
@@ -305,7 +310,7 @@ const BridgeBuilder = struct {
         }
     }
 
-    fn appendGlyphsInRange(self: *BridgeBuilder, run: layout.CascadeRun, start: usize, end: usize, line: layout.ParagraphLine, baseline_y: f32) !void {
+    fn appendGlyphsInRange(self: *BridgeBuilder, run: run_types.CascadeRun, start: usize, end: usize, line: paragraph_types.ParagraphLine, baseline_y: f32) !void {
         const font = face_mod.backend.font(run.font);
         const line_glyph_end = line.glyph_start + line.glyph_len;
         var pen_x = self.options.origin_x + line.x + advanceBefore(self.paragraph.glyphs[line.glyph_start..line_glyph_end], start - line.glyph_start);
@@ -606,7 +611,7 @@ fn colorGlyphPaint(
     return .none;
 }
 
-fn advanceBefore(glyphs: []const layout.GlyphPosition, count: usize) f32 {
+fn advanceBefore(glyphs: []const glyph_position.GlyphPosition, count: usize) f32 {
     var width: f32 = 0;
     for (glyphs[0..@min(count, glyphs.len)]) |glyph| {
         width += glyph.x_advance;
@@ -625,11 +630,11 @@ test "render bridge builds glyph draw commands and deduplicated requests" {
     defer font.deinit();
 
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
+    const cascade = font_fallback.Cascade.init(&fonts);
 
-    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    var layout_buffer = context_output.Buffer.init(allocator);
     defer layout_buffer.deinit();
-    const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "AA", 20, .{
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "AA", 20, .{
         .max_width = 100,
         .line_height = 24,
     });
@@ -673,11 +678,11 @@ test "render bridge carries slug analytic render mode metadata" {
     defer font.deinit();
 
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
+    const cascade = font_fallback.Cascade.init(&fonts);
 
-    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    var layout_buffer = context_output.Buffer.init(allocator);
     defer layout_buffer.deinit();
-    const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
         .max_width = 100,
         .line_height = 24,
     });
@@ -715,11 +720,11 @@ test "render bridge emits color glyph layer metadata" {
     defer font.deinit();
 
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
+    const cascade = font_fallback.Cascade.init(&fonts);
 
-    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    var layout_buffer = context_output.Buffer.init(allocator);
     defer layout_buffer.deinit();
-    const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
         .max_width = 100,
         .line_height = 24,
     });
@@ -747,10 +752,10 @@ test "render bridge owns decoded gzip SVG documents" {
     var font = try font_mod.Font.parse(allocator, bytes);
     defer font.deinit();
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
-    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    const cascade = font_fallback.Cascade.init(&fonts);
+    var layout_buffer = context_output.Buffer.init(allocator);
     defer layout_buffer.deinit();
-    const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
         .max_width = 100,
         .line_height = 24,
     });
@@ -777,10 +782,10 @@ test "render bridge emits embedded PNG color atlas metadata" {
     try std.testing.expect(!font.hasOutlineData());
 
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
-    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    const cascade = font_fallback.Cascade.init(&fonts);
+    var layout_buffer = context_output.Buffer.init(allocator);
     defer layout_buffer.deinit();
-    const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 16, .{
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 16, .{
         .max_width = 100,
         .line_height = 20,
     });
@@ -819,10 +824,10 @@ test "render bridge resolves sbix dupe records before atlas emission" {
     var font = try font_mod.Font.parse(allocator, bytes);
     defer font.deinit();
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
-    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    const cascade = font_fallback.Cascade.init(&fonts);
+    var layout_buffer = context_output.Buffer.init(allocator);
     defer layout_buffer.deinit();
-    const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 16, .{
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 16, .{
         .max_width = 100,
         .line_height = 20,
     });
@@ -847,10 +852,10 @@ test "render bridge preserves CBDT format 19 shared metrics" {
     var font = try font_mod.Font.parse(allocator, bytes);
     defer font.deinit();
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
-    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    const cascade = font_fallback.Cascade.init(&fonts);
+    var layout_buffer = context_output.Buffer.init(allocator);
     defer layout_buffer.deinit();
-    const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 16, .{
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 16, .{
         .max_width = 100,
         .line_height = 20,
     });
@@ -874,21 +879,21 @@ test "render bridge skips atlas and path work for empty bitmap-only glyphs" {
     var font = try font_mod.Font.parse(allocator, bytes);
     defer font.deinit();
 
-    const glyphs = [_]layout.GlyphPosition{.{
+    const glyphs = [_]glyph_position.GlyphPosition{.{
         .glyph_id = 0,
         .codepoint = ' ',
         .cluster = 0,
         .x_advance = 8,
     }};
-    const runs = [_]layout.CascadeRun{.{
-        .font = &font,
+    const runs = [_]run_types.CascadeRun{.{
+        .font = face_mod.backend.face(&font),
         .font_index = 0,
         .font_size = 16,
         .glyph_start = 0,
         .glyph_len = 1,
         .x_offset = 0,
     }};
-    const lines = [_]layout.ParagraphLine{.{
+    const lines = [_]paragraph_types.ParagraphLine{.{
         .glyph_start = 0,
         .glyph_len = 1,
         .run_start = 0,
@@ -904,7 +909,7 @@ test "render bridge skips atlas and path work for empty bitmap-only glyphs" {
         .descent = 4,
         .leading = 0,
     }};
-    const paragraph = layout.ParagraphLayout{
+    const paragraph = paragraph_types.ParagraphLayout{
         .glyphs = &glyphs,
         .runs = &runs,
         .lines = &lines,
@@ -935,11 +940,11 @@ test "render bridge emits COLR v1 paint metadata" {
     defer font.deinit();
 
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
+    const cascade = font_fallback.Cascade.init(&fonts);
 
-    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    var layout_buffer = context_output.Buffer.init(allocator);
     defer layout_buffer.deinit();
-    const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
         .max_width = 100,
         .line_height = 24,
     });
@@ -964,11 +969,11 @@ test "render bridge emits COLR v1 PaintGlyph metadata" {
     defer font.deinit();
 
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
+    const cascade = font_fallback.Cascade.init(&fonts);
 
-    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    var layout_buffer = context_output.Buffer.init(allocator);
     defer layout_buffer.deinit();
-    const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
         .max_width = 100,
         .line_height = 24,
     });
@@ -1000,11 +1005,11 @@ test "render bridge emits COLR v1 PaintColrLayers metadata" {
     defer font.deinit();
 
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
+    const cascade = font_fallback.Cascade.init(&fonts);
 
-    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    var layout_buffer = context_output.Buffer.init(allocator);
     defer layout_buffer.deinit();
-    const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
         .max_width = 100,
         .line_height = 24,
     });
@@ -1028,10 +1033,10 @@ test "render bridge resolves variable COLR paint and color stops" {
     defer font.deinit();
 
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
-    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    const cascade = font_fallback.Cascade.init(&fonts);
+    var layout_buffer = context_output.Buffer.init(allocator);
     defer layout_buffer.deinit();
-    const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A", 20, .{
         .max_width = 100,
         .line_height = 24,
         .normalized_variation_coords = &.{0.5},
@@ -1094,7 +1099,7 @@ test "render bridge variation cache identity preserves coordinates" {
 }
 
 test "render bridge rejects invalid variation coordinates" {
-    const empty = layout.ParagraphLayout{
+    const empty = paragraph_types.ParagraphLayout{
         .glyphs = &.{},
         .runs = &.{},
         .lines = &.{},

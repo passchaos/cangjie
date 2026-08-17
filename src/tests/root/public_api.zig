@@ -536,6 +536,22 @@ test "shaping and paragraph domains expose reusable library workflows" {
     defer caret.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 0), caret.issue_count);
 
+    var gray_target = try cangjie.render.GrayTarget.init(
+        allocator,
+        32,
+        32,
+    );
+    defer gray_target.deinit();
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
+    defer rasterizer.deinit();
+    rasterizer.setSmallGlyphEmboldening(false);
+    try rasterizer.drawText(&gray_target, shaped, 2, 24);
+    var covered_pixels: usize = 0;
+    for (gray_target.pixels) |pixel| {
+        if (pixel != 0) covered_pixels += 1;
+    }
+    try std.testing.expect(covered_pixels != 0);
+
     var paragraph = try engine.prepareParagraph(cascade, .{
         .text = "A A A",
         .font_size = 20,
@@ -549,6 +565,40 @@ test "shaping and paragraph domains expose reusable library workflows" {
         .{ .max_width = 15 },
     );
     try std.testing.expect(narrow.lines.len > 1);
+
+    var draw_list = try cangjie.render.buildGlyphDrawList(
+        allocator,
+        narrow,
+        .{},
+    );
+    defer draw_list.deinit();
+    // Paragraph output retains spaces for hit testing and line geometry, while
+    // the draw list omits empty outlines. The three visible "A" glyphs must
+    // still preserve their source clusters through the renderer bridge.
+    try std.testing.expectEqual(@as(usize, 3), draw_list.glyphs.len);
+    try std.testing.expectEqual(@as(usize, 0), draw_list.glyphs[0].cluster);
+    try std.testing.expectEqual(@as(usize, 2), draw_list.glyphs[1].cluster);
+    try std.testing.expectEqual(@as(usize, 4), draw_list.glyphs[2].cluster);
+
+    var debug_storage: [2048]u8 = undefined;
+    var debug_writer = std.Io.Writer.fixed(&debug_storage);
+    try cangjie.debug.dumpShapeRuns(&debug_writer, shaped);
+    try cangjie.debug.dumpParagraphLayout(&debug_writer, narrow);
+    try cangjie.debug.dumpFontFallback(&debug_writer, cascade, "A");
+    try cangjie.debug.dumpMissingGlyphs(&debug_writer, cascade, "Z");
+    const debug_output = debug_writer.buffered();
+    try std.testing.expect(
+        std.mem.indexOf(u8, debug_output, "shape.runs") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, debug_output, "paragraph size=") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, debug_output, "font_fallback") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, debug_output, "missing_glyphs") != null,
+    );
 }
 
 test "public container value keeps decoded bytes alive for its face" {

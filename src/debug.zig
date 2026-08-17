@@ -1,7 +1,14 @@
 const std = @import("std");
 const buffer_mod = @import("buffer.zig");
 const font_mod = @import("font.zig");
-const layout = @import("layout.zig");
+const glyph_position = @import("layout/glyph_position.zig");
+const paragraph_types = @import("layout/types/paragraph.zig");
+const run_types = @import("layout/types/runs.zig");
+const layout_cache = @import("shaping/context/cache/root.zig");
+const context_output = @import("shaping/context/output.zig");
+const font_fallback = @import("shaping/fallback/font/root.zig");
+const shaping_orchestrator = @import("shaping/orchestrator.zig");
+const shaping_plan = @import("shaping/plan/root.zig");
 const unicode = @import("unicode.zig");
 
 pub const OverlayKind = enum {
@@ -17,7 +24,7 @@ pub const OverlayKind = enum {
 
 pub const DebugOverlay = struct {
     kind: OverlayKind,
-    rect: layout.TextRect,
+    rect: paragraph_types.TextRect,
     line_start_x: f32 = 0,
     line_start_y: f32 = 0,
     line_end_x: f32 = 0,
@@ -38,7 +45,7 @@ pub const DebugOverlayList = struct {
 };
 
 pub const OverlayOptions = struct {
-    cursor: ?layout.TextPosition = null,
+    cursor: ?paragraph_types.TextPosition = null,
     selection_start_glyph: ?usize = null,
     selection_end_glyph: ?usize = null,
     bidi_text: ?[]const u8 = null,
@@ -128,7 +135,7 @@ pub fn dumpLineBreaks(writer: *std.Io.Writer, allocator: std.mem.Allocator, text
     }
 }
 
-pub fn dumpFontFallback(writer: *std.Io.Writer, cascade: layout.FontCascade, text: []const u8) !void {
+pub fn dumpFontFallback(writer: *std.Io.Writer, cascade: font_fallback.Cascade, text: []const u8) !void {
     try writer.print("font_fallback fonts={d}\n", .{cascade.fonts.len});
     var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
     while (it.i < text.len) {
@@ -146,7 +153,7 @@ pub fn dumpFontFallback(writer: *std.Io.Writer, cascade: layout.FontCascade, tex
     }
 }
 
-pub fn dumpShapeRuns(writer: *std.Io.Writer, shaped: layout.ShapedText) !void {
+pub fn dumpShapeRuns(writer: *std.Io.Writer, shaped: run_types.ShapedText) !void {
     try writer.print("shape.runs count={d} glyphs={d} width={d:.3}\n", .{ shaped.runs.len, shaped.glyphs.len, shaped.width() });
     for (shaped.runs, 0..) |run, index| {
         try writer.print("  run[{d}] font_index={d} glyphs={d}..{d} font_size={d:.3} x_offset={d:.3}\n", .{
@@ -160,7 +167,7 @@ pub fn dumpShapeRuns(writer: *std.Io.Writer, shaped: layout.ShapedText) !void {
     }
 }
 
-pub fn dumpGlyphClusters(writer: *std.Io.Writer, glyphs: []const layout.GlyphPosition) !void {
+pub fn dumpGlyphClusters(writer: *std.Io.Writer, glyphs: []const glyph_position.GlyphPosition) !void {
     try writer.print("glyph_clusters count={d}\n", .{glyphs.len});
     for (glyphs, 0..) |glyph, index| {
         try writer.print("  glyph[{d}] id={d} cp=U+{X:0>4} cluster={d} advance={d:.3} offset=({d:.3},{d:.3})\n", .{
@@ -175,7 +182,7 @@ pub fn dumpGlyphClusters(writer: *std.Io.Writer, glyphs: []const layout.GlyphPos
     }
 }
 
-pub fn dumpParagraphLayout(writer: *std.Io.Writer, paragraph: layout.ParagraphLayout) !void {
+pub fn dumpParagraphLayout(writer: *std.Io.Writer, paragraph: paragraph_types.ParagraphLayout) !void {
     try writer.print("paragraph size=({d:.3},{d:.3}) lines={d} glyphs={d} runs={d}\n", .{
         paragraph.width,
         paragraph.height,
@@ -202,7 +209,7 @@ pub fn dumpParagraphLayout(writer: *std.Io.Writer, paragraph: layout.ParagraphLa
     }
 }
 
-pub fn dumpHitTest(writer: *std.Io.Writer, paragraph: layout.ParagraphLayout, x: f32, y: f32) !void {
+pub fn dumpHitTest(writer: *std.Io.Writer, paragraph: paragraph_types.ParagraphLayout, x: f32, y: f32) !void {
     const hit = paragraph.hitTest(x, y);
     try writer.print("hit_test point=({d:.3},{d:.3}) glyph_index={d} cluster={d} trailing={}\n", .{
         x,
@@ -213,7 +220,7 @@ pub fn dumpHitTest(writer: *std.Io.Writer, paragraph: layout.ParagraphLayout, x:
     });
 }
 
-pub fn dumpSelectionRects(writer: *std.Io.Writer, allocator: std.mem.Allocator, paragraph: layout.ParagraphLayout, start_glyph: usize, end_glyph: usize) !void {
+pub fn dumpSelectionRects(writer: *std.Io.Writer, allocator: std.mem.Allocator, paragraph: paragraph_types.ParagraphLayout, start_glyph: usize, end_glyph: usize) !void {
     const rects = try paragraph.selectionRects(allocator, start_glyph, end_glyph);
     defer allocator.free(rects);
     try writer.print("selection_rects glyphs={d}..{d} count={d}\n", .{ start_glyph, end_glyph, rects.len });
@@ -228,7 +235,7 @@ pub fn dumpSelectionRects(writer: *std.Io.Writer, allocator: std.mem.Allocator, 
     }
 }
 
-pub fn buildDebugOverlays(allocator: std.mem.Allocator, paragraph: layout.ParagraphLayout, options: OverlayOptions) !DebugOverlayList {
+pub fn buildDebugOverlays(allocator: std.mem.Allocator, paragraph: paragraph_types.ParagraphLayout, options: OverlayOptions) !DebugOverlayList {
     var overlays = std.ArrayList(DebugOverlay).empty;
     errdefer overlays.deinit(allocator);
 
@@ -290,7 +297,7 @@ pub fn buildDebugOverlays(allocator: std.mem.Allocator, paragraph: layout.Paragr
     };
 }
 
-fn appendGlyphAndClusterOverlays(allocator: std.mem.Allocator, overlays: *std.ArrayList(DebugOverlay), paragraph: layout.ParagraphLayout, line: layout.ParagraphLine, line_index: usize) !void {
+fn appendGlyphAndClusterOverlays(allocator: std.mem.Allocator, overlays: *std.ArrayList(DebugOverlay), paragraph: paragraph_types.ParagraphLayout, line: paragraph_types.ParagraphLine, line_index: usize) !void {
     var x = line.x;
     const glyph_end = line.glyph_start + line.glyph_len;
     var previous_cluster: ?usize = null;
@@ -336,7 +343,7 @@ fn appendGlyphAndClusterOverlays(allocator: std.mem.Allocator, overlays: *std.Ar
     });
 }
 
-fn appendFallbackRegionOverlays(allocator: std.mem.Allocator, overlays: *std.ArrayList(DebugOverlay), paragraph: layout.ParagraphLayout, line: layout.ParagraphLine, line_index: usize) !void {
+fn appendFallbackRegionOverlays(allocator: std.mem.Allocator, overlays: *std.ArrayList(DebugOverlay), paragraph: paragraph_types.ParagraphLayout, line: paragraph_types.ParagraphLine, line_index: usize) !void {
     const line_glyph_end = line.glyph_start + line.glyph_len;
     for (line.runs(paragraph)) |run| {
         const start = @max(line.glyph_start, run.glyph_start);
@@ -354,7 +361,7 @@ fn appendFallbackRegionOverlays(allocator: std.mem.Allocator, overlays: *std.Arr
     }
 }
 
-fn advanceBefore(glyphs: []const layout.GlyphPosition, count: usize) f32 {
+fn advanceBefore(glyphs: []const glyph_position.GlyphPosition, count: usize) f32 {
     var width: f32 = 0;
     for (glyphs[0..@min(count, glyphs.len)]) |glyph| {
         width += glyph.x_advance;
@@ -383,7 +390,7 @@ pub fn dumpDebugOverlays(writer: *std.Io.Writer, overlays: DebugOverlayList) !vo
     }
 }
 
-pub fn dumpMissingGlyphs(writer: *std.Io.Writer, cascade: layout.FontCascade, text: []const u8) !void {
+pub fn dumpMissingGlyphs(writer: *std.Io.Writer, cascade: font_fallback.Cascade, text: []const u8) !void {
     var missing_count: usize = 0;
     var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
     while (it.i < text.len) {
@@ -418,13 +425,13 @@ pub fn dumpFontCoverage(writer: *std.Io.Writer, font: *const font_mod.Font, text
     }
 }
 
-pub fn dumpShapePlanCacheStats(writer: *std.Io.Writer, cache: layout.ShapePlanCache) !void {
+pub fn dumpShapePlanCacheStats(writer: *std.Io.Writer, cache: shaping_plan.ShapePlanCache) !void {
     var total_hits: usize = 0;
     for (cache.plans.items) |plan| total_hits += plan.hits;
     try writer.print("shape_cache plans={d} hits={d}\n", .{ cache.plans.items.len, total_hits });
 }
 
-pub fn dumpShapedRunCacheStats(writer: *std.Io.Writer, cache: layout.ShapedRunCache) !void {
+pub fn dumpShapedRunCacheStats(writer: *std.Io.Writer, cache: layout_cache.ShapedRunCache) !void {
     var entry_hits: usize = 0;
     var glyphs: usize = 0;
     var runs: usize = 0;
@@ -443,7 +450,7 @@ pub fn dumpShapedRunCacheStats(writer: *std.Io.Writer, cache: layout.ShapedRunCa
     });
 }
 
-pub fn dumpFontFallbackCacheStats(writer: *std.Io.Writer, cache: layout.FontFallbackCache) !void {
+pub fn dumpFontFallbackCacheStats(writer: *std.Io.Writer, cache: layout_cache.FontFallbackCache) !void {
     const scalar_entries = cache.scalarEntryCount();
     const cluster_entries = cache.clusterEntryCount();
     try writer.print("font_fallback_cache entries={d} scalar_entries={d} cluster_entries={d} hits={d} misses={d}\n", .{
@@ -455,7 +462,7 @@ pub fn dumpFontFallbackCacheStats(writer: *std.Io.Writer, cache: layout.FontFall
     });
 }
 
-pub fn dumpGlyphMetricsCacheStats(writer: *std.Io.Writer, cache: layout.GlyphMetricsCache) !void {
+pub fn dumpGlyphMetricsCacheStats(writer: *std.Io.Writer, cache: layout_cache.GlyphMetricsCache) !void {
     try writer.print("glyph_metrics_cache entries={d} hits={d} misses={d}\n", .{
         cache.entries.count(),
         cache.hits,
@@ -463,7 +470,7 @@ pub fn dumpGlyphMetricsCacheStats(writer: *std.Io.Writer, cache: layout.GlyphMet
     });
 }
 
-pub fn dumpGlyphIndexCacheStats(writer: *std.Io.Writer, cache: layout.GlyphIndexCache) !void {
+pub fn dumpGlyphIndexCacheStats(writer: *std.Io.Writer, cache: layout_cache.GlyphIndexCache) !void {
     try writer.print("glyph_index_cache entries={d} hits={d} misses={d}\n", .{
         cache.entries.count(),
         cache.hits,
@@ -495,30 +502,30 @@ test "debug dumps unicode bidi paragraph hit selection and cache stats" {
     defer font.deinit();
 
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
+    const cascade = font_fallback.Cascade.init(&fonts);
 
-    var layout_buffer = layout.LayoutBuffer.init(allocator);
+    var layout_buffer = context_output.Buffer.init(allocator);
     defer layout_buffer.deinit();
-    const shaped = try layout.TextShaper.shapeUtf8Cascade(cascade, &layout_buffer, "A A", 20);
-    const paragraph = try layout.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A A", 20, .{
+    const shaped = try shaping_orchestrator.TextShaper.shapeUtf8Cascade(cascade, &layout_buffer, "A A", 20);
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A A", 20, .{
         .max_width = 100,
         .line_height = 24,
     });
 
-    var cache = layout.ShapePlanCache.init(allocator);
-    defer cache.deinit();
-    _ = try cache.getOrPut(layout.ShapePlanKey.fromText("A", .{}));
-    var shaped_cache = layout.ShapedRunCache.init(allocator);
+    var plan_cache = shaping_plan.ShapePlanCache.init(allocator);
+    defer plan_cache.deinit();
+    _ = try plan_cache.getOrPut(shaping_plan.ShapePlanKey.fromText("A", .{}));
+    var shaped_cache = layout_cache.ShapedRunCache.init(allocator);
     defer shaped_cache.deinit();
-    var fallback_cache = layout.FontFallbackCache.init(allocator);
+    var fallback_cache = layout_cache.FontFallbackCache.init(allocator);
     defer fallback_cache.deinit();
     _ = try fallback_cache.selectFont(cascade, 'A');
     _ = try fallback_cache.selectFont(cascade, 'A');
-    var metrics_cache = layout.GlyphMetricsCache.init(allocator);
+    var metrics_cache = layout_cache.GlyphMetricsCache.init(allocator);
     defer metrics_cache.deinit();
     _ = try metrics_cache.horizontalMetrics(&font, 1);
     _ = try metrics_cache.horizontalMetrics(&font, 1);
-    var glyph_index_cache = layout.GlyphIndexCache.init(allocator);
+    var glyph_index_cache = layout_cache.GlyphIndexCache.init(allocator);
     defer glyph_index_cache.deinit();
     _ = try glyph_index_cache.glyphIndex(&font, 'A');
     _ = try glyph_index_cache.glyphIndex(&font, 'A');
@@ -550,7 +557,7 @@ test "debug dumps unicode bidi paragraph hit selection and cache stats" {
     try dumpDebugOverlays(&writer, overlays);
     try dumpMissingGlyphs(&writer, cascade, "Z");
     try dumpFontCoverage(&writer, &font, "AZ");
-    try dumpShapePlanCacheStats(&writer, cache);
+    try dumpShapePlanCacheStats(&writer, plan_cache);
     try dumpShapedRunCacheStats(&writer, shaped_cache);
     try dumpFontFallbackCacheStats(&writer, fallback_cache);
     try dumpGlyphIndexCacheStats(&writer, glyph_index_cache);

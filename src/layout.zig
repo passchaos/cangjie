@@ -3,42 +3,19 @@ const face_mod = @import("font/face/root.zig");
 const font_shaping = @import("font.zig").shaping;
 const attachment = @import("attachment.zig");
 const Font = @import("font.zig").Font;
-const GdefLookupMetadata = @import("font.zig").GdefLookupMetadata;
 const GlyphId = @import("glyph.zig").GlyphId;
-const gpos = @import("gpos.zig");
 const ligature_provenance = @import("ligature_provenance.zig");
-const gsub = @import("gsub.zig");
 const layout_cache = @import("shaping/context/cache/root.zig");
 const context_output = @import("shaping/context/output.zig");
-const shaping_metadata = @import("shaping_metadata.zig");
-const shaping_sections = @import("shaping_sections.zig");
 const pipeline_types = @import("shaping/pipeline/types.zig");
+const segment_pipeline = @import("shaping/pipeline/segment.zig");
 const shaping_plan = @import("shaping/plan/root.zig");
 const plan_bidi = @import("shaping/plan/bidi.zig");
 const plan_resolution = @import("shaping/plan/resolution.zig");
 const plan_validation = @import("shaping/plan/validation.zig");
-const normalization = @import("shaping/pipeline/normalization/root.zig");
-const normalize_marks = normalization.marks;
-const normalize_native = normalization.native;
 const source_pipeline = @import("shaping/pipeline/source/root.zig");
-const gsub_pipeline = @import("shaping/pipeline/gsub/root.zig");
-const gsub_executor = gsub_pipeline.executor;
-const gsub_features = gsub_pipeline.features;
-const gsub_fraction = gsub_pipeline.fraction;
-const gsub_hangul = gsub_pipeline.hangul;
-const gsub_arabic = gsub_pipeline.shapers.arabic;
-const gsub_generic = gsub_pipeline.shapers.generic;
-const gsub_indic = gsub_pipeline.shapers.indic;
-const gsub_khmer = gsub_pipeline.shapers.khmer;
-const gsub_myanmar = gsub_pipeline.shapers.myanmar;
-const gsub_use = gsub_pipeline.shapers.use;
 const positioning = @import("shaping/pipeline/positioning/root.zig");
-const position_adjustments = positioning.adjustments;
 const position_attachments = positioning.attachments;
-const position_collect = positioning.collect;
-const position_engine = positioning.engine;
-const position_output = positioning.output;
-const position_policy = positioning.policy;
 const diagnostics = @import("shaping/diagnostics/root.zig");
 const diagnostic_caret = diagnostics.caret;
 const diagnostic_fallback = diagnostics.fallback;
@@ -48,7 +25,6 @@ const font_fallback = @import("shaping/fallback/font/root.zig");
 const fallback_segment = @import("shaping/fallback/segment.zig");
 const script_run_itemization =
     @import("shaping/itemization/script_runs.zig");
-const stch_feature = @import("shaping/features/stch/root.zig");
 const bidi_reorder = @import("layout/bidi/reorder/root.zig");
 const glyph_position = @import("layout/glyph_position.zig");
 const paragraph_options = @import("layout/paragraph/options.zig");
@@ -61,11 +37,10 @@ const shaped_boundary = @import("layout/line_break/shaped_boundary.zig");
 const styled_bidi = @import("layout/styled_bidi.zig");
 const styled_buffer = @import("layout/styled_buffer.zig");
 const styled_paragraph = @import("layout/styled_paragraph.zig");
-const bidi = @import("text/bidi.zig");
 const segmentation = @import("text/segmentation/root.zig");
 const unicode = @import("unicode.zig");
-const use_shaper = @import("use_shaper.zig");
-pub const ShapeStageProfile = @import("shape_profile.zig").ShapeStageProfile;
+const shape_profile_mod = @import("shape_profile.zig");
+pub const ShapeStageProfile = shape_profile_mod.ShapeStageProfile;
 pub const GdefMetadataCache = layout_cache.GdefMetadataCache;
 pub const GlyphIndexCache = layout_cache.GlyphIndexCache;
 pub const GlyphMetrics = layout_cache.GlyphMetrics;
@@ -201,14 +176,6 @@ const diagnoseClusterCaretConsistencyForLayout = diagnostic_caret.analyze;
 /// glyph-id cache because the same codepoint can map to different glyph ids in
 /// different fonts, while fallback only needs the winning font index.
 pub const FontFallbackCache = layout_cache.FontFallbackCache;
-
-fn gdefMetadataForShaping(font: *const Font, allocator: std.mem.Allocator, cache: ?*GdefMetadataCache, out_owned: *?GdefLookupMetadata) !*const GdefLookupMetadata {
-    if (cache) |metadata_cache| {
-        return try metadata_cache.metadata(font);
-    }
-    out_owned.* = try font_shaping.gdefLookupMetadataForShaping(font, allocator);
-    return &out_owned.*.?;
-}
 
 pub const LayoutBuffer = context_output.Buffer;
 
@@ -770,26 +737,35 @@ const FixedFallbackContext = struct {
 fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !GlyphRun {
     const shape_profile = buffer.shape_profile;
     const profile_io = buffer.profile_io;
-    const total_start = shapeProfileNow(shape_profile, profile_io);
+    const total_start = shape_profile_mod.now(shape_profile, profile_io);
     defer {
-        if (shape_profile) |p| p.total_ns += shapeProfileElapsed(total_start, profile_io);
+        if (shape_profile) |p| p.total_ns += shape_profile_mod.elapsed(total_start, profile_io);
     }
 
-    const validate_start = shapeProfileNow(shape_profile, profile_io);
+    const validate_start = shape_profile_mod.now(shape_profile, profile_io);
     try plan_validation.input(text, font_size, options);
-    if (shape_profile) |p| p.validate_ns += shapeProfileElapsed(validate_start, profile_io);
+    if (shape_profile) |p| p.validate_ns += shape_profile_mod.elapsed(validate_start, profile_io);
 
     buffer.clear();
-    const options_start = shapeProfileNow(shape_profile, profile_io);
+    const options_start = shape_profile_mod.now(shape_profile, profile_io);
     const lookup_options = plan_resolution.forText(text, options);
-    if (shape_profile) |p| p.options_ns += shapeProfileElapsed(options_start, profile_io);
+    if (shape_profile) |p| p.options_ns += shape_profile_mod.elapsed(options_start, profile_io);
 
-    try shapeSegmentInto(font, metrics_cache, glyph_index_cache, buffer, text, font_size, 0, lookup_options);
-    const bidi_start = shapeProfileNow(shape_profile, profile_io);
+    try segment_pipeline.run(.{
+        .font = font,
+        .metrics_cache = metrics_cache,
+        .glyph_index_cache = glyph_index_cache,
+        .buffer = buffer,
+        .text = text,
+        .font_size = font_size,
+        .cluster_base = 0,
+        .lookup_options = lookup_options,
+    });
+    const bidi_start = shape_profile_mod.now(shape_profile, profile_io);
     if (plan_bidi.shouldReorderShapedRun(text, options, lookup_options.all_ascii)) {
         try applyBidiVisualOrder(buffer, text, options.direction, font);
     }
-    if (shape_profile) |p| p.bidi_ns += shapeProfileElapsed(bidi_start, profile_io);
+    if (shape_profile) |p| p.bidi_ns += shape_profile_mod.elapsed(bidi_start, profile_io);
     return buffer.run(font, font_size);
 }
 
@@ -862,7 +838,16 @@ const glyphSourceEnd = shaped_boundary.glyphSourceEnd;
 
 fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, font_index: usize, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen: PenPosition, lookup_options: ResolvedLookupOptions) !PenPosition {
     const glyph_start = buffer.glyphs.items.len;
-    try shapeSegmentInto(font, metrics_cache, glyph_index_cache, buffer, text, font_size, cluster_base, lookup_options);
+    try segment_pipeline.run(.{
+        .font = font,
+        .metrics_cache = metrics_cache,
+        .glyph_index_cache = glyph_index_cache,
+        .buffer = buffer,
+        .text = text,
+        .font_size = font_size,
+        .cluster_base = cluster_base,
+        .lookup_options = lookup_options,
+    });
     const glyph_len = buffer.glyphs.items.len - glyph_start;
     // A segment made solely of default-ignorables/variation selectors may
     // legitimately emit no glyphs. Do not retain a zero-length font run: it
@@ -887,621 +872,6 @@ fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
 }
 
 const ResolvedLookupOptions = pipeline_types.ResolvedLookupOptions;
-
-fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, resolved_lookup_options: ResolvedLookupOptions) !void {
-    const scale = font_size / @as(f32, @floatFromInt(font.units_per_em));
-    var selected_lookup_options = resolved_lookup_options.lookup;
-    const explicit_script_tag = if (resolved_lookup_options.lookup.script_tag_explicit) resolved_lookup_options.lookup.script_tag else null;
-    const layout_scripts: layout_cache.LayoutScriptSelections = if (buffer.lookup_selection_cache) |cache|
-        try cache.layoutScripts(font, resolved_lookup_options.lookup.script, explicit_script_tag)
-    else
-        .{
-            .gsub = try font_shaping.selectGsubScriptForShaping(font, resolved_lookup_options.lookup.script, explicit_script_tag),
-            .gpos = try font_shaping.selectGposScriptForShaping(font, resolved_lookup_options.lookup.script, explicit_script_tag),
-        };
-    const gsub_script = layout_scripts.gsub;
-    const gpos_script = layout_scripts.gpos;
-    if (gsub_script.tag) |selected_tag| {
-        selected_lookup_options.script_tag = selected_tag;
-    }
-    const gpos_script_tag = gpos_script.tag orelse selected_lookup_options.script_tag;
-    const scratch = &buffer.shape_scratch;
-    const glyph_ids = &scratch.glyph_ids;
-    const codepoints = &scratch.codepoints;
-    const clusters = &scratch.clusters;
-    const source_ends = &scratch.source_ends;
-    const glyph_source_indices = &scratch.glyph_source_indices;
-    const glyph_cluster_indices = &scratch.glyph_cluster_indices;
-    const glyph_substituted = &scratch.glyph_substituted;
-    const glyph_stage_substituted = &scratch.glyph_stage_substituted;
-    const ligature_components = &scratch.ligature_components;
-    const joining_forms = &scratch.joining_forms;
-    const source_features = &scratch.source_features;
-    const source_syllables = &scratch.source_syllables;
-    const source_rphf_substituted = &scratch.source_rphf_substituted;
-    const source_pref_substituted = &scratch.source_pref_substituted;
-    const glyph_script_positions = &scratch.glyph_script_positions;
-    const glyph_output_indices = &scratch.glyph_output_indices;
-    const stch_actions = &scratch.stch_actions;
-    const source_boundaries = &scratch.source_boundaries;
-
-    const shape_profile = buffer.shape_profile;
-    const profile_io = buffer.profile_io;
-    const cmap_start = shapeProfileNow(shape_profile, profile_io);
-    const source_result = try source_pipeline.populate(
-        buffer.allocator,
-        font,
-        glyph_index_cache,
-        scratch,
-        text,
-        cluster_base,
-        resolved_lookup_options.all_ascii,
-        selected_lookup_options,
-    );
-    const has_default_ignorable = source_result.has_default_ignorable;
-    var default_ignorable_invisible_glyph_id =
-        source_result.default_ignorable_invisible_glyph_id;
-    if (shape_profile) |p| {
-        p.cmap_ns += shapeProfileElapsed(cmap_start, profile_io);
-        p.glyph_count += glyph_ids.items.len;
-    }
-    source_boundaries.reset(cluster_base, text.len, clusters.items);
-
-    selected_lookup_options.run_has_decimal_number = source_result.run_has_decimal_number;
-    selected_lookup_options.run_has_letter = source_result.run_has_letter;
-    const lookup_options = selected_lookup_options;
-
-    const shape_in_native_direction = lookup_options.shouldShapeInNativeDirection();
-    if (shape_in_native_direction) {
-        normalize_native.reverse(scratch);
-    }
-
-    const gdef_start = shapeProfileNow(shape_profile, profile_io);
-    var owned_gdef_metadata: ?GdefLookupMetadata = null;
-    const gdef_metadata = try gdefMetadataForShaping(font, buffer.allocator, buffer.gdef_metadata_cache, &owned_gdef_metadata);
-    if (shape_profile) |p| p.gdef_ns += shapeProfileElapsed(gdef_start, profile_io);
-    defer if (owned_gdef_metadata) |*metadata| metadata.deinit(buffer.allocator);
-
-    var hangul_feature_overrides_buf: [17]unicode.FeatureOverride = undefined;
-    const gsub_feature_overrides = if (gsub_hangul.needsDefaultDisabledCalt(codepoints.items))
-        gsub_features.withDefaultDisabledCalt(hangul_feature_overrides_buf[0..], lookup_options.features) orelse lookup_options.features
-    else
-        lookup_options.features;
-
-    var gsub_random_state: u32 = 1;
-    var gsub_run_limits = try gsub.runtime.Limits.init(glyph_ids.items.len);
-    // Keep source metadata parallel to glyph ids through GSUB. GPOS MarkLigPos
-    // needs the original component sources for a ligature glyph; otherwise a
-    // mark after a ligature can only guess a component from post-substitution
-    // mark order.
-    var gsub_options = gsub.runtime.Options{
-        .script_tag = lookup_options.script_tag,
-        .language_tag = lookup_options.language_tag,
-        .text_direction = if (lookup_options.direction == .rtl) .rtl else .ltr,
-        .features = gsub_feature_overrides,
-        .normalized_variation_coords = lookup_options.normalized_variation_coords,
-        .vertical = lookup_options.writing_mode.isVertical(),
-        .apply_all_if_unselected = false,
-        .glyph_source_indices = glyph_source_indices,
-        .glyph_cluster_indices = glyph_cluster_indices,
-        .cluster_level = lookup_options.cluster_level orelse .monotone_characters,
-        .glyph_substituted = glyph_substituted,
-        .ligature_components = ligature_components,
-        .source_boundaries = source_boundaries,
-        // The LTR ASCII cmap fast path proves there is no CGJ, joiner, or
-        // default-ignorable scalar for contextual/ligature skipping. Omit the
-        // source slice so generic Latin GSUB avoids scanning the identity
-        // source map merely to re-prove those codepoint bounds.
-        .source_codepoints = if (resolved_lookup_options.all_ascii and lookup_options.direction == .ltr)
-            null
-        else
-            codepoints.items,
-        .shape_profile = shape_profile,
-        .profile_fast_path = buffer.profile_fast_path,
-        .profile_io = profile_io,
-        .visible_variation_selectors = lookup_options.not_found_variation_selector_glyph != null,
-        .random_state = &gsub_random_state,
-        .aat_buffer_reversed = shape_in_native_direction,
-    };
-    // Script shapers split one logical GSUB pass into several feature stages.
-    // Keep HarfBuzz-style operation and growth limits shared across every
-    // stage, including nested contextual lookups, rather than resetting the
-    // safety envelope for each feature.
-    gsub_run_limits.applyTo(&gsub_options);
-    const gsub_start = shapeProfileNow(shape_profile, profile_io);
-    const gsub_after_proof = if (buffer.gsub_table_proof_cache) |proof_cache| proof: {
-        try proof_cache.prove(font);
-        break :proof true;
-    } else false;
-    if (buffer.lookup_selection_cache) |selection_cache| {
-        gsub_options.lookup_accelerators = try selection_cache.gsubLookupAccelerators(font);
-    }
-    const gsub_context = gsub_executor.Context{
-        .allocator = buffer.allocator,
-        .lookup_selection_cache = buffer.lookup_selection_cache,
-    };
-    if (lookup_options.beginning_of_text and
-        lookup_options.context_before.len == 0 and
-        codepoints.items.len != 0 and
-        unicode.isUnicodeMarkCodepoint(codepoints.items[0]) and
-        lookup_options.script_tag != .mym2)
-    {
-        const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
-        try insertBeginningDottedCircle(
-            buffer.allocator,
-            glyph_ids,
-            codepoints,
-            clusters,
-            source_ends,
-            glyph_source_indices,
-            glyph_cluster_indices,
-            glyph_substituted,
-            ligature_components,
-            dotted_circle_glyph,
-        );
-        gsub_options.source_codepoints = codepoints.items;
-        source_boundaries.bindSourceByteStarts(clusters.items);
-    }
-    const use_shape =
-        gsub_use.supports(lookup_options.script_tag) and
-        codepoints.items.len != 0;
-    const myanmar_shape =
-        gsub_myanmar.supports(lookup_options.script_tag) and
-        codepoints.items.len != 0;
-    const khmer_shape =
-        gsub_khmer.supports(lookup_options.script_tag) and
-        codepoints.items.len != 0;
-    const early_zero_mark_shape = use_shape or myanmar_shape;
-    if (use_shape or myanmar_shape) {
-        // Cluster ownership for source text must be established before vowel
-        // constraints inject synthetic U+25CC sources that do not exist in the
-        // original UTF-8 byte stream.
-        try use_shaper.assignShapingClusterOwners(
-            buffer.allocator,
-            text,
-            cluster_base,
-            clusters.items,
-            codepoints.items,
-            glyph_cluster_indices.items,
-        );
-        const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
-        if (use_shape) {
-            try use_shaper.insertVowelConstraintDottedCircles(
-                buffer.allocator,
-                glyph_ids,
-                codepoints,
-                clusters,
-                source_ends,
-                glyph_source_indices,
-                glyph_cluster_indices,
-                glyph_substituted,
-                ligature_components,
-                dotted_circle_glyph,
-                false,
-            );
-            try use_shaper.decomposeCanonicalSources(
-                buffer.allocator,
-                font,
-                glyph_ids,
-                codepoints,
-                clusters,
-                source_ends,
-                glyph_source_indices,
-                glyph_cluster_indices,
-                glyph_substituted,
-                ligature_components,
-                lookup_options.cluster_level orelse .monotone_graphemes,
-            );
-        }
-        gsub_options.source_codepoints = codepoints.items;
-        source_boundaries.bindSourceByteStarts(clusters.items);
-    }
-    // HarfBuzz normalizes every shaping buffer before script-specific GSUB.
-    // Keep immutable source codepoints in logical order, but reorder the glyph
-    // stream and its parallel metadata by modified combining class. USE then
-    // runs its syllable machine over this canonicalized source permutation.
-    const mark_normalization_input = normalize_marks.Input{
-        .glyph_ids = glyph_ids,
-        .glyph_source_indices = glyph_source_indices,
-        .glyph_cluster_indices = glyph_cluster_indices,
-        .glyph_substituted = glyph_substituted,
-        .ligature_components = ligature_components,
-        .codepoints = codepoints.items,
-    };
-    normalize_marks.reorder(
-        mark_normalization_input,
-        lookup_options.cluster_level,
-    );
-    var arabic_joining_features: ?[]const u32 = null;
-    if (lookup_options.script_tag == .arab) {
-        normalize_marks.reorderArabicModifiers(mark_normalization_input);
-    }
-    if (gsub_arabic.supports(lookup_options.script_tag) and
-        codepoints.items.len != 0)
-    {
-        const arabic_result = try gsub_arabic.run(.{
-            .allocator = buffer.allocator,
-            .font = font,
-            .context = gsub_context,
-            .table_proved = gsub_after_proof,
-            .glyph_ids = glyph_ids,
-            .codepoints = codepoints.items,
-            .glyph_source_indices = glyph_source_indices.items,
-            .ligature_components = ligature_components,
-            .source_features = source_features,
-            .joining_forms = joining_forms,
-            .base_gsub_options = gsub_options,
-            .lookup_options = lookup_options,
-            .gdef_metadata = gdef_metadata.*,
-            .shape_in_native_direction = shape_in_native_direction,
-            .profile = shape_profile,
-            .profile_io = profile_io,
-        });
-        arabic_joining_features = arabic_result.joining_features;
-    } else if (myanmar_shape) {
-        const dotted_circle_glyph =
-            try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
-        try gsub_myanmar.run(.{
-            .allocator = buffer.allocator,
-            .font = font,
-            .context = gsub_context,
-            .table_proved = gsub_after_proof,
-            .glyph_ids = glyph_ids,
-            .glyph_source_indices = glyph_source_indices,
-            .glyph_cluster_indices = glyph_cluster_indices,
-            .glyph_substituted = glyph_substituted,
-            .ligature_components = ligature_components,
-            .glyph_script_positions = glyph_script_positions,
-            .source_syllables = source_syllables,
-            .codepoints = codepoints.items,
-            .base_gsub_options = gsub_options,
-            .lookup_options = lookup_options,
-            .gdef_metadata = gdef_metadata.*,
-            .dotted_circle_glyph = dotted_circle_glyph,
-        });
-    } else if (khmer_shape) {
-        const dotted_circle_glyph =
-            try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
-        try gsub_khmer.run(.{
-            .allocator = buffer.allocator,
-            .font = font,
-            .context = gsub_context,
-            .table_proved = gsub_after_proof,
-            .glyph_ids = glyph_ids,
-            .codepoints = codepoints,
-            .clusters = clusters,
-            .source_ends = source_ends,
-            .glyph_source_indices = glyph_source_indices,
-            .glyph_cluster_indices = glyph_cluster_indices,
-            .glyph_substituted = glyph_substituted,
-            .ligature_components = ligature_components,
-            .source_features = source_features,
-            .source_syllables = source_syllables,
-            .source_boundaries = source_boundaries,
-            .base_gsub_options = gsub_options,
-            .gdef_metadata = gdef_metadata.*,
-            .dotted_circle_glyph = dotted_circle_glyph,
-        });
-    } else if (use_shape) {
-        try gsub_use.run(.{
-            .allocator = buffer.allocator,
-            .font = font,
-            .glyph_index_cache = glyph_index_cache,
-            .context = gsub_context,
-            .table_proved = gsub_after_proof,
-            .glyph_ids = glyph_ids,
-            .codepoints = codepoints.items,
-            .glyph_source_indices = glyph_source_indices,
-            .glyph_cluster_indices = glyph_cluster_indices,
-            .glyph_substituted = glyph_substituted,
-            .glyph_stage_substituted = glyph_stage_substituted,
-            .ligature_components = ligature_components,
-            .source_features = source_features,
-            .source_syllables = source_syllables,
-            .source_rphf_substituted = source_rphf_substituted,
-            .source_pref_substituted = source_pref_substituted,
-            .base_gsub_options = gsub_options,
-            .lookup_options = lookup_options,
-            .gdef_metadata = gdef_metadata.*,
-        });
-    } else {
-        const indic_shape =
-            gsub_indic.supports(lookup_options.script_tag) and
-            codepoints.items.len != 0;
-        const indic_input = gsub_indic.Input{
-            .allocator = buffer.allocator,
-            .font = font,
-            .glyph_index_cache = glyph_index_cache,
-            .context = gsub_context,
-            .table_proved = gsub_after_proof,
-            .glyph_ids = glyph_ids,
-            .codepoints = codepoints,
-            .clusters = clusters,
-            .source_ends = source_ends,
-            .glyph_source_indices = glyph_source_indices,
-            .glyph_cluster_indices = glyph_cluster_indices,
-            .glyph_substituted = glyph_substituted,
-            .glyph_stage_substituted = glyph_stage_substituted,
-            .ligature_components = ligature_components,
-            .source_features = source_features,
-            .source_syllables = source_syllables,
-            .source_pref_substituted = source_pref_substituted,
-            .source_boundaries = source_boundaries,
-            .options = &gsub_options,
-            .lookup_options = lookup_options,
-            .gdef_metadata = gdef_metadata.*,
-        };
-        if (indic_shape) try gsub_indic.prepare(indic_input);
-        try gsub_generic.run(.{
-            .allocator = buffer.allocator,
-            .font = font,
-            .context = gsub_context,
-            .table_proved = gsub_after_proof,
-            .glyph_ids = glyph_ids,
-            .codepoints = codepoints.items,
-            .glyph_source_indices = glyph_source_indices,
-            .glyph_cluster_indices = glyph_cluster_indices,
-            .source_features = source_features,
-            .ligature_components = ligature_components,
-            .options = &gsub_options,
-            .lookup_options = lookup_options,
-            .gdef_metadata = gdef_metadata.*,
-        });
-        if (indic_shape) try gsub_indic.finish(indic_input);
-    }
-    if (gsub_fraction.hasRunnable(codepoints.items)) {
-        try source_features.resize(buffer.allocator, codepoints.items.len);
-        var fraction_options = gsub_options;
-        fraction_options.source_features = source_features.items;
-        if (gsub_fraction.mark(source_features.items, codepoints.items, .numerator)) {
-            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, &.{.{ .tag = unicode.tag("numr"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
-        }
-        if (gsub_fraction.mark(source_features.items, codepoints.items, .fraction)) {
-            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, &.{.{ .tag = unicode.tag("frac"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
-        }
-        if (gsub_fraction.mark(source_features.items, codepoints.items, .denominator)) {
-            try gsub_executor.applyAfterRunProof(font, gsub_context, gsub_after_proof, &.{.{ .tag = unicode.tag("dnom"), .source_scoped = true }}, glyph_ids, fraction_options, gdef_metadata.*);
-        }
-    }
-
-    // OpenType SingleSubst format 1 is a modulo-16-bit graph. Individual
-    // lookups may use IDs above maxp as internal states, but no such transient
-    // value may escape the complete GSUB stage into GPOS, metrics, or outlines.
-    try font_shaping.validateShapedGlyphRunForShaping(font, glyph_ids.items);
-
-    if (shape_profile) |p| p.gsub_ns += shapeProfileElapsed(gsub_start, profile_io);
-
-    const gpos_adjustments = &scratch.gpos_adjustments;
-    const gpos_start = shapeProfileNow(shape_profile, profile_io);
-    const position_collection = try position_collect.run(.{
-        .allocator = buffer.allocator,
-        .font = font,
-        .lookup_selection_cache = buffer.lookup_selection_cache,
-        .gpos_table_proof_cache = buffer.gpos_table_proof_cache,
-        .glyph_ids = glyph_ids.items,
-        .glyph_source_indices = glyph_source_indices.items,
-        .codepoints = codepoints.items,
-        .glyph_substituted = glyph_substituted.items,
-        .ligature_components = ligature_components,
-        .source_boundaries = source_boundaries,
-        .gdef_metadata = gdef_metadata.*,
-        .gpos_script_tag = gpos_script_tag,
-        .options = lookup_options,
-        .has_default_ignorable = has_default_ignorable,
-        .run_may_have_mark_attachments = position_policy.runMayHaveMarkAttachments(
-            glyph_ids.items,
-            codepoints.items,
-            glyph_source_indices.items,
-            gdef_metadata.*,
-        ),
-        .adjustments = gpos_adjustments,
-        .profile = shape_profile,
-        .profile_io = profile_io,
-    });
-    const gpos_unsafe_glyphs = position_collection.unsafe_glyphs;
-    const use_kerx_positioning = position_collection.use_kerx_positioning;
-    if (shape_profile) |p| p.gpos_ns += shapeProfileElapsed(gpos_start, profile_io);
-
-    const position_start = shapeProfileNow(shape_profile, profile_io);
-    const position_sort_start = shapeProfileNow(shape_profile, profile_io);
-    std.sort.heap(gpos.Adjustment, gpos_adjustments.items, {}, position_adjustments.lessThan);
-    if (shape_profile) |p| p.position_sort_ns += shapeProfileElapsed(position_sort_start, profile_io);
-    const has_gpos_attachments = position_attachments.hasGpos(gpos_adjustments.items);
-    const kerx_adjustments = &scratch.kerx_adjustments;
-    const kerx_simple_pair_eligible = &scratch.kerx_simple_pair_eligible;
-    const position_engine_plan = try position_engine.prepare(.{
-        .allocator = buffer.allocator,
-        .font = font,
-        .glyph_ids = glyph_ids.items,
-        .codepoints = codepoints.items,
-        .glyph_source_indices = glyph_source_indices.items,
-        .glyph_substituted = glyph_substituted.items,
-        .gdef_metadata = gdef_metadata.*,
-        .use_kerx_positioning = use_kerx_positioning,
-        .has_gpos_attachments = has_gpos_attachments,
-        .early_zero_mark_shape = early_zero_mark_shape,
-        .options = lookup_options,
-        .simple_pair_eligible = kerx_simple_pair_eligible,
-        .kerx_adjustments = kerx_adjustments,
-    });
-    const invisible_glyph_id = if (has_default_ignorable)
-        if (default_ignorable_invisible_glyph_id) |glyph|
-            glyph
-        else resolve: {
-            const glyph =
-                try glyphIndexWithOptionalCache(font, glyph_index_cache, ' ');
-            default_ignorable_invisible_glyph_id = glyph;
-            break :resolve glyph;
-        }
-    else
-        0;
-    const output_result = try position_output.emit(.{
-        .allocator = buffer.allocator,
-        .font = font,
-        .metrics_cache = metrics_cache,
-        .glyph_index_cache = glyph_index_cache,
-        .source_boundaries = source_boundaries,
-        .gdef_metadata = gdef_metadata.*,
-        .gpos_adjustments = gpos_adjustments.items,
-        .gpos_unsafe_glyphs = gpos_unsafe_glyphs,
-        .kerx_lookup = position_engine_plan.kerx_lookup,
-        .kern_lookup = position_engine_plan.kern_lookup,
-        .kerx_adjustments = kerx_adjustments.items,
-        .kerning_enabled = position_engine_plan.kerning_enabled,
-        .has_gpos_attachments = has_gpos_attachments,
-        .has_kerx_state_attachments = position_engine_plan.has_state_attachments,
-        .has_gpos_positioning = position_engine_plan.has_gpos_positioning,
-        .early_zero_mark_shape = early_zero_mark_shape,
-        .fallback_mark_enabled = position_engine_plan.fallback_mark_enabled,
-        .invisible_glyph_id = invisible_glyph_id,
-        .arabic_joining_features = arabic_joining_features,
-        .cluster_base = cluster_base,
-        .font_size = font_size,
-        .scale = scale,
-        .options = lookup_options,
-        .output = &buffer.glyphs,
-        .scratch = scratch,
-        .profile = shape_profile,
-        .profile_io = profile_io,
-    });
-    const segment_glyph_start = output_result.segment_glyph_start;
-    const attachment_links = &scratch.attachment_links;
-    const has_kerx_attachments = (position_engine_plan.has_state_attachments and
-        position_engine_plan.summary.has_cross_stream_adjustment) or
-        position_attachments.hasKerxMarks(kerx_adjustments.items);
-    if (has_gpos_attachments or has_kerx_attachments) {
-        const attachment_start = shapeProfileNow(shape_profile, profile_io);
-        position_attachments.compact(
-            attachment_links.items,
-            glyph_output_indices.items,
-            buffer.glyphs.items.len - segment_glyph_start,
-        );
-        position_attachments.propagate(
-            buffer.glyphs.items[segment_glyph_start..],
-            attachment_links.items[0 .. buffer.glyphs.items.len - segment_glyph_start],
-            lookup_options,
-        );
-        if (shape_profile) |p| p.position_attachment_ns += shapeProfileElapsed(attachment_start, profile_io);
-    }
-    if (stch_actions.items.len != 0) {
-        const stch_start = shapeProfileNow(shape_profile, profile_io);
-        try stch_feature.apply(
-            buffer.allocator,
-            &buffer.glyphs,
-            stch_actions.items,
-            segment_glyph_start,
-            lookup_options.direction == .rtl,
-            shape_in_native_direction and lookup_options.shapingDirection() == .rtl,
-            scale,
-            font,
-            metrics_cache,
-            lookup_options.normalized_variation_coords,
-        );
-        if (shape_profile) |p| p.position_stch_ns += shapeProfileElapsed(stch_start, profile_io);
-    }
-    if (!lookup_options.writing_mode.isVertical()) {
-        const tracking_start = shapeProfileNow(shape_profile, profile_io);
-        if (try font_shaping.horizontalTrackingForShaping(font, buffer.allocator, font_size)) |tracking| {
-            if (tracking != 0) {
-                const tracking_advance = tracking * scale;
-                for (buffer.glyphs.items[segment_glyph_start..]) |*glyph| {
-                    glyph.x_advance += tracking_advance;
-                }
-            }
-        }
-        if (shape_profile) |p| p.position_tracking_ns += shapeProfileElapsed(tracking_start, profile_io);
-    }
-    if (shape_in_native_direction and lookup_options.shapingDirection() == .rtl) {
-        const reverse_start = shapeProfileNow(shape_profile, profile_io);
-        std.mem.reverse(GlyphPosition, buffer.glyphs.items[segment_glyph_start..]);
-        if (shape_profile) |p| p.position_reverse_ns += shapeProfileElapsed(reverse_start, profile_io);
-    }
-    if (shape_profile) |p| p.position_ns += shapeProfileElapsed(position_start, profile_io);
-}
-
-fn shapeProfileNow(profile: ?*ShapeStageProfile, io: ?std.Io) i128 {
-    return if (profile != null) std.Io.Clock.now(.awake, io.?).nanoseconds else 0;
-}
-
-fn shapeProfileElapsed(start: i128, io: ?std.Io) i128 {
-    return std.Io.Clock.now(.awake, io.?).nanoseconds - start;
-}
-
-fn insertBeginningDottedCircle(
-    allocator: std.mem.Allocator,
-    glyph_ids: *std.ArrayList(GlyphId),
-    codepoints: *std.ArrayList(u21),
-    clusters: *std.ArrayList(usize),
-    source_ends: *std.ArrayList(usize),
-    glyph_source_indices: *std.ArrayList(usize),
-    glyph_cluster_indices: *std.ArrayList(usize),
-    glyph_substituted: *std.ArrayList(bool),
-    ligature_components: *ligature_provenance.Store,
-    dotted_circle_glyph: GlyphId,
-) !void {
-    if (dotted_circle_glyph == 0 or codepoints.items.len == 0 or glyph_ids.items.len == 0) return;
-    const source_start = clusters.items[0];
-    const source_end = source_ends.items[0];
-
-    try codepoints.replaceRange(allocator, 0, 0, &.{0x25cc});
-    errdefer _ = codepoints.orderedRemove(0);
-    try clusters.replaceRange(allocator, 0, 0, &.{source_start});
-    errdefer _ = clusters.orderedRemove(0);
-    try source_ends.replaceRange(allocator, 0, 0, &.{source_end});
-    errdefer _ = source_ends.orderedRemove(0);
-
-    for (glyph_source_indices.items) |*source| source.* += 1;
-    for (glyph_cluster_indices.items) |*owner| owner.* += 1;
-    ligature_components.shiftSourceIndices(0, 1);
-
-    try shaping_metadata.insert(
-        allocator,
-        glyph_ids,
-        glyph_source_indices,
-        glyph_cluster_indices,
-        glyph_substituted,
-        ligature_components,
-        0,
-        dotted_circle_glyph,
-        0,
-        0,
-    );
-}
-
-test "beginning item dotted circle creates a synthetic base source" {
-    const allocator = std.testing.allocator;
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.append(allocator, 3);
-    var codepoints = std.ArrayList(u21).empty;
-    defer codepoints.deinit(allocator);
-    try codepoints.append(allocator, 0x064e);
-    var clusters = std.ArrayList(usize).empty;
-    defer clusters.deinit(allocator);
-    try clusters.append(allocator, 0);
-    var source_ends = std.ArrayList(usize).empty;
-    defer source_ends.deinit(allocator);
-    try source_ends.append(allocator, 2);
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(allocator);
-    try sources.append(allocator, 0);
-    var cluster_owners = std.ArrayList(usize).empty;
-    defer cluster_owners.deinit(allocator);
-    try cluster_owners.append(allocator, 0);
-    var substituted = std.ArrayList(bool).empty;
-    defer substituted.deinit(allocator);
-    try substituted.append(allocator, false);
-    var ligatures = ligature_provenance.Store{};
-    defer ligatures.deinit(allocator);
-    try ligatures.infos.append(allocator, .{});
-
-    try insertBeginningDottedCircle(allocator, &glyphs, &codepoints, &clusters, &source_ends, &sources, &cluster_owners, &substituted, &ligatures, 4);
-
-    try std.testing.expectEqualSlices(GlyphId, &.{ 4, 3 }, glyphs.items);
-    try std.testing.expectEqualSlices(u21, &.{ 0x25cc, 0x064e }, codepoints.items);
-    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, sources.items);
-    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, cluster_owners.items);
-}
 
 test "attachment scratch is needed only for emitted attachment adjustments" {
     try std.testing.expect(!position_attachments.hasGpos(&.{
@@ -1540,9 +910,6 @@ test "attachment remapping scratch follows emitted adjustment type across runs" 
     try std.testing.expectEqual(@as(usize, 0), buffer.shape_scratch.attachment_links.items.len);
     try std.testing.expectEqual(@as(usize, 0), buffer.shape_scratch.glyph_output_indices.items.len);
 }
-
-const recordStchActions = stch_feature.recordSubstitutions;
-const appendStchActionForOutput = stch_feature.appendOutput;
 
 test "ordinary shaping clears and leaves stch sidecar empty" {
     const test_font = @import("test_font.zig");
@@ -1591,11 +958,6 @@ test "USE shaping zeroes synthesized nonspacing marks without a GDEF table" {
     try std.testing.expectApproxEqAbs(@as(f32, -800), run.glyphs[1].x_offset, 0.001);
 }
 
-fn isDefaultIgnorableForShaping(codepoint: u21) bool {
-    return unicode.isDefaultIgnorableForShaping(codepoint);
-}
-
-const glyphIndexWithOptionalCache = source_pipeline.glyphIndex;
 const fallbackGlyphIndexWithOptionalCache = source_pipeline.fallbackGlyphIndex;
 
 test "mapped spaces use the glyph index cache before fallback" {

@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-const impl = @import("../../debug.zig");
+const impl = @import("../../debug/root.zig");
 const face_mod = @import("../../font/face/root.zig");
 const shape_profile = @import("../../shape_profile.zig");
 

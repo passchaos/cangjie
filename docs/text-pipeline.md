@@ -231,6 +231,14 @@ The public diagnostic API remains thin.
 diagnostic orchestrator; report storage and the diagnostic algorithms do not
 depend on an aggregate layout façade or on runtime type erasure.
 
+Optional presentation diagnostics are grouped under `src/debug/`:
+
+- `overlays.zig` owns paragraph overlay records and geometry construction.
+- `dumps.zig` formats Unicode, font coverage, shaping, paragraph, cache, and
+  overlay state without owning those subsystems.
+- `root.zig` is the small internal export surface, and `tests.zig` exercises
+  the combined diagnostic workflow.
+
 The first executable shaping stage is isolated under
 `src/shaping/pipeline/source/`:
 

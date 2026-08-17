@@ -1,6 +1,12 @@
 const std = @import("std");
 const font_mod = @import("../../font.zig");
-const layout = @import("../../layout.zig");
+const glyph_position = @import("../glyph_position.zig");
+const retained_paragraph = @import("../paragraph/retained.zig");
+const styled_buffer = @import("../styled_buffer.zig");
+const styled_paragraph = @import("../styled_paragraph.zig");
+const context_output = @import("../../shaping/context/output.zig");
+const font_fallback = @import("../../shaping/fallback/font/root.zig");
+const shaping_orchestrator = @import("../../shaping/orchestrator.zig");
 const test_font = @import("../../test_font.zig");
 const unicode = @import("../../unicode.zig");
 
@@ -11,11 +17,11 @@ test "CJK soft-wrapped lines justify without spaces" {
     var font = try font_mod.Font.parse(allocator, bytes);
     defer font.deinit();
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
-    var buffer = layout.LayoutBuffer.init(allocator);
+    const cascade = font_fallback.Cascade.init(&fonts);
+    var buffer = context_output.Buffer.init(allocator);
     defer buffer.deinit();
 
-    const paragraph = try layout.TextShaper.layoutParagraphUtf8(
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
         cascade,
         &buffer,
         "一丁丂",
@@ -62,14 +68,14 @@ test "CJK punctuation boundaries retain natural spacing" {
     var font = try font_mod.Font.parse(allocator, bytes);
     defer font.deinit();
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
-    var buffer = layout.LayoutBuffer.init(allocator);
+    const cascade = font_fallback.Cascade.init(&fonts);
+    var buffer = context_output.Buffer.init(allocator);
     defer buffer.deinit();
 
     const disable_kern = [_]unicode.FeatureOverride{
         .{ .tag = unicode.tag("kern"), .enabled = false },
     };
-    const paragraph = try layout.TextShaper.layoutParagraphUtf8(
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
         cascade,
         &buffer,
         "一、丁一",
@@ -94,11 +100,11 @@ test "retained CJK reflow restores and reapplies inter-character expansion" {
     var font = try font_mod.Font.parse(allocator, bytes);
     defer font.deinit();
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
-    var shape_buffer = layout.LayoutBuffer.init(allocator);
+    const cascade = font_fallback.Cascade.init(&fonts);
+    var shape_buffer = context_output.Buffer.init(allocator);
     defer shape_buffer.deinit();
 
-    var paragraph = try layout.TextShaper.shapeParagraphUtf8(
+    var paragraph = try shaping_orchestrator.TextShaper.shapeParagraphUtf8(
         allocator,
         cascade,
         &shape_buffer,
@@ -109,7 +115,7 @@ test "retained CJK reflow restores and reapplies inter-character expansion" {
     defer paragraph.deinit();
     const pristine_advance = paragraph.glyphs[0].x_advance;
 
-    var reflow = layout.ReflowBuffer.init(allocator);
+    var reflow = retained_paragraph.ReflowBuffer.init(allocator);
     defer reflow.deinit();
     const justified = try paragraph.layout(&reflow, .{
         .max_width = 40,
@@ -130,7 +136,7 @@ test "retained CJK reflow restores and reapplies inter-character expansion" {
     });
     try std.testing.expectApproxEqAbs(@as(f32, 40), justified_again.lines[0].width, 0.001);
     try std.testing.expectEqualSlices(
-        layout.GlyphPosition,
+        glyph_position.GlyphPosition,
         paragraph.glyphs,
         shape_buffer.glyphs.items,
     );
@@ -143,13 +149,13 @@ test "styled CJK justification preserves metadata and geometry" {
     var font = try font_mod.Font.parse(allocator, bytes);
     defer font.deinit();
     const fonts = [_]*const font_mod.Font{&font};
-    const cascade = layout.FontCascade.init(&fonts);
-    var buffer = layout.LayoutBuffer.init(allocator);
+    const cascade = font_fallback.Cascade.init(&fonts);
+    var buffer = context_output.Buffer.init(allocator);
     defer buffer.deinit();
-    var styled = layout.StyledParagraphBuffer.init(allocator);
+    var styled = styled_buffer.Buffer.init(allocator);
     defer styled.deinit();
     const text = "一丁丂";
-    const spans = [_]layout.StyledParagraphSpan{
+    const spans = [_]styled_paragraph.Span{
         .{
             .byte_start = 0,
             .byte_len = "一".len,
@@ -164,7 +170,7 @@ test "styled CJK justification preserves metadata and geometry" {
         },
     };
 
-    const paragraph = try layout.TextShaper.layoutStyledParagraphUtf8(
+    const paragraph = try shaping_orchestrator.TextShaper.layoutStyledParagraphUtf8(
         cascade,
         &buffer,
         &styled,
@@ -185,7 +191,7 @@ test "styled CJK justification preserves metadata and geometry" {
     try std.testing.expectApproxEqAbs(@as(f32, 24), selection.width, 0.001);
 }
 
-fn lineAdvance(glyphs: []const layout.GlyphPosition) f32 {
+fn lineAdvance(glyphs: []const glyph_position.GlyphPosition) f32 {
     var total: f32 = 0;
     for (glyphs) |glyph| total += glyph.x_advance;
     return total;

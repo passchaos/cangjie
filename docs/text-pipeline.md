@@ -125,12 +125,10 @@ Paragraph request and ownership policy is organized under
 - `styled.zig` drives attributed shaping, fallback, metadata, reflow, and bidi
   over normalized style spans.
 
-`src/layout.zig` is now a small compatibility façade. It re-exports result,
-option, cache, and diagnostic types for consumers that have not yet moved to
-their domain modules, and statically binds the ordinary shaper for two
-diagnostic entry points. It does not own ordinary shaping, the one-font segment
-pipeline, reusable context storage, fallback segmentation, or paragraph
-orchestration.
+The former aggregate layout compatibility façade has been removed. Public and
+internal callers import result records, options, caches, diagnostics, shaping,
+and paragraph operations from their owning domain modules rather than through
+one aggregate implementation namespace.
 
 Post-shaping bidi output reconstruction is similarly isolated under
 `src/layout/bidi/reorder/`:
@@ -151,10 +149,9 @@ Public result records are separated from shaping algorithms under
 - `paragraph.zig` owns paragraph lines, metrics, hit testing, caret movement,
   and selection geometry.
 
-`src/layout.zig` re-exports these records for internal consumers, while the
-public façade groups them under `cangjie.paragraph` and `cangjie.shaping`.
-Implementation files therefore no longer mix data-model methods with OpenType
-shaping stages.
+The public façade groups these records under `cangjie.paragraph` and
+`cangjie.shaping`, while implementation files import `layout/types/` directly.
+Data-model methods therefore remain separate from OpenType shaping stages.
 
 Ordinary shaping and paragraph entry-point orchestration live in
 `src/shaping/orchestrator.zig`. This layer validates requests, selects
@@ -226,7 +223,7 @@ Renderer-free analysis is organized under `src/shaping/diagnostics/`:
 The public diagnostic API remains thin.
 `src/api/shaping/root.zig` statically binds the ordinary shaper directly to the
 diagnostic orchestrator; report storage and the diagnostic algorithms do not
-depend on `src/layout.zig` or on runtime type erasure.
+depend on an aggregate layout façade or on runtime type erasure.
 
 The first executable shaping stage is isolated under
 `src/shaping/pipeline/source/`:
@@ -494,8 +491,9 @@ container.
 
 The shaping integration suite is similarly rooted at
 `src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,
-GSUB, GPOS/AAT, attachment, pipeline-state, and vertical-layout modules.
-`src/layout.zig` contains no named integration tests.
+GSUB, GPOS/AAT, attachment, pipeline-state, and vertical-layout modules. Tests
+also import owning domain modules directly rather than restoring a test-only
+aggregate layout namespace.
 
 Cangjie deliberately does not own an editor or mutable text-buffer model.
 Applications and UI toolkits compose the public Unicode segmentation,
@@ -726,10 +724,9 @@ Future changes must preserve these rules:
 2. Define bounded cache budgets and eviction policy for long-lived engines,
    while preserving exact cache-key comparisons, explicit lifetime rules, and
    observable hit/miss statistics.
-3. Retire `src/layout.zig` after migrating its remaining tests and compatibility
-   consumers. All production paths already consume their shaping, paragraph,
-   rendering, debug, attributed-text, core-style, and database domain modules
-   directly.
+3. Keep public and test consumers on owning domain modules; do not recreate a
+   broad aggregate layout façade as new shaping or paragraph capabilities are
+   added.
 4. Add language-aware hyphenation as the next optional tailoring layer; keep
    dictionary segmentation and hyphenation outside the default UAX #14 state
    machine.

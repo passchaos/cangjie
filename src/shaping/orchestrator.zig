@@ -1,8 +1,8 @@
 //! Ordinary shaping, fallback, paragraph, and measurement orchestration.
 //!
 //! This module owns the concrete shaper below the public extended facade. It
-//! deliberately does not import `layout.zig`; ranged feature shaping can layer
-//! on top without creating a dependency cycle.
+//! deliberately depends only on focused layout-domain modules; ranged feature
+//! shaping can layer on top without creating a dependency cycle.
 
 const std = @import("std");
 

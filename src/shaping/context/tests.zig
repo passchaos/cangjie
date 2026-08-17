@@ -2,7 +2,7 @@ const std = @import("std");
 
 const face_mod = @import("../../font/face/root.zig");
 const Font = @import("../../font.zig").Font;
-const layout = @import("../../layout.zig");
+const styled_paragraph = @import("../../layout/styled_paragraph.zig");
 const context_mod = @import("root.zig");
 
 test "engine owns reusable caches and resets them together" {
@@ -138,7 +138,7 @@ test "engine owns styled metadata and paragraph measurement" {
 
     var engine = context_mod.Engine.init(std.testing.allocator, .{});
     defer engine.deinit();
-    const spans = [_]layout.StyledParagraphSpan{.{
+    const spans = [_]styled_paragraph.Span{.{
         .byte_start = 0,
         .byte_len = 2,
         .style_index = 7,

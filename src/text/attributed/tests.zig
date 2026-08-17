@@ -3,7 +3,10 @@ const core = @import("../../core.zig");
 const database = @import("../../database.zig");
 const font_mod = @import("../../font.zig");
 const glyph_mod = @import("../../glyph.zig");
-const layout = @import("../../layout.zig");
+const styled_buffer = @import("../../layout/styled_buffer.zig");
+const context_output = @import("../../shaping/context/output.zig");
+const font_fallback = @import("../../shaping/fallback/font/root.zig");
+const shaping_orchestrator = @import("../../shaping/orchestrator.zig");
 const test_font = @import("../../test_font.zig");
 const unicode = @import("../../unicode.zig");
 
@@ -45,7 +48,7 @@ test "unified attributed paragraph wraps sizes and preserves paint runs" {
     };
     var result = try core.layoutAttributedParagraphUtf8(
         allocator,
-        layout.FontCascade.init(&fonts),
+        font_fallback.Cascade.init(&fonts),
         .{ .text = "A A A", .spans = &spans },
         60,
     );
@@ -82,7 +85,7 @@ test "unified attributed paragraph applies feature spacing and measurement" {
     const attributed = core.AttributedText{ .text = "AAA", .spans = &spans };
     var result = try core.layoutAttributedParagraphUtf8(
         allocator,
-        layout.FontCascade.init(&fonts),
+        font_fallback.Cascade.init(&fonts),
         attributed,
         200,
     );
@@ -92,10 +95,10 @@ test "unified attributed paragraph applies feature spacing and measurement" {
     try std.testing.expectEqual(@as(glyph_mod.GlyphId, 2), result.glyphs[1].glyph_id);
     try std.testing.expectApproxEqAbs(@as(f32, 23), result.glyphs[1].x_advance, 0.001);
 
-    var buffer = layout.LayoutBuffer.init(allocator);
+    var buffer = context_output.Buffer.init(allocator);
     defer buffer.deinit();
     const measured = try core.measureAttributedTextUtf8(
-        layout.FontCascade.init(&fonts),
+        font_fallback.Cascade.init(&fonts),
         &buffer,
         attributed,
         200,
@@ -122,7 +125,7 @@ test "paint-only spans preserve ligatures and selection geometry" {
     };
     var result = try core.layoutAttributedParagraphUtf8(
         allocator,
-        layout.FontCascade.init(&fonts),
+        font_fallback.Cascade.init(&fonts),
         .{ .text = "AA", .spans = &spans },
         200,
     );
@@ -150,7 +153,7 @@ test "styled bidi order carries paint fragments" {
     };
     var result = try core.layoutAttributedParagraphUtf8(
         allocator,
-        layout.FontCascade.init(&fonts),
+        font_fallback.Cascade.init(&fonts),
         .{ .text = text, .spans = &spans },
         200,
     );
@@ -199,7 +202,7 @@ test "styled cascade fallback keeps size and minimum line height" {
     };
     var result = try core.layoutAttributedParagraphUtf8(
         allocator,
-        layout.FontCascade.init(&fonts),
+        font_fallback.Cascade.init(&fonts),
         .{ .text = "AB", .spans = &spans },
         200,
     );
@@ -232,7 +235,7 @@ test "styled Arabic items retain joining context" {
     };
     var result = try core.layoutAttributedParagraphUtf8(
         allocator,
-        layout.FontCascade.init(&fonts),
+        font_fallback.Cascade.init(&fonts),
         .{
             .text = "با",
             .spans = &spans,
@@ -252,7 +255,7 @@ test "styled ellipsis inherits terminal paint and buffer reuse clears metadata" 
     var owned = try OwnedFont.init(allocator, try test_font.buildMinimalTtf(allocator));
     defer owned.deinit();
     const fonts = [_]*const font_mod.Font{&owned.font};
-    const cascade = layout.FontCascade.init(&fonts);
+    const cascade = font_fallback.Cascade.init(&fonts);
     const spans = [_]core.StyleSpan{
         .{ .byte_range = .{ .start = 0, .len = 2 }, .style = .{} },
         .{ .byte_range = .{ .start = 2, .len = 5 }, .style = .{
@@ -273,11 +276,11 @@ test "styled ellipsis inherits terminal paint and buffer reuse clears metadata" 
     try std.testing.expectEqual(@as(u8, 180), result.style_runs[result.style_runs.len - 1].style.color.g);
     try std.testing.expectEqual(@as(u21, '.'), result.glyphs[result.glyphs.len - 1].codepoint);
 
-    var buffer = layout.LayoutBuffer.init(allocator);
+    var buffer = context_output.Buffer.init(allocator);
     defer buffer.deinit();
-    var styled = layout.StyledParagraphBuffer.init(allocator);
+    var styled = styled_buffer.Buffer.init(allocator);
     defer styled.deinit();
-    _ = try layout.TextShaper.layoutStyledParagraphUtf8(
+    _ = try shaping_orchestrator.TextShaper.layoutStyledParagraphUtf8(
         cascade,
         &buffer,
         &styled,
@@ -287,7 +290,7 @@ test "styled ellipsis inherits terminal paint and buffer reuse clears metadata" 
         .{ .max_width = 100 },
     );
     try std.testing.expectEqual(@as(usize, 2), styled.glyphMetadata().len);
-    _ = try layout.TextShaper.layoutParagraphUtf8(
+    _ = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
         cascade,
         &buffer,
         "AA",
@@ -297,7 +300,7 @@ test "styled ellipsis inherits terminal paint and buffer reuse clears metadata" 
     // Ordinary layout owns no style state and therefore cannot mutate a
     // caller-owned sidecar. Starting another styled layout resets it.
     try std.testing.expectEqual(@as(usize, 2), styled.glyphMetadata().len);
-    _ = try layout.TextShaper.layoutStyledParagraphUtf8(
+    _ = try shaping_orchestrator.TextShaper.layoutStyledParagraphUtf8(
         cascade,
         &buffer,
         &styled,
@@ -314,14 +317,14 @@ test "styled paragraph rejects incomplete source partitions" {
     var owned = try OwnedFont.init(allocator, try test_font.buildMinimalTtf(allocator));
     defer owned.deinit();
     const fonts = [_]*const font_mod.Font{&owned.font};
-    var buffer = layout.LayoutBuffer.init(allocator);
+    var buffer = context_output.Buffer.init(allocator);
     defer buffer.deinit();
-    var styled = layout.StyledParagraphBuffer.init(allocator);
+    var styled = styled_buffer.Buffer.init(allocator);
     defer styled.deinit();
     try std.testing.expectError(
         error.InvalidStyleSpans,
-        layout.TextShaper.layoutStyledParagraphUtf8(
-            layout.FontCascade.init(&fonts),
+        shaping_orchestrator.TextShaper.layoutStyledParagraphUtf8(
+            font_fallback.Cascade.init(&fonts),
             &buffer,
             &styled,
             "AA",

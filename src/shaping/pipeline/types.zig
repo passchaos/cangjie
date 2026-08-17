@@ -1,6 +1,6 @@
 //! Shared run properties passed between shaping pipeline stages.
 //!
-//! These types deliberately live below `layout.zig`: source mapping, GSUB,
+//! These types deliberately live below paragraph orchestration: source mapping, GSUB,
 //! GPOS, and final output all consume the same resolved properties, and none
 //! of those stages should need to import the paragraph/layout orchestrator.
 

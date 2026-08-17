@@ -2,7 +2,7 @@
 //!
 //! This module owns cached glyph/run arrays and the source identity needed to
 //! validate a hit. Copying an entry into a caller's output buffer remains an
-//! orchestration concern, keeping this cache independent of `layout.zig`.
+//! orchestration concern, keeping this cache independent of paragraph policy.
 
 const std = @import("std");
 

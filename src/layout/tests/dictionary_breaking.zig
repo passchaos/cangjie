@@ -1,15 +1,17 @@
 const std = @import("std");
 
+const paragraph_types = @import("../types/paragraph.zig");
+const retained_paragraph = @import("../paragraph/retained.zig");
+const styled_paragraph = @import("../styled_paragraph.zig");
 const context_mod = @import("../../shaping/context/root.zig");
 const dictionary_mod = @import("../../text/segmentation/root.zig");
 const face_mod = @import("../../font/face/root.zig");
 const font_mod = @import("../../font.zig");
-const layout = @import("../../layout.zig");
 const test_font = @import("../../test_font.zig");
 
 const thai_text = "กขคง";
 
-fn expectDictionaryFirstLine(paragraph: layout.ParagraphLayout) !void {
+fn expectDictionaryFirstLine(paragraph: paragraph_types.ParagraphLayout) !void {
     try std.testing.expectEqual(@as(usize, 3), paragraph.lines.len);
     try std.testing.expectEqual(@as(usize, 1), paragraph.lines[0].glyph_len);
     try std.testing.expectEqual(@as(usize, 0), paragraph.lines[0].byte_start);
@@ -75,7 +77,7 @@ test "dictionary opportunities reach one-shot retained and styled paragraphs" {
         },
     );
     defer shaped.deinit();
-    var reflow = layout.ReflowBuffer.init(allocator);
+    var reflow = retained_paragraph.ReflowBuffer.init(allocator);
     defer reflow.deinit();
     const retained = try shaped.layout(&reflow, .{
         .max_width = 35,
@@ -87,7 +89,7 @@ test "dictionary opportunities reach one-shot retained and styled paragraphs" {
         shaped.layout(&reflow, .{ .max_width = 35 }),
     );
 
-    const spans = [_]layout.StyledParagraphSpan{.{
+    const spans = [_]styled_paragraph.Span{.{
         .byte_start = 0,
         .byte_len = thai_text.len,
         .style_index = 4,

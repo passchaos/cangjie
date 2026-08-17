@@ -514,6 +514,11 @@ Font discovery and matching are implemented under `src/font/database/`:
 - `root.zig` owns loaded bytes and faces, directory scanning, fallback cascade
   construction, and the attributed-text bridge.
 
+Modern SFNT, dfont, WOFF1, and WOFF2 container loading is organized under
+`src/font/container/`. The root owns format dispatch and a uniform owned-byte
+contract; format-specific decoders and checked binary helpers remain separate,
+and fixture construction is test-only.
+
 Renderer-facing draw-list construction lives under `src/render/bridge/`.
 `root.zig` converts paragraph geometry into positioned glyph, atlas, path, and
 color-paint requests with stable cache keys, while `tests.zig` owns bitmap,

@@ -15,7 +15,7 @@ pub const debug = @import("api/debug/root.zig");
 /// depend on this namespace.
 pub const testing = struct {
     pub const test_font = @import("test_font.zig");
-    pub const font_container = @import("font_container.zig").testing;
+    pub const font_container = @import("font/container/root.zig").testing;
     pub const shaping_cluster = @import("unicode/grapheme/shaping_cluster.zig");
 };
 

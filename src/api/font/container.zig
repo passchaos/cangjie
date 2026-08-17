@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-const impl = @import("../../font_container.zig");
+const impl = @import("../../font/container/root.zig");
 const face_mod = @import("../../font/face/root.zig");
 
 pub const Error = impl.Error;

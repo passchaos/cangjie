@@ -106,12 +106,12 @@ pub const serializeManifest = @import("../../font/database/root.zig").serializeM
 pub const userFontSourcesForOs = @import("../../font/database/root.zig").userFontSourcesForOs;
 pub const writeManifestFile = @import("../../font/database/root.zig").writeManifestFile;
 pub const Font = @import("../../font.zig").Font;
-pub const FontContainerError = @import("../../font_container.zig").Error;
-pub const FontContainerFormat = @import("../../font_container.zig").Format;
-pub const default_max_decoded_font_size = @import("../../font_container.zig").default_max_decoded_size;
-pub const OwnedFace = @import("../../font_container.zig").OwnedFace;
-pub const decodeFontContainerAlloc = @import("../../font_container.zig").decodeFontContainerAlloc;
-pub const detectFontContainerFormat = @import("../../font_container.zig").detectFormat;
+pub const FontContainerError = @import("../../font/container/root.zig").Error;
+pub const FontContainerFormat = @import("../../font/container/root.zig").Format;
+pub const default_max_decoded_font_size = @import("../../font/container/root.zig").default_max_decoded_size;
+pub const OwnedFace = @import("../../font/container/root.zig").OwnedFace;
+pub const decodeFontContainerAlloc = @import("../../font/container/root.zig").decodeFontContainerAlloc;
+pub const detectFontContainerFormat = @import("../../font/container/root.zig").detectFormat;
 pub const AnkrAnchorInfo = @import("../../font.zig").AnkrAnchorInfo;
 pub const AnkrGlyphAnchorsInfo = @import("../../font.zig").AnkrGlyphAnchorsInfo;
 pub const AnkrInfo = @import("../../font.zig").AnkrInfo;
@@ -372,7 +372,7 @@ const test_diagnostics = struct {
 
 pub const testing = struct {
     pub const test_font = @import("../../test_font.zig");
-    pub const font_container = @import("../../font_container.zig").testing;
+    pub const font_container = @import("../../font/container/root.zig").testing;
     /// Internal shaping boundaries shared with repository-owned parity tools.
     /// They are intentionally not part of the supported font-stack API.
     pub const shaping_cluster = @import("../../unicode/grapheme/shaping_cluster.zig");

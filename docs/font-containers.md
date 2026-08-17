@@ -37,6 +37,16 @@ therefore bounds WOFF expansion and DFONT-to-SFNT/TTC reconstruction.
 Convenience database loaders use a conservative 64 MiB default; callers
 loading a trusted larger collection can use the explicit `*WithLimit` APIs.
 
+The implementation is organized under `src/font/container/`:
+
+- `root.zig` owns format detection, the unified decode contract, and the
+  internal decoded-face owner.
+- `dfont.zig`, `woff1.zig`, and `woff2.zig` isolate format-specific validation
+  and reconstruction.
+- `binary.zig` centralizes checked ranges, alignment, and big-endian access.
+- `test_support.zig` and `tests.zig` keep fixture construction and malformed
+  input coverage outside production decoders.
+
 `cangjie.font.database.Database` decodes containers before parsing and fallback
 discovery. It:
 

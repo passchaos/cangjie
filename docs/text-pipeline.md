@@ -551,8 +551,12 @@ aggregate layout namespace.
 Unicode behavioral coverage is grouped beside the implementation under
 `src/unicode/tests_*.zig`: baseline contracts, segmentation, RTL/joining
 scripts, Indic/USE scripts, and other script families have independent test
-containers. Only the two tests that intentionally exercise private joining and
-mark-classification helpers remain in the Unicode root implementation.
+containers. The joining state machine and its private bidirectional test oracle
+live together in `src/unicode/joining.zig`; a comptime script policy supplied by
+the root itemizer keeps joining-property lookup independent from script
+classification without adding runtime callbacks. Only the mark-classification
+test that intentionally exercises private root helpers remains in the Unicode
+root implementation.
 UAX #50 orientation ranges and compatibility presentation-form mappings live
 in `src/unicode/vertical.zig`; the root Unicode API supplies only the resolved
 script-family proof needed by that independent policy.

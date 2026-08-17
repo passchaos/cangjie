@@ -538,6 +538,9 @@ focused tests do not require color or SVG rendering state.
 and HSL composite math over RGBA slices. HarfBuzz-oracle and edge-invariant
 tests remain beside that pure numerical boundary rather than inside the
 rasterizer engine.
+`bitmap.zig` owns clipped bilinear scaling of embedded straight-alpha RGBA
+glyph images into premultiplied targets, including transparent-border sampling
+that prevents hidden RGB from producing emoji edge fringes.
 
 The shaping integration suite is similarly rooted at
 `src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,

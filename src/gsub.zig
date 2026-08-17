@@ -1,7 +1,6 @@
 const std = @import("std");
 const accelerator_root = @import("gsub/accelerator/root.zig");
 const accelerator_model = accelerator_root.model;
-const cluster_safety = @import("shaping/cluster_safety.zig");
 const feature_domain = @import("gsub/feature/root.zig");
 const direct_alternate = @import("gsub/execution/direct/alternate/root.zig");
 const direct_ligature = @import("gsub/execution/direct/ligature/root.zig");
@@ -28,7 +27,6 @@ const contextual_safety =
 const lookup_execution = @import("gsub/execution/lookup/root.zig");
 const GlyphId = @import("glyph.zig").GlyphId;
 const ligature_provenance = @import("ligature_provenance.zig");
-const class_context = @import("opentype/class_context.zig");
 pub const runtime = @import("gsub/runtime/root.zig");
 const runtime_prefilter = @import("gsub/runtime/prefilter/root.zig");
 const table_core = @import("gsub/table/root.zig");
@@ -93,7 +91,6 @@ const FeatureSelection = feature_domain.selection.Item;
 const LookupOptions = runtime.Options;
 
 const LookupAccelerator = acceleration.Lookup;
-const ContextClassSubtableAccelerator = accelerator_model.ContextClassSubtable;
 const FastSingleRecord = accelerator_model.FastSingleRecord;
 const ChainingSubtableGroup = accelerator_model.ChainingGroup;
 const ChainingSubtablePair = accelerator_model.ChainingPair;
@@ -1102,112 +1099,6 @@ test "GSUB class-based substitutions handle null ClassDef offsets where HarfBuzz
         .{},
     );
     try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
-}
-
-test "GSUB accelerated context class matching keeps shorter rules at syllable end" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 64;
-
-    // The accelerated matcher is tested directly, but nested substitution
-    // records still resolve through a normal GSUB LookupList.
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 8, 10);
-    writeU16Test(&bytes, 10, 1);
-    writeU16Test(&bytes, 12, 4);
-    writeSingleDeltaLookup(&bytes, 14, 1, 10);
-
-    const coverage = 40;
-    writeCoverage1(&bytes, coverage, 1);
-    const class_def = 46;
-    writeU16Test(&bytes, class_def + 0, 1);
-    writeU16Test(&bytes, class_def + 2, 1);
-    writeU16Test(&bytes, class_def + 4, 3);
-    writeU16Test(&bytes, class_def + 6, 3);
-    writeU16Test(&bytes, class_def + 8, 1);
-    writeU16Test(&bytes, class_def + 10, 5);
-    const records = 60;
-    writeU16Test(&bytes, records + 0, 0);
-    writeU16Test(&bytes, records + 2, 0);
-
-    const classes = [_]u16{
-        1, 5, // Three-glyph rule after the first input.
-        2,                                                  1, 5, // Four-glyph rule after the first input.
-        accelerator_root.index.class_first.sorted_encoding, 1, 0,
-    };
-    const rules = [_]class_context.Rule{
-        .{
-            .class_set = 3,
-            .input_count = 3,
-            .lookahead_count = 0,
-            .hash = class_context.sequenceHash(classes[0..2]),
-            .order = 0,
-            .lookup_index = 0,
-            .classes_start = 0,
-            .subst_count = 1,
-            .records_offset = records,
-        },
-        .{
-            .class_set = 3,
-            .input_count = 4,
-            .lookahead_count = 0,
-            .hash = class_context.sequenceHash(classes[2..5]),
-            .order = 1,
-            .lookup_index = 0,
-            .classes_start = 2,
-            .subst_count = 1,
-            .records_offset = records,
-        },
-    };
-    const groups = [_]class_context.RuleGroup{.{
-        .class_set = 3,
-        .start = 0,
-        .len = rules.len,
-        .max_input_count = 4,
-        .max_lookahead_count = 0,
-    }};
-    const subtable = ContextClassSubtableAccelerator{
-        .first_index_start = 5,
-        .class_def = class_def,
-        .rules = &rules,
-        .classes = &classes,
-        .groups = &groups,
-    };
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 2, 3, 9 });
-    var sources = std.ArrayList(usize).empty;
-    defer sources.deinit(allocator);
-    try sources.appendSlice(allocator, &.{ 0, 1, 2, 3 });
-    const source_byte_starts = [_]usize{ 0, 1, 2, 3 };
-    const source_syllables = [_]u8{ 1, 1, 1, 2 };
-    var source_boundaries = cluster_safety.SourceBoundaries{};
-    defer source_boundaries.deinit(allocator);
-    source_boundaries.reset(0, 4, &source_byte_starts);
-
-    const result = try contextual_context.acceleratedClassAt(
-        ContextualRecordExecutor,
-        .{ .data = &bytes, .offset = 0, .length = bytes.len, .assume_validated = true },
-        subtable,
-        &glyphs,
-        0,
-        allocator,
-        0,
-        .{
-            .glyph_source_indices = &sources,
-            .source_boundaries = &source_boundaries,
-            .source_syllables = &source_syllables,
-            .match_source_syllable = true,
-        },
-    );
-
-    try std.testing.expect(result.matched);
-    try std.testing.expectEqual(@as(usize, 3), result.next_pos);
-    try std.testing.expectEqualSlices(GlyphId, &.{ 11, 2, 3, 9 }, glyphs.items);
-    try std.testing.expect(!source_boundaries.isUnsafeBeforeByte(0));
-    try std.testing.expect(source_boundaries.isUnsafeBeforeByte(1));
-    try std.testing.expect(source_boundaries.isUnsafeBeforeByte(2));
-    try std.testing.expect(!source_boundaries.isUnsafeBeforeByte(3));
 }
 
 test "GSUB chaining class substitution applies nested lookup" {
@@ -3199,6 +3090,10 @@ const DirectValidationIntegrationTestBindings = struct {
     pub const validateTable = validateGlyphBounds;
 };
 
+const ContextExecutionIntegrationTestBindings = struct {
+    pub const Executor = ContextualRecordExecutor;
+};
+
 const GlyphBoundsTestBindings = struct {
     pub const validate = validateGlyphBounds;
     pub const validateForShaping = validateGlyphBoundsForShaping;
@@ -3219,6 +3114,8 @@ const TopologyTestBindings = struct {
 test {
     _ = @import("gsub/tests/accelerator/root.zig");
     _ = @import("gsub/tests/execution/root.zig");
+    _ = @import("gsub/tests/execution/contextual/context/integration.zig")
+        .suite(ContextExecutionIntegrationTestBindings);
     _ = @import("gsub/tests/feature/root.zig");
     _ = @import("gsub/tests/feature/integration/root.zig")
         .applicationSuite(FeatureIntegrationTestBindings);

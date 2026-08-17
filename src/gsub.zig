@@ -96,9 +96,6 @@ const ChainingSubtableGroup = accelerator_model.ChainingGroup;
 const ChainingSubtablePair = accelerator_model.ChainingPair;
 const ChainingPairSubtableGroup = accelerator_model.ChainingPairGroup;
 const ChainingPairSubtablePair = accelerator_model.ChainingPairEntry;
-const deinitLookupAcceleratorContents =
-    accelerator_root.ownership.deinitContents;
-
 const FeatureLookupPlanEntry = feature.LookupPlanEntry;
 const MergedFeatureLookup = feature.MergedLookup;
 const MergedFeatureLookupPlan = feature.MergedLookupPlan;
@@ -888,207 +885,6 @@ test "GSUB context substitution can apply nested multiple substitution" {
     try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, allocator, .{});
 
     try std.testing.expectEqualSlices(GlyphId, &.{ 1, 20, 21, 3 }, glyphs.items);
-}
-
-test "GSUB context coverage accelerator preserves order skips and cardinality changes" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 140;
-
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 8, 10); // LookupList.
-    writeU16Test(&bytes, 10, 3);
-    writeU16Test(&bytes, 12, 8); // Context lookup at 18.
-    writeU16Test(&bytes, 14, 74); // Multiple lookup at 84.
-    writeU16Test(&bytes, 16, 106); // Single fallback lookup at 116.
-
-    const context_lookup = 18;
-    writeU16Test(&bytes, context_lookup + 0, 5);
-    writeU16Test(&bytes, context_lookup + 2, 0x0008); // IgnoreMarks.
-    writeU16Test(&bytes, context_lookup + 4, 2);
-    writeU16Test(&bytes, context_lookup + 6, 10);
-    writeU16Test(&bytes, context_lookup + 8, 38);
-
-    // Both format-3 subtables match [1, 2]. The first expands glyph 2 and must
-    // prevent the later fallback from changing glyph 1.
-    const first_context = 28;
-    writeU16Test(&bytes, first_context + 0, 3);
-    writeU16Test(&bytes, first_context + 2, 2);
-    writeU16Test(&bytes, first_context + 4, 1);
-    writeU16Test(&bytes, first_context + 6, 16);
-    writeU16Test(&bytes, first_context + 8, 22);
-    writeU16Test(&bytes, first_context + 10, 1); // SequenceIndex 1.
-    writeU16Test(&bytes, first_context + 12, 1); // Multiple lookup.
-    writeCoverage1(&bytes, first_context + 16, 1);
-    writeCoverage1(&bytes, first_context + 22, 2);
-
-    const second_context = 56;
-    writeU16Test(&bytes, second_context + 0, 3);
-    writeU16Test(&bytes, second_context + 2, 2);
-    writeU16Test(&bytes, second_context + 4, 1);
-    writeU16Test(&bytes, second_context + 6, 16);
-    writeU16Test(&bytes, second_context + 8, 22);
-    writeU16Test(&bytes, second_context + 10, 0); // SequenceIndex 0.
-    writeU16Test(&bytes, second_context + 12, 2); // Single fallback lookup.
-    writeCoverage1(&bytes, second_context + 16, 1);
-    writeCoverage1(&bytes, second_context + 22, 2);
-
-    const multiple_lookup = 84;
-    writeU16Test(&bytes, multiple_lookup + 0, 2);
-    writeU16Test(&bytes, multiple_lookup + 2, 0);
-    writeU16Test(&bytes, multiple_lookup + 4, 1);
-    writeU16Test(&bytes, multiple_lookup + 6, 8);
-    const multiple = 92;
-    writeU16Test(&bytes, multiple + 0, 1);
-    writeU16Test(&bytes, multiple + 2, 12);
-    writeU16Test(&bytes, multiple + 4, 1);
-    writeU16Test(&bytes, multiple + 6, 18);
-    writeCoverage1(&bytes, multiple + 12, 2);
-    writeU16Test(&bytes, multiple + 18, 2);
-    writeU16Test(&bytes, multiple + 20, 20);
-    writeU16Test(&bytes, multiple + 22, 21);
-
-    writeSingleDeltaLookup(&bytes, 116, 1, 10);
-
-    var glyph_classes = [_]u16{0} ** 22;
-    glyph_classes[9] = 3;
-    const options = LookupOptions{ .glyph_classes = &glyph_classes };
-    const table = Table{
-        .data = &bytes,
-        .offset = 0,
-        .length = bytes.len,
-        .assume_validated = true,
-    };
-
-    var generic = std.ArrayList(GlyphId).empty;
-    defer generic.deinit(allocator);
-    try generic.appendSlice(allocator, &.{ 1, 9, 2, 1, 9, 2 });
-    try applyLookup(table, context_lookup, &generic, allocator, options);
-
-    const accelerator = try accelerator_root.build.lookup.one(table, context_lookup, allocator);
-    defer {
-        var accelerators = [_]LookupAccelerator{accelerator};
-        deinitLookupAcceleratorContents(allocator, &accelerators);
-    }
-    try std.testing.expect(accelerator.context_group_slots.len > 1);
-    const group_slot = accelerator.context_group_slots[1];
-    try std.testing.expect(group_slot != 0);
-    const candidates = accelerator.context_groups[group_slot - 1].subtable_indices;
-    try std.testing.expectEqualSlices(u16, &.{ 0, 1 }, candidates);
-
-    var accelerated = std.ArrayList(GlyphId).empty;
-    defer accelerated.deinit(allocator);
-    try accelerated.appendSlice(allocator, &.{ 1, 9, 2, 1, 9, 2 });
-    try contextual_context.acceleratedCoverageLookup(
-        ContextualRecordExecutor,
-        table,
-        &accelerated,
-        allocator,
-        0x0008,
-        .{
-            .glyph_classes = &glyph_classes,
-            .assume_validated = true,
-        },
-        &accelerator,
-    );
-
-    const expected = [_]GlyphId{ 1, 9, 20, 21, 1, 9, 20, 21 };
-    try std.testing.expectEqualSlices(GlyphId, &expected, generic.items);
-    try std.testing.expectEqualSlices(GlyphId, &expected, accelerated.items);
-
-    // Accelerators are externally supplied through LookupOptions. Even after
-    // lookup-offset validation, reject corrupt direct slots rather than using
-    // them as unchecked indexes or silently dispatching another glyph's group.
-    var invalid_index_slots = [_]u16{ 0, 2 };
-    var invalid_accelerator = accelerator;
-    invalid_accelerator.context_group_slots = &invalid_index_slots;
-    var invalid_glyphs = std.ArrayList(GlyphId).empty;
-    defer invalid_glyphs.deinit(allocator);
-    try invalid_glyphs.appendSlice(allocator, &.{ 1, 2 });
-    try std.testing.expectError(
-        error.BadGsub,
-        contextual_context.acceleratedCoverageLookup(
-            ContextualRecordExecutor,
-            table,
-            &invalid_glyphs,
-            allocator,
-            0x0008,
-            .{
-                .glyph_classes = &glyph_classes,
-                .assume_validated = true,
-            },
-            &invalid_accelerator,
-        ),
-    );
-
-    var wrong_key_slots = [_]u16{ 0, 0, 1 };
-    invalid_accelerator.context_group_slots = &wrong_key_slots;
-    invalid_glyphs.clearRetainingCapacity();
-    try invalid_glyphs.appendSlice(allocator, &.{ 2, 2 });
-    try std.testing.expectError(
-        error.BadGsub,
-        contextual_context.acceleratedCoverageLookup(
-            ContextualRecordExecutor,
-            table,
-            &invalid_glyphs,
-            allocator,
-            0x0008,
-            .{
-                .glyph_classes = &glyph_classes,
-                .assume_validated = true,
-            },
-            &invalid_accelerator,
-        ),
-    );
-
-    // A high first glyph would make a dense array wasteful. Rebuild the same
-    // lookup with glyph 4096 and verify that the empty-slot representation
-    // falls back to ordered group search without changing substitution order.
-    writeCoverage1(
-        &bytes,
-        first_context + 16,
-        accelerator_root.build.context_coverage.max_direct_group_slots,
-    );
-    writeCoverage1(
-        &bytes,
-        second_context + 16,
-        accelerator_root.build.context_coverage.max_direct_group_slots,
-    );
-    const sparse_accelerator = try accelerator_root.build.lookup.one(table, context_lookup, allocator);
-    defer {
-        var accelerators = [_]LookupAccelerator{sparse_accelerator};
-        deinitLookupAcceleratorContents(allocator, &accelerators);
-    }
-    try std.testing.expectEqual(@as(usize, 0), sparse_accelerator.context_group_slots.len);
-
-    var sparse_glyphs = std.ArrayList(GlyphId).empty;
-    defer sparse_glyphs.deinit(allocator);
-    try sparse_glyphs.appendSlice(allocator, &.{
-        accelerator_root.build.context_coverage.max_direct_group_slots,
-        9,
-        2,
-    });
-    try contextual_context.acceleratedCoverageLookup(
-        ContextualRecordExecutor,
-        table,
-        &sparse_glyphs,
-        allocator,
-        0x0008,
-        .{
-            .glyph_classes = &glyph_classes,
-            .assume_validated = true,
-        },
-        &sparse_accelerator,
-    );
-    try std.testing.expectEqualSlices(
-        GlyphId,
-        &.{
-            accelerator_root.build.context_coverage.max_direct_group_slots,
-            9,
-            20,
-            21,
-        },
-        sparse_glyphs.items,
-    );
 }
 
 test "GSUB multiple substitution makes a later sequence index valid" {
@@ -1890,6 +1686,8 @@ test {
     _ = @import("gsub/tests/execution/contextual/chaining/integration.zig")
         .suite(ChainingExecutionIntegrationTestBindings);
     _ = @import("gsub/tests/execution/contextual/context/integration.zig")
+        .suite(ContextExecutionIntegrationTestBindings);
+    _ = @import("gsub/tests/execution/contextual/context/accelerator_integration.zig")
         .suite(ContextExecutionIntegrationTestBindings);
     _ = @import("gsub/tests/execution/lookup/atomicity.zig")
         .suite(FilteringIntegrationTestBindings);

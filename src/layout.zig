@@ -14,6 +14,7 @@ const shaping_metadata = @import("shaping_metadata.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const pipeline_types = @import("shaping/pipeline/types.zig");
 const shaping_plan = @import("shaping/plan/root.zig");
+const plan_resolution = @import("shaping/plan/resolution.zig");
 const plan_validation = @import("shaping/plan/validation.zig");
 const normalization = @import("shaping/pipeline/normalization/root.zig");
 const normalize_marks = normalization.marks;
@@ -781,25 +782,11 @@ fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []cons
             font_size,
             script_run.byte_start,
             pen,
-            .{
-                .lookup = .{
-                    .script = script_run.script,
-                    .script_tag = options.script_tag orelse unicode.openTypeScriptTag(script_run.script),
-                    .script_tag_explicit = options.script_tag != null,
-                    .language_tag = effectiveLanguageTag(run_text, options),
-                    // Script-run itemization already decoded this slice, but does
-                    // not currently retain an ASCII summary. Keep this path
-                    // conservative rather than introducing another scan.
-                    .direction = options.direction,
-                    .reorder_bidi = options.reorder_bidi,
-                    .native_direction_shaping = options.native_direction_shaping,
-                    .features = options.features,
-                    .writing_mode = options.writing_mode,
-                    .text_orientation = options.text_orientation,
-                    .normalized_variation_coords = options.normalized_variation_coords,
-                },
-                .all_ascii = false,
-            },
+            plan_resolution.forScriptRun(
+                run_text,
+                script_run.script,
+                options,
+            ),
         );
     }
 }
@@ -831,7 +818,7 @@ const DynamicFallbackContext = struct {
             self.font_size,
             cluster_base,
             pen,
-            lookupOptionsForText(text, self.options),
+            plan_resolution.forText(text, self.options),
         );
     }
 };
@@ -878,7 +865,7 @@ fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, gl
 
     buffer.clear();
     const options_start = shapeProfileNow(shape_profile, profile_io);
-    const lookup_options = lookupOptionsForText(text, options);
+    const lookup_options = plan_resolution.forText(text, options);
     if (shape_profile) |p| p.options_ns += shapeProfileElapsed(options_start, profile_io);
 
     try shapeSegmentInto(font, metrics_cache, glyph_index_cache, buffer, text, font_size, 0, lookup_options);
@@ -1019,42 +1006,7 @@ fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     return next_pen;
 }
 
-const LookupOptions = pipeline_types.LookupOptions;
 const ResolvedLookupOptions = pipeline_types.ResolvedLookupOptions;
-
-fn lookupOptionsForText(text: []const u8, options: ShapeOptions) ResolvedLookupOptions {
-    const infer_language = options.language_tag == null;
-    const inferred = if (infer_language)
-        unicode.inferOpenTypeProperties(text)
-    else
-        undefined;
-    const script = if (infer_language) inferred.script else unicode.inferOpenTypeScript(text);
-    return .{ .lookup = .{
-        .script = script,
-        .script_tag = options.script_tag orelse unicode.openTypeScriptTag(script),
-        .script_tag_explicit = options.script_tag != null,
-        .language_tag = options.language_tag orelse inferred.language,
-        .direction = options.direction,
-        .reorder_bidi = options.reorder_bidi,
-        .native_direction_shaping = options.native_direction_shaping,
-        .script_position = options.script_position,
-        .features = options.features,
-        .writing_mode = options.writing_mode,
-        .text_orientation = options.text_orientation,
-        .normalized_variation_coords = options.normalized_variation_coords,
-        .not_found_variation_selector_glyph = options.not_found_variation_selector_glyph,
-        .remove_default_ignorables = options.remove_default_ignorables,
-        .context_before = options.context_before,
-        .context_after = options.context_after,
-        .beginning_of_text = options.beginning_of_text,
-        .end_of_text = options.end_of_text,
-        .cluster_level = options.cluster_level,
-    }, .all_ascii = infer_language and inferred.all_ascii };
-}
-
-fn effectiveLanguageTag(text: []const u8, options: ShapeOptions) unicode.OpenTypeLanguageTag {
-    return options.language_tag orelse unicode.inferOpenTypeLanguageTag(text);
-}
 
 fn shapeSegmentInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, resolved_lookup_options: ResolvedLookupOptions) !void {
     const scale = font_size / @as(f32, @floatFromInt(font.units_per_em));

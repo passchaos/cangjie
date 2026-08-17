@@ -564,6 +564,12 @@ eligibility, while `ranges.zig` contains only scalar-range facts. The public
 `unicode.Script` and `scriptForCodepoint` surface remains rooted in
 `src/unicode.zig`, so shaping and application code do not depend on internal
 block predicates.
+Unicode mark policy is separated under `src/unicode/mark/`:
+`nonspacing.zig` is the generated Unicode 17 General_Category=Mn table,
+`spacing.zig` owns the supported visible dependent-sign/spacing-mark policy,
+and `extender.zig` retains the established word and shaping-source boundary
+tailoring. `root.zig` keeps those meanings distinct while exposing the stable
+Mn, spacing-mark, and combined mark queries through `src/unicode.zig`.
 UAX #50 orientation ranges and compatibility presentation-form mappings live
 in `src/unicode/vertical.zig`; the root Unicode API supplies only the resolved
 script-family proof needed by that independent policy.

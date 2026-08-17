@@ -1,15 +1,18 @@
-//! Width-independent shaped paragraph ownership and repeatable visual reflow.
+//! Width-independent paragraph ownership and repeatable visual reflow.
 
 const std = @import("std");
 
 const bidi_reorder = @import("../bidi/reorder/root.zig");
+const font_fallback = @import("../../shaping/fallback/font/root.zig");
 const glyph_position = @import("../glyph_position.zig");
 const inline_object = @import("../inline_object/root.zig");
+const kashida_justification = @import("../justification/kashida.zig");
 const paragraph_options = @import("options.zig");
 const line_break_opportunity = @import("../line_break/opportunity.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 const run_types = @import("../types/runs.zig");
 const paragraph_reflow = @import("../line_break/reflow/root.zig");
+const reshape = @import("reshape.zig");
 const punctuation_compression = @import("../punctuation/compression.zig");
 const punctuation_hanging = @import("../punctuation/hanging.zig");
 const shaping_output = @import("../../shaping/context/output.zig");
@@ -36,6 +39,12 @@ pub const ShapedParagraph = struct {
     default_metrics: paragraph_reflow.BaselineMetrics,
     shape_key: shaping_plan.ShapePlanKey,
     needs_bidi_reorder: bool,
+    /// Borrowed shaping recipe for line-local source transformations.
+    ///
+    /// The font-pointer slice is owned by this paragraph, while the referenced
+    /// parsed fonts must outlive it just like the pointers already in `runs`.
+    cascade_fonts: []const *const @import("../../font.zig").Font,
+    font_size: f32,
 
     pub fn deinit(self: *ShapedParagraph) void {
         self.allocator.free(self.line_breaks);
@@ -43,6 +52,7 @@ pub const ShapedParagraph = struct {
         self.allocator.free(self.grapheme_clusters);
         self.allocator.free(self.runs);
         self.allocator.free(self.glyphs);
+        self.allocator.free(self.cascade_fonts);
         self.allocator.free(self.text);
         self.* = undefined;
     }
@@ -51,8 +61,12 @@ pub const ShapedParagraph = struct {
         return .{ .glyphs = self.glyphs, .runs = self.runs };
     }
 
-    /// Rebuild visual lines without repeating GSUB/GPOS or Unicode analysis.
+    /// Rebuild visual lines without repeating whole-paragraph shaping or
+    /// Unicode analysis.
     ///
+    /// Justified Arabic lines may perform bounded line-local reshaping after
+    /// inserting U+0640 at retained safe boundaries. All other lines reuse the
+    /// pristine glyph stream directly.
     /// Returned slices borrow `reflow` until its next layout call. Separate
     /// buffers may reflow the same immutable paragraph concurrently.
     pub fn layout(
@@ -89,6 +103,19 @@ pub const ShapedParagraph = struct {
             self.word_break_dictionary,
             self.hyphenation_dictionary,
         );
+        const recipe = reshape.Uniform{
+            .cascade = font_fallback.Cascade.init(self.cascade_fonts),
+            .text = self.text,
+            .font_size = self.font_size,
+            .options = options,
+        };
+        try kashida_justification.apply(
+            &reflow.buffer,
+            self.text,
+            options,
+            recipe,
+        );
+        paragraph_reflow.applyPendingJustification(&reflow.buffer);
         try punctuation_compression.apply(&reflow.buffer, options);
         if (self.needs_bidi_reorder) {
             try bidi_reorder.applyLines(

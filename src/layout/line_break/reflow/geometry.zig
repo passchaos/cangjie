@@ -140,6 +140,7 @@ pub fn appendLine(
     alignment: anytype,
     max_width: f32,
     indent: f32,
+    justification_target: ?f32,
 ) !void {
     const available_width = lineWidthLimitForIndent(max_width, indent);
     const x = indent + alignedLineX(width, available_width, alignment);
@@ -155,6 +156,7 @@ pub fn appendLine(
         .y = y,
         .indent = indent,
         .width = width,
+        .justification_target = justification_target,
         .height = metrics.lineHeight(),
         .baseline = metrics.ascent,
         .ascent = metrics.ascent,

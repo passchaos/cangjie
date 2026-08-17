@@ -132,6 +132,9 @@ test "public facade uses domain names without legacy aliases" {
         @typeInfo(cangjie.paragraph.Hyphenation) == .@"struct",
     );
     try std.testing.expect(
+        @typeInfo(cangjie.paragraph.Kashida) == .@"struct",
+    );
+    try std.testing.expect(
         @typeInfo(cangjie.paragraph.Punctuation) == .@"struct",
     );
     try std.testing.expect(
@@ -140,6 +143,10 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(@hasDecl(
         cangjie.shaping.Glyph,
         "isSafeToInsertTatweel",
+    ));
+    try std.testing.expect(@hasDecl(
+        cangjie.shaping.Glyph,
+        "isKashida",
     ));
 }
 

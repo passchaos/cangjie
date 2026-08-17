@@ -3,10 +3,11 @@
 const std = @import("std");
 
 const face_mod = @import("../../font/face/root.zig");
-const Font = @import("../../font.zig").Font;
 const bidi_reorder = @import("../bidi/reorder/root.zig");
 const inline_object = @import("../inline_object/root.zig");
+const kashida_justification = @import("../justification/kashida.zig");
 const paragraph_reflow = @import("../line_break/reflow/root.zig");
+const styled_reshape = @import("reshape/styled.zig");
 const punctuation_compression = @import("../punctuation/compression.zig");
 const punctuation_hanging = @import("../punctuation/hanging.zig");
 const paragraph_options = @import("options.zig");
@@ -229,10 +230,42 @@ const Driver = struct {
                 self.buffer.lines.items[
                     self.buffer.lines.items.len - 1
                 ].byteEnd() < self.text.len);
+        if (content_omitted and self.buffer.lines.items.len != 0) {
+            // Styled layout suppresses ellipsis during reflow so metadata can
+            // be synchronized first. Clear the terminal target here as well:
+            // the later styled ellipsis pass must never receive an already
+            // justified/Kashida-expanded line.
+            self.buffer.lines.items[
+                self.buffer.lines.items.len - 1
+            ].justification_target = null;
+        }
         try styled_buffer.synchronizeAfterTruncation(
             &self.styled.metadata,
             self.buffer.glyphs.items.len,
         );
+        var candidate_metadata =
+            std.ArrayList(styled_buffer.Metadata).empty;
+        defer candidate_metadata.deinit(self.buffer.allocator);
+        var commit_metadata =
+            std.ArrayList(styled_buffer.Metadata).empty;
+        defer commit_metadata.deinit(self.buffer.allocator);
+        const recipe = styled_reshape.Recipe{
+            .cascade = self.cascade,
+            .allocator = self.buffer.allocator,
+            .metadata = &self.styled.metadata,
+            .candidate_metadata = &candidate_metadata,
+            .commit_metadata = &commit_metadata,
+            .text = self.text,
+            .spans = spans,
+            .options = self.options,
+        };
+        try kashida_justification.apply(
+            self.buffer,
+            self.text,
+            self.options,
+            recipe,
+        );
+        paragraph_reflow.applyPendingJustification(self.buffer);
         if (self.options.ellipsis and content_omitted and
             self.buffer.glyphs.items.len != 0)
         {

@@ -15,8 +15,10 @@ pub const TextAlign = enum {
     /// Physical right edge, independent of paragraph direction.
     right,
     /// Fill each non-terminal soft-wrapped line by expanding its breakable
-    /// inter-word spaces. Lines without spaces may use conservative
-    /// inter-character expansion between adjacent CJK source atoms.
+    /// inter-word spaces. Arabic-family runs first consume retained safe
+    /// boundaries through source-level U+0640 insertion and reshaping; lines
+    /// without spaces may use conservative inter-character expansion between
+    /// adjacent CJK source atoms.
     /// Hard-break lines, the final line of a paragraph, ellipsized last lines,
     /// unbounded layouts, and lines without safe opportunities retain their
     /// natural width.
@@ -73,6 +75,12 @@ pub const ParagraphLine = struct {
     /// Portion of edge glyph advance protruding after the physical line box.
     hang_end: f32 = 0,
     width: f32,
+    /// Full-advance measure requested for a justified soft-wrapped line.
+    ///
+    /// This remains null for hard-break, terminal, truncated, and naturally
+    /// aligned lines. Keeping the target on the selected line lets later
+    /// source-level Kashida reshaping run before generic spacing expansion.
+    justification_target: ?f32 = null,
     height: f32,
     baseline: f32,
     ascent: f32,

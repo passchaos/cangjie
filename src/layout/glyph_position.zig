@@ -22,7 +22,12 @@ pub const Flags = packed struct(u8) {
     /// HarfBuzz-compatible proof that U+0640 may be inserted before this
     /// cluster without interrupting cursive shaping.
     safe_to_insert_tatweel: bool = false,
-    _reserved: u3 = 0,
+    /// Output created by line-local source-level U+0640 insertion.
+    ///
+    /// It is anchored at an original UTF-8 boundary and therefore owns no
+    /// caller source bytes, even though it passed through the complete shaper.
+    kashida: bool = false,
+    _reserved: u2 = 0,
 };
 
 /// One positioned glyph after cmap mapping, GSUB substitution, and GPOS/kern
@@ -74,6 +79,10 @@ pub const GlyphPosition = struct {
         return self.flags.safe_to_insert_tatweel;
     }
 
+    pub fn isKashida(self: GlyphPosition) bool {
+        return self.flags.kashida;
+    }
+
     /// Logical source end represented by this output.
     ///
     /// Ordinary shaped glyphs keep the historical one-byte fallback for
@@ -81,7 +90,7 @@ pub const GlyphPosition = struct {
     /// hyphen is different: it is a zero-length insertion at an existing
     /// source boundary and must never claim the following UTF-8 byte.
     pub fn sourceByteEnd(self: GlyphPosition) usize {
-        if (self.isAutomaticHyphen()) return self.cluster;
+        if (self.isAutomaticHyphen() or self.isKashida()) return self.cluster;
         return self.cluster + @max(self.source_byte_len, 1);
     }
 };

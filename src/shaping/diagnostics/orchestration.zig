@@ -46,6 +46,7 @@ pub fn clusterCaretConsistency(
         null,
         null,
     );
+    paragraph_reflow.applyPendingJustification(&buffer);
     return try caret.analyze(
         allocator,
         text,

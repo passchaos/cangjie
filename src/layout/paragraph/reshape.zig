@@ -1,0 +1,189 @@
+//! Concrete shaping recipes for post-line-selection source transformations.
+//!
+//! Retained paragraphs keep enough immutable ownership to construct this value
+//! at reflow time. The recipe deliberately shapes into a caller-supplied
+//! temporary buffer, so a failed or over-wide candidate cannot mutate the
+//! paragraph being laid out.
+
+const std = @import("std");
+const face_mod = @import("../../font/face/root.zig");
+const cache = @import("../../shaping/context/cache/root.zig");
+const context_output = @import("../../shaping/context/output.zig");
+const font_fallback = @import("../../shaping/fallback/font/root.zig");
+const fallback_segment = @import("../../shaping/fallback/segment.zig");
+const plan_resolution = @import("../../shaping/plan/resolution.zig");
+const segment_pipeline = @import("../../shaping/pipeline/segment.zig");
+const pipeline_types = @import("../../shaping/pipeline/types.zig");
+const bidi_reorder = @import("../bidi/reorder/root.zig");
+const geometry = @import("../line_break/reflow/geometry.zig");
+const kashida = @import("../justification/kashida.zig");
+const paragraph_options = @import("options.zig");
+
+pub const Uniform = struct {
+    cascade: font_fallback.Cascade,
+    fallback_cache: ?*cache.FontFallbackCache = null,
+    metrics_cache: ?*cache.GlyphMetricsCache = null,
+    glyph_index_cache: ?*cache.GlyphIndexCache = null,
+    text: []const u8,
+    font_size: f32,
+    options: paragraph_options.Options,
+
+    pub fn acceptKashidaBoundary(_: Uniform, _: usize) bool {
+        return true;
+    }
+
+    pub fn saveCandidate(_: Uniform) !void {}
+
+    pub fn prepareCommit(
+        _: Uniform,
+        _: usize,
+        _: usize,
+        _: usize,
+    ) !void {}
+
+    pub fn commit(
+        _: Uniform,
+        _: usize,
+        _: usize,
+        _: usize,
+    ) void {}
+
+    pub fn shapeLine(
+        self: Uniform,
+        buffer: *context_output.Buffer,
+        temporary_text: []const u8,
+        original_byte_start: usize,
+        original_byte_len: usize,
+        insertion_boundaries: []const kashida.Boundary,
+        insertion_count: usize,
+    ) !void {
+        buffer.clear();
+        const original_byte_end = original_byte_start + original_byte_len;
+        var shape_options = paragraph_options.shapeOptions(self.options);
+        shape_options.context_before = self.text[0..original_byte_start];
+        shape_options.context_after = self.text[original_byte_end..];
+        shape_options.beginning_of_text = original_byte_start == 0;
+        shape_options.end_of_text = original_byte_end == self.text.len;
+        const lookup_options = plan_resolution.forText(
+            temporary_text,
+            shape_options,
+        );
+        var driver = Driver{
+            .buffer = buffer,
+            .metrics_cache = self.metrics_cache,
+            .glyph_index_cache = self.glyph_index_cache,
+            .font_size = self.font_size,
+            .lookup_options = lookup_options,
+        };
+        const font_overrides = try temporaryFontOverrides(
+            buffer.allocator,
+            insertion_boundaries,
+            insertion_count,
+            original_byte_start,
+        );
+        defer buffer.allocator.free(font_overrides);
+        _ = try fallback_segment.shape(&driver, .{
+            .cascade = self.cascade,
+            .fallback_cache = self.fallback_cache,
+            .glyph_index_cache = self.glyph_index_cache,
+            .text = temporary_text,
+            .font_overrides = font_overrides,
+        });
+        try bidi_reorder.normalizeLogical(buffer);
+    }
+
+    pub fn finishLine(
+        self: Uniform,
+        buffer: *context_output.Buffer,
+    ) !void {
+        for (buffer.glyphs.items) |*glyph| {
+            if (glyph.isKashida()) continue;
+            glyph.x_advance += geometry.spacingForGlyph(
+                glyph.codepoint,
+                self.options,
+            );
+        }
+    }
+};
+
+pub fn temporaryFontOverrides(
+    allocator: std.mem.Allocator,
+    boundaries: []const kashida.Boundary,
+    insertion_count: usize,
+    line_byte_start: usize,
+) ![]const fallback_segment.FontOverride {
+    const used_count = @min(insertion_count, boundaries.len);
+    const overrides = try allocator.alloc(
+        fallback_segment.FontOverride,
+        used_count,
+    );
+    // The slice is consumed synchronously by fallback segmentation. Shape
+    // scratch does not retain it, so callers can free it after `shape` returns.
+    var used: usize = 0;
+    var inserted_before: usize = 0;
+    for (boundaries, 0..) |boundary, boundary_index| {
+        const count = kashida.insertionCountAtBoundary(
+            insertion_count,
+            boundaries.len,
+            boundary_index,
+        );
+        if (count == 0) continue;
+        overrides[used] = .{
+            .byte_start = boundary.byte_offset - line_byte_start + inserted_before,
+            .byte_len = count * 2,
+            .font = boundary.font,
+        };
+        used += 1;
+        inserted_before += count * 2;
+    }
+    std.debug.assert(used == overrides.len);
+    return overrides;
+}
+
+const Driver = struct {
+    buffer: *context_output.Buffer,
+    metrics_cache: ?*cache.GlyphMetricsCache,
+    glyph_index_cache: ?*cache.GlyphIndexCache,
+    font_size: f32,
+    lookup_options: pipeline_types.ResolvedLookupOptions,
+
+    pub fn appendSegment(
+        self: *Driver,
+        cascade: font_fallback.Cascade,
+        font_index: usize,
+        text: []const u8,
+        cluster_base: usize,
+        pen: fallback_segment.Pen,
+    ) !fallback_segment.Pen {
+        const font = cascade.fonts[font_index];
+        const glyph_start = self.buffer.glyphs.items.len;
+        try segment_pipeline.run(.{
+            .font = font,
+            .metrics_cache = self.metrics_cache,
+            .glyph_index_cache = self.glyph_index_cache,
+            .buffer = self.buffer,
+            .text = text,
+            .font_size = self.font_size,
+            .cluster_base = cluster_base,
+            .lookup_options = self.lookup_options,
+        });
+        const glyph_len = self.buffer.glyphs.items.len - glyph_start;
+        if (glyph_len == 0) return pen;
+
+        try self.buffer.runs.append(self.buffer.allocator, .{
+            .font = face_mod.backend.face(font),
+            .font_index = font_index,
+            .font_size = self.font_size,
+            .glyph_start = glyph_start,
+            .glyph_len = glyph_len,
+            .x_offset = pen.x,
+            .y_offset = pen.y,
+        });
+        var next_pen = pen;
+        for (self.buffer.glyphs.items[glyph_start..]) |glyph| {
+            next_pen.x += glyph.x_advance;
+            next_pen.y += glyph.y_advance;
+        }
+        return next_pen;
+    }
+};

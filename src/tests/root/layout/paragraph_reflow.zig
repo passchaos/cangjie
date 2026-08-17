@@ -582,6 +582,38 @@ test "paragraph justification skips hard breaks tabs and lines without spaces" {
     try std.testing.expectApproxEqAbs(@as(f32, 32), cjk.lines[0].width, 0.001);
 }
 
+test "truncated terminal line is not justified" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &layout_buffer,
+        "A A A A",
+        20,
+        .{
+            .max_width = 50,
+            .max_lines = 1,
+            .alignment = .justify,
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 1), paragraph.lines.len);
+    try std.testing.expectApproxEqAbs(
+        lineAdvanceSum(paragraph.lines[0].glyphs(paragraph)),
+        paragraph.lines[0].width,
+        0.001,
+    );
+    try std.testing.expect(paragraph.lines[0].width < 50);
+}
+
 test "right-to-left justification keeps line origin and survives bidi reorder" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

@@ -139,6 +139,7 @@ pub fn build(
                 alignment,
                 max_width,
                 geometry.lineIndent(line_in_paragraph, options),
+                null,
             );
             if (buffer.lines.items.len >= max_lines) {
                 try automatic_hyphens.materialize(
@@ -265,7 +266,7 @@ pub fn build(
             const break_end = overflow_break.index;
             const uses_last_break = fitting_last_break != null and
                 break_end == fitting_last_break.?;
-            var break_width = if (overflow_break.uses_current_discardable)
+            const break_width = if (overflow_break.uses_current_discardable)
                 line_width - glyph.x_advance
             else if (uses_last_break)
                 last_break.width
@@ -273,12 +274,6 @@ pub fn build(
                 geometry.lineWidth(
                     buffer.glyphs.items[line_start..break_end],
                 );
-            const hanging_amount = punctuation_hanging.logicalEndAmount(
-                buffer.glyphs.items,
-                line_start,
-                break_end,
-                options.punctuation.end_hanging_fraction,
-            );
             var selected_visible_hyphen = false;
             if (uses_last_break) {
                 if (last_break.hyphen) |candidate| {
@@ -314,19 +309,14 @@ pub fn build(
                 next_line_start < buffer.glyphs.items.len and
                 buffer.lines.items.len + 1 < max_lines;
             const indent = geometry.lineIndent(line_in_paragraph, options);
-            if (justify_line and alignment == .justify) {
-                const occupied_break_width =
-                    @max(0, break_width - hanging_amount);
-                break_width = horizontal_justification.apply(
-                    buffer.glyphs.items[line_start..break_end],
-                    occupied_break_width,
+            const justification_target =
+                if (justify_line and alignment == .justify)
                     @max(
-                        occupied_break_width,
-                        geometry.lineWidthLimitForIndent(max_width, indent) -
-                            hanging_amount,
-                    ),
-                ) + hanging_amount;
-            }
+                        break_width,
+                        geometry.lineWidthLimitForIndent(max_width, indent),
+                    )
+                else
+                    null;
             const line_info = geometry.lineRunInfo(
                 buffer.runs.items,
                 buffer.glyphs.items,
@@ -348,6 +338,7 @@ pub fn build(
                 alignment,
                 max_width,
                 indent,
+                justification_target,
             );
             if (buffer.lines.items.len >= max_lines) {
                 try automatic_hyphens.materialize(
@@ -362,6 +353,14 @@ pub fn build(
                     alignment,
                     true,
                 );
+                // Truncation makes this the terminal visible line. A pending
+                // target would otherwise trigger Kashida/space expansion even
+                // though terminal and ellipsized lines are never justified.
+                if (buffer.lines.items.len != 0) {
+                    buffer.lines.items[
+                        buffer.lines.items.len - 1
+                    ].justification_target = null;
+                }
                 return;
             }
             y += line_info.metrics.lineHeight();
@@ -452,6 +451,7 @@ pub fn build(
             alignment,
             max_width,
             geometry.lineIndent(line_in_paragraph, options),
+            null,
         );
     }
     try truncation.apply(
@@ -466,4 +466,25 @@ pub fn build(
         buffer,
         selected_automatic_hyphens.items,
     );
+}
+
+/// Apply generic spacing after any source-level line reshaping has finished.
+///
+/// Kashida consumes part of a line's target first. Spaces or conservative CJK
+/// boundaries receive only the remainder, so the two mechanisms cannot both
+/// independently claim the complete measure.
+pub fn applyPendingJustification(buffer: anytype) void {
+    for (buffer.lines.items) |*line| {
+        const target = line.justification_target orelse continue;
+        const line_end = line.glyph_start + line.glyph_len;
+        const natural_width = geometry.lineWidth(
+            buffer.glyphs.items[line.glyph_start..line_end],
+        );
+        line.width = horizontal_justification.apply(
+            buffer.glyphs.items[line.glyph_start..line_end],
+            natural_width,
+            target,
+        );
+        line.justification_target = null;
+    }
 }

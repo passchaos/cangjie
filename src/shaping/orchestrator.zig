@@ -22,8 +22,11 @@ const script_run_itemization = @import("itemization/script_runs.zig");
 const bidi_reorder = @import("../layout/bidi/reorder/root.zig");
 const glyph_position = @import("../layout/glyph_position.zig");
 const inline_object = @import("../layout/inline_object/root.zig");
+const kashida_justification =
+    @import("../layout/justification/kashida.zig");
 const paragraph_options = @import("../layout/paragraph/options.zig");
 const retained_paragraph = @import("../layout/paragraph/retained.zig");
+const paragraph_reshape = @import("../layout/paragraph/reshape.zig");
 const styled_paragraph_layout = @import("../layout/paragraph/styled.zig");
 const paragraph_types = @import("../layout/types/paragraph.zig");
 const run_types = @import("../layout/types/runs.zig");
@@ -152,9 +155,10 @@ pub const TextShaper = struct {
 
     /// Shape and retain a width-independent paragraph.
     ///
-    /// Unlike `layoutParagraphUtf8`, this performs GSUB/GPOS and fallback only
-    /// once. Call `ShapedParagraph.layout` with different `ParagraphOptions`
-    /// to rebuild visual lines without reshaping.
+    /// Unlike `layoutParagraphUtf8`, this performs whole-paragraph GSUB/GPOS
+    /// and fallback only once. Call `ShapedParagraph.layout` with different
+    /// `ParagraphOptions` to rebuild visual lines. Justified Arabic lines may
+    /// still run bounded, line-local shaping after real U+0640 insertion.
     pub fn shapeParagraphUtf8(allocator: std.mem.Allocator, cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ShapedParagraph {
         return try shapeParagraphUtf8WithCaches(allocator, cascade, null, null, null, null, buffer, text, font_size, options);
     }
@@ -213,6 +217,11 @@ pub const TextShaper = struct {
         for (inline_object_indexes, options.inline_objects) |*index, object| {
             index.* = object.byte_index;
         }
+        const cascade_fonts = try allocator.dupe(
+            *const Font,
+            cascade.fonts,
+        );
+        errdefer allocator.free(cascade_fonts);
 
         return .{
             .allocator = allocator,
@@ -227,6 +236,8 @@ pub const TextShaper = struct {
             .default_metrics = defaultBaselineMetrics(cascade.fonts[0], font_size),
             .shape_key = ShapePlanKey.fromText(text, shape_options),
             .needs_bidi_reorder = plan_bidi.paragraphNeedsReorder(text, options.direction),
+            .cascade_fonts = cascade_fonts,
+            .font_size = font_size,
         };
     }
 
@@ -278,6 +289,16 @@ pub const TextShaper = struct {
             options.word_break_dictionary,
             options.hyphenation.dictionary,
         );
+        try reshapeUniformParagraph(
+            cascade,
+            fallback_cache,
+            metrics_cache,
+            glyph_index_cache,
+            buffer,
+            text,
+            font_size,
+            options,
+        );
         try punctuation_compression.apply(buffer, options);
         if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
             try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
@@ -311,6 +332,16 @@ pub const TextShaper = struct {
             null,
             options.word_break_dictionary,
             options.hyphenation.dictionary,
+        );
+        try reshapeUniformParagraph(
+            cascade,
+            fallback_cache,
+            metrics_cache,
+            glyph_index_cache,
+            buffer,
+            text,
+            font_size,
+            options,
         );
         try punctuation_compression.apply(buffer, options);
         if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
@@ -644,6 +675,34 @@ fn buildParagraphLines(
         dictionary,
         hyphenation_dictionary,
     );
+}
+
+fn reshapeUniformParagraph(
+    cascade: FontCascade,
+    fallback_cache: ?*FontFallbackCache,
+    metrics_cache: ?*GlyphMetricsCache,
+    glyph_index_cache: ?*GlyphIndexCache,
+    buffer: *LayoutBuffer,
+    text: []const u8,
+    font_size: f32,
+    options: ParagraphOptions,
+) !void {
+    const recipe = paragraph_reshape.Uniform{
+        .cascade = cascade,
+        .fallback_cache = fallback_cache,
+        .metrics_cache = metrics_cache,
+        .glyph_index_cache = glyph_index_cache,
+        .text = text,
+        .font_size = font_size,
+        .options = options,
+    };
+    try kashida_justification.apply(
+        buffer,
+        text,
+        options,
+        recipe,
+    );
+    paragraph_reflow.applyPendingJustification(buffer);
 }
 
 const defaultBaselineMetrics = paragraph_reflow.defaultBaselineMetrics;

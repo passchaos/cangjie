@@ -62,6 +62,21 @@ pub const Punctuation = struct {
     end_hanging_fraction: f32 = 0,
 };
 
+/// Arabic elongation policy used by justified soft-wrapped lines.
+///
+/// Cangjie inserts real U+0640 source scalars into a temporary line and shapes
+/// that line again. The inserted bytes never alter the caller's source text or
+/// public byte coordinates.
+pub const Kashida = struct {
+    /// Prefer Arabic elongation before generic inter-word expansion when the
+    /// shaper retained a safe Tatweel boundary.
+    enabled: bool = true,
+    /// Bound repeated reshaping and prevent a very wide measure from producing
+    /// an impractically long run. Zero disables insertion without changing the
+    /// rest of justification.
+    max_insertions_per_line: usize = 8,
+};
+
 pub const Options = struct {
     max_width: f32,
     wrap_mode: paragraph_types.WrapMode = .word,
@@ -90,6 +105,8 @@ pub const Options = struct {
     hyphenation: Hyphenation = .{},
     /// Optional optical punctuation policy.
     punctuation: Punctuation = .{},
+    /// Optional Arabic Kashida insertion for justified soft-wrapped lines.
+    kashida: Kashida = .{},
     /// Shaping controls resolved before line breaking.
     script_tag: ?unicode.OpenTypeScriptTag = null,
     language_tag: ?unicode.OpenTypeLanguageTag = null,
@@ -205,4 +222,16 @@ test "punctuation compression fraction stays normalized" {
         .max_width = 100,
         .punctuation = .{ .max_compression_fraction = 1 },
     });
+}
+
+test "zero Kashida insertion limit is an explicit disable" {
+    const options = Options{
+        .max_width = 100,
+        .kashida = .{ .max_insertions_per_line = 0 },
+    };
+    try validate(options);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        options.kashida.max_insertions_per_line,
+    );
 }

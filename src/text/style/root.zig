@@ -253,6 +253,8 @@ pub const ParagraphStyle = struct {
     hyphenation: paragraph_options.Hyphenation = .{},
     /// Optional optical punctuation policy.
     punctuation: paragraph_options.Punctuation = .{},
+    /// Arabic elongation policy for justified soft-wrapped lines.
+    kashida: paragraph_options.Kashida = .{},
 
     pub fn paragraphOptions(self: ParagraphStyle, max_width: f32) paragraph_options.Options {
         return .{
@@ -271,6 +273,7 @@ pub const ParagraphStyle = struct {
             .word_break_dictionary = self.word_break_dictionary,
             .hyphenation = self.hyphenation,
             .punctuation = self.punctuation,
+            .kashida = self.kashida,
         };
     }
 };

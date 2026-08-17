@@ -100,6 +100,10 @@ test "paragraph style converts to paragraph options" {
             .max_compression_fraction = 0.75,
             .end_hanging_fraction = 0.5,
         },
+        .kashida = .{
+            .enabled = false,
+            .max_insertions_per_line = 3,
+        },
     };
     const options = style.paragraphOptions(80);
 
@@ -136,6 +140,11 @@ test "paragraph style converts to paragraph options" {
     try std.testing.expectEqual(
         @TypeOf(options.punctuation.convention).cns,
         options.punctuation.convention,
+    );
+    try std.testing.expect(!options.kashida.enabled);
+    try std.testing.expectEqual(
+        @as(usize, 3),
+        options.kashida.max_insertions_per_line,
     );
     try std.testing.expectApproxEqAbs(@as(f32, 10), options.first_line_indent, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 4), options.paragraph_spacing, 0.001);

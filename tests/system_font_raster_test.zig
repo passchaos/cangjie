@@ -4,6 +4,7 @@ const cangjie = @import("cangjie");
 
 const system_font_path = "/System/Library/Fonts/SFNSMono.ttf";
 const linux_noto_sans_arabic_path = "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf";
+const linux_noto_naskh_arabic_path = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf";
 const linux_noto_sans_cjk_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc";
 const known_sfns_mono_sha256 = hexToBytes("55caaed55254a28ac793847e8976be16c5ba7cbad1ec2ee2d5d86d4e6b3fa0c1");
 const known_raster_sha256 = hexToBytes("76440f37e0266d38bf0fc4a65e399dc527f81ef76f963470fe796bc895356a6c");
@@ -161,6 +162,140 @@ fn expectTatweelFlags(text: cangjie.shaping.Text) !void {
     try std.testing.expect(text.glyphs[0].isSafeToInsertTatweel());
     try std.testing.expect(text.glyphs[0].isUnsafeToBreakBefore());
     try std.testing.expect(!text.glyphs[1].isSafeToInsertTatweel());
+}
+
+test "Linux Noto Naskh Arabic justification inserts shaped Kashida" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const font_bytes = std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        linux_noto_naskh_arabic_path,
+        allocator,
+        .limited(16 * 1024 * 1024),
+    ) catch |err| switch (err) {
+        error.FileNotFound, error.AccessDenied => return error.SkipZigTest,
+        else => return err,
+    };
+    defer allocator.free(font_bytes);
+    var font = try cangjie.font.Face.parse(allocator, font_bytes);
+    defer font.deinit();
+
+    var engine = cangjie.shaping.Engine.init(allocator, .{});
+    defer engine.deinit();
+    const cascade = cangjie.font.Cascade.init(&.{&font});
+    const text = "بب بب بب";
+    const options = cangjie.paragraph.Options{
+        .max_width = 95,
+        .direction = .rtl,
+        .alignment = .justify,
+    };
+    const layout = try engine.layout(cascade, .{
+        .text = text,
+        .font_size = 32,
+        .options = options,
+    });
+    try expectShapedKashidaLayout(layout, text);
+
+    // The retained path owns the cascade pointer list and exact font size
+    // needed to repeat this line-local reshape at a different width.
+    var retained = try engine.prepareParagraph(cascade, .{
+        .text = text,
+        .font_size = 32,
+        .options = options,
+    });
+    defer retained.deinit();
+    var reflow = cangjie.paragraph.ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const retained_layout = try retained.layout(&reflow, options);
+    try expectShapedKashidaLayout(retained_layout, text);
+}
+
+test "Linux Noto Naskh styled paragraph keeps Kashida metadata aligned" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const font_bytes = std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        linux_noto_naskh_arabic_path,
+        allocator,
+        .limited(16 * 1024 * 1024),
+    ) catch |err| switch (err) {
+        error.FileNotFound, error.AccessDenied => return error.SkipZigTest,
+        else => return err,
+    };
+    defer allocator.free(font_bytes);
+    var font = try cangjie.font.Face.parse(allocator, font_bytes);
+    defer font.deinit();
+
+    var engine = cangjie.shaping.Engine.init(allocator, .{});
+    defer engine.deinit();
+    const text = "بب بب بب";
+    const spans = [_]cangjie.paragraph.StyledSpan{.{
+        .byte_start = 0,
+        .byte_len = text.len,
+        .style_index = 9,
+        .font_size = 32,
+        .letter_spacing = 1,
+    }};
+    const result = try engine.layoutStyled(
+        cangjie.font.Cascade.init(&.{&font}),
+        .{
+            .text = text,
+            .default_font_size = 32,
+            .spans = &spans,
+            .options = .{
+                .max_width = 95,
+                .direction = .rtl,
+                .alignment = .justify,
+            },
+        },
+    );
+    try expectShapedKashidaLayout(result.layout, text);
+    try std.testing.expectEqual(
+        result.layout.glyphs.len,
+        result.glyph_metadata.len,
+    );
+    for (result.glyph_metadata) |metadata| {
+        try std.testing.expectEqual(@as(u32, 9), metadata.style_index);
+    }
+    for (result.layout.glyphs, result.glyph_metadata) |glyph, metadata| {
+        if (glyph.isKashida()) {
+            try std.testing.expectApproxEqAbs(
+                @as(f32, 0),
+                metadata.layout_spacing,
+                0.001,
+            );
+        }
+    }
+}
+
+fn expectShapedKashidaLayout(
+    layout: cangjie.paragraph.Layout,
+    source: []const u8,
+) !void {
+    try std.testing.expectEqual(@as(usize, 2), layout.lines.len);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 95),
+        layout.lines[0].width,
+        0.001,
+    );
+    var kashida_count: usize = 0;
+    for (layout.glyphs) |glyph| {
+        try std.testing.expect(glyph.cluster <= source.len);
+        if (!glyph.isKashida()) continue;
+        kashida_count += 1;
+        try std.testing.expectEqual(@as(u21, 0x0640), glyph.codepoint);
+        try std.testing.expectEqual(@as(usize, 0), glyph.source_byte_len);
+        try std.testing.expectEqual(glyph.cluster, glyph.sourceByteEnd());
+        // This is the font's shaped U+0640 output, not a manually synthesized
+        // advance: Noto Naskh's nominal Tatweel glyph is id 726.
+        try std.testing.expectEqual(
+            @as(cangjie.font.GlyphId, 726),
+            glyph.glyph_id,
+        );
+    }
+    try std.testing.expect(kashida_count > 0);
 }
 
 test "Linux Noto Sans CJK vertical shaping uses real vert substitutions and vmtx" {

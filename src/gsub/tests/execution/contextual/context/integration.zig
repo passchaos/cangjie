@@ -130,6 +130,60 @@ pub fn suite(comptime Bindings: type) type {
             try std.testing.expect(boundaries.isUnsafeBeforeByte(2));
             try std.testing.expect(!boundaries.isUnsafeBeforeByte(3));
         }
+
+        test "ContextSubst root dispatch skips LookupFlag-ignored glyphs" {
+            const allocator = std.testing.allocator;
+            var bytes = [_]u8{0} ** 72;
+            writeU32(&bytes, 0, 0x00010000);
+            writeU16(&bytes, 8, 10);
+            writeU16(&bytes, 10, 2);
+            writeU16(&bytes, 12, 6);
+            writeU16(&bytes, 14, 42);
+
+            writeU16(&bytes, 16, 5);
+            writeU16(&bytes, 18, 0x0008);
+            writeU16(&bytes, 20, 1);
+            writeU16(&bytes, 22, 8);
+
+            const subtable = 24;
+            writeU16(&bytes, subtable, 1);
+            writeU16(&bytes, subtable + 2, 22);
+            writeU16(&bytes, subtable + 4, 1);
+            writeU16(&bytes, subtable + 6, 8);
+            const set = subtable + 8;
+            writeU16(&bytes, set, 1);
+            writeU16(&bytes, set + 2, 4);
+            const rule = set + 4;
+            writeU16(&bytes, rule, 2);
+            writeU16(&bytes, rule + 2, 1);
+            writeU16(&bytes, rule + 4, 2);
+            writeU16(&bytes, rule + 6, 1);
+            writeU16(&bytes, rule + 8, 1);
+            writeCoverage1(&bytes, subtable + 22, 1);
+            writeSingleDeltaLookup(&bytes, 52, 2, 10);
+
+            var glyphs = std.ArrayList(GlyphId).empty;
+            defer glyphs.deinit(allocator);
+            try glyphs.appendSlice(allocator, &.{ 1, 3, 2 });
+            const glyph_classes = [_]u16{ 0, 0, 0, 3 };
+
+            try Bindings.applyLookup(
+                table.View{
+                    .data = &bytes,
+                    .offset = 0,
+                    .length = bytes.len,
+                },
+                16,
+                &glyphs,
+                allocator,
+                .{ .glyph_classes = &glyph_classes },
+            );
+            try std.testing.expectEqualSlices(
+                GlyphId,
+                &.{ 1, 3, 12 },
+                glyphs.items,
+            );
+        }
     };
 }
 

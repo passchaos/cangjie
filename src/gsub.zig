@@ -836,52 +836,6 @@ fn readU32(table: Table, relative: usize) GsubError!u32 {
     return table.readU32(relative);
 }
 
-test "GSUB context substitution skips lookup-flag ignored glyphs" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 72;
-
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 8, 10);
-    writeU16Test(&bytes, 10, 2);
-    writeU16Test(&bytes, 12, 6);
-    writeU16Test(&bytes, 14, 42);
-
-    writeU16Test(&bytes, 16, 5);
-    writeU16Test(&bytes, 18, 0x0008);
-    writeU16Test(&bytes, 20, 1);
-    writeU16Test(&bytes, 22, 8);
-
-    const context = 24;
-    writeU16Test(&bytes, context + 0, 1);
-    writeU16Test(&bytes, context + 2, 22);
-    writeU16Test(&bytes, context + 4, 1);
-    writeU16Test(&bytes, context + 6, 8);
-
-    const set = context + 8;
-    writeU16Test(&bytes, set + 0, 1);
-    writeU16Test(&bytes, set + 2, 4);
-    const rule = set + 4;
-    writeU16Test(&bytes, rule + 0, 2);
-    writeU16Test(&bytes, rule + 2, 1);
-    writeU16Test(&bytes, rule + 4, 2);
-    writeU16Test(&bytes, rule + 6, 1);
-    writeU16Test(&bytes, rule + 8, 1);
-
-    writeCoverage1(&bytes, context + 22, 1);
-    writeSingleDeltaLookup(&bytes, 52, 2, 10);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 3, 2 });
-
-    const glyph_classes = [_]u16{ 0, 0, 0, 3 };
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, allocator, .{
-        .glyph_classes = &glyph_classes,
-    });
-
-    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 3, 12 }, glyphs.items);
-}
-
 test "GSUB direct context substitution preflights payload arrays atomically" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 110;
@@ -2549,8 +2503,11 @@ const ContextValidationIntegrationTestBindings = struct {
     pub const validateTable = validateGlyphBounds;
 };
 
+const contextTestApplyLookup = applyLookup;
+
 const ContextExecutionIntegrationTestBindings = struct {
     pub const Executor = ContextualRecordExecutor;
+    pub const applyLookup = contextTestApplyLookup;
 };
 
 const chainingTestApplyLookup = applyLookup;

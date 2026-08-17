@@ -43,6 +43,8 @@ const diagnostic_fallback = diagnostics.fallback;
 const diagnostic_quality = diagnostics.quality;
 const diagnostic_types = diagnostics.types;
 const font_fallback = @import("shaping/fallback/font/root.zig");
+const script_run_itemization =
+    @import("shaping/itemization/script_runs.zig");
 const stch_feature = @import("shaping/features/stch/root.zig");
 const bidi_reorder = @import("layout/bidi/reorder/root.zig");
 const glyph_position = @import("layout/glyph_position.zig");
@@ -446,7 +448,14 @@ pub const TextShaper = struct {
         if (shouldApplyBidiVisualOrder(text, options)) {
             try applyBidiVisualOrder(buffer, text, options.direction, null);
         }
-        try buildScriptRuns(buffer, text, options.direction, options.language_tag);
+        try script_run_itemization.rebuild(
+            buffer.allocator,
+            &buffer.script_runs,
+            buffer.glyphs.items,
+            text,
+            options.direction,
+            options.language_tag,
+        );
         return buffer.scriptedText();
     }
 
@@ -1030,46 +1039,6 @@ fn selectFontWithOptionalCache(cascade: FontCascade, cache: ?*FontFallbackCache,
         glyph_index_cache,
         codepoint,
     );
-}
-
-fn buildScriptRuns(buffer: *LayoutBuffer, text: []const u8, direction: TextDirection, language_tag: ?unicode.OpenTypeLanguageTag) !void {
-    buffer.script_runs.clearRetainingCapacity();
-    const script_runs = try unicode.itemizeScriptRuns(buffer.allocator, text);
-    defer buffer.allocator.free(script_runs);
-
-    if (direction == .ltr) {
-        for (script_runs) |script_run| {
-            try appendScriptedRunForByteRange(buffer, text, script_run, language_tag);
-        }
-    } else {
-        var index = script_runs.len;
-        while (index > 0) {
-            index -= 1;
-            try appendScriptedRunForByteRange(buffer, text, script_runs[index], language_tag);
-        }
-    }
-}
-
-fn appendScriptedRunForByteRange(buffer: *LayoutBuffer, text: []const u8, script_run: unicode.ScriptRun, language_tag: ?unicode.OpenTypeLanguageTag) !void {
-    const byte_start = script_run.byte_start;
-    const byte_end = script_run.byte_start + script_run.byte_len;
-    var glyph_start: ?usize = null;
-    var glyph_end: usize = 0;
-    for (buffer.glyphs.items, 0..) |glyph, index| {
-        if (glyph.cluster < byte_start or glyph.cluster >= byte_end) continue;
-        if (glyph_start == null) glyph_start = index;
-        glyph_end = index + 1;
-    }
-    if (glyph_start == null) return;
-    try buffer.script_runs.append(buffer.allocator, .{
-        .script = script_run.script,
-        .script_tag = unicode.openTypeScriptTag(script_run.script),
-        .language_tag = language_tag orelse unicode.inferOpenTypeLanguageTag(text[byte_start..byte_end]),
-        .glyph_start = glyph_start.?,
-        .glyph_len = glyph_end - glyph_start.?,
-        .byte_start = byte_start,
-        .byte_len = script_run.byte_len,
-    });
 }
 
 fn applyBidiVisualOrder(

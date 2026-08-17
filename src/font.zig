@@ -1495,9 +1495,31 @@ pub const Font = struct {
 
     /// Return horizontal metrics with HVAR advance/LSB deltas applied when present.
     pub fn horizontalMetricsAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!HorizontalMetricInfo {
-        var metrics = try self.horizontalMetricsAtCoordsForReadMode(glyph_id, normalized_coords, .revalidate);
+        return try self.horizontalMetricsAtCoordsIncludingGvar(
+            glyph_id,
+            normalized_coords,
+            .revalidate,
+        );
+    }
+
+    fn horizontalMetricsAtCoordsIncludingGvar(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+        normalized_coords: []const f32,
+        read_mode: OutlineReadMode,
+    ) FontError!HorizontalMetricInfo {
+        var metrics = try self.horizontalMetricsAtCoordsForReadMode(
+            glyph_id,
+            normalized_coords,
+            read_mode,
+        );
         if (self.hvar == null and self.gvar != null) {
-            if (try self.gvarPhantomPointDeltasAtCoordsPrepared(std.heap.page_allocator, glyph_id, normalized_coords, .revalidate)) |phantom| {
+            if (try self.gvarPhantomPointDeltasAtCoordsPrepared(
+                std.heap.page_allocator,
+                glyph_id,
+                normalized_coords,
+                read_mode,
+            )) |phantom| {
                 // With no HVAR, OpenType derives horizontal metric deltas from
                 // gvar phantom points: pp1 is the LSB delta and pp2-pp1 is the
                 // advance delta. This is the high-level metrics contract used
@@ -1512,6 +1534,24 @@ pub const Font = struct {
             }
         }
         return metrics;
+    }
+
+    fn horizontalMetricsAtCoordsForShaping(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!HorizontalMetricInfo {
+        // Match the shaping cache's historical default-instance behavior:
+        // empty coordinates read hmtx directly rather than deriving phantom
+        // point deltas from an otherwise inactive gvar table.
+        if (normalized_coords.len == 0) {
+            return try self.horizontalMetricsForReadMode(glyph_id, .parsed);
+        }
+        // Keep the trusted shaping path numerically identical to the defensive
+        // public API. The only difference is ownership: shaping receives a
+        // parsed face whose bytes remain immutable, so the parse-time table
+        // proof replaces per-glyph checksum and grammar validation.
+        return try self.horizontalMetricsAtCoordsIncludingGvar(
+            glyph_id,
+            normalized_coords,
+            .parsed,
+        );
     }
 
     fn horizontalMetricsAtCoordsForReadMode(
@@ -4771,6 +4811,7 @@ pub const shaping = struct {
     pub const applyGsub = Font.applyGsub;
     pub const collectGposAdjustments = Font.collectGposAdjustments;
     pub const verticalOriginYAtCoords = Font.shapingVerticalOriginYAtCoords;
+    pub const horizontalMetricsAtCoords = Font.horizontalMetricsAtCoordsForShaping;
     pub const horizontalTrackingForShaping = Font.horizontalTrackingForShaping;
     pub const kernLookupForShaping = Font.kernLookupForShaping;
     pub const kerxLookupForShaping = Font.kerxLookupForShaping;

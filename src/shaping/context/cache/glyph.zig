@@ -1,6 +1,7 @@
 const std = @import("std");
 
-const Font = @import("../../../font.zig").Font;
+const font_mod = @import("../../../font.zig");
+const Font = font_mod.Font;
 const GlyphId = @import("../../../glyph.zig").GlyphId;
 
 pub const GlyphMetrics = struct {
@@ -72,10 +73,15 @@ pub const GlyphMetricsCache = struct {
             return metrics;
         }
         self.misses += 1;
-        const raw = if (normalized_variation_coords.len == 0)
-            try font.horizontalMetrics(glyph_id)
-        else
-            try font.horizontalMetricsAtCoords(glyph_id, normalized_variation_coords);
+        // Faces reachable here were parsed before entering the shaping
+        // pipeline and must remain immutable while cache keys borrow them.
+        // Reuse that proof rather than checksumming hhea/hmtx for every cache
+        // miss; public font metric APIs retain mutation-aware validation.
+        const raw = try font_mod.shaping.horizontalMetricsAtCoords(
+            font,
+            glyph_id,
+            normalized_variation_coords,
+        );
         const metrics = GlyphMetrics{
             .advance_width = raw.advance_width,
             .left_side_bearing = raw.left_side_bearing,
@@ -165,6 +171,34 @@ test "glyph metrics direct cache is exact and cleared with the backing map" {
     try std.testing.expect(!cache.direct_entries[slot].valid);
     try std.testing.expectEqual(@as(usize, 0), cache.hits);
     try std.testing.expectEqual(@as(usize, 0), cache.misses);
+}
+
+test "shaping metrics reuse the parsed immutable face proof" {
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    const tables = try font.tables(std.testing.allocator);
+    defer std.testing.allocator.free(tables);
+    var hhea_tail: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "hhea")) {
+            hhea_tail = table.offset + table.length - 1;
+        }
+    }
+
+    // Corrupt only reserved hhea padding: the metric payload stays unchanged,
+    // but mutation-aware public access must observe the checksum failure.
+    bytes[hhea_tail orelse return error.MissingTable] +%= 1;
+    try std.testing.expectError(error.InvalidMetrics, font.horizontalMetrics(1));
+
+    var cache = GlyphMetricsCache.init(std.testing.allocator);
+    defer cache.deinit();
+    const metrics = try cache.horizontalMetrics(&font, 1);
+    try std.testing.expectEqual(@as(u16, 800), metrics.advance_width);
+    try std.testing.expectEqual(@as(i16, 0), metrics.left_side_bearing);
 }
 
 const GlyphIndexKey = struct {

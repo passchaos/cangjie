@@ -1,9 +1,11 @@
 # Text Analysis, Shaping, And Reflow Architecture
 
-This document defines the target architecture for Cangjie's text stack. It is
-not a claim that every stage has already reached the target. The first completed
-slice is the Unicode line-break boundary layer and its streaming integration
-with paragraph wrapping.
+This document defines the target architecture for Cangjie's text stack and
+records the module boundaries already implemented toward it. It is not a claim
+that every stage has reached the target. Unicode line breaking and its
+streaming paragraph integration were the first completed slice; shaping,
+fallback, context ownership, and paragraph orchestration have since been split
+into the domain modules described below.
 
 ## Reference Designs
 
@@ -79,7 +81,7 @@ The long-term paragraph pipeline is:
 The key boundary is that shaping never chooses visual lines, while line
 breaking never performs OpenType substitution or positioning.
 
-## Implemented First Slice
+## Implemented Architecture
 
 `src/unicode/line_break/iterator.zig` now owns Unicode line breaking:
 
@@ -112,10 +114,23 @@ than embedded in the shaping implementation:
   run ranges.
 - `truncation.zig` owns line limits and plain-text ellipsis materialization.
 
-`src/layout.zig` retains paragraph orchestration and the internal records
-re-exported by `cangjie.paragraph` and `cangjie.shaping`. This keeps shaping,
-boundary selection, geometry, and truncation independently testable without
-changing the context ownership model.
+Paragraph request and ownership policy is organized under
+`src/layout/paragraph/`:
+
+- `options.zig` owns public paragraph options, validation, and the projection
+  from paragraph controls to width-independent shaping controls.
+- `retained.zig` owns `ShapedParagraph` and `ReflowBuffer`, including immutable
+  source/shaping snapshots and repeatable reflow without another GSUB/GPOS
+  pass.
+- `styled.zig` drives attributed shaping, fallback, metadata, reflow, and bidi
+  over normalized style spans.
+
+`src/layout.zig` is now a small compatibility façade. It re-exports result,
+option, cache, and diagnostic types for consumers that have not yet moved to
+their domain modules, and statically binds the ordinary shaper for two
+diagnostic entry points. It does not own ordinary shaping, the one-font segment
+pipeline, reusable context storage, fallback segmentation, or paragraph
+orchestration.
 
 Post-shaping bidi output reconstruction is similarly isolated under
 `src/layout/bidi/reorder/`:
@@ -141,6 +156,54 @@ public façade groups them under `cangjie.paragraph` and `cangjie.shaping`.
 Implementation files therefore no longer mix data-model methods with OpenType
 shaping stages.
 
+Ordinary shaping and paragraph entry-point orchestration live in
+`src/shaping/orchestrator.zig`. This layer validates requests, selects
+single-font or cascade shaping, coordinates script-run itemization and bidi
+policy, and constructs retained, one-shot, styled, and measured paragraph
+results. `src/shaping/text_shaper.zig` is the extended façade: it aliases the
+ordinary operations and adds the uncommon UTF-8 byte-ranged GSUB feature path
+without expanding every run-wide options record.
+
+Reusable shaping-plan policy is grouped under `src/shaping/plan/`:
+
+- `root.zig` owns `ShapeOptions`, plan identity, and plan-cache records.
+- `validation.zig` validates UTF-8, sizes, feature overrides, and normalized
+  variation coordinates at request boundaries.
+- `resolution.zig` converts public options and inferred Unicode properties into
+  homogeneous lookup options consumed by the segment pipeline.
+- `bidi.zig` owns pure policy for standalone shaped-run and paragraph visual
+  reordering.
+
+Concrete context ownership is grouped under `src/shaping/context/`:
+
+- `root.zig` exposes the source-level `Engine` owner and named request records.
+- `state.zig` owns engine output and cache lifetimes and binds borrowed caches
+  to each operation.
+- `output.zig` owns reusable glyph, run, line, script-run, profiling, and
+  scratch storage returned as borrowing views.
+- `scratch.zig` owns the parallel transient arrays used by source mapping,
+  GSUB, GPOS, attachment, cluster-safety, and final-output stages.
+- `cache/` separates font metadata/proofs, lookup selection, glyph data,
+  cascade-aware fallback, and fully owned shaped-run entries. Hashes are
+  rejection filters; cache hits still compare the complete relevant identity,
+  including ordered cascade pointers and shaped-run inputs.
+
+This keeps the public owner concrete: callers hold an `Engine` value, returned
+views borrow it until the next operation, and no opaque ABI handle or runtime
+callback is required inside the source-level pipeline.
+
+Cluster-safe fallback is grouped under `src/shaping/fallback/`:
+
+- `font/root.zig` owns borrowed cascade identity and complete-cluster font
+  selection, including variation-selector preference and default-ignorable
+  coverage policy.
+- `segment.zig` partitions ASCII or grapheme input into maximal same-font
+  spans. It invokes a generic context's `appendSegment` method through Zig
+  static dispatch, so the boundary adds neither a function pointer nor type
+  erasure.
+- `mark.zig` provides the separate geometric mark-fallback support used when
+  portable font positioning is unavailable.
+
 Arabic/Syriac stretch post-processing lives under
 `src/shaping/features/stch/`:
 
@@ -153,12 +216,17 @@ Arabic/Syriac stretch post-processing lives under
 Renderer-free analysis is organized under `src/shaping/diagnostics/`:
 
 - `types.zig` owns the stable fallback, quality, and caret report records.
+- `fallback.zig` traces the cluster-safe face and glyph decisions while
+  preserving source spans and variation-selector semantics.
 - `quality.zig` aggregates already-shaped font/script runs.
 - `caret.zig` validates UTF-8 source spans and caret round trips.
+- `orchestration.zig` composes shaping, paragraph geometry, and pure analysis
+  through a comptime-supplied shaper type.
 
-The public `diagnose*Utf8` functions remain thin orchestration entry points in
-the layout surface, while report storage and pure analysis no longer depend on
-the shaping executor.
+The public diagnostic API remains thin. Its current compatibility wrappers
+statically bind `TextShaper` through `src/layout.zig`; report storage and the
+diagnostic algorithms themselves do not depend on that façade or on runtime
+type erasure.
 
 The first executable shaping stage is isolated under
 `src/shaping/pipeline/source/`:
@@ -212,10 +280,18 @@ Final positioning is grouped under `src/shaping/pipeline/positioning/`:
 - `output/` converts font-unit adjustments into public glyph geometry, with
   separate Arabic cmap fallback, per-glyph geometry, and shared state records.
 
-The segment orchestrator therefore no longer owns metric fallback, attachment
-compaction, default-ignorable suppression, or the final glyph construction
-loop. Shared resolved run properties live in `shaping/pipeline/types.zig`, so
+`src/shaping/pipeline/segment.zig` is the one-font execution boundary that
+connects source mapping, normalization, GSUB, positioning, and final output.
+It accepts resolved lookup properties and a concrete reusable output owner; it
+does not choose fallback spans, paragraph lines, or bidi layout. Metric
+fallback, attachment compaction, default-ignorable suppression, and glyph
+construction remain delegated to the focused positioning modules above.
+Shared resolved run properties live in `shaping/pipeline/types.zig`, so
 pipeline stages do not import the paragraph/layout orchestrator.
+
+After shaping, `src/shaping/itemization/script_runs.zig` maps glyph clusters
+back onto Unicode script byte ranges and records stable script/language
+metadata without moving that policy into the segment executor.
 
 `WordBreakDictionary` is the optional tailoring for mainstream scripts whose
 orthography normally omits spaces:
@@ -415,6 +491,11 @@ namespace. The root integration suite is likewise split under
 `src/tests/root/` by font, Unicode, shaping, rendering, database, bidi, and
 paragraph responsibility instead of making the public root a 10,000-line test
 container.
+
+The shaping integration suite is similarly rooted at
+`src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,
+GSUB, GPOS/AAT, attachment, pipeline-state, and vertical-layout modules.
+`src/layout.zig` contains no named integration tests.
 
 Paragraph shaping now retains glyph atoms in logical source order and applies
 bidi visual ordering only after line ranges are known. Each line builds its own
@@ -635,17 +716,25 @@ Future changes must preserve these rules:
 
 1. Extend the existing HarfBuzz-compatible shaping-boundary flags only when a
    new portable shaping relationship can change retained-run reuse semantics.
-2. Continue moving internal cache and scratch implementations under the
-   `shaping/context` module boundary now that `cangjie.shaping.Engine` owns
-   their public lifetime.
-3. Add language-aware hyphenation as the next optional tailoring layer; keep
+2. Define bounded cache budgets and eviction policy for long-lived engines,
+   while preserving exact cache-key comparisons, explicit lifetime rules, and
+   observable hit/miss statistics.
+3. Finish routing public shaping and paragraph APIs directly to their domain
+   modules, then retire the remaining `src/layout.zig` compatibility aliases
+   once all internal consumers have migrated.
+4. Add language-aware hyphenation as the next optional tailoring layer; keep
    dictionary segmentation and hyphenation outside the default UAX #14 state
    machine.
-4. Add Arabic kashida and language-specific CJK punctuation
+5. Add Arabic kashida and language-specific CJK punctuation
    compression/hanging where portable references exist, without changing the
    generic inter-word and inter-character contracts.
-5. Benchmark analysis, shaping, and reflow separately. A faster micro-iterator
-   does not by itself establish end-to-end superiority over reference engines.
+6. Add fuzz and CI matrices for stage boundaries, cache reuse, malformed font
+   data, mixed-script fallback, vertical text, and retained reflow, alongside
+   the existing Unicode and HarfBuzz parity gates.
+7. Benchmark analysis, shaping, and reflow separately across representative
+   scripts, variable/color fonts, short UI runs, and long paragraphs. A faster
+   micro-iterator does not by itself establish end-to-end superiority over
+   reference engines.
 
 The standalone iterator benchmark is:
 

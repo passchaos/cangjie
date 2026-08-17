@@ -124,6 +124,9 @@ Paragraph request and ownership policy is organized under
   pass.
 - `styled.zig` drives attributed shaping, fallback, metadata, reflow, and bidi
   over normalized style spans.
+- `text_geometry/` builds an owned, platform-neutral view of final paragraph
+  text runs. Its focused source, placement, and span stages keep bidi
+  resolution, glyph-to-grapheme geometry, and flat output ownership separate.
 
 The former aggregate layout compatibility façade has been removed. Public and
 internal callers import result records, options, caches, diagnostics, shaping,
@@ -714,6 +717,21 @@ paragraph, caret, selection, and hit-testing APIs with their own document,
 history, IME, clipboard, and viewport state. This keeps the font/text stack
 independent of any particular widget framework and avoids a second editor model
 beside the application's native one.
+
+`cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
+platform-neutral accessibility bridge without introducing AccessKit or another
+platform tree model. The owned result enumerates logical-order spans split by
+line, final font run, resolved bidi direction, and optional style identity.
+Each span carries paragraph-space bounds, UTF-8 source range, same-line
+previous/next links, UAX #29 word-start indexes, and a flat range of source
+graphemes with UTF-8 lengths, span-relative inline positions, and widths.
+When one shaped glyph covers multiple source graphemes (for example a GSUB
+ligature), its final advance is divided evenly among those graphemes; an RTL
+span retains logical grapheme order while its inline positions decrease in
+visual order. The builder resolves bidi from source once rather than guessing
+from visual glyph order, and its arrays remain valid after the shaping output
+buffer is reused. Platform adapters can translate this stable data to
+AccessKit, UI Automation, AT-SPI, or native application semantics.
 
 Paragraph shaping now retains glyph atoms in logical source order and applies
 bidi visual ordering only after line ranges are known. Each line builds its own

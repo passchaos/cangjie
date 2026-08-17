@@ -5,4 +5,5 @@ test {
     _ = @import("layout_interaction.zig");
     _ = @import("paragraph_reflow.zig");
     _ = @import("paragraph_retained.zig");
+    _ = @import("text_geometry.zig");
 }

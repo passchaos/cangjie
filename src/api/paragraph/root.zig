@@ -1,6 +1,9 @@
 //! Width-independent paragraph shaping and repeatable visual reflow.
 
 const paragraph_options = @import("../../layout/paragraph/options.zig");
+const text_geometry = @import(
+    "../../layout/paragraph/text_geometry/root.zig",
+);
 const inline_object = @import("../../layout/inline_object/root.zig");
 const retained = @import("../../layout/paragraph/retained.zig");
 const styled_buffer = @import("../../layout/styled_buffer.zig");
@@ -40,3 +43,23 @@ pub const Rect = paragraph_types.TextRect;
 
 pub const StyledSpan = styled_paragraph.Span;
 pub const StyledGlyphMetadata = styled_buffer.Metadata;
+
+pub const TextGeometry = text_geometry.TextGeometry;
+pub const TextGeometrySpan = text_geometry.Span;
+pub const GraphemeGeometry = text_geometry.Grapheme;
+pub const TextGeometryFontRun = text_geometry.FontRun;
+pub const TextGeometryDirection = text_geometry.Direction;
+pub const TextGeometryOptions = text_geometry.Options;
+
+/// Build owned, platform-neutral text-run geometry from a final paragraph.
+///
+/// The returned arrays remain valid after the shaping engine or layout buffer
+/// is reused. Source byte ranges still refer to `text`; font face pointers
+/// retain their ordinary caller-owned lifetime.
+pub const buildGeometry = text_geometry.build;
+
+/// Styled counterpart of `buildGeometry`.
+///
+/// Source spans are used only to attach stable style identities; geometry is
+/// always taken from the final unified paragraph after wrapping and bidi.
+pub const buildStyledGeometry = text_geometry.buildStyled;

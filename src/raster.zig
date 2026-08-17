@@ -6,6 +6,7 @@ const font_mod = @import("font.zig");
 const glyph_mod = @import("glyph.zig");
 const run_types = @import("layout/types/runs.zig");
 const curves = @import("raster/curves.zig");
+const outline_raster = @import("raster/outline.zig");
 const prepared_mod = @import("raster/prepared.zig");
 const scanline = @import("raster/scanline.zig");
 const prepared_scanline = @import("raster/prepared_scanline.zig");
@@ -786,12 +787,21 @@ pub const Rasterizer = struct {
     /// `samples_per_axis`. This is intended for glyph atlases and repeated UI
     /// drawing where the same glyph geometry is scanned many times.
     pub fn prepareGlyph(self: *Rasterizer, outline: *const glyph_mod.GlyphOutline, x: f32, baseline_y: f32, font_size: f32, units_per_em: u16) !PreparedGlyph {
-        var flattened = try std.ArrayList(Line).initCapacity(self.allocator, flattenedLineCapacity(outline.commands.items));
+        var flattened = try std.ArrayList(Line).initCapacity(
+            self.allocator,
+            outline_raster.lineCapacity(outline.commands.items),
+        );
         defer flattened.deinit(self.allocator);
         const scale = font_size / @as(f32, @floatFromInt(units_per_em));
-        flattenOutline(&flattened, outline, scale, x, baseline_y);
+        outline_raster.flatten(&flattened, outline, scale, x, baseline_y);
         const hint_size = self.hint_size_px orelse font_size;
-        alignSmallGlyphToPixelGrid(flattened.items, outline, scale, font_size, hint_size);
+        outline_raster.alignSmallGlyphToPixelGrid(
+            flattened.items,
+            outline,
+            scale,
+            font_size,
+            hint_size,
+        );
         return .{
             .prepared_fill = try prepared_scanline.prepare(self.allocator, flattened.items),
             .hint_size = hint_size,
@@ -810,7 +820,8 @@ pub const Rasterizer = struct {
     }
 
     pub fn renderGlyph(self: *Rasterizer, target: *RenderTarget, outline: *const glyph_mod.GlyphOutline, x: f32, baseline_y: f32, font_size: f32, units_per_em: u16) !void {
-        const flattened_capacity = flattenedLineCapacity(outline.commands.items);
+        const flattened_capacity =
+            outline_raster.lineCapacity(outline.commands.items);
         var inline_flattened: [128]Line = undefined;
         var flattened = if (flattened_capacity <= inline_flattened.len)
             std.ArrayList(Line).initBuffer(inline_flattened[0..])
@@ -818,9 +829,15 @@ pub const Rasterizer = struct {
             try std.ArrayList(Line).initCapacity(self.allocator, flattened_capacity);
         defer if (flattened_capacity > inline_flattened.len) flattened.deinit(self.allocator);
         const scale = font_size / @as(f32, @floatFromInt(units_per_em));
-        flattenOutline(&flattened, outline, scale, x, baseline_y);
+        outline_raster.flatten(&flattened, outline, scale, x, baseline_y);
         const hint_size = self.hint_size_px orelse font_size;
-        alignSmallGlyphToPixelGrid(flattened.items, outline, scale, font_size, hint_size);
+        outline_raster.alignSmallGlyphToPixelGrid(
+            flattened.items,
+            outline,
+            scale,
+            font_size,
+            hint_size,
+        );
         try self.fillLines(target, flattened.items, .non_zero);
         if (self.embolden_small_glyphs and hint_size <= 20.0) {
             try self.emboldenSmallGlyph(target, flattened.items, hint_size);
@@ -1182,7 +1199,8 @@ pub const Rasterizer = struct {
         if (std.meta.eql(transform, font_mod.ColorAffine.identity)) {
             return try self.renderGlyph(target, outline, x, baseline_y, font_size, units_per_em);
         }
-        const flattened_capacity = flattenedLineCapacity(outline.commands.items);
+        const flattened_capacity =
+            outline_raster.lineCapacity(outline.commands.items);
         var inline_flattened: [128]Line = undefined;
         var flattened = if (flattened_capacity <= inline_flattened.len)
             std.ArrayList(Line).initBuffer(inline_flattened[0..])
@@ -1190,7 +1208,14 @@ pub const Rasterizer = struct {
             try std.ArrayList(Line).initCapacity(self.allocator, flattened_capacity);
         defer if (flattened_capacity > inline_flattened.len) flattened.deinit(self.allocator);
         const scale = font_size / @as(f32, @floatFromInt(units_per_em));
-        flattenOutlineTransformed(&flattened, outline, transform, scale, x, baseline_y);
+        outline_raster.flattenTransformed(
+            &flattened,
+            outline,
+            transform,
+            scale,
+            x,
+            baseline_y,
+        );
         try self.fillLines(target, flattened.items, .non_zero);
     }
 
@@ -1999,134 +2024,15 @@ const Point = glyph_mod.Point;
 const Line = scanline.Line;
 const FillRule = scanline.FillRule;
 
-fn alignSmallGlyphToPixelGrid(lines: []Line, outline: *const glyph_mod.GlyphOutline, scale: f32, font_size: f32, hint_size: f32) void {
-    if (hint_size > 20.0 or lines.len == 0) return;
-    var min_x = std.math.inf(f32);
-    var min_y = std.math.inf(f32);
-    var max_x = -std.math.inf(f32);
-    var max_y = -std.math.inf(f32);
-    for (lines) |line| {
-        min_x = @min(min_x, @min(line.a.x, line.b.x));
-        min_y = @min(min_y, @min(line.a.y, line.b.y));
-        max_x = @max(max_x, @max(line.a.x, line.b.x));
-        max_y = @max(max_y, @max(line.a.y, line.b.y));
-    }
-    if (!std.math.isFinite(min_x) or !std.math.isFinite(min_y) or !std.math.isFinite(max_x) or !std.math.isFinite(max_y)) return;
-    const dx = @round(min_x) - min_x;
-    const dy = @round(max_y) - max_y;
-
-    _ = outline;
-    _ = scale;
-    _ = font_size;
-    if (@abs(dx) < 0.001 and @abs(dy) < 0.001) return;
-    for (lines) |*line| {
-        line.a.x += dx;
-        line.b.x += dx;
-        line.a.y += dy;
-        line.b.y += dy;
-    }
-}
-
-fn outlineContourCount(outline: *const glyph_mod.GlyphOutline) usize {
-    var count: usize = 0;
-    for (outline.commands.items) |command| {
-        if (command == .move_to) count += 1;
-    }
-    return count;
-}
-
-fn flattenOutline(lines: *std.ArrayList(Line), outline: *const glyph_mod.GlyphOutline, scale: f32, x: f32, baseline_y: f32) void {
-    return flattenOutlineTransformed(lines, outline, .identity, scale, x, baseline_y);
-}
-
-fn flattenOutlineTransformed(
-    lines: *std.ArrayList(Line),
-    outline: *const glyph_mod.GlyphOutline,
-    transform: font_mod.ColorAffine,
-    scale: f32,
-    x: f32,
-    baseline_y: f32,
-) void {
-    var start: ?Point = null;
-    var current: ?Point = null;
-    for (outline.commands.items) |command| {
-        switch (command) {
-            .move_to => |p| {
-                const q = fontToPixel(transform.apply(p), scale, x, baseline_y);
-                start = q;
-                current = q;
-            },
-            .line_to => |p| {
-                const a = current orelse continue;
-                const b = fontToPixel(transform.apply(p), scale, x, baseline_y);
-                lines.appendAssumeCapacity(.{ .a = a, .b = b });
-                current = b;
-            },
-            .quad_to => |q| {
-                const a = current orelse continue;
-                const control = fontToPixel(transform.apply(q.control), scale, x, baseline_y);
-                const end = fontToPixel(transform.apply(q.end), scale, x, baseline_y);
-                const segments = curves.quadSegmentCount(a, control, end);
-                var prev = a;
-                for (1..segments + 1) |i| {
-                    const t = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(segments));
-                    const p = quadPoint(a, control, end, t);
-                    lines.appendAssumeCapacity(.{ .a = prev, .b = p });
-                    prev = p;
-                }
-                current = end;
-            },
-            .cubic_to => |c| {
-                const a = current orelse continue;
-                const c0 = fontToPixel(transform.apply(c.c0), scale, x, baseline_y);
-                const c1 = fontToPixel(transform.apply(c.c1), scale, x, baseline_y);
-                const end = fontToPixel(transform.apply(c.end), scale, x, baseline_y);
-                const segments = curves.cubicSegmentCount(a, c0, c1, end);
-                var prev = a;
-                for (1..segments + 1) |i| {
-                    const t = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(segments));
-                    const p = cubicPoint(a, c0, c1, end, t);
-                    lines.appendAssumeCapacity(.{ .a = prev, .b = p });
-                    prev = p;
-                }
-                current = end;
-            },
-            .close => {
-                if (current) |a| {
-                    if (start) |b| {
-                        lines.appendAssumeCapacity(.{ .a = a, .b = b });
-                    }
-                }
-                current = start;
-            },
-        }
-    }
-}
-
-fn flattenedLineCapacity(commands: []const glyph_mod.PathCommand) usize {
-    var result: usize = 0;
-    for (commands) |command| {
-        result += switch (command) {
-            .move_to => 0,
-            .line_to => 1,
-            .quad_to => 16,
-            .cubic_to => 24,
-            .close => 1,
-        };
-    }
-    return result;
-}
-
-fn fontToPixel(point: Point, scale: f32, x: f32, baseline_y: f32) Point {
-    return .{ .x = x + point.x * scale, .y = baseline_y - point.y * scale };
-}
-
 fn svgToPixel(point: Point, scale: f32, origin_x: f32, origin_y: f32) Point {
     return .{ .x = origin_x + point.x * scale, .y = origin_y + point.y * scale };
 }
 
 fn flattenSvgOutline(allocator: std.mem.Allocator, lines: *std.ArrayList(Line), outline: *const glyph_mod.GlyphOutline, transform: SvgTransform, scale: f32, origin_x: f32, origin_y: f32) !void {
-    try lines.ensureUnusedCapacity(allocator, flattenedLineCapacity(outline.commands.items));
+    try lines.ensureUnusedCapacity(
+        allocator,
+        outline_raster.lineCapacity(outline.commands.items),
+    );
     var start: ?Point = null;
     var current: ?Point = null;
     for (outline.commands.items) |command| {
@@ -4135,44 +4041,6 @@ fn normalizedVariationCoordinatesAreDefault(coords: []const f32) bool {
         if (coord != 0) return false;
     }
     return true;
-}
-
-test "small glyph alignment translates outline to pixel grid" {
-    var lines = [_]Line{
-        .{ .a = .{ .x = 2.3, .y = 4.2 }, .b = .{ .x = 7.3, .y = 4.2 } },
-        .{ .a = .{ .x = 7.3, .y = 4.2 }, .b = .{ .x = 7.3, .y = 9.7 } },
-    };
-    const outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{ .x_min = 0, .y_min = 0, .x_max = 500, .y_max = 500 }, 500, 0);
-    alignSmallGlyphToPixelGrid(&lines, &outline, 12.0 / 1000.0, 12, 12);
-    try std.testing.expect(@abs(lines[0].a.x - 2.0) < 0.001);
-    try std.testing.expect(@abs(lines[0].a.y - 4.5) < 0.001);
-    try std.testing.expect(@abs(lines[1].b.y - 10.0) < 0.001);
-}
-
-test "small multi-contour glyph alignment preserves outline height" {
-    var lines = [_]Line{
-        .{ .a = .{ .x = 2.3, .y = 4.2 }, .b = .{ .x = 7.3, .y = 4.2 } },
-        .{ .a = .{ .x = 7.3, .y = 4.2 }, .b = .{ .x = 7.3, .y = 9.7 } },
-    };
-    var outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{ .x_min = 0, .y_min = 0, .x_max = 500, .y_max = 500 }, 500, 0);
-    defer outline.deinit();
-    try outline.commands.append(std.testing.allocator, .{ .move_to = .{ .x = 0, .y = 0 } });
-    try outline.commands.append(std.testing.allocator, .{ .move_to = .{ .x = 1, .y = 1 } });
-    alignSmallGlyphToPixelGrid(&lines, &outline, 12.0 / 1000.0, 12, 12);
-    try std.testing.expect(@abs(lines[0].a.x - 2.0) < 0.001);
-    try std.testing.expect(@abs(lines[0].a.y - 4.5) < 0.001);
-    try std.testing.expect(@abs(lines[1].b.y - 10.0) < 0.001);
-    try std.testing.expect(@abs((lines[1].b.y - lines[0].a.y) - 5.5) < 0.001);
-}
-
-test "large glyph alignment leaves outline unchanged" {
-    var lines = [_]Line{
-        .{ .a = .{ .x = 2.3, .y = 4.2 }, .b = .{ .x = 7.3, .y = 9.7 } },
-    };
-    const outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{ .x_min = 0, .y_min = 0, .x_max = 500, .y_max = 500 }, 500, 0);
-    alignSmallGlyphToPixelGrid(&lines, &outline, 24.0 / 1000.0, 24, 24);
-    try std.testing.expect(@abs(lines[0].a.x - 2.3) < 0.001);
-    try std.testing.expect(@abs(lines[0].b.y - 9.7) < 0.001);
 }
 
 test "small glyph embolden can be disabled for native-weight UI text" {

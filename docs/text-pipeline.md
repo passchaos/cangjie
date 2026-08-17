@@ -531,6 +531,9 @@ CPU raster storage has focused ownership modules under `src/raster/`:
 `prepared.zig` owns reusable prepared scan geometry. The raster engine consumes
 these concrete values without making target storage responsible for outline,
 SVG, COLR, or scan-conversion policy.
+`outline.zig` separately owns adaptive font-outline flattening, transformed
+geometry, capacity bounds, and conservative small-size pixel alignment; its
+focused tests do not require color or SVG rendering state.
 
 The shaping integration suite is similarly rooted at
 `src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,

@@ -557,6 +557,13 @@ the root itemizer keeps joining-property lookup independent from script
 classification without adding runtime callbacks. Only the mark-classification
 test that intentionally exercises private root helpers remains in the Unicode
 root implementation.
+Unicode script identity and scalar classification live under
+`src/unicode/script/`: `root.zig` owns the public script type, overlap-sensitive
+classification order, and semantic policies such as Arabic-style joining
+eligibility, while `ranges.zig` contains only scalar-range facts. The public
+`unicode.Script` and `scriptForCodepoint` surface remains rooted in
+`src/unicode.zig`, so shaping and application code do not depend on internal
+block predicates.
 UAX #50 orientation ranges and compatibility presentation-form mappings live
 in `src/unicode/vertical.zig`; the root Unicode API supplies only the resolved
 script-family proof needed by that independent policy.

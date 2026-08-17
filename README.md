@@ -10,7 +10,6 @@ paragraph layout, and CPU rasterization behind domain-oriented APIs:
 - `cangjie.shaping` — shaping requests, options, results, and diagnostics
 - `cangjie.paragraph` — retained paragraphs, reflow, lines, and hit-test records
 - `cangjie.render` — grayscale/color targets, rasterization, and draw lists
-- `cangjie.editor` — text buffers and editor-oriented helpers
 - `cangjie.debug` — optional dumps and diagnostic overlays
 
 ## Shape and rasterize

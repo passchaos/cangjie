@@ -1,5 +1,4 @@
 const std = @import("std");
-const buffer_mod = @import("buffer.zig");
 const font_mod = @import("font.zig");
 const glyph_position = @import("layout/glyph_position.zig");
 const paragraph_types = @import("layout/types/paragraph.zig");
@@ -478,19 +477,6 @@ pub fn dumpGlyphIndexCacheStats(writer: *std.Io.Writer, cache: layout_cache.Glyp
     });
 }
 
-pub fn dumpTextBufferLayoutStats(writer: *std.Io.Writer, buffer: buffer_mod.TextBuffer) !void {
-    const dirty = buffer.dirtyRange();
-    try writer.print("layout_cache text_bytes={d} layout_valid={} dirty={d}..{d} scroll_y={d:.3} grapheme_cache={d} word_cache={d}\n", .{
-        buffer.slice().len,
-        buffer.layout_valid,
-        dirty.byte_start,
-        dirty.byte_end,
-        buffer.scroll_y,
-        buffer.grapheme_cache.items.len,
-        buffer.word_cache.items.len,
-    });
-}
-
 test "debug dumps unicode bidi paragraph hit selection and cache stats" {
     const allocator = std.testing.allocator;
     const test_font = @import("test_font.zig");
@@ -530,9 +516,6 @@ test "debug dumps unicode bidi paragraph hit selection and cache stats" {
     _ = try glyph_index_cache.glyphIndex(&font, 'A');
     _ = try glyph_index_cache.glyphIndex(&font, 'A');
 
-    var text_buffer = try buffer_mod.TextBuffer.initText(allocator, "A A");
-    defer text_buffer.deinit();
-
     var storage: [8192]u8 = undefined;
     var writer = std.Io.Writer.fixed(&storage);
     try dumpUnicodeSegmentation(&writer, allocator, "A\u{0301} B");
@@ -562,7 +545,6 @@ test "debug dumps unicode bidi paragraph hit selection and cache stats" {
     try dumpFontFallbackCacheStats(&writer, fallback_cache);
     try dumpGlyphIndexCacheStats(&writer, glyph_index_cache);
     try dumpGlyphMetricsCacheStats(&writer, metrics_cache);
-    try dumpTextBufferLayoutStats(&writer, text_buffer);
 
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "unicode.graphemes") != null);
@@ -588,5 +570,4 @@ test "debug dumps unicode bidi paragraph hit selection and cache stats" {
     try std.testing.expect(std.mem.indexOf(u8, output, "font_fallback_cache") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "glyph_index_cache") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "glyph_metrics_cache") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "layout_cache") != null);
 }

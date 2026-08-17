@@ -481,12 +481,12 @@ invoke `clearCaches` before destroying them.
 
 The package root is intentionally small and grouped by responsibility:
 `cangjie.shaping.Engine`, `cangjie.font`, `cangjie.text`, `cangjie.shaping`, `cangjie.paragraph`,
-`cangjie.render`, `cangjie.editor`, and `cangjie.debug`. Specialized font-table
+`cangjie.render`, and `cangjie.debug`. Specialized font-table
 records are grouped by responsibility under `font.metadata`; Unicode analysis
 is similarly split under `text.bidi`, `text.segmentation`, `text.script`, and
 `text.opentype`. Container and database APIs live under
 `font.container` and `font.database`. This prevents unrelated low-level table
-types, editor helpers, and renderer commands from competing in one flat
+types and renderer commands from competing in one flat
 namespace. The root integration suite is likewise split under
 `src/tests/root/` by font, Unicode, shaping, rendering, database, bidi, and
 paragraph responsibility instead of making the public root a 10,000-line test
@@ -496,6 +496,13 @@ The shaping integration suite is similarly rooted at
 `src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,
 GSUB, GPOS/AAT, attachment, pipeline-state, and vertical-layout modules.
 `src/layout.zig` contains no named integration tests.
+
+Cangjie deliberately does not own an editor or mutable text-buffer model.
+Applications and UI toolkits compose the public Unicode segmentation,
+paragraph, caret, selection, and hit-testing APIs with their own document,
+history, IME, clipboard, and viewport state. This keeps the font/text stack
+independent of any particular widget framework and avoids a second editor model
+beside the application's native one.
 
 Paragraph shaping now retains glyph atoms in logical source order and applies
 bidi visual ordering only after line ranges are known. Each line builds its own
@@ -719,11 +726,10 @@ Future changes must preserve these rules:
 2. Define bounded cache budgets and eviction policy for long-lived engines,
    while preserving exact cache-key comparisons, explicit lifetime rules, and
    observable hit/miss statistics.
-3. Migrate the remaining editor `TextBuffer` compatibility consumer directly
-   to its shaping and paragraph domain modules. Shaping, paragraph, rendering,
-   debug, attributed-text, core-style, and database production paths are
-   already independent of `src/layout.zig`; retire that façade once tests and
-   compatibility consumers no longer require it.
+3. Retire `src/layout.zig` after migrating its remaining tests and compatibility
+   consumers. All production paths already consume their shaping, paragraph,
+   rendering, debug, attributed-text, core-style, and database domain modules
+   directly.
 4. Add language-aware hyphenation as the next optional tailoring layer; keep
    dictionary segmentation and hyphenation outside the default UAX #14 state
    machine.

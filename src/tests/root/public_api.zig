@@ -6,6 +6,7 @@ const test_font = @import("../../test_font.zig");
 
 test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(!@hasDecl(cangjie, "Engine"));
+    try std.testing.expect(!@hasDecl(cangjie, "editor"));
     try std.testing.expect(@hasDecl(cangjie.font, "Face"));
     try std.testing.expect(@hasDecl(cangjie.font, "Cascade"));
     try std.testing.expect(@hasDecl(cangjie.font.container, "OwnedFace"));

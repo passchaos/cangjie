@@ -9,7 +9,6 @@ pub const text = @import("api/text/root.zig");
 pub const shaping = @import("api/shaping/root.zig");
 pub const paragraph = @import("api/paragraph/root.zig");
 pub const render = @import("api/render/root.zig");
-pub const editor = @import("api/editor/root.zig");
 pub const debug = @import("api/debug/root.zig");
 
 /// Repository-owned fixtures and parity boundaries. Applications should not

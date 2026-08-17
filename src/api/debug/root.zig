@@ -22,7 +22,6 @@ pub const dumpLineBreaks = impl.dumpLineBreaks;
 pub const dumpParagraphLayout = impl.dumpParagraphLayout;
 pub const dumpSelectionRects = impl.dumpSelectionRects;
 pub const dumpShapeRuns = impl.dumpShapeRuns;
-pub const dumpTextBufferLayoutStats = impl.dumpTextBufferLayoutStats;
 pub const dumpUnicodeSegmentation = impl.dumpUnicodeSegmentation;
 
 pub fn dumpFontCoverage(

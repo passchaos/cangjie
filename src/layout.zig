@@ -14,6 +14,7 @@ const shaping_metadata = @import("shaping_metadata.zig");
 const shaping_sections = @import("shaping_sections.zig");
 const pipeline_types = @import("shaping/pipeline/types.zig");
 const shaping_plan = @import("shaping/plan/root.zig");
+const plan_bidi = @import("shaping/plan/bidi.zig");
 const plan_resolution = @import("shaping/plan/resolution.zig");
 const plan_validation = @import("shaping/plan/validation.zig");
 const normalization = @import("shaping/pipeline/normalization/root.zig");
@@ -274,7 +275,7 @@ pub const TextShaper = struct {
             .text = text,
         });
 
-        if (shouldApplyBidiVisualOrder(text, options)) {
+        if (plan_bidi.shouldReorderShapedRun(text, options, false)) {
             try applyBidiVisualOrder(buffer, text, options.direction, null);
         }
         const shaped = buffer.shapedText();
@@ -287,7 +288,7 @@ pub const TextShaper = struct {
     pub fn shapeUtf8ScriptRuns(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ScriptedText {
         try plan_validation.input(text, font_size, options);
         try shapeScriptRunsInto(cascade, buffer, text, font_size, options);
-        if (shouldApplyBidiVisualOrder(text, options)) {
+        if (plan_bidi.shouldReorderShapedRun(text, options, false)) {
             try applyBidiVisualOrder(buffer, text, options.direction, null);
         }
         try script_run_itemization.rebuild(
@@ -365,7 +366,7 @@ pub const TextShaper = struct {
             .word_break_dictionary = options.word_break_dictionary,
             .default_metrics = defaultBaselineMetrics(cascade.fonts[0], font_size),
             .shape_key = ShapePlanKey.fromText(text, shape_options),
-            .needs_bidi_reorder = options.direction == .rtl or textHasRtlBidiClass(text),
+            .needs_bidi_reorder = plan_bidi.paragraphNeedsReorder(text, options.direction),
         };
     }
 
@@ -405,7 +406,7 @@ pub const TextShaper = struct {
             null,
             options.word_break_dictionary,
         );
-        if (options.direction == .rtl or textHasRtlBidiClass(text)) {
+        if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
             try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
         }
         return buffer.paragraphLayout();
@@ -424,7 +425,7 @@ pub const TextShaper = struct {
             null,
             options.word_break_dictionary,
         );
-        if (options.direction == .rtl or textHasRtlBidiClass(text)) {
+        if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
             try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
         }
         return buffer.paragraphLayout();
@@ -645,7 +646,7 @@ const StyledParagraphDriver = struct {
             self.buffer.glyphs.items.len,
             self.buffer.lines.items,
         );
-        if (self.options.direction == .rtl or textHasRtlBidiClass(self.text)) {
+        if (plan_bidi.paragraphNeedsReorder(self.text, self.options.direction)) {
             const visual_order = try styled_bidi.visualPermutation(
                 self.buffer.allocator,
                 self.text,
@@ -785,47 +786,11 @@ fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, gl
 
     try shapeSegmentInto(font, metrics_cache, glyph_index_cache, buffer, text, font_size, 0, lookup_options);
     const bidi_start = shapeProfileNow(shape_profile, profile_io);
-    if (shouldApplyBidiVisualOrderWithAsciiProof(text, options, lookup_options.all_ascii)) {
+    if (plan_bidi.shouldReorderShapedRun(text, options, lookup_options.all_ascii)) {
         try applyBidiVisualOrder(buffer, text, options.direction, font);
     }
     if (shape_profile) |p| p.bidi_ns += shapeProfileElapsed(bidi_start, profile_io);
     return buffer.run(font, font_size);
-}
-
-fn shouldApplyBidiVisualOrder(text: []const u8, options: ShapeOptions) bool {
-    return shouldApplyBidiVisualOrderWithAsciiProof(text, options, false);
-}
-
-fn shouldApplyBidiVisualOrderWithAsciiProof(text: []const u8, options: ShapeOptions, all_ascii: bool) bool {
-    if (!options.reorder_bidi) return false;
-    if (options.writing_mode.isVertical()) return false;
-    if (options.direction == .rtl) return true;
-    // Default property inference already scans the complete run before cmap
-    // construction. Reuse its all-ASCII result instead of decoding every byte
-    // again after shaping merely to prove that no strong RTL scalar exists.
-    if (all_ascii) return false;
-    return textHasRtlBidiClass(text);
-}
-
-fn textHasRtlBidiClass(text: []const u8) bool {
-    var it = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    while (it.nextCodepoint()) |codepoint| {
-        // No ASCII scalar has a strong RTL class. Latin word lists and common
-        // UI strings can therefore reject paragraph-level bidi reordering
-        // without entering the all-script classifier for every byte.
-        if (codepoint <= 0x7f) continue;
-        if (unicode.bidiClassForCodepoint(codepoint) == .rtl) return true;
-    }
-    return false;
-}
-
-test "RTL presence scan ignores ASCII without hiding RTL scripts" {
-    try std.testing.expect(!textHasRtlBidiClass("ASCII 123 ()"));
-    try std.testing.expect(textHasRtlBidiClass("ASCII \u{05d0}"));
-    try std.testing.expect(textHasRtlBidiClass("فارسی"));
-    try std.testing.expect(!shouldApplyBidiVisualOrderWithAsciiProof("ASCII 123 ()", .{}, true));
-    // Explicit RTL remains authoritative even when the source is all ASCII.
-    try std.testing.expect(shouldApplyBidiVisualOrderWithAsciiProof("ASCII", .{ .direction = .rtl }, true));
 }
 
 fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen: PenPosition, lookup_options: ResolvedLookupOptions) !PenPosition {

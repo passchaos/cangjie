@@ -5,7 +5,8 @@ const support = @import("../support.zig");
 const LayoutBuffer = support.LayoutBuffer;
 const TextShaper = support.TextShaper;
 const GraphemeCluster = support.GraphemeCluster;
-const LineBreak = support.LineBreak;
+const LineBreakOpportunity =
+    @import("../../../layout/line_break/opportunity.zig").Opportunity;
 const Font = support.Font;
 const GlyphPosition = support.GlyphPosition;
 const CascadeRun = support.CascadeRun;
@@ -49,7 +50,10 @@ test "shaped paragraphs reflow repeatedly without reshaping or accumulating layo
     defer allocator.free(pristine_runs);
     const pristine_graphemes = try allocator.dupe(GraphemeCluster, paragraph.grapheme_clusters);
     defer allocator.free(pristine_graphemes);
-    const pristine_breaks = try allocator.dupe(LineBreak, paragraph.line_breaks);
+    const pristine_breaks = try allocator.dupe(
+        LineBreakOpportunity,
+        paragraph.line_breaks,
+    );
     defer allocator.free(pristine_breaks);
 
     var reflow = ReflowBuffer.init(allocator);
@@ -80,7 +84,11 @@ test "shaped paragraphs reflow repeatedly without reshaping or accumulating layo
     try std.testing.expectEqualSlices(GlyphPosition, pristine_glyphs, paragraph.glyphs);
     try std.testing.expectEqualSlices(CascadeRun, pristine_runs, paragraph.runs);
     try std.testing.expectEqualSlices(GraphemeCluster, pristine_graphemes, paragraph.grapheme_clusters);
-    try std.testing.expectEqualSlices(LineBreak, pristine_breaks, paragraph.line_breaks);
+    try std.testing.expectEqualSlices(
+        LineBreakOpportunity,
+        pristine_breaks,
+        paragraph.line_breaks,
+    );
 }
 
 test "shaped paragraphs restore advances between justified reflows" {

@@ -249,6 +249,11 @@ pub const ParagraphStyle = struct {
     /// The dictionary is borrowed and must outlive layout or any retained
     /// paragraph created from these options.
     word_break_dictionary: ?*const segmentation.WordBreakDictionary = null,
+    /// Optional language-specific Liang patterns for automatic hyphenation.
+    ///
+    /// The dictionary is borrowed and must outlive layout or any retained
+    /// paragraph created from these options.
+    hyphenation_dictionary: ?*const @import("../hyphenation/root.zig").Dictionary = null,
 
     pub fn paragraphOptions(self: ParagraphStyle, max_width: f32) paragraph_options.Options {
         return .{
@@ -265,6 +270,7 @@ pub const ParagraphStyle = struct {
             .first_line_indent = self.first_line_indent,
             .paragraph_spacing = self.paragraph_spacing,
             .word_break_dictionary = self.word_break_dictionary,
+            .hyphenation_dictionary = self.hyphenation_dictionary,
         };
     }
 };

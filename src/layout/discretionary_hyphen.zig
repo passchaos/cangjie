@@ -21,6 +21,11 @@ pub const Candidate = struct {
     resolved: Resolved,
 };
 
+pub const RunResolved = struct {
+    run_index: usize,
+    resolved: Resolved,
+};
+
 pub fn isCandidate(codepoint: u21) bool {
     return codepoint == soft_hyphen;
 }
@@ -35,17 +40,37 @@ pub fn resolveForGlyph(
     glyph_index: usize,
     normalized_variation_coords: []const f32,
 ) !?Resolved {
-    for (runs) |run| {
+    const value = try resolveForGlyphRun(
+        runs,
+        glyph_index,
+        normalized_variation_coords,
+    );
+    return if (value) |resolved| resolved.resolved else null;
+}
+
+/// Resolve a hyphen and retain the font-run identity needed by a later
+/// synthetic insertion. Run indexes remain stable while line selection is in
+/// progress even though materialization eventually shifts glyph ranges.
+pub fn resolveForGlyphRun(
+    runs: anytype,
+    glyph_index: usize,
+    normalized_variation_coords: []const f32,
+) !?RunResolved {
+    for (runs, 0..) |run, run_index| {
         if (glyph_index < run.glyph_start or
             glyph_index >= run.glyph_start + run.glyph_len)
         {
             continue;
         }
-        return resolve(
+        const resolved = try resolve(
             run_types.fontForBackend(run),
             run.font_size,
             normalized_variation_coords,
-        );
+        ) orelse return null;
+        return .{
+            .run_index = run_index,
+            .resolved = resolved,
+        };
     }
     return null;
 }
@@ -59,6 +84,25 @@ pub fn materialize(glyph: anytype, resolved: Resolved) void {
     glyph.x_offset = 0;
     glyph.y_offset = 0;
     glyph.flags.discretionary_hyphen = true;
+}
+
+pub fn synthetic(
+    resolved: Resolved,
+    byte_offset: usize,
+    vertical: bool,
+) @import("glyph_position.zig").GlyphPosition {
+    return .{
+        .glyph_id = resolved.glyph_id,
+        .codepoint = resolved.codepoint,
+        .cluster = byte_offset,
+        .source_byte_len = 0,
+        .x_advance = resolved.x_advance,
+        .vertical = vertical,
+        .flags = .{
+            .discretionary_hyphen = true,
+            .automatic_hyphen = true,
+        },
+    };
 }
 
 test "non-soft-hyphen scalars are never discretionary candidates" {

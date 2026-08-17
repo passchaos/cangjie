@@ -90,6 +90,7 @@ pub const Paragraph = struct {
             u8,
             self.levels[scalar_start..scalar_end],
         );
+        errdefer allocator.free(result);
         resetLineLevels(
             self.classes[scalar_start..scalar_end],
             result,

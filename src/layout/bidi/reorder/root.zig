@@ -244,7 +244,15 @@ pub fn applyLines(buffer: anytype, text: []const u8, rtl: bool) !void {
             var retained_x9: [1]usize = undefined;
             var retained_x9_count: usize = 0;
             for (old_glyphs[old_line_start..old_line_end]) |source_glyph| {
-                if (!source_glyph.isDiscretionaryHyphen()) continue;
+                if (!source_glyph.isDiscretionaryHyphen() or
+                    source_glyph.isAutomaticHyphen())
+                {
+                    continue;
+                }
+                // A materialized U+00AD is removed by X9 and therefore needs
+                // explicit retention. Automatic hyphens have no source
+                // scalar; the cluster index attaches those outputs to the
+                // preceding scalar solely for visual permutation.
                 retained_x9[0] = paragraph.scalarIndexForByte(
                     source_glyph.cluster,
                 ) orelse return error.InvalidBidiMap;

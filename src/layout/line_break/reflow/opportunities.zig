@@ -9,6 +9,7 @@ const std = @import("std");
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const discretionary_hyphen = @import("../../discretionary_hyphen.zig");
 const geometry = @import("geometry.zig");
+const opportunity = @import("../opportunity.zig");
 const shaped_boundary = @import("../shaped_boundary.zig");
 const unicode = @import("../../../unicode.zig");
 
@@ -16,21 +17,29 @@ pub const Candidate = struct {
     glyph_index: ?usize = null,
     width: f32 = 0,
     hyphen: ?discretionary_hyphen.Candidate = null,
+    automatic_hyphen: ?AutomaticHyphen = null,
 
     pub fn reset(self: *Candidate) void {
         self.* = .{};
     }
 };
 
+pub const AutomaticHyphen = struct {
+    byte_offset: usize,
+    run_index: usize,
+    resolved: discretionary_hyphen.Resolved,
+    vertical: bool,
+};
+
 pub const Cursor = struct {
     iterator: unicode.LineBreakIterator,
-    analyzed: ?[]const unicode.LineBreak = null,
+    analyzed: ?[]const opportunity.Opportunity = null,
     analyzed_index: usize = 0,
     pending: ?unicode.LineBreak = null,
 
     pub fn init(
         text: []const u8,
-        analyzed: ?[]const unicode.LineBreak,
+        analyzed: ?[]const opportunity.Opportunity,
     ) Cursor {
         return .{
             .iterator = unicode.lineBreaksAssumeValid(text),
@@ -45,7 +54,7 @@ pub const Cursor = struct {
     pub fn nextThrough(
         self: *Cursor,
         byte_offset: usize,
-    ) ?unicode.LineBreak {
+    ) ?opportunity.Opportunity {
         const candidate = if (self.analyzed) |breaks|
             if (self.analyzed_index < breaks.len)
                 breaks[self.analyzed_index]
@@ -53,7 +62,9 @@ pub const Cursor = struct {
                 return null
         else candidate: {
             if (self.pending == null) self.pending = self.iterator.next();
-            break :candidate self.pending orelse return null;
+            break :candidate opportunity.fromUnicode(
+                self.pending orelse return null,
+            );
         };
         if (candidate.byte_offset > byte_offset) return null;
         if (self.analyzed != null) {
@@ -78,6 +89,7 @@ pub fn recordSoft(
     line_width: f32,
     candidate: *Candidate,
     normalized_variation_coords: []const f32,
+    automatic_hyphen: bool,
 ) !void {
     if (glyphs.len == 0) return;
     if (shaped_boundary.sourceBoundaryIsUnsafe(
@@ -109,28 +121,45 @@ pub fn recordSoft(
         // overwhelmingly common case O(1) rather than searching the line.
         const break_index = index + 1;
         if (break_index > line_start) {
-            const resolved_hyphen = if (discretionary_hyphen.isCandidate(
-                current.codepoint,
-            ))
-                try discretionary_hyphen.resolveForGlyph(
+            if (automatic_hyphen) {
+                const resolved = try discretionary_hyphen.resolveForGlyphRun(
                     runs,
                     index,
                     normalized_variation_coords,
-                )
-            else
-                null;
-            candidate.* = .{
-                .glyph_index = break_index,
-                .width = line_width +
-                    if (resolved_hyphen) |resolved|
-                        resolved.x_advance
+                ) orelse return;
+                candidate.* = .{
+                    .glyph_index = break_index,
+                    .width = line_width + resolved.resolved.x_advance,
+                    .automatic_hyphen = .{
+                        .byte_offset = byte_offset,
+                        .run_index = resolved.run_index,
+                        .resolved = resolved.resolved,
+                        .vertical = current.vertical,
+                    },
+                };
+            } else {
+                const resolved_hyphen =
+                    if (discretionary_hyphen.isCandidate(current.codepoint))
+                        try discretionary_hyphen.resolveForGlyph(
+                            runs,
+                            index,
+                            normalized_variation_coords,
+                        )
                     else
-                        0,
-                .hyphen = if (resolved_hyphen) |resolved| .{
-                    .glyph_index = index,
-                    .resolved = resolved,
-                } else null,
-            };
+                        null;
+                candidate.* = .{
+                    .glyph_index = break_index,
+                    .width = line_width +
+                        if (resolved_hyphen) |resolved|
+                            resolved.x_advance
+                        else
+                            0,
+                    .hyphen = if (resolved_hyphen) |resolved| .{
+                        .glyph_index = index,
+                        .resolved = resolved,
+                    } else null,
+                };
+            }
         }
         return;
     }
@@ -141,10 +170,30 @@ pub fn recordSoft(
         index + 1,
     ) orelse @min(index + 1, glyphs.len);
     if (break_index > line_start) {
-        candidate.* = .{
-            .glyph_index = break_index,
-            .width = geometry.lineWidth(glyphs[line_start..break_index]),
-        };
+        const width = geometry.lineWidth(glyphs[line_start..break_index]);
+        if (automatic_hyphen) {
+            const owner_index = break_index - 1;
+            const resolved = try discretionary_hyphen.resolveForGlyphRun(
+                runs,
+                owner_index,
+                normalized_variation_coords,
+            ) orelse return;
+            candidate.* = .{
+                .glyph_index = break_index,
+                .width = width + resolved.resolved.x_advance,
+                .automatic_hyphen = .{
+                    .byte_offset = byte_offset,
+                    .run_index = resolved.run_index,
+                    .resolved = resolved.resolved,
+                    .vertical = glyphs[owner_index].vertical,
+                },
+            };
+        } else {
+            candidate.* = .{
+                .glyph_index = break_index,
+                .width = width,
+            };
+        }
     }
 }
 
@@ -183,6 +232,7 @@ test "soft opportunity never splits a shaped source atom" {
         15,
         &candidate,
         &.{},
+        false,
     );
     try std.testing.expectEqual(@as(?usize, null), candidate.glyph_index);
 
@@ -195,6 +245,7 @@ test "soft opportunity never splits a shaped source atom" {
         15,
         &candidate,
         &.{},
+        false,
     );
     try std.testing.expectEqual(@as(?usize, 2), candidate.glyph_index);
     try std.testing.expectApproxEqAbs(@as(f32, 15), candidate.width, 0.001);
@@ -228,6 +279,22 @@ test "soft opportunity rejects contextual unsafe boundary" {
         10,
         &candidate,
         &.{},
+        false,
+    );
+    try std.testing.expectEqual(@as(?usize, null), candidate.glyph_index);
+
+    // Automatic boundaries must take the same shaping-safety path before
+    // attempting to resolve or insert a visible hyphen.
+    try recordSoft(
+        &glyphs,
+        &.{},
+        1,
+        0,
+        0,
+        10,
+        &candidate,
+        &.{},
+        true,
     );
     try std.testing.expectEqual(@as(?usize, null), candidate.glyph_index);
 }

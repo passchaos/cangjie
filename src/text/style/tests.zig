@@ -4,6 +4,7 @@ const std = @import("std");
 const style_model = @import("root.zig");
 const paragraph_types = @import("../../layout/types/paragraph.zig");
 const pipeline_types = @import("../../shaping/pipeline/types.zig");
+const hyphenation = @import("../hyphenation/root.zig");
 const segmentation = @import("../segmentation/root.zig");
 
 const FontId = style_model.FontId;
@@ -71,6 +72,13 @@ test "paragraph style converts to paragraph options" {
         &.{"ไทย"},
     );
     defer dictionary.deinit();
+    var hyphenation_dictionary = try hyphenation.Dictionary.init(
+        std.testing.allocator,
+        "a1b",
+        "",
+        .{ .left_min = 1, .right_min = 1 },
+    );
+    defer hyphenation_dictionary.deinit();
     const style = ParagraphStyle{
         .direction = .rtl,
         .text_align = .center,
@@ -82,6 +90,7 @@ test "paragraph style converts to paragraph options" {
         .first_line_indent = 10,
         .paragraph_spacing = 4,
         .word_break_dictionary = &dictionary,
+        .hyphenation_dictionary = &hyphenation_dictionary,
     };
     const options = style.paragraphOptions(80);
 
@@ -93,6 +102,10 @@ test "paragraph style converts to paragraph options" {
     try std.testing.expect(options.ellipsis);
     try std.testing.expectEqual(@as(usize, 2), options.tab_width);
     try std.testing.expectEqual(&dictionary, options.word_break_dictionary.?);
+    try std.testing.expectEqual(
+        &hyphenation_dictionary,
+        options.hyphenation_dictionary.?,
+    );
     try std.testing.expectApproxEqAbs(@as(f32, 10), options.first_line_indent, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 4), options.paragraph_spacing, 0.001);
 

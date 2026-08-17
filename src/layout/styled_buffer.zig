@@ -69,6 +69,58 @@ pub fn applySpacing(
     }
 }
 
+/// Rebuild the glyph-parallel sidecar after paragraph reflow inserts automatic
+/// line-end hyphens. Existing source glyph metadata remains byte-for-byte
+/// unchanged; an insertion inherits paint and minimum height from the style at
+/// its source boundary, but never inherits letter/word spacing.
+pub fn insertAutomaticHyphenMetadata(
+    list: *std.ArrayList(Metadata),
+    allocator: std.mem.Allocator,
+    glyphs: anytype,
+    spans: []const styled_paragraph.Span,
+) !void {
+    var automatic_count: usize = 0;
+    for (glyphs) |glyph| {
+        automatic_count += @intFromBool(glyph.isAutomaticHyphen());
+    }
+    if (automatic_count == 0) return;
+    const retained_source_count = glyphs.len - automatic_count;
+    if (retained_source_count > list.items.len) {
+        return error.InvalidStyleSpans;
+    }
+    for (glyphs) |glyph| {
+        if (glyph.isAutomaticHyphen() and
+            spanForBoundary(spans, glyph.cluster) == null)
+        {
+            return error.InvalidStyleSpans;
+        }
+    }
+
+    const old = try allocator.dupe(Metadata, list.items);
+    defer allocator.free(old);
+    try list.ensureTotalCapacity(allocator, glyphs.len);
+    list.clearRetainingCapacity();
+    var old_index: usize = 0;
+    for (glyphs) |glyph| {
+        if (glyph.isAutomaticHyphen()) {
+            const span = spanForBoundary(spans, glyph.cluster).?;
+            list.appendAssumeCapacity(.{
+                .style_index = span.style_index,
+                .layout_spacing = 0,
+                .minimum_line_height = span.minimum_line_height,
+            });
+            continue;
+        }
+        std.debug.assert(old_index < old.len);
+        list.appendAssumeCapacity(old[old_index]);
+        old_index += 1;
+    }
+    // `max_lines` truncation may have removed a source suffix before this
+    // pass. The unused tail belongs to omitted glyphs and is intentionally
+    // discarded when the rebuilt list adopts `glyphs.len`.
+    std.debug.assert(old_index == retained_source_count);
+}
+
 pub fn synchronizeAfterTruncation(
     list: *std.ArrayList(Metadata),
     glyph_count: usize,
@@ -131,6 +183,21 @@ pub fn appendEllipsis(
         buffer.glyphs.items.len + ellipsis_count,
     );
     try list.ensureTotalCapacity(allocator, list.items.len + ellipsis_count);
+
+    // A discretionary hyphen describes continuation onto another visible
+    // line. Ellipsis ends the visible text instead, so remove that glyph before
+    // ordinary fit trimming even when the dots already fit beside it.
+    while (line.glyph_len > 0 and
+        buffer.glyphs.items[
+            line.glyph_start + line.glyph_len - 1
+        ].isDiscretionaryHyphen())
+    {
+        const remove_index = line.glyph_start + line.glyph_len - 1;
+        line.width -= buffer.glyphs.items[remove_index].x_advance;
+        _ = buffer.glyphs.pop();
+        line.glyph_len -= 1;
+        if (run.glyph_len > 0) run.glyph_len -= 1;
+    }
 
     while (line.glyph_len > 0 and line.width + ellipsis_width > width_limit) {
         const remove_index = line.glyph_start + line.glyph_len - 1;
@@ -272,6 +339,21 @@ fn appendEllipsisStyle(
         .layout_spacing = 0,
         .minimum_line_height = style.minimum_line_height,
     });
+}
+
+fn spanForBoundary(
+    spans: []const styled_paragraph.Span,
+    boundary: usize,
+) ?styled_paragraph.Span {
+    if (spans.len == 0) return null;
+    // Automatic hyphens are attached to the preceding fragment. At a style
+    // boundary, use that fragment's style rather than the next source glyph.
+    for (spans) |span| {
+        if (boundary > span.byte_start and boundary <= span.byteEnd()) {
+            return span;
+        }
+    }
+    return styled_paragraph.spanForCluster(spans, boundary);
 }
 
 fn isWordSpacingCodepoint(codepoint: u21) bool {

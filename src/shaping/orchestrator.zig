@@ -28,6 +28,8 @@ const styled_paragraph_layout = @import("../layout/paragraph/styled.zig");
 const paragraph_types = @import("../layout/types/paragraph.zig");
 const run_types = @import("../layout/types/runs.zig");
 const line_break_analysis = @import("../layout/line_break/analysis.zig");
+const line_break_opportunity =
+    @import("../layout/line_break/opportunity.zig");
 const paragraph_reflow = @import("../layout/line_break/reflow/root.zig");
 const segmentation = @import("../text/segmentation/root.zig");
 const unicode = @import("../unicode.zig");
@@ -192,11 +194,12 @@ pub const TextShaper = struct {
         errdefer allocator.free(owned_runs);
         const grapheme_clusters = try unicode.itemizeGraphemeClusters(allocator, text);
         errdefer allocator.free(grapheme_clusters);
-        const line_breaks = try line_break_analysis.itemize(
+        const line_breaks = try line_break_analysis.itemizeWithHyphenation(
             allocator,
             text,
             grapheme_clusters,
             options.word_break_dictionary,
+            options.hyphenation_dictionary,
         );
         errdefer allocator.free(line_breaks);
         const inline_object_indexes = try allocator.alloc(
@@ -217,6 +220,7 @@ pub const TextShaper = struct {
             .line_breaks = line_breaks,
             .inline_object_indexes = inline_object_indexes,
             .word_break_dictionary = options.word_break_dictionary,
+            .hyphenation_dictionary = options.hyphenation_dictionary,
             .default_metrics = defaultBaselineMetrics(cascade.fonts[0], font_size),
             .shape_key = ShapePlanKey.fromText(text, shape_options),
             .needs_bidi_reorder = plan_bidi.paragraphNeedsReorder(text, options.direction),
@@ -269,6 +273,7 @@ pub const TextShaper = struct {
             null,
             null,
             options.word_break_dictionary,
+            options.hyphenation_dictionary,
         );
         if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
             try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
@@ -300,6 +305,7 @@ pub const TextShaper = struct {
             null,
             null,
             options.word_break_dictionary,
+            options.hyphenation_dictionary,
         );
         if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
             try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
@@ -617,8 +623,9 @@ fn buildParagraphLines(
     options: ParagraphOptions,
     default_metrics: BaselineMetrics,
     analyzed_graphemes: ?[]const unicode.GraphemeCluster,
-    analyzed_line_breaks: ?[]const unicode.LineBreak,
+    analyzed_line_breaks: ?[]const line_break_opportunity.Opportunity,
     dictionary: ?*const segmentation.WordBreakDictionary,
+    hyphenation_dictionary: ?*const @import("../text/hyphenation/root.zig").Dictionary,
 ) !void {
     return try paragraph_reflow.build(
         buffer,
@@ -628,6 +635,7 @@ fn buildParagraphLines(
         analyzed_graphemes,
         analyzed_line_breaks,
         dictionary,
+        hyphenation_dictionary,
     );
 }
 

@@ -4,6 +4,7 @@ const std = @import("std");
 
 const paragraph_types = @import("../types/paragraph.zig");
 const inline_object = @import("../inline_object/root.zig");
+const hyphenation = @import("../../text/hyphenation/root.zig");
 const pipeline_types = @import("../../shaping/pipeline/types.zig");
 const shaping_plan = @import("../../shaping/plan/root.zig");
 const plan_validation = @import("../../shaping/plan/validation.zig");
@@ -34,6 +35,11 @@ pub const Options = struct {
     /// The dictionary is borrowed and must outlive the layout call or retained
     /// paragraph. Its boundaries still pass grapheme and shaping safety checks.
     word_break_dictionary: ?*const segmentation.WordBreakDictionary = null,
+    /// Optional language-specific Liang-pattern automatic hyphenation.
+    ///
+    /// The dictionary is borrowed and must outlive layout or retained reflow.
+    /// It only adds discretionary opportunities; UAX #14 remains authoritative.
+    hyphenation_dictionary: ?*const hyphenation.Dictionary = null,
     /// Shaping controls resolved before line breaking.
     script_tag: ?unicode.OpenTypeScriptTag = null,
     language_tag: ?unicode.OpenTypeLanguageTag = null,

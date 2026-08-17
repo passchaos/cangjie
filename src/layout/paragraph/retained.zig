@@ -6,6 +6,7 @@ const bidi_reorder = @import("../bidi/reorder/root.zig");
 const glyph_position = @import("../glyph_position.zig");
 const inline_object = @import("../inline_object/root.zig");
 const paragraph_options = @import("options.zig");
+const line_break_opportunity = @import("../line_break/opportunity.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 const run_types = @import("../types/runs.zig");
 const paragraph_reflow = @import("../line_break/reflow/root.zig");
@@ -17,17 +18,19 @@ const unicode = @import("../../unicode.zig");
 /// Width-independent, owning paragraph content.
 ///
 /// Source text, pristine shaped output, and Unicode boundary analysis are
-/// retained once. Font pointers inside `runs`, and an optional word-breaking
-/// dictionary, are borrowed and must outlive this value and every reflow view.
+/// retained once. Font pointers inside `runs` and optional segmentation or
+/// hyphenation dictionaries are borrowed and must outlive this value and every
+/// reflow view.
 pub const ShapedParagraph = struct {
     allocator: std.mem.Allocator,
     text: []const u8,
     glyphs: []const glyph_position.GlyphPosition,
     runs: []const run_types.CascadeRun,
     grapheme_clusters: []const unicode.GraphemeCluster,
-    line_breaks: []const unicode.LineBreak,
+    line_breaks: []const line_break_opportunity.Opportunity,
     inline_object_indexes: []const usize,
     word_break_dictionary: ?*const segmentation.WordBreakDictionary,
+    hyphenation_dictionary: ?*const @import("../../text/hyphenation/root.zig").Dictionary,
     default_metrics: paragraph_reflow.BaselineMetrics,
     shape_key: shaping_plan.ShapePlanKey,
     needs_bidi_reorder: bool,
@@ -58,6 +61,7 @@ pub const ShapedParagraph = struct {
         try paragraph_options.validate(options);
         try inline_object.validate(self.text, options.inline_objects);
         if (options.word_break_dictionary != self.word_break_dictionary or
+            options.hyphenation_dictionary != self.hyphenation_dictionary or
             !inline_object.indexesMatch(
                 self.inline_object_indexes,
                 options.inline_objects,
@@ -81,6 +85,7 @@ pub const ShapedParagraph = struct {
             self.grapheme_clusters,
             self.line_breaks,
             self.word_break_dictionary,
+            self.hyphenation_dictionary,
         );
         if (self.needs_bidi_reorder) {
             try bidi_reorder.applyLines(

@@ -6,6 +6,7 @@
 const std = @import("std");
 
 const analysis = @import("../analysis.zig");
+const automatic_hyphens = @import("automatic_hyphens.zig");
 const discretionary_hyphen = @import("../../discretionary_hyphen.zig");
 const geometry = @import("geometry.zig");
 const horizontal_justification =
@@ -29,8 +30,9 @@ pub fn build(
     options: anytype,
     default_metrics: BaselineMetrics,
     analyzed_graphemes: ?[]const unicode.GraphemeCluster,
-    analyzed_line_breaks: ?[]const unicode.LineBreak,
+    analyzed_line_breaks: ?[]const @import("../opportunity.zig").Opportunity,
     dictionary: ?*const segmentation.WordBreakDictionary,
+    hyphenation_dictionary: ?*const @import("../../../text/hyphenation/root.zig").Dictionary,
 ) !void {
     buffer.lines.clearRetainingCapacity();
     const max_width = if (options.max_width > 0)
@@ -51,6 +53,9 @@ pub fn build(
     var line_in_paragraph: usize = 0;
     var terminal_emergency_line_committed = false;
     const max_lines = options.max_lines orelse std.math.maxInt(usize);
+    var selected_automatic_hyphens =
+        std.ArrayList(automatic_hyphens.Selected).empty;
+    defer selected_automatic_hyphens.deinit(buffer.allocator);
     const space_advance = geometry.defaultSpaceAdvance(buffer.glyphs.items);
     const tab_stop =
         @as(f32, @floatFromInt(@max(1, options.tab_width))) * space_advance;
@@ -68,16 +73,19 @@ pub fn build(
         );
         break :clusters owned_graphemes.?;
     };
-    var owned_line_breaks: ?[]unicode.LineBreak = null;
+    var owned_line_breaks: ?[]@import("../opportunity.zig").Opportunity = null;
     defer if (owned_line_breaks) |breaks| buffer.allocator.free(breaks);
     const effective_line_breaks = analyzed_line_breaks orelse breaks: {
-        const selected_dictionary = dictionary orelse break :breaks null;
+        if (dictionary == null and hyphenation_dictionary == null) {
+            break :breaks null;
+        }
         if (options.wrap_mode == .no_wrap) break :breaks null;
-        owned_line_breaks = try analysis.itemize(
+        owned_line_breaks = try analysis.itemizeWithHyphenation(
             buffer.allocator,
             text,
             grapheme_clusters,
-            selected_dictionary,
+            dictionary,
+            hyphenation_dictionary,
         );
         break :breaks owned_line_breaks.?;
     };
@@ -130,6 +138,10 @@ pub fn build(
                 geometry.lineIndent(line_in_paragraph, options),
             );
             if (buffer.lines.items.len >= max_lines) {
+                try automatic_hyphens.materialize(
+                    buffer,
+                    selected_automatic_hyphens.items,
+                );
                 try truncation.apply(
                     buffer,
                     max_lines,
@@ -203,6 +215,14 @@ pub fn build(
                         &buffer.glyphs.items[candidate.glyph_index],
                         candidate.resolved,
                     );
+                } else if (last_break.automatic_hyphen) |candidate| {
+                    try automatic_hyphens.appendSelected(
+                        &selected_automatic_hyphens,
+                        buffer.allocator,
+                        buffer.lines.items.len,
+                        break_end,
+                        candidate,
+                    );
                 }
             }
             var next_line_start = break_end;
@@ -251,6 +271,10 @@ pub fn build(
                 indent,
             );
             if (buffer.lines.items.len >= max_lines) {
+                try automatic_hyphens.materialize(
+                    buffer,
+                    selected_automatic_hyphens.items,
+                );
                 try truncation.apply(
                     buffer,
                     max_lines,
@@ -310,6 +334,7 @@ pub fn build(
                         line_width,
                         &last_break,
                         options.normalized_variation_coords,
+                        line_break.automatic_hyphen,
                     ),
                     .hard => {},
                 }
@@ -351,5 +376,9 @@ pub fn build(
         max_width,
         alignment,
         false,
+    );
+    try automatic_hyphens.materialize(
+        buffer,
+        selected_automatic_hyphens.items,
     );
 }

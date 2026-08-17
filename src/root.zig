@@ -23,6 +23,7 @@ test {
     _ = @import("tests/root/root.zig");
     _ = @import("layout/tests/cjk_justification.zig");
     _ = @import("layout/tests/dictionary_breaking.zig");
+    _ = @import("layout/tests/hyphenation.zig");
     _ = @import("layout/tests/positioning_break_safety.zig");
     _ = @import("shaping/context/tests.zig");
     _ = @import("text/attributed/tests.zig");

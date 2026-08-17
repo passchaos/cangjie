@@ -419,10 +419,19 @@ Unicode Liang-pattern and exception format used by tex-hyphen/libhnj and
 MuPDF's hyphen resources, copies it into an immutable scalar trie, and returns
 UTF-8 byte boundaries. Left/right minimum fragments and owned one-to-one
 Unicode normalization mappings are explicit construction options; no language
-data, locale guess, or runtime callback is built into the library. Paragraph
-integration remains a separate next step so the pattern engine's correctness
-and ownership contract can be validated independently from discretionary glyph
-materialization.
+data, locale guess, or runtime callback is built into the library.
+
+`ParagraphOptions.hyphenation_dictionary` and
+`ParagraphStyle.hyphenation_dictionary` now tailor paragraph reflow with those
+boundaries. UAX #14 remains the default when the option is null. A selected
+automatic boundary resolves U+2010/U+002D/U+00AD through the preceding
+cascade run, includes that advance while fitting the line, and inserts one
+zero-source-length glyph only after all logical line ranges have been chosen.
+Run ownership, retained reflow, attributed metadata, bidi visual order, hit
+testing, and selection therefore consume the same materialized result without
+mutating the source text. Boundaries inside a shaped atom or marked unsafe to
+break remain unavailable. Callers own language selection and dictionary
+lifetime; Cangjie deliberately does not infer either from locale.
 
 `TextAlign.justify` now provides portable inter-word and CJK inter-character
 justification. Reflow first expands UAX #14 `SP` source atoms on non-terminal
@@ -829,9 +838,8 @@ Future changes must preserve these rules:
 3. Keep public and test consumers on owning domain modules; do not recreate a
    broad aggregate layout façade as new shaping or paragraph capabilities are
    added.
-4. Integrate the implemented Liang-pattern dictionary with paragraph reflow as
-   an optional tailoring layer; keep automatic hyphenation outside the default
-   UAX #14 state machine and preserve shaped-boundary safety.
+4. Add hyphenation limits across consecutive lines and a caller-selected
+   replacement character policy without weakening shaped-boundary safety.
 5. Add Arabic kashida and language-specific CJK punctuation
    compression/hanging where portable references exist, without changing the
    generic inter-word and inter-character contracts.

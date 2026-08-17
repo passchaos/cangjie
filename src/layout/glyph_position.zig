@@ -17,7 +17,9 @@ pub const Flags = packed struct(u8) {
     unsafe_to_break_before: bool = false,
     /// Synthetic non-rendering atom for one U+FFFC inline object anchor.
     inline_object: bool = false,
-    _reserved: u5 = 0,
+    /// Synthetic visible hyphen inserted at an automatic word boundary.
+    automatic_hyphen: bool = false,
+    _reserved: u4 = 0,
 };
 
 /// One positioned glyph after cmap mapping, GSUB substitution, and GPOS/kern
@@ -59,6 +61,21 @@ pub const GlyphPosition = struct {
 
     pub fn isInlineObject(self: GlyphPosition) bool {
         return self.flags.inline_object;
+    }
+
+    pub fn isAutomaticHyphen(self: GlyphPosition) bool {
+        return self.flags.automatic_hyphen;
+    }
+
+    /// Logical source end represented by this output.
+    ///
+    /// Ordinary shaped glyphs keep the historical one-byte fallback for
+    /// hand-constructed records whose source length is omitted. An automatic
+    /// hyphen is different: it is a zero-length insertion at an existing
+    /// source boundary and must never claim the following UTF-8 byte.
+    pub fn sourceByteEnd(self: GlyphPosition) usize {
+        if (self.isAutomaticHyphen()) return self.cluster;
+        return self.cluster + @max(self.source_byte_len, 1);
     }
 };
 

@@ -75,7 +75,7 @@ pub fn glyphClusterStart(glyph: GlyphPosition) usize {
 }
 
 pub fn glyphSourceEnd(glyph: GlyphPosition) usize {
-    return glyph.cluster + @max(glyph.source_byte_len, 1);
+    return glyph.sourceByteEnd();
 }
 
 pub fn byteEndForGlyphPrefix(

@@ -19,9 +19,22 @@ pub fn buildClusterIndex(
     const entries = try allocator.alloc(ClusterEntry, glyphs.len);
     var monotone = true;
     for (glyphs, entries, 0..) |glyph, *entry, glyph_index| {
-        entry.* = .{ .cluster = glyph.cluster, .glyph_index = glyph_index };
+        // A generated hyphen is logically inserted at a source boundary and
+        // intentionally keeps that boundary as its public caret cluster. For
+        // bidi permutation only, attach it to the preceding source atom: LTR
+        // emits it after that atom and RTL emits it before, which is exactly
+        // the visual line-end behavior of a discretionary hyphen.
+        const visual_cluster =
+            if (glyph.isAutomaticHyphen() and glyph_index != 0)
+                glyphs[glyph_index - 1].cluster
+            else
+                glyph.cluster;
+        entry.* = .{
+            .cluster = visual_cluster,
+            .glyph_index = glyph_index,
+        };
         if (glyph_index != 0 and
-            glyph.cluster < glyphs[glyph_index - 1].cluster)
+            visual_cluster < entries[glyph_index - 1].cluster)
         {
             monotone = false;
         }
@@ -167,7 +180,8 @@ fn appendItemGlyph(
 ) !void {
     const glyph = glyphs[glyph_index];
     const visual_codepoint =
-        if (@max(glyph.source_byte_len, 1) == item.byte_len)
+        if (!glyph.isAutomaticHyphen() and
+        @max(glyph.source_byte_len, 1) == item.byte_len)
             item.visual_codepoint
         else
             null;

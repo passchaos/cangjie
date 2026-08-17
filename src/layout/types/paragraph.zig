@@ -359,7 +359,7 @@ pub const ParagraphLayout = struct {
         var nearest_before_end: usize = 0;
         for (self.glyphs, 0..) |glyph, index| {
             const glyph_start = glyph.cluster;
-            const glyph_end = glyph_start + @max(glyph.source_byte_len, 1);
+            const glyph_end = glyph.sourceByteEnd();
             if (cluster == glyph_start) return .{ .glyph_index = index, .cluster = glyph_start };
             if (cluster > glyph_start and cluster < glyph_end) {
                 return .{ .glyph_index = index, .cluster = glyph_start, .trailing = cluster - glyph_start >= glyph_end - cluster };
@@ -436,7 +436,7 @@ fn textPositionAtGlyphTrailingEdge(layout_value: ParagraphLayout, glyph_index: u
 
 fn trailingByteOffsetForGlyph(layout_value: ParagraphLayout, glyph_index: usize) usize {
     const glyph = layout_value.glyphs[glyph_index];
-    const glyph_end = glyph.cluster + @max(glyph.source_byte_len, 1);
+    const glyph_end = glyph.sourceByteEnd();
     if (glyph_index + 1 < layout_value.glyphs.len) {
         const next_cluster = layout_value.glyphs[glyph_index + 1].cluster;
         if (next_cluster > glyph.cluster) return next_cluster;

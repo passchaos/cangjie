@@ -72,7 +72,13 @@ fn buildClusterIndex(
 ) ![]ClusterEntry {
     const entries = try allocator.alloc(ClusterEntry, glyphs.len);
     for (glyphs, entries, 0..) |glyph, *entry, glyph_index| {
-        entry.* = .{ .cluster = glyph.cluster, .glyph_index = glyph_index };
+        entry.* = .{
+            .cluster = if (glyph.isAutomaticHyphen() and glyph_index != 0)
+                glyphs[glyph_index - 1].cluster
+            else
+                glyph.cluster,
+            .glyph_index = glyph_index,
+        };
     }
     std.sort.heap(ClusterEntry, entries, {}, entryLessThan);
     return entries;
@@ -141,7 +147,13 @@ fn clusterRange(
 }
 
 test "styled bidi permutation preserves equal-cluster output order" {
-    const Glyph = struct { cluster: usize };
+    const Glyph = struct {
+        cluster: usize,
+
+        fn isAutomaticHyphen(_: @This()) bool {
+            return false;
+        }
+    };
     const Line = struct {
         glyph_start: usize,
         glyph_len: usize,

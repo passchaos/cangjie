@@ -44,6 +44,7 @@ pub fn clusterCaretConsistency(
         null,
         null,
         null,
+        null,
     );
     return try caret.analyze(
         allocator,

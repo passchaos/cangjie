@@ -213,6 +213,13 @@ const Driver = struct {
             null,
             null,
             self.options.word_break_dictionary,
+            self.options.hyphenation_dictionary,
+        );
+        try styled_buffer.insertAutomaticHyphenMetadata(
+            &self.styled.metadata,
+            self.styled.allocator,
+            self.buffer.glyphs.items,
+            spans,
         );
         const content_omitted =
             self.buffer.glyphs.items.len < shaped_glyph_count or

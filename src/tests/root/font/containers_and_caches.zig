@@ -419,6 +419,36 @@ test "caches glyph metrics by font and glyph id during shaping" {
     try std.testing.expectEqual(@as(usize, 0), metrics_cache.misses);
 }
 
+test "trusted glyph bounds reuse the immutable parsed face proof" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try @import("../../../font/face/root.zig").Face.parse(
+        allocator,
+        bytes,
+    );
+    defer face.deinit();
+
+    const tables = try face.implementation.tables(allocator);
+    defer allocator.free(tables);
+    var glyf_tail: ?usize = null;
+    for (tables) |table| {
+        if (std.mem.eql(u8, &table.tag, "glyf")) {
+            glyf_tail = table.offset + table.length - 1;
+        }
+    }
+    const expected = try face.glyphs().bounds(1);
+
+    // Change glyph payload padding without changing the header bounds. The
+    // public path detects the post-parse mutation; an immutable owner can reuse
+    // the parse proof and read the same already-validated header.
+    bytes[glyf_tail orelse return error.MissingTable] +%= 1;
+    try std.testing.expectError(error.BadSfnt, face.glyphs().bounds(1));
+    try std.testing.expectEqual(expected, try face.glyphs().boundsTrusted(1));
+}
+
 test "caches glyph metrics by variation coordinates during shaping" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

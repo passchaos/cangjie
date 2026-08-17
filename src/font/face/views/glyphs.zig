@@ -49,6 +49,21 @@ pub const View = struct {
         return self.implementation.glyphBounds(glyph_id);
     }
 
+    /// Read bounds using the validation proof established by Face.parse.
+    ///
+    /// The face's source bytes must remain unchanged for its complete lifetime.
+    /// Font services and retained rendering scenes satisfy that contract; code
+    /// that permits post-parse byte mutation must use `bounds` instead.
+    pub fn boundsTrusted(
+        self: View,
+        glyph_id: glyph_mod.GlyphId,
+    ) font_mod.FontError!glyph_mod.Bounds {
+        return font_mod.immutable_face_backend.glyphBounds(
+            self.implementation,
+            glyph_id,
+        );
+    }
+
     pub fn boundsAt(
         self: View,
         glyph_id: glyph_mod.GlyphId,

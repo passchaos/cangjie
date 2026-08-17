@@ -4114,6 +4114,51 @@ pub const Font = struct {
         return error.UnsupportedGlyph;
     }
 
+    fn glyphBoundsForImmutableFace(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.Bounds {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        // Face.parse validated every table used below. This path is reserved
+        // for owners that keep the borrowed bytes immutable for the face
+        // lifetime; mutation-aware callers must continue using glyphBounds().
+        if (self.varc) |varc| {
+            if (try varc_mod.glyphCoverageIndex(
+                self.data,
+                varc.offset,
+                varc.length,
+                self.glyph_count,
+                glyph_id,
+            ) != null) {
+                var outline = try self.glyphOutlineForRaster(
+                    std.heap.page_allocator,
+                    glyph_id,
+                );
+                defer outline.deinit();
+                return outline.bounds;
+            }
+        }
+        if (self.format == .truetype) {
+            return try self.glyphBoundsFromParsedTables(glyph_id);
+        }
+        if (self.cff2) |cff2| {
+            const bounds = (try cff2_mod.charStringBoundsInfo(
+                self.data,
+                cff2.offset,
+                cff2.length,
+                glyph_id,
+                self.glyph_count,
+            )) orelse return error.InvalidGlyph;
+            return cff_outline.boundsFromCff2(bounds);
+        }
+        if (self.cff != null) {
+            var outline = try self.glyphOutlineForRaster(
+                std.heap.page_allocator,
+                glyph_id,
+            );
+            defer outline.deinit();
+            return outline.bounds;
+        }
+        return error.UnsupportedGlyph;
+    }
+
     pub fn glyphBoundsAtCoords(self: *const Font, glyph_id: glyph_mod.GlyphId, normalized_coords: []const f32) FontError!glyph_mod.Bounds {
         try validateNormalizedVariationCoordinateSlice(normalized_coords);
         if (self.varc) |varc| {
@@ -4858,6 +4903,13 @@ pub const raster_backend = struct {
     pub const resolvedSvgGlyphDocument = Font.resolvedSvgGlyphDocumentForRaster;
     pub const glyphOutlineAtCoords = Font.glyphOutlineForRasterAtCoords;
     pub const glyphOutline = Font.glyphOutlineForRaster;
+};
+
+/// Backend for public Face views whose owners explicitly guarantee immutable
+/// borrowed bytes. Keeping this separate from ordinary glyph APIs makes the
+/// skipped post-parse mutation checks visible at every call site.
+pub const immutable_face_backend = struct {
+    pub const glyphBounds = Font.glyphBoundsForImmutableFace;
 };
 
 fn validateCff2Table(data: []const u8, cff2: TableRecord) FontError!void {

@@ -35,6 +35,25 @@ pub fn glyphCount(data: []const u8, offset: usize) ParseError!u16 {
     };
 }
 
+/// Return the Coverage index for one glyph without allocating the set.
+///
+/// Canonical GDEF coverages are sorted and validated during `Font.parse`.
+/// This defensive reader still checks encoded lengths and range ordering; the
+/// LigCaretList reader separately bounds the resulting index against its
+/// parallel LigGlyph array when borrowed table bytes may have changed.
+pub fn coverageIndex(
+    data: []const u8,
+    offset: usize,
+    glyph_id: GlyphId,
+) ParseError!?usize {
+    if (offset > data.len or data.len - offset < 2) return error.BadSfnt;
+    return switch (try bin.readU16At(data, offset)) {
+        1 => format1Index(data, offset, glyph_id),
+        2 => format2Index(data, offset, glyph_id),
+        else => error.BadSfnt,
+    };
+}
+
 pub fn glyphs(
     allocator: std.mem.Allocator,
     data: []const u8,
@@ -46,6 +65,59 @@ pub fn glyphs(
         2 => format2Glyphs(allocator, data, offset),
         else => error.BadSfnt,
     };
+}
+
+fn format1Index(
+    data: []const u8,
+    offset: usize,
+    glyph_id: GlyphId,
+) ParseError!?usize {
+    const count = try format1Count(data, offset);
+    var low: usize = 0;
+    var high: usize = count;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const candidate = try bin.readU16At(data, offset + 4 + mid * 2);
+        if (candidate < glyph_id) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    if (low >= count or
+        try bin.readU16At(data, offset + 4 + low * 2) != glyph_id)
+    {
+        return null;
+    }
+    return low;
+}
+
+fn format2Index(
+    data: []const u8,
+    offset: usize,
+    glyph_id: GlyphId,
+) ParseError!?usize {
+    if (data.len - offset < 4) return error.BadSfnt;
+    const range_count = try bin.readU16At(data, offset + 2);
+    if (@as(usize, range_count) * 6 > data.len - (offset + 4)) {
+        return error.BadSfnt;
+    }
+    var previous_end: ?GlyphId = null;
+    for (0..range_count) |range_index| {
+        const record = offset + 4 + range_index * 6;
+        const start = try bin.readU16At(data, record);
+        const end = try bin.readU16At(data, record + 2);
+        const coverage_start = try bin.readU16At(data, record + 4);
+        if (end < start) return error.BadSfnt;
+        if (previous_end) |previous| {
+            if (start <= previous) return error.BadSfnt;
+        }
+        if (glyph_id >= start and glyph_id <= end) {
+            return @as(usize, coverage_start) + glyph_id - start;
+        }
+        previous_end = end;
+    }
+    return null;
 }
 
 fn validateFormat1(

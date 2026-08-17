@@ -726,12 +726,19 @@ Each span carries paragraph-space bounds, UTF-8 source range, same-line
 previous/next links, UAX #29 word-start indexes, and a flat range of source
 graphemes with UTF-8 lengths, span-relative inline positions, and widths.
 When one shaped glyph covers multiple source graphemes (for example a GSUB
-ligature), its final advance is divided evenly among those graphemes; an RTL
-span retains logical grapheme order while its inline positions decrease in
-visual order. The builder resolves bidi from source once rather than guessing
-from visual glyph order, and its arrays remain valid after the shaping output
-buffer is reused. Platform adapters can translate this stable data to
-AccessKit, UI Automation, AT-SPI, or native application semantics.
+ligature), Cangjie first reads the glyph's GDEF LigCaretList. CaretValue
+formats 1, 2, and 3 are supported, including TrueType contour-point resolution
+and GDEF 1.3 ItemVariationStore deltas at each final run's variation instance.
+Complete, strictly increasing authored carets divide the glyph advance exactly;
+missing, incomplete, unavailable, or out-of-range data falls back to equal
+division rather than exposing invalid widths. `GraphemeGeometry` records which
+case applied through `authored_ligature_caret`, so consumers never have to infer
+precision from unequal widths. An RTL span reverses component assignment while
+retaining logical grapheme order and decreasing visual positions. The builder
+resolves bidi from source once rather than guessing from visual glyph order,
+and its arrays remain valid after the shaping output buffer is reused. Platform
+adapters can translate this stable data to AccessKit, UI Automation, AT-SPI, or
+native application semantics.
 
 Paragraph shaping now retains glyph atoms in logical source order and applies
 bidi visual ordering only after line ranges are known. Each line builds its own

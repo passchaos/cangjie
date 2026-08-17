@@ -80,3 +80,41 @@ test "GDEF dense ClassDef reader fills glyph-indexed metadata" {
 
     try std.testing.expectError(error.BadSfnt, gdef.readClassDefDense(&format2, 0, @intCast(dense2.len), dense2[0..], true));
 }
+
+test "GDEF coverage indexes canonical format 1 and format 2 tables" {
+    var format1: [12]u8 = .{0} ** 12;
+    sfnt_fixture.writeU16(&format1, 0, 1);
+    sfnt_fixture.writeU16(&format1, 2, 4);
+    sfnt_fixture.writeU16(&format1, 4, 2);
+    sfnt_fixture.writeU16(&format1, 6, 5);
+    sfnt_fixture.writeU16(&format1, 8, 9);
+    sfnt_fixture.writeU16(&format1, 10, 12);
+    try std.testing.expectEqual(
+        @as(?usize, 2),
+        try gdef.coverageIndex(&format1, 0, 9),
+    );
+    try std.testing.expectEqual(
+        @as(?usize, null),
+        try gdef.coverageIndex(&format1, 0, 8),
+    );
+
+    var format2: [16]u8 = .{0} ** 16;
+    sfnt_fixture.writeU16(&format2, 0, 2);
+    sfnt_fixture.writeU16(&format2, 2, 2);
+    sfnt_fixture.writeU16(&format2, 4, 3);
+    sfnt_fixture.writeU16(&format2, 6, 4);
+    sfnt_fixture.writeU16(&format2, 8, 0);
+    sfnt_fixture.writeU16(&format2, 10, 8);
+    sfnt_fixture.writeU16(&format2, 12, 9);
+    sfnt_fixture.writeU16(&format2, 14, 2);
+    try std.testing.expectEqual(
+        @as(?usize, 3),
+        try gdef.coverageIndex(&format2, 0, 9),
+    );
+
+    sfnt_fixture.writeU16(&format2, 10, 4);
+    try std.testing.expectError(
+        error.BadSfnt,
+        gdef.coverageIndex(&format2, 0, 9),
+    );
+}

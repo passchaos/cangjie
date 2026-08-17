@@ -39,6 +39,9 @@ pub const Grapheme = struct {
     byte_len: usize,
     inline_position: f32,
     width: f32,
+    /// True when this grapheme's width partition came from an authored GDEF
+    /// LigCaretList rather than equal division of a shaped glyph advance.
+    authored_ligature_caret: bool = false,
 
     pub fn byteEnd(self: Grapheme) usize {
         return self.byte_start + self.byte_len;

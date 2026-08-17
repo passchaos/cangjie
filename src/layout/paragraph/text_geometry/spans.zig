@@ -49,6 +49,7 @@ pub fn appendLine(
                 .byte_len = item.byte_len,
                 .inline_position = item.position - min_x,
                 .width = item.width,
+                .authored_ligature_caret = item.authored_ligature_caret,
             });
             if (containsSorted(word_start_bytes, item.byte_start)) {
                 try word_starts.append(allocator, relative_index);

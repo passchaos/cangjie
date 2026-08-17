@@ -214,7 +214,14 @@ fn validateLigatureGlyph(data: []const u8, offset: usize) Error!void {
 fn validateCaretValue(data: []const u8, offset: usize) Error!void {
     if (offset > data.len or data.len - offset < 2) return error.BadSfnt;
     switch (try bin.readU16At(data, offset)) {
-        1, 2 => try requireBytes(data, offset, 4),
+        1 => try requireBytes(data, offset, 4),
+        2 => {
+            // The payload is an index into the covered glyph's outline and
+            // cannot be bounded by GDEF/maxp alone. Runtime contour resolution
+            // validates it against the concrete glyf instance and can decline
+            // the optional caret when that point does not exist.
+            try requireBytes(data, offset, 4);
+        },
         3 => {
             try requireBytes(data, offset, 6);
             const relative = try bin.readU16At(data, offset + 4);

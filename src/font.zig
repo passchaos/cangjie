@@ -327,6 +327,7 @@ pub const BitmapStrikeSource = bitmap_mod.StrikeSource;
 pub const BitmapStrikeInfo = bitmap_mod.StrikeInfo;
 
 pub const GlyphClass = gdef_mod.GlyphClass;
+pub const LigatureCaret = gdef_mod.LigatureCaret;
 
 const TableRecord = sfnt.Record;
 
@@ -604,6 +605,33 @@ fn resolveKerxOutlinePoint(
         .x = roundedGlyphPosition(value.x),
         .y = roundedGlyphPosition(value.y),
     } else null;
+}
+
+const LigatureCaretContourContext = struct {
+    font: *const Font,
+    allocator: std.mem.Allocator,
+};
+
+fn resolveLigatureCaretContourPoint(
+    opaque_context: *const anyopaque,
+    glyph_id: glyph_mod.GlyphId,
+    point_index: u16,
+    normalized_coords: []const f32,
+) gdef_mod.LigatureCaretError!?f32 {
+    const context: *const LigatureCaretContourContext =
+        @ptrCast(@alignCast(opaque_context));
+    const point = context.font.glyphContourPoint(
+        context.allocator,
+        glyph_id,
+        point_index,
+        normalized_coords,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.BadSfnt,
+    };
+    // Horizontal text uses the ordinary glyf origin (0, 0), so format 2's
+    // origin adjustment is exactly the point's x coordinate.
+    return if (point) |value| value.x else null;
 }
 
 pub const Font = struct {
@@ -3200,6 +3228,76 @@ pub const Font = struct {
         );
     }
 
+    /// Return GDEF LigCaretList positions for one glyph.
+    ///
+    /// CaretValue format 1 uses its authored coordinate, format 2 resolves a
+    /// TrueType contour point at the requested variation instance, and format
+    /// 3 evaluates VariationIndex against GDEF 1.3's ItemVariationStore.
+    /// Ordinary Device deltas are PPEM-dependent and intentionally remain zero
+    /// in this resolution-independent font-unit API.
+    pub fn ligatureCarets(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+        normalized_coords: []const f32,
+    ) FontError![]LigatureCaret {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        const gdef = self.gdef orelse
+            return try allocator.alloc(LigatureCaret, 0);
+        try sfnt.checksum.validate(self.data, gdef);
+        const gdef_header = try gdef_mod.header(self.data, gdef);
+        const lig_caret_list_offset = gdef_header.lig_caret_list_offset;
+        if (lig_caret_list_offset == 0) {
+            return try allocator.alloc(LigatureCaret, 0);
+        }
+        try gdef_mod.validateChildOffset(
+            lig_caret_list_offset,
+            gdef.length,
+            gdef_header.length,
+        );
+        const table = self.data[gdef.offset .. gdef.offset + gdef.length];
+        const variation_axis_count: ?usize =
+            if (gdef_header.item_variation_store_offset) |offset| axis_count: {
+                if (offset == 0) break :axis_count null;
+                const fvar = self.fvar orelse return error.BadSfnt;
+                try sfnt.checksum.validate(self.data, fvar);
+                break :axis_count (try fvar_mod.info(self.data, fvar)).axis_count;
+            } else null;
+        // Revalidate the complete child grammar against maxp before lazy reads;
+        // Font borrows bytes and callers may mutate them after parse.
+        try gdef_mod.validate(
+            self.data,
+            gdef,
+            self.glyph_count,
+            variation_axis_count,
+        );
+        const context = LigatureCaretContourContext{
+            .font = self,
+            .allocator = allocator,
+        };
+        return gdef_mod.readLigatureCarets(
+            allocator,
+            table,
+            lig_caret_list_offset,
+            glyph_id,
+            .{
+                .normalized_coords = normalized_coords,
+                .item_variation_store_offset = if (gdef_header.item_variation_store_offset) |offset|
+                    if (offset == 0) null else @intCast(offset)
+                else
+                    null,
+                .contour_context = &context,
+                .resolve_contour_point = resolveLigatureCaretContourPoint,
+            },
+        ) catch |err| switch (err) {
+            error.UnavailableContourPoint, error.NonCanonicalCaretOrder => try allocator.alloc(LigatureCaret, 0),
+            error.BadSfnt => return error.BadSfnt,
+            error.EndOfStream => return error.EndOfStream,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+    }
+
     fn markFilteringSets(self: *const Font, allocator: std.mem.Allocator) FontError!?[][]glyph_mod.GlyphId {
         const gdef = self.gdef orelse return null;
         try sfnt.checksum.validate(self.data, gdef);
@@ -4322,6 +4420,22 @@ pub const Font = struct {
         };
     }
 
+    fn glyphContourPoint(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+        point_index: usize,
+        normalized_coords: []const f32,
+    ) FontError!?glyph_mod.Point {
+        return self.glyphContourPointForReadMode(
+            allocator,
+            glyph_id,
+            point_index,
+            normalized_coords,
+            .revalidate,
+        );
+    }
+
     fn glyphContourPointForShaping(
         self: *const Font,
         allocator: std.mem.Allocator,
@@ -4329,12 +4443,36 @@ pub const Font = struct {
         point_index: usize,
         normalized_coords: []const f32,
     ) FontError!?glyph_mod.Point {
+        return self.glyphContourPointForReadMode(
+            allocator,
+            glyph_id,
+            point_index,
+            normalized_coords,
+            .parsed,
+        );
+    }
+
+    fn glyphContourPointForReadMode(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+        point_index: usize,
+        normalized_coords: []const f32,
+        read_mode: OutlineReadMode,
+    ) FontError!?glyph_mod.Point {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
         if (self.format != .truetype) return null;
+        if (read_mode.shouldRevalidate()) {
+            try self.validateContourPointTables(allocator);
+        }
         const data = try self.glyphData(glyph_id);
         if (data.len == 0) return null;
 
-        const metrics = try self.horizontalMetricsForReadMode(glyph_id, .parsed);
+        const metrics = try self.horizontalMetricsForReadMode(
+            glyph_id,
+            read_mode,
+        );
         const bounds = try self.glyphBoundsFromParsedTables(glyph_id);
         var outline = glyph_mod.GlyphOutline.init(
             allocator,
@@ -4362,10 +4500,60 @@ pub const Font = struct {
                 Transform.identity(),
                 0,
                 normalized_coords,
-                .parsed,
+                read_mode,
             );
         }
         return if (point_index < points.items.len) points.items[point_index] else null;
+    }
+
+    fn validateContourPointTables(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+    ) FontError!void {
+        const loca = self.loca orelse return error.MissingTable;
+        const glyf = self.glyf orelse return error.MissingTable;
+        try sfnt.checksum.validate(self.data, self.maxp);
+        try sfnt.checksum.validate(self.data, loca);
+        try sfnt.checksum.validate(self.data, glyf);
+        try maxp_mod.validate(self.data, self.maxp, self.format);
+        const limits =
+            try (try maxp_mod.info(self.data, self.maxp)).trueTypeLimits();
+        try loca_mod.validate(
+            self.data,
+            loca,
+            glyf,
+            self.glyph_count,
+            self.index_to_loc_format,
+        );
+        try glyf_mod.validate(
+            allocator,
+            self.data,
+            loca,
+            glyf,
+            self.glyph_count,
+            self.index_to_loc_format,
+            .{
+                .max_points = limits.max_points,
+                .max_contours = limits.max_contours,
+                .max_component_elements = limits.max_component_elements,
+                .max_component_depth = limits.max_component_depth,
+            },
+        );
+        if (self.gvar) |gvar| {
+            try sfnt.checksum.validate(self.data, gvar);
+            const axis_count = try self.fvarAxisCountForReadMode(.revalidate);
+            try gvar_validation.validate(
+                self.data,
+                gvar,
+                self.glyph_count,
+                axis_count,
+                .{
+                    .loca = loca,
+                    .glyf = glyf,
+                    .index_to_loc_format = self.index_to_loc_format,
+                },
+            );
+        }
     }
 
     fn glyphOutlineFromParsedTables(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, read_mode: OutlineReadMode) FontError!glyph_mod.GlyphOutline {

@@ -1,5 +1,7 @@
 //! Mapping final visual glyph advances onto logical source graphemes.
 
+const std = @import("std");
+
 const draft = @import("draft.zig");
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const paragraph_types = @import("../../types/paragraph.zig");
@@ -7,10 +9,11 @@ const source = @import("source.zig");
 const types = @import("types.zig");
 
 pub fn applyLine(
+    allocator: std.mem.Allocator,
     layout: paragraph_types.ParagraphLayout,
     line: paragraph_types.ParagraphLine,
     drafts: []draft.Grapheme,
-) void {
+) error{ OutOfMemory, InvalidParagraphLayout }!void {
     var pen_x = line.x;
     const glyph_end = line.glyph_start + line.glyph_len;
     for (
@@ -26,6 +29,20 @@ pub fn applyLine(
                 source_end,
             )) |range| {
                 const count = range.end - range.start;
+                if (count > 1 and run_index != null and
+                    try addAuthoredLigaturePortions(
+                        allocator,
+                        layout,
+                        glyph,
+                        run_index.?,
+                        pen_x,
+                        drafts,
+                        range,
+                    ))
+                {
+                    pen_x += glyph.x_advance;
+                    continue;
+                }
                 const share = glyph.x_advance /
                     @as(f32, @floatFromInt(count));
                 const direction = drafts[range.start].direction;
@@ -57,6 +74,96 @@ pub fn applyLine(
         }
         pen_x += glyph.x_advance;
     }
+}
+
+fn addAuthoredLigaturePortions(
+    allocator: std.mem.Allocator,
+    layout: paragraph_types.ParagraphLayout,
+    glyph: GlyphPosition,
+    run_index: usize,
+    pen_x: f32,
+    drafts: []draft.Grapheme,
+    range: draft.IndexRange,
+) error{ OutOfMemory, InvalidParagraphLayout }!bool {
+    if (run_index >= layout.runs.len) return error.InvalidParagraphLayout;
+    const run = layout.runs[run_index];
+    const coord_end = run.variation_coord_start + run.variation_coord_len;
+    if (coord_end > layout.normalized_variation_coords.len) {
+        return error.InvalidParagraphLayout;
+    }
+    const normalized_coords =
+        layout.normalized_variation_coords[run.variation_coord_start..coord_end];
+    const carets = run.font.glyphs().ligatureCarets(
+        allocator,
+        glyph.glyph_id,
+        normalized_coords,
+    ) catch |err| switch (err) {
+        // TextGeometry is a convenience projection over an already accepted
+        // paragraph. If caller-owned font bytes were mutated after shaping,
+        // retain valid equal-split source geometry rather than making the
+        // entire accessibility build fail because an optional GDEF hint can no
+        // longer be trusted. Allocation failure still propagates normally.
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return false,
+    };
+    defer allocator.free(carets);
+
+    const component_count = range.end - range.start;
+    if (carets.len + 1 != component_count or glyph.x_advance <= 0) {
+        return false;
+    }
+    const properties = run.font.properties();
+    if (properties.units_per_em == 0) return false;
+    const scale = run.font_size /
+        @as(f32, @floatFromInt(properties.units_per_em));
+
+    // Convert authored design-unit boundaries into final layout units. GPOS,
+    // letter spacing, and justification may change the output advance after
+    // GDEF was authored; requiring every boundary to remain strictly inside
+    // that final advance prevents malformed or stale metadata from producing
+    // negative accessibility widths.
+    var boundaries: [32]f32 = undefined;
+    const positions = if (carets.len <= boundaries.len)
+        boundaries[0..carets.len]
+    else
+        try allocator.alloc(f32, carets.len);
+    defer if (carets.len > boundaries.len) allocator.free(positions);
+    var previous: f32 = 0;
+    for (carets, positions) |caret, *position| {
+        position.* = caret.position * scale;
+        if (!std.math.isFinite(position.*) or
+            position.* <= previous or
+            position.* >= glyph.x_advance)
+        {
+            return false;
+        }
+        previous = position.*;
+    }
+
+    for (range.start..range.end) |draft_index| {
+        const logical_index = draft_index - range.start;
+        const physical_index = switch (drafts[range.start].direction) {
+            .ltr => logical_index,
+            .rtl => component_count - logical_index - 1,
+        };
+        const component_start = if (physical_index == 0)
+            0
+        else
+            positions[physical_index - 1];
+        const component_end = if (physical_index == positions.len)
+            glyph.x_advance
+        else
+            positions[physical_index];
+        addPortion(
+            &drafts[draft_index],
+            pen_x + component_start,
+            component_end - component_start,
+            run_index,
+            false,
+        );
+        drafts[draft_index].authored_ligature_caret = true;
+    }
+    return true;
 }
 
 pub fn resolveMissingPositions(

@@ -130,7 +130,7 @@ fn buildInternal(
             }
         }
 
-        placement.applyLine(layout, line, drafts.items);
+        try placement.applyLine(allocator, layout, line, drafts.items);
         placement.resolveMissingPositions(line.x, drafts.items);
         placement.resolveMissingOwners(drafts.items);
         try spans_impl.appendLine(

@@ -22,6 +22,7 @@ pub const GlyphId = glyph.GlyphId;
 pub const Bounds = glyph.Bounds;
 pub const Outline = glyph.GlyphOutline;
 pub const OutlineBuilder = glyph.OutlineBuilder;
+pub const LigatureCaret = font_mod.LigatureCaret;
 
 /// An ordered list of faces used for cluster-safe fallback.
 pub const Cascade = face.Cascade;

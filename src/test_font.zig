@@ -861,6 +861,47 @@ pub fn buildMinimalGsubTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try minimalGsubTtfTables(allocator));
 }
 
+/// Two-component GSUB ligature with one authored GDEF caret at 300/1000 em.
+pub fn buildGdefLigatureCaretTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const base = try minimalGsubTtfTables(allocator);
+    const tables = try allocator.alloc(Table, base.len + 1);
+    errdefer allocator.free(tables);
+    @memcpy(tables[0..base.len], base);
+    allocator.free(base);
+    tables[base.len] = .{
+        .tag = "GDEF",
+        .data = try gdefLigatureCaretTable(allocator),
+    };
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
+/// GDEF 1.3 format-3 caret whose VariationIndex adds seven design units at
+/// normalized coordinate 0.5.
+pub fn buildGdefVariableLigatureCaretTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const base = try minimalGsubTtfTables(allocator);
+    const tables = try allocator.alloc(Table, base.len + 3);
+    errdefer allocator.free(tables);
+    @memcpy(tables[0..base.len], base);
+    allocator.free(base);
+    tables[base.len] = .{
+        .tag = "GDEF",
+        .data = try gdefVariableLigatureCaretTable(allocator),
+    };
+    tables[base.len + 1] = .{
+        .tag = "fvar",
+        .data = try singleAxisFvarTable(allocator),
+    };
+    tables[base.len + 2] = .{
+        .tag = "name",
+        .data = try singleAxisNameTable(allocator),
+    };
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
 pub fn buildMultipleGsubTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try multipleGsubTtfTables(allocator));
 }
@@ -6362,6 +6403,81 @@ fn gdefClassTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 32, 1);
     writeU16(bytes, 34, 7);
     return bytes;
+}
+
+fn gdefLigatureCaretTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 34);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 0);
+    writeU16(bytes, 8, 12);
+
+    const list = 12;
+    writeU16(bytes, list, 6);
+    writeU16(bytes, list + 2, 1);
+    writeU16(bytes, list + 4, 12);
+    writeU16(bytes, list + 6, 1);
+    writeU16(bytes, list + 8, 1);
+    writeU16(bytes, list + 10, 2);
+
+    const ligature = list + 12;
+    writeU16(bytes, ligature, 1);
+    writeU16(bytes, ligature + 2, 4);
+    writeU16(bytes, ligature + 4, 1);
+    writeI16(bytes, ligature + 6, 300);
+    return bytes;
+}
+
+fn gdefVariableLigatureCaretTable(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const store_offset: usize = 46;
+    const bytes = try allocator.alloc(u8, store_offset + 34);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 3);
+    writeU16(bytes, 8, 18);
+    writeU32(bytes, 14, store_offset);
+
+    const list = 18;
+    writeU16(bytes, list, 6);
+    writeU16(bytes, list + 2, 1);
+    writeU16(bytes, list + 4, 12);
+    writeU16(bytes, list + 6, 1);
+    writeU16(bytes, list + 8, 1);
+    writeU16(bytes, list + 10, 2);
+
+    const ligature = list + 12;
+    writeU16(bytes, ligature, 1);
+    writeU16(bytes, ligature + 2, 4);
+    writeU16(bytes, ligature + 4, 3);
+    writeI16(bytes, ligature + 6, 300);
+    writeU16(bytes, ligature + 8, 6);
+    writeU16(bytes, ligature + 10, 0);
+    writeU16(bytes, ligature + 12, 0);
+    writeU16(bytes, ligature + 14, 0x8000);
+
+    writeSingleAxisItemVariationStore(bytes, store_offset);
+    return bytes;
+}
+
+fn writeSingleAxisItemVariationStore(bytes: []u8, offset: usize) void {
+    writeU16(bytes, offset, 1);
+    writeU32(bytes, offset + 2, 12);
+    writeU16(bytes, offset + 6, 1);
+    writeU32(bytes, offset + 8, 24);
+
+    writeU16(bytes, offset + 12, 1);
+    writeU16(bytes, offset + 14, 1);
+    writeI16(bytes, offset + 16, 0);
+    writeI16(bytes, offset + 18, 0x2000);
+    writeI16(bytes, offset + 20, 0x4000);
+
+    writeU16(bytes, offset + 24, 1);
+    writeU16(bytes, offset + 26, 1);
+    writeU16(bytes, offset + 28, 1);
+    writeU16(bytes, offset + 30, 0);
+    writeI16(bytes, offset + 32, 7);
 }
 
 fn gsubIgnoreMarksTable(allocator: std.mem.Allocator) ![]u8 {

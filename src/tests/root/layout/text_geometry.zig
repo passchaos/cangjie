@@ -90,6 +90,289 @@ test "text geometry divides a shaped ligature over source graphemes" {
     try std.testing.expectEqual(@as(usize, 3), geometry.graphemes[3].byte_start);
 }
 
+test "text geometry prefers authored GDEF ligature carets" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildGdefLigatureCaretTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const layout = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&fonts),
+        &layout_buffer,
+        "AA",
+        20,
+        .{ .max_width = 100 },
+    );
+    var geometry = try paragraph.buildGeometry(
+        allocator,
+        "AA",
+        layout,
+        .{},
+    );
+    defer geometry.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), geometry.graphemes.len);
+    // The ligature advance is 20. GDEF authors its boundary at 300/1000 em,
+    // yielding 6 + 14 rather than the fallback 10 + 10 split.
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 6),
+        geometry.graphemes[0].width,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 14),
+        geometry.graphemes[1].width,
+        0.001,
+    );
+    try std.testing.expect(geometry.graphemes[0].authored_ligature_caret);
+    try std.testing.expect(geometry.graphemes[1].authored_ligature_caret);
+}
+
+test "text geometry applies GDEF caret variation at the final run instance" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildGdefVariableLigatureCaretTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const layout = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&fonts),
+        &layout_buffer,
+        "AA",
+        20,
+        .{
+            .max_width = 100,
+            .normalized_variation_coords = &.{0.5},
+        },
+    );
+    var geometry = try paragraph.buildGeometry(
+        allocator,
+        "AA",
+        layout,
+        .{},
+    );
+    defer geometry.deinit();
+
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 6.14),
+        geometry.graphemes[0].width,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        layout.glyphs[0].x_advance - 6.14,
+        geometry.graphemes[1].width,
+        0.001,
+    );
+    try std.testing.expect(geometry.graphemes[0].authored_ligature_caret);
+}
+
+test "text geometry falls back when GDEF caret cardinality mismatches source" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildGdefLigatureCaretTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const face = @import("../../../font/face/root.zig").backend.face(&font);
+    const glyphs = [_]@import("../../../layout/glyph_position.zig").GlyphPosition{.{
+        .glyph_id = 2,
+        .codepoint = 'A',
+        .cluster = 0,
+        .source_byte_len = 3,
+        .x_advance = 30,
+    }};
+    const runs = [_]support.CascadeRun{.{
+        .font = face,
+        .font_index = 0,
+        .font_size = 20,
+        .glyph_start = 0,
+        .glyph_len = 1,
+        .x_offset = 0,
+    }};
+    const lines = [_]support.ParagraphLine{.{
+        .glyph_start = 0,
+        .glyph_len = 1,
+        .run_start = 0,
+        .run_len = 1,
+        .byte_start = 0,
+        .byte_len = 3,
+        .x = 0,
+        .y = 0,
+        .width = 30,
+        .height = 20,
+        .baseline = 16,
+        .ascent = 16,
+        .descent = 4,
+        .leading = 0,
+    }};
+    const layout = support.ParagraphLayout{
+        .glyphs = &glyphs,
+        .runs = &runs,
+        .lines = &lines,
+        .width = 30,
+        .height = 20,
+    };
+
+    var geometry = try paragraph.buildGeometry(
+        allocator,
+        "AAA",
+        layout,
+        .{},
+    );
+    defer geometry.deinit();
+    for (geometry.graphemes) |grapheme| {
+        try std.testing.expectApproxEqAbs(
+            @as(f32, 10),
+            grapheme.width,
+            0.001,
+        );
+        try std.testing.expect(!grapheme.authored_ligature_caret);
+    }
+}
+
+test "text geometry falls back when authored GDEF caret exceeds final advance" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildGdefLigatureCaretTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const face = @import("../../../font/face/root.zig").backend.face(&font);
+    const glyphs = [_]@import("../../../layout/glyph_position.zig").GlyphPosition{.{
+        .glyph_id = 2,
+        .codepoint = 'A',
+        .cluster = 0,
+        .source_byte_len = 2,
+        .x_advance = 4,
+    }};
+    const runs = [_]support.CascadeRun{.{
+        .font = face,
+        .font_index = 0,
+        .font_size = 20,
+        .glyph_start = 0,
+        .glyph_len = 1,
+        .x_offset = 0,
+    }};
+    const lines = [_]support.ParagraphLine{.{
+        .glyph_start = 0,
+        .glyph_len = 1,
+        .run_start = 0,
+        .run_len = 1,
+        .byte_start = 0,
+        .byte_len = 2,
+        .x = 0,
+        .y = 0,
+        .width = 4,
+        .height = 20,
+        .baseline = 16,
+        .ascent = 16,
+        .descent = 4,
+        .leading = 0,
+    }};
+    const layout = support.ParagraphLayout{
+        .glyphs = &glyphs,
+        .runs = &runs,
+        .lines = &lines,
+        .width = 4,
+        .height = 20,
+    };
+
+    var geometry = try paragraph.buildGeometry(
+        allocator,
+        "AA",
+        layout,
+        .{},
+    );
+    defer geometry.deinit();
+    for (geometry.graphemes) |grapheme| {
+        try std.testing.expectApproxEqAbs(
+            @as(f32, 2),
+            grapheme.width,
+            0.001,
+        );
+        try std.testing.expect(!grapheme.authored_ligature_caret);
+    }
+}
+
+test "RTL ligature geometry reverses authored GDEF component assignment" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildGdefLigatureCaretTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const face = @import("../../../font/face/root.zig").backend.face(&font);
+    const glyphs = [_]@import("../../../layout/glyph_position.zig").GlyphPosition{.{
+        .glyph_id = 2,
+        .codepoint = 0x05d0,
+        .cluster = 0,
+        .source_byte_len = 4,
+        .x_advance = 20,
+    }};
+    const runs = [_]support.CascadeRun{.{
+        .font = face,
+        .font_index = 0,
+        .font_size = 20,
+        .glyph_start = 0,
+        .glyph_len = 1,
+        .x_offset = 0,
+    }};
+    const lines = [_]support.ParagraphLine{.{
+        .glyph_start = 0,
+        .glyph_len = 1,
+        .run_start = 0,
+        .run_len = 1,
+        .byte_start = 0,
+        .byte_len = 4,
+        .x = 0,
+        .y = 0,
+        .width = 20,
+        .height = 20,
+        .baseline = 16,
+        .ascent = 16,
+        .descent = 4,
+        .leading = 0,
+    }};
+    const layout = support.ParagraphLayout{
+        .glyphs = &glyphs,
+        .runs = &runs,
+        .lines = &lines,
+        .width = 20,
+        .height = 20,
+    };
+    const text = "אב";
+
+    var geometry = try paragraph.buildGeometry(
+        allocator,
+        text,
+        layout,
+        .{ .direction = .rtl },
+    );
+    defer geometry.deinit();
+    const graphemes = geometry.spans[0].graphemes(geometry);
+    try std.testing.expectApproxEqAbs(@as(f32, 14), graphemes[0].width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 6), graphemes[1].width, 0.001);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 6),
+        graphemes[0].inline_position,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0),
+        graphemes[1].inline_position,
+        0.001,
+    );
+}
+
 test "text geometry keeps bidi spans logical and positions RTL graphemes visually" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

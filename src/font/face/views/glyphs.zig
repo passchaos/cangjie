@@ -87,4 +87,21 @@ pub const View = struct {
     ) font_mod.FontError!?[]const u8 {
         return self.implementation.glyphName(glyph_id);
     }
+
+    /// Return allocator-owned GDEF ligature caret positions in design units.
+    ///
+    /// An empty slice means the glyph is uncovered or its authored contour
+    /// point/order cannot be resolved safely at this variation instance.
+    pub fn ligatureCarets(
+        self: View,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+        normalized_coords: []const f32,
+    ) font_mod.FontError![]font_mod.LigatureCaret {
+        return self.implementation.ligatureCarets(
+            allocator,
+            glyph_id,
+            normalized_coords,
+        );
+    }
 };

@@ -18,6 +18,7 @@ pub const Grapheme = struct {
     width: f32 = 0,
     positioned: bool = false,
     fontless: bool = false,
+    authored_ligature_caret: bool = false,
 
     pub fn byteEnd(self: Grapheme) usize {
         return self.byte_start + self.byte_len;

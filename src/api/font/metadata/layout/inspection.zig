@@ -42,6 +42,21 @@ pub const View = struct {
         return self.implementation().markAttachClass(glyph_id);
     }
 
+    pub fn ligatureCarets(
+        self: View,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph.GlyphId,
+        normalized_coords: []const f32,
+    ) font.FontError![]font.LigatureCaret {
+        // This is the same defensive read exposed on `Face.glyphs()`, kept
+        // here so layout-table inspection remains a complete GDEF surface.
+        return self.implementation().ligatureCarets(
+            allocator,
+            glyph_id,
+            normalized_coords,
+        );
+    }
+
     pub fn kerning(
         self: View,
         left: glyph.GlyphId,

@@ -833,65 +833,6 @@ fn readU32(table: Table, relative: usize) GsubError!u32 {
     return table.readU32(relative);
 }
 
-test "GSUB chaining resumes after a nested ligature's adjusted match end" {
-    const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 88;
-
-    writeU32Test(&bytes, 0, 0x00010000);
-    writeU16Test(&bytes, 8, 10);
-    writeU16Test(&bytes, 10, 2);
-    writeU16Test(&bytes, 12, 6); // Lookup 0 at 16.
-    writeU16Test(&bytes, 14, 46); // Lookup 1 at 56.
-
-    writeU16Test(&bytes, 16, 6); // ChainingContextSubst.
-    writeU16Test(&bytes, 20, 1);
-    writeU16Test(&bytes, 22, 8);
-    const chain = 24;
-    writeU16Test(&bytes, chain + 0, 1);
-    writeU16Test(&bytes, chain + 2, 26);
-    writeU16Test(&bytes, chain + 4, 1);
-    writeU16Test(&bytes, chain + 6, 8);
-    const set = chain + 8;
-    writeU16Test(&bytes, set + 0, 1);
-    writeU16Test(&bytes, set + 2, 4);
-    const rule = set + 4;
-    writeU16Test(&bytes, rule + 0, 0); // BacktrackGlyphCount.
-    writeU16Test(&bytes, rule + 2, 2); // InputGlyphCount.
-    writeU16Test(&bytes, rule + 4, 2);
-    writeU16Test(&bytes, rule + 6, 0); // LookAheadGlyphCount.
-    writeU16Test(&bytes, rule + 8, 1); // SubstCount.
-    writeU16Test(&bytes, rule + 10, 0);
-    writeU16Test(&bytes, rule + 12, 1);
-    writeCoverage1(&bytes, chain + 26, 1);
-
-    writeU16Test(&bytes, 56, 4); // LigatureSubst.
-    writeU16Test(&bytes, 60, 1);
-    writeU16Test(&bytes, 62, 8);
-    const ligature_subst = 64;
-    writeU16Test(&bytes, ligature_subst + 0, 1);
-    writeU16Test(&bytes, ligature_subst + 2, 18);
-    writeU16Test(&bytes, ligature_subst + 4, 1);
-    writeU16Test(&bytes, ligature_subst + 6, 8);
-    const ligature_set = ligature_subst + 8;
-    writeU16Test(&bytes, ligature_set + 0, 1);
-    writeU16Test(&bytes, ligature_set + 2, 4);
-    const ligature = ligature_set + 4;
-    writeU16Test(&bytes, ligature + 0, 10);
-    writeU16Test(&bytes, ligature + 2, 2);
-    writeU16Test(&bytes, ligature + 4, 2);
-    writeCoverage1(&bytes, ligature_subst + 18, 1);
-
-    var glyphs = std.ArrayList(GlyphId).empty;
-    defer glyphs.deinit(allocator);
-    try glyphs.appendSlice(allocator, &.{ 1, 2, 1, 2 });
-
-    try applyLookup(.{ .data = &bytes, .offset = 0, .length = bytes.len }, 16, &glyphs, allocator, .{});
-
-    // The first ligature shrinks the run, moving the second candidate to index
-    // one. Resuming at the pre-substitution match end would skip it.
-    try std.testing.expectEqualSlices(GlyphId, &.{ 10, 10 }, glyphs.items);
-}
-
 test "GSUB contextual ligature compacts positions before a later multiple substitution" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 92;

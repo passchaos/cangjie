@@ -211,6 +211,56 @@ pub fn suite(comptime Bindings: type) type {
                 glyphs.items,
             );
         }
+
+        test "GSUB chaining resumes after nested ligature contraction" {
+            const allocator = std.testing.allocator;
+            var bytes = [_]u8{0} ** 88;
+            writeU32(&bytes, 0, 0x00010000);
+            writeU16(&bytes, 8, 10);
+            writeU16(&bytes, 10, 2);
+            writeU16(&bytes, 12, 6);
+            writeU16(&bytes, 14, 46);
+
+            writeU16(&bytes, 16, 6);
+            writeU16(&bytes, 20, 1);
+            writeU16(&bytes, 22, 8);
+            const chain = 24;
+            writeU16(&bytes, chain, 1);
+            writeU16(&bytes, chain + 2, 26);
+            writeU16(&bytes, chain + 4, 1);
+            writeU16(&bytes, chain + 6, 8);
+            const set = chain + 8;
+            writeU16(&bytes, set, 1);
+            writeU16(&bytes, set + 2, 4);
+            const rule = set + 4;
+            writeU16(&bytes, rule, 0);
+            writeU16(&bytes, rule + 2, 2);
+            writeU16(&bytes, rule + 4, 2);
+            writeU16(&bytes, rule + 6, 0);
+            writeU16(&bytes, rule + 8, 1);
+            writeU16(&bytes, rule + 10, 0);
+            writeU16(&bytes, rule + 12, 1);
+            writeCoverage1(&bytes, chain + 26, 1);
+            writeLigatureLookup(&bytes, 56, 1, 2, 10);
+
+            var glyphs = std.ArrayList(GlyphId).empty;
+            defer glyphs.deinit(allocator);
+            try glyphs.appendSlice(allocator, &.{ 1, 2, 1, 2 });
+            try Bindings.applyLookup(
+                view(&bytes),
+                16,
+                &glyphs,
+                allocator,
+                .{},
+            );
+            // The first contraction moves the second candidate to index one.
+            // Resuming at the old match end would skip it.
+            try std.testing.expectEqualSlices(
+                GlyphId,
+                &.{ 10, 10 },
+                glyphs.items,
+            );
+        }
     };
 }
 
@@ -336,6 +386,30 @@ fn writeSingleDeltaLookup(
     writeU16(bytes, offset + 10, 6);
     writeI16(bytes, offset + 12, delta);
     writeCoverage1(bytes, offset + 14, glyph);
+}
+
+fn writeLigatureLookup(
+    bytes: []u8,
+    lookup: usize,
+    first: GlyphId,
+    second: GlyphId,
+    output: GlyphId,
+) void {
+    writeU16(bytes, lookup, 4);
+    writeU16(bytes, lookup + 4, 1);
+    writeU16(bytes, lookup + 6, 8);
+    const subtable = lookup + 8;
+    writeU16(bytes, subtable, 1);
+    writeU16(bytes, subtable + 2, 18);
+    writeU16(bytes, subtable + 4, 1);
+    writeU16(bytes, subtable + 6, 8);
+    const set = subtable + 8;
+    writeU16(bytes, set, 1);
+    writeU16(bytes, set + 2, 4);
+    writeU16(bytes, set + 4, output);
+    writeU16(bytes, set + 6, 2);
+    writeU16(bytes, set + 8, second);
+    writeCoverage1(bytes, subtable + 18, first);
 }
 
 fn writeCoverage1(bytes: []u8, offset: usize, glyph: GlyphId) void {

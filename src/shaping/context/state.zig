@@ -3,14 +3,14 @@
 const std = @import("std");
 
 const cache = @import("cache/root.zig");
-const layout = @import("../../layout.zig");
 const output_mod = @import("output.zig");
 const stats_mod = @import("stats.zig");
+const styled_buffer = @import("../../layout/styled_buffer.zig");
 
 pub const State = struct {
     allocator: std.mem.Allocator,
     output: output_mod.Buffer,
-    styled_output: layout.StyledParagraphBuffer,
+    styled_output: styled_buffer.Buffer,
     glyph_metrics: cache.GlyphMetricsCache,
     glyph_indices: cache.GlyphIndexCache,
     font_fallback: cache.FontFallbackCache,
@@ -30,7 +30,7 @@ pub const State = struct {
         return .{
             .allocator = allocator,
             .output = output_mod.Buffer.init(allocator),
-            .styled_output = layout.StyledParagraphBuffer.init(allocator),
+            .styled_output = styled_buffer.Buffer.init(allocator),
             .glyph_metrics = cache.GlyphMetricsCache.init(allocator),
             .glyph_indices = cache.GlyphIndexCache.init(allocator),
             .font_fallback = cache.FontFallbackCache.init(allocator),

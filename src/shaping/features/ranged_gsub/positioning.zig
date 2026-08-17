@@ -10,20 +10,21 @@ const GlyphId = @import("../../../glyph.zig").GlyphId;
 const gpos = @import("../../../gpos.zig");
 const GlyphMetricsCache = @import("../../context/cache/root.zig").GlyphMetricsCache;
 const GlyphPosition = @import("../../../layout/glyph_position.zig").GlyphPosition;
-const layout = @import("../../../layout.zig");
+const context_output = @import("../../context/output.zig");
+const shaping_plan = @import("../../plan/root.zig");
 const run_metadata = @import("../../run_metadata.zig");
 const source_buffer = @import("source_buffer.zig");
 
 pub fn collect(
     font: *const Font,
     metrics_cache: ?*GlyphMetricsCache,
-    layout_buffer: *layout.LayoutBuffer,
+    layout_buffer: *context_output.Buffer,
     font_size: f32,
     sources: *source_buffer.Buffer,
     gdef_metadata: GdefLookupMetadata,
     script_tag: @import("../../../unicode.zig").OpenTypeScriptTag,
     language_tag: @import("../../../unicode.zig").OpenTypeLanguageTag,
-    options: layout.ShapeOptions,
+    options: shaping_plan.ShapeOptions,
 ) !void {
     const allocator = layout_buffer.allocator;
     const scale = font_size / @as(f32, @floatFromInt(font.units_per_em));

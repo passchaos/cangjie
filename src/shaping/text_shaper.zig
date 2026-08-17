@@ -5,9 +5,12 @@
 //! rare-path state to run-wide shape options.
 
 const Font = @import("../font.zig").Font;
-const layout = @import("../layout.zig");
+const cache = @import("context/cache/root.zig");
+const context_output = @import("context/output.zig");
 const ordinary = @import("orchestrator.zig").TextShaper;
 const ranged_gsub = @import("features/ranged_gsub/shaper.zig");
+const run_types = @import("../layout/types/runs.zig");
+const shaping_plan = @import("plan/root.zig");
 const unicode = @import("../unicode.zig");
 
 pub const TextShaper = struct {
@@ -48,12 +51,12 @@ pub const TextShaper = struct {
 
     pub fn shapeUtf8WithGsubFeatureRanges(
         font: *const Font,
-        buffer: *layout.LayoutBuffer,
+        buffer: *context_output.Buffer,
         text: []const u8,
         font_size: f32,
         ranges: []const unicode.GsubFeatureRange,
-        options: layout.ShapeOptions,
-    ) !layout.GlyphRun {
+        options: shaping_plan.ShapeOptions,
+    ) !run_types.GlyphRun {
         return ranged_gsub.Shaper.shapeUtf8WithOptions(
             font,
             buffer,
@@ -66,14 +69,14 @@ pub const TextShaper = struct {
 
     pub fn shapeUtf8WithCachesAndGsubFeatureRanges(
         font: *const Font,
-        metrics_cache: ?*layout.GlyphMetricsCache,
-        glyph_index_cache: ?*layout.GlyphIndexCache,
-        buffer: *layout.LayoutBuffer,
+        metrics_cache: ?*cache.GlyphMetricsCache,
+        glyph_index_cache: ?*cache.GlyphIndexCache,
+        buffer: *context_output.Buffer,
         text: []const u8,
         font_size: f32,
         ranges: []const unicode.GsubFeatureRange,
-        options: layout.ShapeOptions,
-    ) !layout.GlyphRun {
+        options: shaping_plan.ShapeOptions,
+    ) !run_types.GlyphRun {
         return ranged_gsub.Shaper.shapeUtf8WithCaches(
             font,
             metrics_cache,

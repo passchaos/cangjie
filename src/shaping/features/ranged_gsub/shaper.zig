@@ -10,9 +10,11 @@ const font_shaping = @import("../../../font.zig").shaping;
 const Font = @import("../../../font.zig").Font;
 const GlyphMetricsCache = @import("../../context/cache/root.zig").GlyphMetricsCache;
 const GlyphIndexCache = @import("../../context/cache/root.zig").GlyphIndexCache;
+const context_output = @import("../../context/output.zig");
 const executor = @import("executor.zig");
 const gsub = @import("../../../gsub.zig");
-const layout = @import("../../../layout.zig");
+const run_types = @import("../../../layout/types/runs.zig");
+const shaping_plan = @import("../../plan/root.zig");
 const overrides = @import("overrides.zig");
 const positioning = @import("positioning.zig");
 const ranges_mod = @import("ranges.zig");
@@ -28,12 +30,12 @@ pub const Shaper = struct {
     /// HarfBuzz's user-feature order.
     pub fn shapeUtf8WithOptions(
         font: *const Font,
-        buffer: *layout.LayoutBuffer,
+        buffer: *context_output.Buffer,
         text: []const u8,
         font_size: f32,
         ranges: []const ranges_mod.Range,
-        options: layout.ShapeOptions,
-    ) !layout.GlyphRun {
+        options: shaping_plan.ShapeOptions,
+    ) !run_types.GlyphRun {
         return shapeUtf8WithCaches(
             font,
             null,
@@ -50,12 +52,12 @@ pub const Shaper = struct {
         font: *const Font,
         metrics_cache: ?*GlyphMetricsCache,
         glyph_index_cache: ?*GlyphIndexCache,
-        buffer: *layout.LayoutBuffer,
+        buffer: *context_output.Buffer,
         text: []const u8,
         font_size: f32,
         ranges: []const ranges_mod.Range,
-        options: layout.ShapeOptions,
-    ) linksection(shaping_sections.isolated_hotpaths) !layout.GlyphRun {
+        options: shaping_plan.ShapeOptions,
+    ) linksection(shaping_sections.isolated_hotpaths) !run_types.GlyphRun {
         try validateInput(text, font_size, ranges, options);
         return shapeValidated(
             font,
@@ -74,12 +76,12 @@ fn shapeValidated(
     font: *const Font,
     metrics_cache: ?*GlyphMetricsCache,
     glyph_index_cache: ?*GlyphIndexCache,
-    buffer: *layout.LayoutBuffer,
+    buffer: *context_output.Buffer,
     text: []const u8,
     font_size: f32,
     ranges: []const ranges_mod.Range,
-    options: layout.ShapeOptions,
-) !layout.GlyphRun {
+    options: shaping_plan.ShapeOptions,
+) !run_types.GlyphRun {
     const inferred_script = unicode.inferOpenTypeScript(text);
     const script_selection = try font_shaping.selectGsubScriptForShaping(
         font,
@@ -162,7 +164,7 @@ fn validateInput(
     text: []const u8,
     font_size: f32,
     ranges: []const ranges_mod.Range,
-    options: layout.ShapeOptions,
+    options: shaping_plan.ShapeOptions,
 ) !void {
     if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
     if (!std.math.isFinite(font_size) or font_size <= 0) {

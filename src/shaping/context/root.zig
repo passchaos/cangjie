@@ -7,7 +7,15 @@
 const std = @import("std");
 
 const face_mod = @import("../../font/face/root.zig");
-const layout_mod = @import("../../layout.zig");
+const paragraph_options = @import("../../layout/paragraph/options.zig");
+const retained_paragraph = @import("../../layout/paragraph/retained.zig");
+const paragraph_types = @import("../../layout/types/paragraph.zig");
+const run_types = @import("../../layout/types/runs.zig");
+const styled_buffer = @import("../../layout/styled_buffer.zig");
+const styled_paragraph = @import("../../layout/styled_paragraph.zig");
+const font_fallback = @import("../fallback/font/root.zig");
+const shaping_plan = @import("../plan/root.zig");
+const shape_profile = @import("../../shape_profile.zig");
 const state_mod = @import("state.zig");
 const stats_mod = @import("stats.zig");
 const text_shaper = @import("../text_shaper.zig");
@@ -21,7 +29,7 @@ pub const ShapeRequest = struct {
     text: []const u8,
     /// Positive, finite font size in output units.
     font_size: f32,
-    options: layout_mod.ShapeOptions = .{},
+    options: shaping_plan.ShapeOptions = .{},
     feature_ranges: []const unicode.GsubFeatureRange = &.{},
 };
 
@@ -29,7 +37,7 @@ pub const ShapeRequest = struct {
 pub const CascadeRequest = struct {
     text: []const u8,
     font_size: f32,
-    options: layout_mod.ShapeOptions = .{},
+    options: shaping_plan.ShapeOptions = .{},
 };
 
 /// Paragraph shaping and layout input. Keeping text, size, and options in one
@@ -37,7 +45,7 @@ pub const CascadeRequest = struct {
 pub const ParagraphRequest = struct {
     text: []const u8,
     font_size: f32,
-    options: layout_mod.ParagraphOptions,
+    options: paragraph_options.Options,
 };
 
 /// Styled paragraph input. Spans and their backing style data are borrowed for
@@ -45,8 +53,8 @@ pub const ParagraphRequest = struct {
 pub const StyledParagraphRequest = struct {
     text: []const u8,
     default_font_size: f32,
-    spans: []const layout_mod.StyledParagraphSpan,
-    options: layout_mod.ParagraphOptions,
+    spans: []const styled_paragraph.Span,
+    options: paragraph_options.Options,
 };
 
 /// Owns reusable shaping output, transient arrays, and font-derived caches.
@@ -67,8 +75,8 @@ pub const Engine = struct {
     pub const Stats = stats_mod.Stats;
     pub const Counter = stats_mod.Counter;
     pub const StyledParagraph = struct {
-        layout: layout_mod.ParagraphLayout,
-        glyph_metadata: []const layout_mod.StyledGlyphMetadata,
+        layout: paragraph_types.ParagraphLayout,
+        glyph_metadata: []const styled_buffer.Metadata,
     };
 
     pub fn init(
@@ -109,7 +117,7 @@ pub const Engine = struct {
 
     pub fn enableProfiling(
         self: *Engine,
-        profile: *layout_mod.ShapeStageProfile,
+        profile: *shape_profile.ShapeStageProfile,
         io: std.Io,
         fast_path: bool,
     ) void {
@@ -130,7 +138,7 @@ pub const Engine = struct {
         self: *Engine,
         face: *const face_mod.Face,
         request: ShapeRequest,
-    ) !layout_mod.GlyphRun {
+    ) !run_types.GlyphRun {
         const state = self.getStateForWork();
         const font = face_mod.backend.font(face);
         if (request.feature_ranges.len != 0) {
@@ -162,9 +170,9 @@ pub const Engine = struct {
         self: *Engine,
         cascade: face_mod.Cascade,
         request: CascadeRequest,
-    ) !layout_mod.ShapedText {
+    ) !run_types.ShapedText {
         const state = self.getStateForWork();
-        return layout_mod.TextShaper.shapeUtf8CascadeWithCaches(
+        return text_shaper.TextShaper.shapeUtf8CascadeWithCaches(
             internalCascade(cascade),
             if (state.cache_font_data) &state.font_fallback else null,
             if (state.cache_font_data) &state.glyph_metrics else null,
@@ -182,9 +190,9 @@ pub const Engine = struct {
         self: *Engine,
         cascade: face_mod.Cascade,
         request: CascadeRequest,
-    ) !layout_mod.ScriptedText {
+    ) !run_types.ScriptedText {
         const state = self.getStateForWork();
-        return layout_mod.TextShaper.shapeUtf8ScriptRuns(
+        return text_shaper.TextShaper.shapeUtf8ScriptRuns(
             internalCascade(cascade),
             &state.output,
             request.text,
@@ -198,9 +206,9 @@ pub const Engine = struct {
         self: *Engine,
         cascade: face_mod.Cascade,
         request: ParagraphRequest,
-    ) !layout_mod.ShapedParagraph {
+    ) !retained_paragraph.ShapedParagraph {
         const state = self.getStateForWork();
-        return layout_mod.TextShaper.shapeParagraphUtf8WithCaches(
+        return text_shaper.TextShaper.shapeParagraphUtf8WithCaches(
             state.allocator,
             internalCascade(cascade),
             if (state.cache_font_data) &state.font_fallback else null,
@@ -219,9 +227,9 @@ pub const Engine = struct {
         self: *Engine,
         cascade: face_mod.Cascade,
         request: ParagraphRequest,
-    ) !layout_mod.ParagraphLayout {
+    ) !paragraph_types.ParagraphLayout {
         const state = self.getStateForWork();
-        return layout_mod.TextShaper.layoutParagraphUtf8WithCaches(
+        return text_shaper.TextShaper.layoutParagraphUtf8WithCaches(
             internalCascade(cascade),
             if (state.cache_font_data) &state.font_fallback else null,
             if (state.cache_font_data) &state.glyph_metrics else null,
@@ -240,7 +248,7 @@ pub const Engine = struct {
         request: StyledParagraphRequest,
     ) !StyledParagraph {
         const state = self.getStateForWork();
-        const paragraph = try layout_mod.TextShaper.layoutStyledParagraphUtf8(
+        const paragraph = try text_shaper.TextShaper.layoutStyledParagraphUtf8(
             internalCascade(cascade),
             &state.output,
             &state.styled_output,
@@ -259,7 +267,7 @@ pub const Engine = struct {
         self: *Engine,
         cascade: face_mod.Cascade,
         request: ParagraphRequest,
-    ) !layout_mod.TextMetrics {
+    ) !paragraph_types.TextMetrics {
         const paragraph = try self.layout(cascade, request);
         if (paragraph.lines.len == 0) {
             return .{
@@ -296,6 +304,6 @@ pub const Engine = struct {
     }
 };
 
-fn internalCascade(cascade: face_mod.Cascade) layout_mod.FontCascade {
+fn internalCascade(cascade: face_mod.Cascade) font_fallback.Cascade {
     return .init(face_mod.backend.fonts(cascade.faces));
 }

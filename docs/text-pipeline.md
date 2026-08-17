@@ -553,6 +553,9 @@ Unicode behavioral coverage is grouped beside the implementation under
 scripts, Indic/USE scripts, and other script families have independent test
 containers. Only the two tests that intentionally exercise private joining and
 mark-classification helpers remain in the Unicode root implementation.
+UAX #50 orientation ranges and compatibility presentation-form mappings live
+in `src/unicode/vertical.zig`; the root Unicode API supplies only the resolved
+script-family proof needed by that independent policy.
 
 Cangjie deliberately does not own an editor or mutable text-buffer model.
 Applications and UI toolkits compose the public Unicode segmentation,

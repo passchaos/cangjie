@@ -70,9 +70,11 @@ test "direct and extension lookups preserve non-cascading subtable order" {
     writeSingleDelta(&direct, 24, 20, 10);
     var glyphs = std.ArrayList(u16).empty;
     defer glyphs.deinit(allocator);
-    try glyphs.append(allocator, 10);
+    try glyphs.appendSlice(allocator, &.{ 10, 20 });
     try single.lookup(view(&direct), 0, 2, &glyphs, allocator, 0, .{});
-    try std.testing.expectEqualSlices(u16, &.{20}, glyphs.items);
+    // The glyph produced by subtable zero must not cascade into subtable one,
+    // while an originally-authored glyph 20 still follows lookup order.
+    try std.testing.expectEqualSlices(u16, &.{ 20, 30 }, glyphs.items);
 
     var extension = [_]u8{0} ** 54;
     writeU16(&extension, 0, 7);
@@ -84,6 +86,7 @@ test "direct and extension lookups preserve non-cascading subtable order" {
     writeExtension(&extension, 32, 8);
     writeSingleDelta(&extension, 40, 20, 10);
     glyphs.items[0] = 10;
+    glyphs.items[1] = 20;
     try single.extensionLookup(
         view(&extension),
         0,
@@ -93,7 +96,7 @@ test "direct and extension lookups preserve non-cascading subtable order" {
         0,
         .{},
     );
-    try std.testing.expectEqualSlices(u16, &.{20}, glyphs.items);
+    try std.testing.expectEqualSlices(u16, &.{ 20, 30 }, glyphs.items);
 }
 
 test "single lookup heap scratch releases on malformed later subtable" {

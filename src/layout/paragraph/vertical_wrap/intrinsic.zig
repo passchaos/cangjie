@@ -35,11 +35,12 @@ pub fn measure(
                 options.inline_objects,
                 glyph.cluster,
             ) orelse return error.InvalidInlineObjects;
-            if (object.kind != .in_flow) {
+            if (object.kind == .custom_out_of_flow) {
                 return error.UnsupportedVerticalParagraphOptions;
             }
-            glyph.x_advance = object.width;
-            glyph.y_advance = object.height;
+            const in_flow = object.kind == .in_flow;
+            glyph.x_advance = if (in_flow) object.width else 0;
+            glyph.y_advance = if (in_flow) object.height else 0;
             continue;
         }
         if (!glyph.isTab()) {

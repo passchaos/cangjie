@@ -594,16 +594,18 @@ positive-down inline advance. Vertical objects are centered inside the final
 column width and positioned at the current y pen. They participate in safe
 wrapping, caret/selection and owned TextGeometry, retained geometry-only
 reflow, attributed metadata, and renderer object draw commands without
-acquiring font-run ownership. `.out_of_flow` and `.custom_out_of_flow` objects,
-absolute placements, and resolver-driven exclusions remain explicitly
-unsupported in vertical paragraphs.
+acquiring font-run ownership. Ordinary `.out_of_flow` objects also produce a
+source-anchor fallback at the current column y pen while their marker keeps
+zero inline/block occupancy; paint bounds may extend beyond paragraph metrics.
+`.custom_out_of_flow`, absolute placements, and resolver-driven exclusions
+remain explicitly unsupported in vertical paragraphs.
 
 This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
 axes, vertical paragraph validation rejects bottom-to-top/RTL text, bidi
 controls, justification,
 ellipsis/line limits, negative glyph spacing, exclusions/line regions, inline
-object out-of-flow placement, hyphenation,
+object custom placement/resolution, hyphenation,
 optical punctuation, and the resumable breaker. Retained whole-paragraph
 layout and intrinsic inline-size measurement are supported and restore the
 pristine vertical shaping snapshot between calls. Returning a concrete

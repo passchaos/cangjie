@@ -324,7 +324,7 @@ fn validateVerticalForText(text: []const u8, options: Options) !void {
         return error.UnsupportedVerticalParagraphOptions;
     }
     for (options.inline_objects) |object| {
-        if (object.kind != .in_flow) {
+        if (object.kind == .custom_out_of_flow) {
             return error.UnsupportedVerticalParagraphOptions;
         }
     }

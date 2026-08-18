@@ -17,8 +17,8 @@ pub const Kind = enum {
     /// axes: width is horizontal inline or vertical block extent, while height
     /// is horizontal block or vertical inline extent.
     in_flow,
-    /// The object is positioned at its source anchor without affecting line
-    /// width or line height.
+    /// The object is positioned at its source anchor without affecting inline
+    /// or block occupancy in either writing mode.
     out_of_flow,
     /// The object yields through `paragraph.OutOfFlowResolver`.
     ///

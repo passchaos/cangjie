@@ -41,14 +41,15 @@ pub fn build(
                 options.inline_objects,
                 glyph.cluster,
             ) orelse return error.InvalidInlineObjects;
-            if (object.kind != .in_flow) {
+            if (object.kind == .custom_out_of_flow) {
                 return error.UnsupportedVerticalParagraphOptions;
             }
             // Retained reflow may change object geometry while preserving the
             // source anchor. Refresh both physical dimensions from the current
             // request rather than trusting the shaping snapshot.
-            glyph.x_advance = object.width;
-            glyph.y_advance = object.height;
+            const in_flow = object.kind == .in_flow;
+            glyph.x_advance = if (in_flow) object.width else 0;
+            glyph.y_advance = if (in_flow) object.height else 0;
             continue;
         }
         if (!glyph.isTab()) {
@@ -206,7 +207,9 @@ fn appendColumn(
                 options.inline_objects,
                 glyph.cluster,
             ) orelse return error.InvalidInlineObjects;
-            block_size = @max(block_size, object.width);
+            if (object.kind == .in_flow) {
+                block_size = @max(block_size, object.width);
+            }
         }
     }
     const resolved_alignment = if (vertical_tabs.contains(

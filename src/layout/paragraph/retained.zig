@@ -98,7 +98,14 @@ pub const ShapedParagraph = struct {
             return error.ParagraphShapingOptionsChanged;
         }
         if (options.writing_mode.isVertical()) {
-            return vertical_columns.contentWidths(self.glyphs, options);
+            return vertical_columns.contentWidths(
+                self.allocator,
+                self.text,
+                self.glyphs,
+                self.grapheme_clusters,
+                self.line_breaks,
+                options,
+            );
         }
         return content_widths.calculate(
             self.allocator,

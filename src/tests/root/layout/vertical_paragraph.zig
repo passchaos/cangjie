@@ -6,4 +6,5 @@ test {
     _ = @import("vertical_paragraph/retained.zig");
     _ = @import("vertical_paragraph/interaction.zig");
     _ = @import("vertical_paragraph/styled.zig");
+    _ = @import("vertical_paragraph/wrapping.zig");
 }

@@ -1,0 +1,232 @@
+//! Greedy inline-axis selection for vertical paragraph columns.
+//!
+//! Physical RL/LR placement and line-box metrics remain in
+//! `vertical_columns.zig`; this module selects only safe source/glyph ranges.
+
+const std = @import("std");
+const candidates = @import("candidates.zig");
+const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
+const intrinsic = @import("intrinsic.zig");
+const line_break_opportunity = @import("../../line_break/opportunity.zig");
+const paragraph_options = @import("../options.zig");
+const shared = @import("shared.zig");
+const unicode = @import("../../../unicode.zig");
+
+pub const Range = shared.Range;
+pub const intrinsicWidths = intrinsic.measure;
+
+pub fn build(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    glyphs: []const GlyphPosition,
+    graphemes: []const unicode.GraphemeCluster,
+    breaks: []const line_break_opportunity.Opportunity,
+    options: paragraph_options.Options,
+) ![]Range {
+    var output = std.ArrayList(Range).empty;
+    errdefer output.deinit(allocator);
+    const prefix = try allocator.alloc(f32, glyphs.len + 1);
+    defer allocator.free(prefix);
+    shared.fillPrefix(prefix, glyphs);
+
+    var segment_start: usize = 0;
+    var segment_byte_start: usize = 0;
+    var index: usize = 0;
+    while (index < glyphs.len) : (index += 1) {
+        if (!isMandatory(glyphs[index].codepoint)) continue;
+        const break_end = if (glyphs[index].codepoint == '\r' and
+            index + 1 < glyphs.len and
+            glyphs[index + 1].codepoint == '\n')
+            index + 2
+        else
+            index + 1;
+        const hard_byte_end = glyphs[break_end - 1].sourceByteEnd();
+        try appendSegment(
+            &output,
+            allocator,
+            glyphs,
+            prefix,
+            graphemes,
+            breaks,
+            options,
+            segment_start,
+            index,
+            segment_byte_start,
+            glyphs[index].cluster,
+        );
+        output.items[output.items.len - 1].byte_end = hard_byte_end;
+        segment_start = break_end;
+        segment_byte_start = hard_byte_end;
+        index = break_end - 1;
+    }
+    try appendSegment(
+        &output,
+        allocator,
+        glyphs,
+        prefix,
+        graphemes,
+        breaks,
+        options,
+        segment_start,
+        glyphs.len,
+        segment_byte_start,
+        text.len,
+    );
+    return output.toOwnedSlice(allocator);
+}
+
+fn appendSegment(
+    output: *std.ArrayList(Range),
+    allocator: std.mem.Allocator,
+    glyphs: []const GlyphPosition,
+    prefix: []const f32,
+    graphemes: []const unicode.GraphemeCluster,
+    breaks: []const line_break_opportunity.Opportunity,
+    options: paragraph_options.Options,
+    segment_start: usize,
+    segment_end: usize,
+    segment_byte_start: usize,
+    segment_byte_end: usize,
+) !void {
+    if (segment_start >= segment_end) {
+        try output.append(allocator, .{
+            .glyph_start = segment_start,
+            .glyph_end = segment_start,
+            .byte_start = segment_byte_start,
+            .byte_end = segment_byte_end,
+        });
+        return;
+    }
+
+    const limit = if (options.wrap_mode == .word and
+        options.max_width > 0 and
+        std.math.isFinite(options.max_width))
+        options.max_width
+    else
+        std.math.inf(f32);
+    if (!std.math.isFinite(limit)) {
+        try output.append(allocator, .{
+            .glyph_start = segment_start,
+            .glyph_end = segment_end,
+            .byte_start = segment_byte_start,
+            .byte_end = segment_byte_end,
+        });
+        return;
+    }
+
+    var items = std.ArrayList(shared.SoftCandidate).empty;
+    defer items.deinit(allocator);
+    try candidates.collect(
+        &items,
+        allocator,
+        glyphs,
+        graphemes,
+        breaks,
+        segment_start,
+        segment_end,
+        segment_byte_start,
+        segment_byte_end,
+    );
+    var glyph_start = segment_start;
+    var byte_start = segment_byte_start;
+    while (glyph_start < segment_end) {
+        if (shared.advance(prefix, glyph_start, segment_end) <= limit) {
+            try output.append(allocator, .{
+                .glyph_start = glyph_start,
+                .glyph_end = segment_end,
+                .byte_start = byte_start,
+                .byte_end = segment_byte_end,
+            });
+            return;
+        }
+        const overflow = firstOverflow(
+            prefix,
+            glyph_start,
+            segment_end,
+            limit,
+        );
+        const selected = candidates.lastFitting(
+            items.items,
+            prefix,
+            glyph_start,
+            overflow,
+            limit,
+        ) orelse candidates.emergency(
+            glyphs,
+            prefix,
+            graphemes,
+            glyph_start,
+            segment_end,
+            segment_byte_end,
+            overflow,
+            limit,
+        );
+        try output.append(allocator, .{
+            .glyph_start = glyph_start,
+            .glyph_end = selected.glyph_end,
+            .byte_start = byte_start,
+            .byte_end = selected.byte_end,
+        });
+        glyph_start = selected.next_glyph_start;
+        byte_start = selected.byte_end;
+    }
+}
+
+fn firstOverflow(
+    prefix: []const f32,
+    glyph_start: usize,
+    glyph_end: usize,
+    limit: f32,
+) usize {
+    var index = glyph_start + 1;
+    while (index <= glyph_end and
+        shared.advance(prefix, glyph_start, index) <= limit)
+    {
+        index += 1;
+    }
+    return @min(index, glyph_end);
+}
+
+fn isMandatory(codepoint: u21) bool {
+    return switch (unicode.lineBreakClassForCodepoint(codepoint)) {
+        .mandatory, .carriage_return, .line_feed, .next_line => true,
+        else => false,
+    };
+}
+
+test "vertical emergency break defers across unsafe output boundaries" {
+    const glyphs = [_]GlyphPosition{
+        .{
+            .glyph_id = 1,
+            .codepoint = 'A',
+            .cluster = 0,
+            .source_byte_len = 1,
+            .x_advance = 0,
+            .y_advance = 20,
+        },
+        .{
+            .glyph_id = 1,
+            .codepoint = 'A',
+            .cluster = 1,
+            .source_byte_len = 1,
+            .x_advance = 0,
+            .y_advance = 20,
+            .flags = .{ .unsafe_to_break_before = true },
+        },
+    };
+    const graphemes = [_]unicode.GraphemeCluster{
+        .{ .byte_start = 0, .byte_len = 1 },
+        .{ .byte_start = 1, .byte_len = 1 },
+    };
+    const ranges = try build(
+        std.testing.allocator,
+        "AA",
+        &glyphs,
+        &graphemes,
+        &.{},
+        .{ .max_width = 20.1, .writing_mode = .vertical_lr },
+    );
+    defer std.testing.allocator.free(ranges);
+    try std.testing.expectEqual(@as(usize, 1), ranges.len);
+    try std.testing.expectEqual(@as(usize, 2), ranges[0].glyph_end);
+}

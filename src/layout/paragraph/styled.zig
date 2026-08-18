@@ -258,8 +258,12 @@ const Driver = struct {
         defer self.buffer.allocator.free(intrinsic_breaks);
         self.styled.content_widths =
             if (resolved_options.writing_mode.isVertical())
-                vertical_columns.contentWidths(
+                try vertical_columns.contentWidths(
+                    self.buffer.allocator,
+                    self.text,
                     self.buffer.glyphs.items,
+                    intrinsic_graphemes,
+                    intrinsic_breaks,
                     resolved_options,
                 )
             else

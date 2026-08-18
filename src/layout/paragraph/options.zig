@@ -129,12 +129,11 @@ pub const Options = struct {
     direction: pipeline_types.TextDirection = .ltr,
     /// Physical writing mode shared by shaping and final paragraph geometry.
     ///
-    /// The initial vertical paragraph contract is deliberately hard-break-only:
-    /// every segment is one top-to-bottom column, while `vertical_rl` and
-    /// `vertical_lr` select physical column progression. `max_width` remains
-    /// the inline-size measure (column height) and `.no_wrap` may overflow it.
-    /// Unsupported combinations are rejected rather than silently applying
-    /// horizontal wrapping or interaction geometry.
+    /// The vertical paragraph contract wraps top-to-bottom columns against
+    /// `max_width` as their inline-size/height measure. It prefers safe UAX #14
+    /// opportunities and uses grapheme-safe emergency boundaries when an
+    /// unbreakable fragment overflows; `.no_wrap` keeps only hard breaks.
+    /// `vertical_rl` and `vertical_lr` select physical column progression.
     writing_mode: pipeline_types.WritingMode = .horizontal_tb,
     text_orientation: pipeline_types.TextOrientation = .mixed,
     max_lines: ?usize = null,
@@ -289,11 +288,6 @@ pub fn shapeOptions(options: Options) shaping_plan.ShapeOptions {
 /// become an accidental vertical no-op.
 fn validateVerticalForText(text: []const u8, options: Options) !void {
     if (options.direction != .ltr or
-        line_break_policy.anyWrappingEnabled(
-            text.len,
-            defaultLineBreakPolicy(options),
-            options.line_break_policy_ranges,
-        ) or
         options.line_break_strategy != .greedy or
         options.alignment != .start or
         options.max_lines != null or
@@ -458,14 +452,14 @@ test "JSTF extender limit is independent from generic Kashida" {
 test "vertical paragraph validation admits only implemented columns" {
     try validateForText("AA", .{
         .max_width = 100,
-        .wrap_mode = .no_wrap,
         .writing_mode = .vertical_rl,
     });
     try std.testing.expectError(
         error.UnsupportedVerticalParagraphOptions,
         validateForText("AA", .{
             .max_width = 100,
-            .wrap_mode = .word,
+            .wrap_mode = .no_wrap,
+            .word_break = .break_all,
             .writing_mode = .vertical_rl,
         }),
     );

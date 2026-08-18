@@ -101,4 +101,26 @@ test "styled vertical paragraph shares shaping and intrinsic y geometry" {
         columns.glyphs[1].y_advance,
         0.001,
     );
+
+    const wrapped = try TextShaper.layoutStyledParagraphUtf8(
+        FontCascade.init(&.{&font}),
+        &buffer,
+        &styled,
+        "A A A",
+        20,
+        &.{.{
+            .byte_start = 0,
+            .byte_len = 5,
+            .style_index = 1,
+            .font_size = 20,
+        }},
+        .{
+            .max_width = 20.1,
+            .writing_mode = .vertical_lr,
+            .text_orientation = .upright,
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 3), wrapped.lines.len);
+    const wrapped_widths = styled.contentWidths().?;
+    try std.testing.expect(wrapped_widths.max > wrapped_widths.min);
 }

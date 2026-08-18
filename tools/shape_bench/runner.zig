@@ -311,8 +311,12 @@ fn glyphYAdvances(allocator: std.mem.Allocator, font: *const cangjie.font.Face, 
     const values = try allocator.alloc(i32, glyphs.len);
     for (glyphs, values) |glyph, *value| {
         const runtime_value = fontUnitPosition(font, font_size, glyph.y_advance);
-        value.* = if (usesHarfBuzzVerticalSummary(options.direction) and glyph.isVertical() and runtime_value > 0)
-            try harfBuzzVerticalAdvance(font, glyph)
+        value.* = if (usesHarfBuzzVerticalSummary(options.direction) and
+            glyph.isVertical())
+            if (usesSyntheticVerticalSpaceAdvance(glyph.codepoint))
+                -runtime_value
+            else
+                try harfBuzzVerticalAdvance(font, glyph)
         else
             runtime_value;
     }
@@ -492,6 +496,19 @@ fn harfBuzzVerticalAdvance(font: *const cangjie.font.Face, glyph: cangjie.shapin
 
 fn defaultVerticalAdvance(font: *const cangjie.font.Face) i32 {
     return @as(i32, font.properties().ascender) - @as(i32, font.properties().descender);
+}
+
+fn usesSyntheticVerticalSpaceAdvance(codepoint: u21) bool {
+    return switch (codepoint) {
+        0x0020,
+        0x00a0,
+        0x2000...0x200a,
+        0x202f,
+        0x205f,
+        0x3000,
+        => true,
+        else => false,
+    };
 }
 
 fn fontUnitPosition(font: *const cangjie.font.Face, font_size: f32, value: f32) i32 {

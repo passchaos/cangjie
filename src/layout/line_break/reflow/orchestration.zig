@@ -59,6 +59,8 @@ pub fn buildWithJstfShrinkage(
             text,
             options,
             default_metrics,
+            analyzed_graphemes,
+            analyzed_line_breaks,
         );
     }
     if (options.line_break_strategy == .balanced and

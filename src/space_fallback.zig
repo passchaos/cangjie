@@ -64,7 +64,10 @@ pub fn advanceHeight(font: *const Font, codepoint: u21, glyph_id: GlyphId, defau
         .punctuation => default_advance,
         .narrow => @divTrunc(default_advance, 2),
     };
-    return -length;
+    // Public shaping uses target-space vertical advances: positive values move
+    // the pen down a TTB column. HarfBuzz's negative font-space convention is
+    // applied only by the parity-summary adapter, just like ordinary vmtx.
+    return length;
 }
 
 pub fn mayNeedHorizontalAdvanceFallback(codepoint: u21) bool {

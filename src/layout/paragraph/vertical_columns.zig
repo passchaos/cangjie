@@ -1,24 +1,28 @@
-//! Hard-break vertical paragraph columns.
+//! Vertical paragraph columns.
 //!
 //! This is intentionally separate from horizontal greedy reflow. Reusing the
 //! latter by renaming "width" variables would leave tabs, exclusions,
 //! justification, truncation, and rollback checkpoints coupled to physical x.
-//! The public validator admits only explicit hard breaks and no width-induced
-//! wrapping. That bounded surface lets this module establish correct physical
-//! RL/LR column progression while the remaining features migrate to explicit
-//! flow axes independently.
+//! Width-induced selection is delegated to the focused `vertical_wrap`
+//! modules. This owner applies resolved metrics and physical RL/LR progression
+//! without importing horizontal regions, tabs, justification, or rollback.
 
 const axes = @import("axes.zig");
 const geometry = @import("../line_break/reflow/geometry.zig");
 const opportunities = @import("../line_break/reflow/opportunities.zig");
+const line_break_opportunity = @import("../line_break/opportunity.zig");
 const paragraph_options = @import("options.zig");
+const vertical_wrap = @import("vertical_wrap.zig");
 const GlyphPosition = @import("../glyph_position.zig").GlyphPosition;
+const unicode = @import("../../unicode.zig");
 
 pub fn build(
     buffer: anytype,
     text: []const u8,
     options: paragraph_options.Options,
     default_metrics: geometry.BaselineMetrics,
+    analyzed_graphemes: ?[]const unicode.GraphemeCluster,
+    analyzed_line_breaks: ?[]const line_break_opportunity.Opportunity,
 ) !void {
     buffer.lines.clearRetainingCapacity();
 
@@ -36,61 +40,71 @@ pub fn build(
         );
     }
 
-    var glyph_start: usize = 0;
-    var byte_start: usize = 0;
-    var index: usize = 0;
-    while (index < buffer.glyphs.items.len) : (index += 1) {
-        if (!opportunities.isMandatory(
-            buffer.glyphs.items[index].codepoint,
-        )) continue;
-        const break_end = if (buffer.glyphs.items[index].codepoint == '\r' and
-            index + 1 < buffer.glyphs.items.len and
-            buffer.glyphs.items[index + 1].codepoint == '\n')
-            index + 2
-        else
-            index + 1;
+    var owned_graphemes: ?[]unicode.GraphemeCluster = null;
+    defer if (owned_graphemes) |items| buffer.allocator.free(items);
+    const graphemes = analyzed_graphemes orelse graphemes: {
+        owned_graphemes = try unicode.itemizeGraphemeClusters(
+            buffer.allocator,
+            text,
+        );
+        break :graphemes owned_graphemes.?;
+    };
+    var owned_breaks: ?[]line_break_opportunity.Opportunity = null;
+    defer if (owned_breaks) |items| buffer.allocator.free(items);
+    const breaks = analyzed_line_breaks orelse breaks: {
+        const unicode_breaks = try unicode.itemizeLineBreaks(
+            buffer.allocator,
+            text,
+        );
+        defer buffer.allocator.free(unicode_breaks);
+        owned_breaks = try buffer.allocator.alloc(
+            line_break_opportunity.Opportunity,
+            unicode_breaks.len,
+        );
+        for (unicode_breaks, owned_breaks.?) |item, *output| {
+            output.* = line_break_opportunity.fromUnicode(item);
+        }
+        break :breaks owned_breaks.?;
+    };
+    const ranges = try vertical_wrap.build(
+        buffer.allocator,
+        text,
+        buffer.glyphs.items,
+        graphemes,
+        breaks,
+        options,
+    );
+    defer buffer.allocator.free(ranges);
+    for (ranges) |range| {
         try appendColumn(
             buffer,
             options,
             default_metrics,
-            glyph_start,
-            index,
-            byte_start,
-            buffer.glyphs.items[break_end - 1].sourceByteEnd(),
+            range.glyph_start,
+            range.glyph_end,
+            range.byte_start,
+            range.byte_end,
         );
-        glyph_start = break_end;
-        byte_start = buffer.glyphs.items[break_end - 1].sourceByteEnd();
-        index = break_end - 1;
     }
-    try appendColumn(
-        buffer,
-        options,
-        default_metrics,
-        glyph_start,
-        buffer.glyphs.items.len,
-        byte_start,
-        text.len,
-    );
     placeColumns(buffer.lines.items, options.writing_mode);
 }
 
 pub fn contentWidths(
+    allocator: @import("std").mem.Allocator,
+    text: []const u8,
     glyphs: []const GlyphPosition,
+    graphemes: []const unicode.GraphemeCluster,
+    breaks: []const line_break_opportunity.Opportunity,
     options: paragraph_options.Options,
-) @import("../types/paragraph.zig").ContentWidths {
-    var widest: f32 = 0;
-    var current: f32 = 0;
-    for (glyphs) |glyph| {
-        if (opportunities.isMandatory(glyph.codepoint)) {
-            widest = @max(widest, current);
-            current = 0;
-            continue;
-        }
-        current += glyph.y_advance +
-            geometry.spacingForGlyph(glyph.codepoint, options);
-    }
-    widest = @max(widest, current);
-    return .{ .min = widest, .max = widest };
+) !@import("../types/paragraph.zig").ContentWidths {
+    return vertical_wrap.intrinsicWidths(
+        allocator,
+        text,
+        glyphs,
+        graphemes,
+        breaks,
+        options,
+    );
 }
 
 fn appendColumn(

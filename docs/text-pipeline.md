@@ -547,23 +547,24 @@ origins. Grayscale, color, and hinted renderers therefore consume the same
 public offset contract, and parity tools no longer reconstruct ordinary
 vertical origins out of band.
 
-Paragraph layout now admits an explicit first vertical writing contract through
-`ParagraphOptions.writing_mode` and `text_orientation`. A `.no_wrap` request
-shapes each hard-break segment as one top-to-bottom column, treats `max_width`
-as the inline-size/column-height measure, and reports physical column bounds
-(`width` is block size, `height` is inline extent). `vertical_rl` places
-source-order columns from right to left; `vertical_lr` places them left to
-right. This block progression is independent from HarfBuzz-style BTT, which
-remains an inline-direction request rather than a CSS writing mode. Paragraph
-hit testing, caret/selection rectangles, owned `TextGeometry`, debug overlays,
-and renderer draw lists all consume the same y-axis pen. Public draw-list glyphs
-therefore retain `y_advance` and orientation rather than flattening paragraph
-output back to horizontal coordinates.
+Paragraph layout now admits vertical writing through
+`ParagraphOptions.writing_mode` and `text_orientation`. `max_width` is the
+inline-size/column-height measure. Greedy `.word` wrapping prefers reusable
+UAX #14 opportunities and falls back to extended-grapheme boundaries that also
+pass the shaper's `unsafe-to-break` contract; `.no_wrap` keeps only hard
+breaks. `vertical_rl` places source-order columns from right to left, while
+`vertical_lr` places them left to right. This block progression is independent
+from HarfBuzz-style BTT, which remains an inline-direction request rather than
+a CSS writing mode. Paragraph hit testing, caret/selection rectangles, owned
+`TextGeometry`, debug overlays, and renderer draw lists all consume the same
+y-axis pen. Public draw-list glyphs therefore retain `y_advance` and
+orientation rather than flattening paragraph output back to horizontal
+coordinates.
 
 This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
-axes, vertical paragraph validation rejects soft wrapping,
-bottom-to-top/RTL text, bidi controls, tabs, justification,
+axes, vertical paragraph validation rejects bottom-to-top/RTL text, bidi
+controls, tabs, justification,
 ellipsis/line limits, whitespace collapsing, negative spacing, indentation,
 paragraph spacing, exclusions/line regions, inline objects, hyphenation,
 optical punctuation, and the resumable breaker. Retained whole-paragraph
@@ -573,6 +574,13 @@ pristine vertical shaping snapshot between calls. Returning a concrete
 `UnsupportedVerticalParagraphBreaker` error is part of this boundary: an
 unsupported request must never fall through the horizontal x-axis machinery
 and produce plausible but false geometry.
+
+Vertical Unicode-space fallback follows the library's public positive-down
+`y_advance` convention, including synthesized U+2000..U+200A/U+202F/U+205F/
+U+3000 lengths. The HarfBuzz parity adapter converts those final advances back
+to negative font-space output; ordinary glyphs still use their authored vmtx
+oracle. This keeps wrapping, rendering, and parity from assigning opposite pen
+directions to the same space glyph.
 
 Before discrete Kashida or spacing expansion, a justified non-terminal line
 may also reshape through one variable-font expansion axis. Cangjie prefers an

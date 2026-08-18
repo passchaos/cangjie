@@ -4,6 +4,7 @@ const std = @import("std");
 
 const geometry = @import("geometry.zig");
 const regions = @import("regions.zig");
+const tabs = @import("../../paragraph/tabs.zig");
 const run_types = @import("../../types/runs.zig");
 
 pub fn apply(
@@ -130,9 +131,17 @@ fn appendEllipsisToLastLine(
         line.glyph_start,
         line.glyph_start + line.glyph_len,
     ).len;
+    const final_alignment =
+        if (tabs.contains(
+            buffer.glyphs.items[line.glyph_start .. line.glyph_start + line.glyph_len],
+        ))
+            line.resolved_alignment orelse alignment
+        else
+            alignment;
+    line.resolved_alignment = final_alignment;
     line.x = region.x + geometry.alignedLineX(
         @min(line.width, region.width),
         region.width,
-        alignment,
+        final_alignment,
     );
 }

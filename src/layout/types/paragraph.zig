@@ -69,6 +69,12 @@ pub const ParagraphLine = struct {
     /// Physical x and measure of the selected contiguous line fragment.
     region_x: f32 = 0,
     region_width: f32 = 0,
+    /// Final physical alignment selected for this line.
+    ///
+    /// Reflow resolves paragraph `.start`/`.end` and pins tab-ruler lines to
+    /// logical start. Null is the compatibility sentinel for manually
+    /// constructed lines whose post-processing should use paragraph options.
+    resolved_alignment: ?TextAlign = null,
     /// Portion of edge glyph advance protruding before the physical line box.
     ///
     /// Glyph positions and caret geometry still include this ink. `x` remains

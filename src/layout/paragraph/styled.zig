@@ -14,6 +14,8 @@ const styled_reshape = @import("reshape/styled.zig");
 const punctuation_compression = @import("../punctuation/compression.zig");
 const punctuation_hanging = @import("../punctuation/hanging.zig");
 const paragraph_options = @import("options.zig");
+const source_items = @import("source_items.zig");
+const tabs = @import("tabs.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 const run_types = @import("../types/runs.zig");
 const styled_bidi = @import("../styled_bidi.zig");
@@ -107,41 +109,43 @@ const Driver = struct {
                 self.cascade.fonts,
         );
         const run_start = self.buffer.runs.items.len;
-        var source_start = byte_start;
-        for (self.options.inline_objects) |object| {
-            if (object.byte_index < byte_start) continue;
-            if (object.byte_index >= byte_end) break;
-            if (source_start < object.byte_index) {
-                try self.shapeTextRange(
-                    item_cascade,
-                    source_start,
-                    object.byte_index,
-                    inferred_script,
-                    span,
-                );
+        var items = source_items.Cursor.init(
+            self.text,
+            self.options.inline_objects,
+            byte_start,
+            byte_end,
+        );
+        while (items.next()) |item| {
+            switch (item) {
+                .text => |range| {
+                    try self.shapeTextRange(
+                        item_cascade,
+                        range.start,
+                        range.end,
+                        inferred_script,
+                        span,
+                    );
+                },
+                .object => |object| {
+                    const object_advance =
+                        if (object.kind == .in_flow) object.width else 0;
+                    try self.buffer.glyphs.append(self.buffer.allocator, .{
+                        .glyph_id = 0,
+                        .codepoint = inline_object.object_replacement_character,
+                        .cluster = object.byte_index,
+                        .source_byte_len = inline_object.object_replacement_utf8.len,
+                        .x_advance = object_advance,
+                        .flags = .{ .inline_object = true },
+                    });
+                    self.pen.x += object_advance;
+                },
+                .tab => |tab_index| {
+                    try self.buffer.glyphs.append(
+                        self.buffer.allocator,
+                        tabs.marker(tab_index),
+                    );
+                },
             }
-            const object_advance =
-                if (object.kind == .in_flow) object.width else 0;
-            try self.buffer.glyphs.append(self.buffer.allocator, .{
-                .glyph_id = 0,
-                .codepoint = inline_object.object_replacement_character,
-                .cluster = object.byte_index,
-                .source_byte_len = inline_object.object_replacement_utf8.len,
-                .x_advance = object_advance,
-                .flags = .{ .inline_object = true },
-            });
-            self.pen.x += object_advance;
-            source_start =
-                object.byte_index + inline_object.object_replacement_utf8.len;
-        }
-        if (source_start < byte_end) {
-            try self.shapeTextRange(
-                item_cascade,
-                source_start,
-                byte_end,
-                inferred_script,
-                span,
-            );
         }
         if (span.faces != null) self.normalizeNewRunFontIndices(run_start);
     }
@@ -329,6 +333,7 @@ const Driver = struct {
             );
         }
         punctuation_hanging.apply(self.buffer, self.options);
+        bidi_reorder.recomputeRunOffsets(self.buffer);
         try inline_object.position(
             self.buffer,
             self.options.inline_objects,

@@ -110,9 +110,16 @@ than embedded in the shaping implementation:
 - `root.zig` owns the greedy line-selection state machine.
 - `opportunities.zig` maps streaming or retained Unicode opportunities onto
   shaped output while enforcing `unsafe-to-break`.
-- `geometry.zig` owns line struts, alignment, indentation, tabs, spacing, and
-  run ranges.
+- `geometry.zig` owns line struts, alignment, indentation, spacing, and run
+  ranges.
 - `truncation.zig` owns line limits and plain-text ellipsis materialization.
+
+Paragraph-specific source atoms and rulers live with paragraph ownership:
+
+- `source_items.zig` splits ordinary UTF-8 ranges from inline-object and tab
+  markers before font shaping.
+- `tabs.zig` owns explicit tab-ruler validation, synthetic markers, advance
+  resolution, and repeating fallback intervals.
 
 Paragraph request and ownership policy is organized under
 `src/layout/paragraph/`:
@@ -611,6 +618,28 @@ widths, line limits, tabs, spacing, and ellipsis can be applied repeatedly
 without another GSUB/GPOS pass and without accumulating mutations. Reflow
 rejects direction, script, language, feature, or variation changes because
 those options require reshaping.
+
+`ParagraphOptions.tab_stops` adds an explicit paragraph tab ruler. Each
+`TabStop.position` is a finite, positive, strictly increasing advance from the
+selected line fragment's logical inline start; this keeps the same ruler
+meaning for LTR and RTL and composes with first-line indentation and rectangular
+exclusions. Tabs move to the first explicit position ahead of the current
+logical pen. After the final explicit stop, the existing `tab_width × ordinary
+space advance` interval repeats from that final position. An empty ruler
+therefore preserves the legacy repeating-grid behavior.
+
+`TabStop.alignment` makes following-field alignment part of the concrete ruler
+record; the first public level accepts `.start`. Center, physical left/right,
+and decimal-field modes require measuring the complete following field and are
+not silently approximated by this implementation. A visible line containing a
+tab is pinned to logical paragraph start even when paragraph alignment requests
+center, right, or justification; otherwise moving the complete line after
+resolving the ruler would invalidate every tab column. The line persists that
+resolved physical alignment so ellipsis and optical-punctuation post-processing
+cannot move it again. Tabs remain source/caret/selection atoms but the render
+bridge suppresses their font glyph, and styled word spacing never shifts the
+following field past its selected stop. Retained reflow may change the ruler
+without reshaping.
 
 `cangjie.shaping.Engine` is the public ownership boundary for this pipeline.
 It is a concrete value type that owns reusable output/scratch arrays

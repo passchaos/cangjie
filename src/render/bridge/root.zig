@@ -314,6 +314,7 @@ const BridgeBuilder = struct {
             if (start >= end) continue;
             const command_start = self.glyphs.items.len;
             try self.appendGlyphsInRange(run, start, end, line, baseline_y);
+            if (self.glyphs.items.len == command_start) continue;
             try self.runs.append(self.allocator, .{
                 .font = run.font,
                 .font_size = run.font_size,
@@ -324,7 +325,7 @@ const BridgeBuilder = struct {
                 ),
                 .glyph_start = command_start,
                 .glyph_len = self.glyphs.items.len - command_start,
-                .x = self.options.origin_x + line.x + advanceBefore(self.paragraph.glyphs[line.glyph_start..line_glyph_end], start - line.glyph_start),
+                .x = self.glyphs.items[command_start].x,
                 .baseline_y = baseline_y,
                 .line_index = line_index,
                 .render_mode = self.options.render_mode,
@@ -344,6 +345,13 @@ const BridgeBuilder = struct {
         const line_glyph_end = line.glyph_start + line.glyph_len;
         var pen_x = self.options.origin_x + line.x + advanceBefore(self.paragraph.glyphs[line.glyph_start..line_glyph_end], start - line.glyph_start);
         for (self.paragraph.glyphs[start..end]) |glyph| {
+            if (glyph.isTab()) {
+                // Tabs are source/caret atoms whose advance positions the next
+                // field. They do not request a font glyph, even if the active
+                // cmap happens to map U+0009 to a visible outline.
+                pen_x += glyph.x_advance;
+                continue;
+            }
             const output_index = self.glyphs.items.len;
             const color_index: ?usize = if (self.options.include_color_glyphs)
                 try self.appendColorGlyph(

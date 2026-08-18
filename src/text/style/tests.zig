@@ -3,6 +3,7 @@
 const std = @import("std");
 const style_model = @import("root.zig");
 const inline_object = @import("../../layout/inline_object/root.zig");
+const paragraph_options = @import("../../layout/paragraph/options.zig");
 const paragraph_types = @import("../../layout/types/paragraph.zig");
 const pipeline_types = @import("../../shaping/pipeline/types.zig");
 const hyphenation = @import("../hyphenation/root.zig");
@@ -89,6 +90,10 @@ test "paragraph style converts to paragraph options" {
             .height = 4,
         },
     };
+    const tab_stops = [_]paragraph_options.TabStop{
+        .{ .position = 24 },
+        .{ .position = 72 },
+    };
     const style = ParagraphStyle{
         .direction = .rtl,
         .text_align = .center,
@@ -97,6 +102,7 @@ test "paragraph style converts to paragraph options" {
         .wrap_mode = .no_wrap,
         .overflow_mode = .ellipsis,
         .tab_width = 2,
+        .tab_stops = &tab_stops,
         .first_line_indent = 10,
         .paragraph_spacing = 4,
         .out_of_flow_placements = &.{placement},
@@ -126,6 +132,11 @@ test "paragraph style converts to paragraph options" {
     try std.testing.expectEqual(@as(usize, 2), options.max_lines.?);
     try std.testing.expect(options.ellipsis);
     try std.testing.expectEqual(@as(usize, 2), options.tab_width);
+    try std.testing.expectEqualSlices(
+        @TypeOf(tab_stops[0]),
+        &tab_stops,
+        options.tab_stops,
+    );
     try std.testing.expectEqual(&dictionary, options.word_break_dictionary.?);
     try std.testing.expectEqual(
         &hyphenation_dictionary,

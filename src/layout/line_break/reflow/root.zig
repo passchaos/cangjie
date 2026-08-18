@@ -18,6 +18,7 @@ const opportunities = @import("opportunities.zig");
 const punctuation_compression = @import("../../punctuation/compression.zig");
 const punctuation_hanging = @import("../../punctuation/hanging.zig");
 const regions = @import("regions.zig");
+const tabs = @import("../../paragraph/tabs.zig");
 const segmentation = @import("../../../text/segmentation/root.zig");
 const shaped_boundary = @import("../shaped_boundary.zig");
 const truncation = @import("truncation.zig");
@@ -101,7 +102,7 @@ pub fn buildWithJstfShrinkage(
         std.ArrayList(automatic_hyphens.Selected).empty;
     defer selected_automatic_hyphens.deinit(buffer.allocator);
     const space_advance = geometry.defaultSpaceAdvance(buffer.glyphs.items);
-    const tab_stop =
+    const fallback_tab_interval =
         @as(f32, @floatFromInt(@max(1, options.tab_width))) * space_advance;
 
     // Retained paragraphs carry width-independent grapheme and line-break
@@ -186,7 +187,11 @@ pub fn buildWithJstfShrinkage(
                 line_width,
                 line_info,
                 y,
-                alignment,
+                lineAlignment(
+                    buffer.glyphs.items[line_start..index],
+                    alignment,
+                    options.direction,
+                ),
                 line_region,
                 null,
             );
@@ -231,15 +236,21 @@ pub fn buildWithJstfShrinkage(
             continue :glyph_loop;
         }
 
-        if (glyph.codepoint == '\t') {
+        if (glyph.isTab()) {
             // Tabs depend on the current line pen, not only font metrics.
-            glyph.x_advance = geometry.tabAdvance(
+            glyph.x_advance = tabs.advance(
                 line_width,
-                tab_stop,
+                options.tab_stops,
+                fallback_tab_interval,
                 space_advance,
             );
         }
-        glyph.x_advance += geometry.spacingForGlyph(glyph.codepoint, options);
+        if (!glyph.isTab()) {
+            glyph.x_advance += geometry.spacingForGlyph(
+                glyph.codepoint,
+                options,
+            );
+        }
         line_width += glyph.x_advance;
         if (uses_exclusions) {
             const next_region_height = @max(
@@ -504,10 +515,19 @@ pub fn buildWithJstfShrinkage(
             // selected source prefix. Justification must therefore use the
             // exact region re-resolved for the committed line, not the preview.
             const justification_target =
-                if (justify_line and alignment == .justify)
+                if (justify_line and
+                alignment == .justify and
+                !tabs.contains(
+                    buffer.glyphs.items[line_start..break_end],
+                ))
                     @max(break_width, committed_region.width)
                 else
                     null;
+            const committed_alignment = lineAlignment(
+                buffer.glyphs.items[line_start..break_end],
+                alignment,
+                options.direction,
+            );
             try geometry.appendLine(
                 buffer,
                 line_start,
@@ -517,7 +537,7 @@ pub fn buildWithJstfShrinkage(
                 break_width,
                 line_info,
                 y,
-                alignment,
+                committed_alignment,
                 committed_region,
                 justification_target,
             );
@@ -603,8 +623,11 @@ pub fn buildWithJstfShrinkage(
                 index = line_start - 1;
                 continue :glyph_loop;
             }
-            line_width = geometry.lineWidth(
+            line_width = tabs.recomputeRange(
                 buffer.glyphs.items[line_start .. index + 1],
+                options.tab_stops,
+                fallback_tab_interval,
+                space_advance,
             );
             terminal_emergency_line_committed =
                 break_end == buffer.glyphs.items.len;
@@ -668,7 +691,11 @@ pub fn buildWithJstfShrinkage(
             line_width,
             line_info,
             y,
-            alignment,
+            lineAlignment(
+                buffer.glyphs.items[line_start..],
+                alignment,
+                options.direction,
+            ),
             line_region,
             null,
         );
@@ -685,6 +712,17 @@ pub fn buildWithJstfShrinkage(
         buffer,
         selected_automatic_hyphens.items,
     );
+}
+
+fn lineAlignment(
+    glyphs: []const @import("../../glyph_position.zig").GlyphPosition,
+    paragraph_alignment: anytype,
+    direction: anytype,
+) @TypeOf(paragraph_alignment) {
+    if (tabs.contains(glyphs)) {
+        return if (direction == .rtl) .right else .left;
+    }
+    return paragraph_alignment;
 }
 
 const NoShrinkageRecipe = struct {

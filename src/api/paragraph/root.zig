@@ -21,6 +21,8 @@ pub const Jstf = paragraph_options.Jstf;
 pub const Punctuation = paragraph_options.Punctuation;
 pub const PunctuationConvention =
     paragraph_options.PunctuationConvention;
+pub const TabStop = paragraph_options.TabStop;
+pub const TabAlignment = paragraph_options.TabAlignment;
 pub const Request = context.ParagraphRequest;
 pub const StyledRequest = context.StyledParagraphRequest;
 pub const StyledResult = context.Engine.StyledParagraph;

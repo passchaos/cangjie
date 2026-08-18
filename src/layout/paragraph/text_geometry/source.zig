@@ -47,7 +47,7 @@ pub fn buildOwners(
     var result = std.ArrayList(draft.SourceOwner).empty;
     errdefer result.deinit(allocator);
     for (layout.glyphs, 0..) |glyph, glyph_index| {
-        if (glyph.isInlineObject()) continue;
+        if (glyph.isInlineObject() or glyph.isTab()) continue;
         const source_end = glyph.sourceByteEnd();
         if (source_end <= glyph.cluster) continue;
         const run_index = runIndexForGlyph(layout.runs, glyph_index) orelse

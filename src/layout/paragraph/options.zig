@@ -5,6 +5,7 @@ const std = @import("std");
 const paragraph_types = @import("../types/paragraph.zig");
 const exclusions = @import("exclusions.zig");
 const inline_object = @import("../inline_object/root.zig");
+const tabs = @import("tabs.zig");
 const hyphenation = @import("../../text/hyphenation/root.zig");
 const pipeline_types = @import("../../shaping/pipeline/types.zig");
 const shaping_plan = @import("../../shaping/plan/root.zig");
@@ -13,6 +14,8 @@ const segmentation = @import("../../text/segmentation/root.zig");
 const unicode = @import("../../unicode.zig");
 
 pub const Exclusion = exclusions.Exclusion;
+pub const TabAlignment = tabs.Alignment;
+pub const TabStop = tabs.Stop;
 
 /// Optional language-aware discretionary line-breaking policy.
 ///
@@ -110,7 +113,12 @@ pub const Options = struct {
     max_lines: ?usize = null,
     /// Append "..." only when `max_lines` removes content.
     ellipsis: bool = false,
+    /// Width in ordinary space advances of the repeating fallback grid.
+    ///
+    /// This remains active after the final explicit `tab_stops` entry.
     tab_width: usize = 4,
+    /// Start-aligned absolute stops from each line fragment's logical start.
+    tab_stops: []const tabs.Stop = &.{},
     letter_spacing: f32 = 0,
     word_spacing: f32 = 0,
     first_line_indent: f32 = 0,
@@ -172,6 +180,7 @@ pub fn validate(options: Options) !void {
         return error.InvalidParagraphOptions;
     }
     try exclusions.validate(options.exclusions);
+    try tabs.validate(options.tab_stops);
     try inline_object.validatePlacements(
         options.inline_objects,
         options.out_of_flow_placements,

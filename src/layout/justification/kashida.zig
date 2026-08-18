@@ -377,7 +377,7 @@ pub fn lineContainsSynthetic(
         if (glyph.isInlineObject() or glyph.isDiscretionaryHyphen()) {
             return true;
         }
-        if (glyph.codepoint == '\t' or
+        if (glyph.isTab() or
             switch (@import("../../unicode.zig").lineBreakClassForCodepoint(
                 glyph.codepoint,
             )) {

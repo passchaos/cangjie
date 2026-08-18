@@ -29,6 +29,20 @@ pub fn applyLine(
                 source_end,
             )) |range| {
                 const count = range.end - range.start;
+                if (glyph.isTab()) {
+                    // Tabs are fontless source atoms even when neighboring
+                    // text shares one geometry span. Their full reflow advance
+                    // must remain a selectable/caret-addressable partition.
+                    addPortion(
+                        &drafts[range.start],
+                        pen_x,
+                        glyph.x_advance,
+                        null,
+                        true,
+                    );
+                    pen_x += glyph.x_advance;
+                    continue;
+                }
                 if (count > 1 and run_index != null and
                     try addAuthoredLigaturePortions(
                         allocator,
@@ -251,7 +265,7 @@ fn addPortion(
     position: f32,
     width: f32,
     run_index: ?usize,
-    inline_object: bool,
+    fontless: bool,
 ) void {
     if (!item.positioned) {
         item.position = @min(position, position + width);
@@ -263,10 +277,10 @@ fn addPortion(
         );
     }
     item.width += width;
-    if (item.run_index == null and !inline_object) {
+    if (item.run_index == null and !fontless) {
         item.run_index = run_index;
     }
-    item.fontless = item.fontless or inline_object;
+    item.fontless = item.fontless or fontless;
 }
 
 fn resolveDirectionGroup(

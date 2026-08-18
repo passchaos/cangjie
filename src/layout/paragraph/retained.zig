@@ -150,6 +150,7 @@ pub const ShapedParagraph = struct {
             );
         }
         punctuation_hanging.apply(&reflow.buffer, options);
+        bidi_reorder.recomputeRunOffsets(&reflow.buffer);
         try inline_object.position(
             &reflow.buffer,
             options.inline_objects,

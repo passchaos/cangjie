@@ -180,7 +180,7 @@ fn reusableSourceRange(
             glyph.isDiscretionaryHyphen() or
             glyph.isKashida() or
             glyph.isAutomaticHyphen() or
-            glyph.codepoint == '\t' or
+            glyph.isTab() or
             isMandatoryBreak(glyph.codepoint))
         {
             return null;

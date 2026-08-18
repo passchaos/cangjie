@@ -31,6 +31,9 @@ const jstf_extender =
 const kashida_justification =
     @import("../layout/justification/kashida.zig");
 const paragraph_options = @import("../layout/paragraph/options.zig");
+const paragraph_source_items =
+    @import("../layout/paragraph/source_items.zig");
+const paragraph_tabs = @import("../layout/paragraph/tabs.zig");
 const retained_paragraph = @import("../layout/paragraph/retained.zig");
 const paragraph_reshape = @import("../layout/paragraph/reshape.zig");
 const styled_paragraph_layout = @import("../layout/paragraph/styled.zig");
@@ -330,6 +333,7 @@ pub const TextShaper = struct {
             try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
         }
         punctuation_hanging.apply(buffer, options);
+        bidi_reorder.recomputeRunOffsets(buffer);
         try inline_object.position(
             buffer,
             options.inline_objects,
@@ -388,6 +392,7 @@ pub const TextShaper = struct {
             try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
         }
         punctuation_hanging.apply(buffer, options);
+        bidi_reorder.recomputeRunOffsets(buffer);
         try inline_object.position(
             buffer,
             options.inline_objects,
@@ -606,7 +611,7 @@ fn shapeParagraphContent(
     try plan_validation.input(text, font_size, options);
     if (cascade.fonts.len == 0) return error.EmptyFontCascade;
     try inline_object.validate(text, objects);
-    if (objects.len == 0) {
+    if (objects.len == 0 and std.mem.indexOfScalar(u8, text, '\t') == null) {
         _ = try TextShaper.shapeUtf8CascadeWithCaches(
             cascade,
             fallback_cache,
@@ -622,57 +627,52 @@ fn shapeParagraphContent(
     }
 
     buffer.clear();
-    var source_start: usize = 0;
     var pen = PenPosition{};
-    for (objects) |object| {
-        if (source_start < object.byte_index) {
-            const segment = text[source_start..object.byte_index];
-            var context = DynamicFallbackContext{
-                .buffer = buffer,
-                .metrics_cache = metrics_cache,
-                .glyph_index_cache = glyph_index_cache,
-                .font_size = font_size,
-                .options = options,
-            };
-            pen = try fallback_segment.shape(&context, .{
-                .cascade = cascade,
-                .fallback_cache = fallback_cache,
-                .glyph_index_cache = glyph_index_cache,
-                .text = segment,
-                .cluster_base = source_start,
-                .pen = pen,
-            });
+    var items = paragraph_source_items.Cursor.init(
+        text,
+        objects,
+        0,
+        text.len,
+    );
+    while (items.next()) |item| {
+        switch (item) {
+            .text => |range| {
+                var context = DynamicFallbackContext{
+                    .buffer = buffer,
+                    .metrics_cache = metrics_cache,
+                    .glyph_index_cache = glyph_index_cache,
+                    .font_size = font_size,
+                    .options = options,
+                };
+                pen = try fallback_segment.shape(&context, .{
+                    .cascade = cascade,
+                    .fallback_cache = fallback_cache,
+                    .glyph_index_cache = glyph_index_cache,
+                    .text = text[range.start..range.end],
+                    .cluster_base = range.start,
+                    .pen = pen,
+                });
+            },
+            .object => |object| {
+                const object_advance =
+                    if (object.kind == .in_flow) object.width else 0;
+                try buffer.glyphs.append(buffer.allocator, .{
+                    .glyph_id = 0,
+                    .codepoint = inline_object.object_replacement_character,
+                    .cluster = object.byte_index,
+                    .source_byte_len = inline_object.object_replacement_utf8.len,
+                    .x_advance = object_advance,
+                    .flags = .{ .inline_object = true },
+                });
+                pen.x += object_advance;
+            },
+            .tab => |byte_index| {
+                try buffer.glyphs.append(
+                    buffer.allocator,
+                    paragraph_tabs.marker(byte_index),
+                );
+            },
         }
-        const object_advance = if (object.kind == .in_flow) object.width else 0;
-        try buffer.glyphs.append(buffer.allocator, .{
-            .glyph_id = 0,
-            .codepoint = inline_object.object_replacement_character,
-            .cluster = object.byte_index,
-            .source_byte_len = inline_object.object_replacement_utf8.len,
-            .x_advance = object_advance,
-            .flags = .{ .inline_object = true },
-        });
-        pen.x += object_advance;
-        source_start =
-            object.byte_index + inline_object.object_replacement_utf8.len;
-    }
-    if (source_start < text.len) {
-        const segment = text[source_start..];
-        var context = DynamicFallbackContext{
-            .buffer = buffer,
-            .metrics_cache = metrics_cache,
-            .glyph_index_cache = glyph_index_cache,
-            .font_size = font_size,
-            .options = options,
-        };
-        _ = try fallback_segment.shape(&context, .{
-            .cascade = cascade,
-            .fallback_cache = fallback_cache,
-            .glyph_index_cache = glyph_index_cache,
-            .text = segment,
-            .cluster_base = source_start,
-            .pen = pen,
-        });
     }
 }
 

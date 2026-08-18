@@ -82,7 +82,7 @@ pub fn apply(buffer: anytype, options: anytype) void {
         const occupied_x = region.x + geometry.alignedLineX(
             @min(line.width, region.width),
             region.width,
-            alignment,
+            line.resolved_alignment orelse alignment,
         );
         // `line.x` remains the origin of the first physical glyph. The occupied
         // measure starts after any punctuation protruding from the left edge.

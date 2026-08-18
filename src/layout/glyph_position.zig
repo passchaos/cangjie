@@ -27,7 +27,12 @@ pub const Flags = packed struct(u8) {
     /// It is anchored at an original UTF-8 boundary and therefore owns no
     /// caller source bytes, even though it passed through the complete shaper.
     kashida: bool = false,
-    _reserved: u2 = 0,
+    /// Synthetic non-rendering paragraph tab marker.
+    ///
+    /// Its reflow-computed advance positions the next field, but the marker
+    /// never participates in cmap, GSUB, GPOS, kerning, or glyph rendering.
+    tab: bool = false,
+    _reserved: u1 = 0,
 };
 
 /// One positioned glyph after cmap mapping, GSUB substitution, and GPOS/kern
@@ -81,6 +86,10 @@ pub const GlyphPosition = struct {
 
     pub fn isKashida(self: GlyphPosition) bool {
         return self.flags.kashida;
+    }
+
+    pub fn isTab(self: GlyphPosition) bool {
+        return self.flags.tab;
     }
 
     /// Logical source end represented by this output.

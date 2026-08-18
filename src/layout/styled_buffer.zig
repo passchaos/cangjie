@@ -1,6 +1,7 @@
 const std = @import("std");
 const run_types = @import("types/runs.zig");
 const reflow_regions = @import("line_break/reflow/regions.zig");
+const tabs = @import("paragraph/tabs.zig");
 const styled_paragraph = @import("styled_paragraph.zig");
 const unicode = @import("../unicode.zig");
 
@@ -48,6 +49,8 @@ pub fn rebuild(
         list.appendAssumeCapacity(.{
             .style_index = span.style_index,
             .layout_spacing = if (glyph.isInlineObject())
+                0
+            else if (glyph.isTab())
                 0
             else if (isWordSpacingCodepoint(glyph.codepoint))
                 span.word_spacing
@@ -240,10 +243,18 @@ pub fn appendEllipsis(
         line.glyph_start,
         line.glyph_start + line.glyph_len,
     );
+    const final_alignment =
+        if (tabs.contains(
+            buffer.glyphs.items[line.glyph_start .. line.glyph_start + line.glyph_len],
+        ))
+            line.resolved_alignment orelse alignment
+        else
+            alignment;
+    line.resolved_alignment = final_alignment;
     line.x = region.x + alignedLineX(
         @min(line.width, region.width),
         region.width,
-        alignment,
+        final_alignment,
     );
 }
 
@@ -366,7 +377,7 @@ fn spanForBoundary(
 }
 
 fn isWordSpacingCodepoint(codepoint: u21) bool {
-    return codepoint == ' ' or codepoint == '\t';
+    return codepoint == ' ';
 }
 
 fn isMandatoryLineBreak(codepoint: u21) bool {

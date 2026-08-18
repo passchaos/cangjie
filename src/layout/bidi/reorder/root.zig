@@ -187,6 +187,15 @@ pub fn normalizeLogical(buffer: anytype) !void {
     runs.recomputeOffsets(buffer);
 }
 
+/// Refresh flat run pens after paragraph-only advance mutations.
+///
+/// Reflow can change tabs, spacing, justification, and punctuation after
+/// shaping. This keeps public run metadata synchronized even when bidi does not
+/// otherwise require a permutation/rebuild pass.
+pub fn recomputeRunOffsets(buffer: anytype) void {
+    runs.recomputeOffsets(buffer);
+}
+
 pub fn applyLines(buffer: anytype, text: []const u8, rtl: bool) !void {
     if (buffer.glyphs.items.len == 0 or buffer.lines.items.len == 0) {
         return;

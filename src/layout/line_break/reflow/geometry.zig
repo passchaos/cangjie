@@ -168,6 +168,7 @@ pub fn appendLine(
         .indent = region.indent,
         .region_x = region.x,
         .region_width = region.width,
+        .resolved_alignment = alignment,
         .width = width,
         .justification_target = justification_target,
         .height = metrics.lineHeight(),
@@ -209,21 +210,10 @@ pub fn defaultSpaceAdvance(glyphs: []const GlyphPosition) f32 {
     return 1;
 }
 
-pub fn tabAdvance(
-    current_width: f32,
-    tab_stop: f32,
-    fallback_advance: f32,
-) f32 {
-    if (tab_stop <= 0) return fallback_advance;
-    const stops_passed = @floor(current_width / tab_stop);
-    const next_stop = (stops_passed + 1) * tab_stop;
-    return @max(fallback_advance, next_stop - current_width);
-}
-
 pub fn spacingForGlyph(codepoint: u21, options: anytype) f32 {
     if (codepoint == '\n') return 0;
     if (codepoint == discretionary_hyphen.soft_hyphen) return 0;
-    if (codepoint == ' ' or codepoint == '\t') return options.word_spacing;
+    if (codepoint == ' ') return options.word_spacing;
     return options.letter_spacing;
 }
 

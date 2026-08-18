@@ -480,7 +480,9 @@ pub const Recipe = struct {
                 return error.InvalidStyleSpans;
             const spacing = if (glyph.isKashida() or glyph.isInlineObject())
                 0
-            else if (glyph.codepoint == ' ' or glyph.codepoint == '\t')
+            else if (glyph.isTab())
+                0
+            else if (glyph.codepoint == ' ')
                 span.word_spacing
             else
                 span.letter_spacing;

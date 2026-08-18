@@ -16,6 +16,7 @@ pub const Runtime = struct {
     transient: *zones.GraphicsState,
     twilight: ?zones.Zone,
     glyph: ?zones.Zone,
+    point_scale_16_16: i32,
 
     /// Return whether `opcode` belongs to the point/vector instruction set.
     pub fn handle(self: *Runtime, opcode: u8) types.Error!bool {
@@ -103,8 +104,35 @@ pub const Runtime = struct {
                 var context = try self.pointContext();
                 try context.interpolateUntouched((opcode & 1) != 0);
             },
+            0x32, 0x33 => try self.shiftPointsByReference(opcode),
+            0x34, 0x35 => {
+                const contour = try self.stack.popIndex();
+                var context = try self.pointContext();
+                try context.shiftContourByReference(
+                    (opcode & 1) != 0,
+                    contour,
+                );
+            },
+            0x36, 0x37 => {
+                const zone_index = try self.popZoneIndex();
+                var context = try self.pointContext();
+                try context.shiftZoneByReference(
+                    (opcode & 1) != 0,
+                    zone_index,
+                );
+            },
             0x38 => try self.shiftPixels(),
             0x39 => try self.interpolatePoints(),
+            0x3a, 0x3b => {
+                const distance = try self.stack.pop();
+                const point = try self.stack.popIndex();
+                var context = try self.pointContext();
+                try context.moveStackIndirectRelative(
+                    point,
+                    distance,
+                    (opcode & 1) != 0,
+                );
+            },
             0x3c => try self.alignReferences(),
             0x3e, 0x3f => try self.moveIndirectAbsolute(opcode),
             0x46, 0x47 => {
@@ -158,7 +186,7 @@ pub const Runtime = struct {
             .glyph = self.glyph orelse
                 return error.UnsupportedHintInstruction,
             .state = self.transient,
-            .scale_16_16 = self.retained.scale_16_16,
+            .scale_16_16 = self.point_scale_16_16,
         };
     }
 
@@ -220,6 +248,23 @@ pub const Runtime = struct {
             };
         }
         self.stack.len = distance_index;
+        self.transient.loop = 1;
+    }
+
+    fn shiftPointsByReference(
+        self: *Runtime,
+        opcode: u8,
+    ) types.Error!void {
+        const loop = self.transient.loop;
+        if (loop > self.stack.depth()) return error.HintStackUnderflow;
+        var inline_points: [32]usize = undefined;
+        const points = if (loop <= inline_points.len)
+            inline_points[0..loop]
+        else
+            return error.HintExecutionLimitExceeded;
+        for (points) |*point| point.* = try self.stack.popIndex();
+        var context = try self.pointContext();
+        try context.shiftPointsByReference((opcode & 1) != 0, points);
         self.transient.loop = 1;
     }
 

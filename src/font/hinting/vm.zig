@@ -25,6 +25,7 @@ pub const Vm = struct {
     graphics: *types.RetainedGraphicsState,
     twilight: ?zones.Zone = null,
     glyph: ?zones.Zone = null,
+    point_scale_16_16: i32 = 0,
     executed: usize = 0,
     backward_jumps: usize = 0,
     loop_calls: usize = 0,
@@ -78,11 +79,13 @@ pub const Vm = struct {
         self: *Vm,
         twilight: zones.Zone,
         glyph: zones.Zone,
+        point_scale_16_16: i32,
     ) types.Error!void {
         try twilight.validate();
         try glyph.validate();
         self.twilight = twilight;
         self.glyph = glyph;
+        self.point_scale_16_16 = point_scale_16_16;
     }
 
     fn dispatch(
@@ -106,6 +109,7 @@ pub const Vm = struct {
             .transient = &self.transient,
             .twilight = self.twilight,
             .glyph = self.glyph,
+            .point_scale_16_16 = self.point_scale_16_16,
         };
         if (try point_runtime.handle(opcode)) return;
         switch (opcode) {

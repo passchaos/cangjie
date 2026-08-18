@@ -17,12 +17,30 @@ pub const Point = struct {
     y: i32,
 };
 
+pub const ComponentTransform = struct {
+    xx: i16 = 0x4000,
+    yx: i16 = 0,
+    xy: i16 = 0,
+    yy: i16 = 0x4000,
+};
+
+pub const ComponentPlacement = union(enum) {
+    offset: struct { x: i16, y: i16 },
+    points: struct {
+        parent_point: u16,
+        child_point: u16,
+    },
+};
+
 pub const ComponentRecord = struct {
     glyph_id: glyph.GlyphId,
+    flags: u16,
     point_start: usize,
     point_len: usize,
     contour_start: usize,
     contour_len: usize,
+    transform: ComponentTransform,
+    placement: ComponentPlacement,
     use_my_metrics: bool,
     is_compound: bool,
     /// Borrowed from the component glyph's validated `glyf` payload.

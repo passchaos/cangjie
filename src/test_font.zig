@@ -1359,7 +1359,7 @@ fn trueTypeCompoundHintingTables(
     initialized += 1;
     tables[7] = .{
         .tag = "maxp",
-        .data = try gvarCompoundMaxpTable(allocator),
+        .data = try trueTypeCompoundHintingMaxpTable(allocator),
     };
     initialized += 1;
     return tables;
@@ -6794,9 +6794,28 @@ fn gvarCompoundGlyfTable(allocator: std.mem.Allocator) ![]u8 {
 fn trueTypeCompoundHintingGlyfTable(
     allocator: std.mem.Allocator,
 ) ![]u8 {
-    const bytes = try allocator.alloc(u8, 60);
+    const bytes = try allocator.alloc(u8, 66);
     @memset(bytes, 0);
-    writeSimpleTriangleGlyph(bytes, 12, 350, 350, 250);
+    // Child glyph 1 has the usual triangle plus SHPIX point 0 by +1px.
+    const child = 12;
+    writeI16(bytes, child + 0, 1);
+    writeI16(bytes, child + 2, 0);
+    writeI16(bytes, child + 4, 0);
+    writeI16(bytes, child + 6, 700);
+    writeI16(bytes, child + 8, 700);
+    writeU16(bytes, child + 10, 2);
+    writeU16(bytes, child + 12, 4);
+    bytes[child + 14] = 0xb1;
+    bytes[child + 15] = 64;
+    bytes[child + 16] = 0;
+    bytes[child + 17] = 0x38;
+    bytes[child + 18] = 0x31;
+    bytes[child + 19] = 0x21;
+    bytes[child + 20] = 0x25;
+    writeU16(bytes, child + 21, 350);
+    writeU16(bytes, child + 23, 350);
+    bytes[child + 25] = 250;
+    writeU16(bytes, child + 26, 700);
 
     const off = 40;
     writeI16(bytes, off + 0, -1);
@@ -6809,8 +6828,16 @@ fn trueTypeCompoundHintingGlyfTable(
     writeU16(bytes, off + 12, 1);
     bytes[off + 14] = 10;
     bytes[off + 15] = 0;
-    writeU16(bytes, off + 16, 1);
-    bytes[off + 18] = 0x22; // CLEAR, retained as parent glyph bytecode.
+    writeU16(bytes, off + 16, 7);
+    // Parent reads the placed point 0 and writes it to storage[0]. The
+    // observed coordinate proves child hinting preceded component placement.
+    bytes[off + 18] = 0xb0;
+    bytes[off + 19] = 0;
+    bytes[off + 20] = 0x46;
+    bytes[off + 21] = 0xb0;
+    bytes[off + 22] = 0;
+    bytes[off + 23] = 0x23;
+    bytes[off + 24] = 0x42;
     return bytes;
 }
 
@@ -7276,7 +7303,7 @@ fn trueTypeCompoundHintingLocaTable(
     writeU16(bytes, 0, 0);
     writeU16(bytes, 2, 6);
     writeU16(bytes, 4, 20);
-    writeU16(bytes, 6, 30);
+    writeU16(bytes, 6, 33);
     return bytes;
 }
 
@@ -8864,6 +8891,17 @@ fn gvarCompoundMaxpTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 12, 1); // maxCompositeContours.
     writeU16(bytes, 28, 1); // maxComponentElements.
     writeU16(bytes, 30, 1); // maxComponentDepth.
+    return bytes;
+}
+
+fn trueTypeCompoundHintingMaxpTable(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const bytes = try gvarCompoundMaxpTable(allocator);
+    writeU16(bytes, 16, 2); // maxTwilightPoints.
+    writeU16(bytes, 18, 1); // Parent bytecode writes storage[0].
+    writeU16(bytes, 24, 16); // maxStackElements.
+    writeU16(bytes, 26, 16); // maxSizeOfInstructions.
     return bytes;
 }
 

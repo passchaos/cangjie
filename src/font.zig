@@ -1575,6 +1575,8 @@ pub const Font = struct {
                         return error.BadSfnt,
                     .max_twilight_points = maxp_info.max_twilight_points orelse
                         return error.BadSfnt,
+                    .max_component_depth = maxp_info.max_component_depth orelse
+                        return error.BadSfnt,
                 },
             },
             ppem,
@@ -5344,6 +5346,15 @@ fn resolveHintingComponent(
             .top_side_bearing = vertical.top_side_bearing,
         },
     };
+}
+
+/// Internal bridge used by the public face executor to materialize component
+/// glyph transactions without exposing parser storage through the public API.
+pub fn resolveHintingComponentForExecution(
+    context: *const anyopaque,
+    glyph_id: glyph_mod.GlyphId,
+) hinting.Error!hinting.compound.Source {
+    return resolveHintingComponent(context, glyph_id);
 }
 
 fn validateSbixTable(

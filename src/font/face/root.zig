@@ -135,7 +135,13 @@ pub const Face = struct {
         if (transaction.face_identity != @intFromPtr(&self.implementation)) {
             return error.StaleHintingInstance;
         }
-        return instance.executeGlyph(transaction);
+        return instance.executeGlyph(
+            transaction,
+            .{
+                .context = &self.implementation,
+                .resolveFn = font_mod.resolveHintingComponentForExecution,
+            },
+        );
     }
 };
 

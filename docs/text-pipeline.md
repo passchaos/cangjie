@@ -898,9 +898,10 @@ contour ends; component point/contour ranges; borrowed glyph instruction
 slices; and all four horizontal/vertical phantom points. Compound decoding
 recursively applies exact 2.14 matrices, scaled/unscaled offsets, grid-rounded
 offsets, nested point matching, and `USE_MY_METRICS` ownership. Compound
-execution still returns `UnsupportedHintGlyph`: child programs must run before
-component placement and parent bytecode, and that complete lifecycle has not
-yet been folded into the atomic executor.
+execution recursively runs each child program before component transform and
+placement, resets touched/original state for top-level compound bytecode, and
+shares one private CVT/storage/twilight transaction across the complete
+child-to-parent lifecycle.
 `Face.executeHintingTransaction` now runs core point-zone bytecode over private
 working copies of the glyph and persistent PPEM twilight zones. Projection and
 freedom vectors, reference points, zone pointers, loop and rounding state are
@@ -916,11 +917,11 @@ origin. `Rasterizer.drawPixelOutline` and `preparePixelOutline` consume that
 path at scale one, applying only caller x/baseline placement; they deliberately
 skip the design-outline UPEM scale, small-glyph alignment, and synthetic
 emboldening because the bytecode has already made pixel-grid decisions.
-Compound glyphs can be decoded and reconstructed, but their execution returns
-`UnsupportedHintGlyph`; gvar-backed transaction creation also returns that
-error rather than silently losing variation semantics. Transactions reject an
-instance created from another face or PPEM/target. Automatic hinted run
-rendering and remaining less-common point opcodes are the next layer.
+Compound glyphs can be decoded, executed, and reconstructed; gvar-backed
+transaction creation still returns `UnsupportedHintGlyph` rather than silently
+losing variation semantics. Transactions reject an instance created from
+another face or PPEM/target. Automatic hinted run rendering and remaining
+less-common point opcodes are the next layer.
 
 The shaping integration suite is similarly rooted at
 `src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,

@@ -2,6 +2,7 @@
 
 const std = @import("std");
 
+const compound = @import("compound.zig");
 const glyph_executor = @import("glyph/executor.zig");
 const outline = @import("outline.zig");
 const program = @import("program.zig");
@@ -173,6 +174,7 @@ pub const Instance = struct {
     pub fn executeGlyph(
         self: *Instance,
         transaction: *outline.Transaction,
+        component_resolver: ?compound.Resolver,
     ) types.Error!void {
         return glyph_executor.execute(
             self.allocator,
@@ -194,6 +196,7 @@ pub const Instance = struct {
                 },
             },
             transaction,
+            component_resolver,
         );
     }
 
@@ -417,7 +420,7 @@ test "glyph execution moves points and commits VM working state" {
     );
     defer transaction.deinit();
 
-    try instance.executeGlyph(&transaction);
+    try instance.executeGlyph(&transaction, null);
     try std.testing.expectEqual(@as(i32, 64), transaction.points[0].x);
     try std.testing.expectEqual(@as(i32, 64), transaction.points[1].x);
     try std.testing.expectEqual(@as(i32, 192), transaction.points[2].x);
@@ -465,7 +468,7 @@ test "failed glyph execution rolls back points CVT and storage" {
 
     try std.testing.expectError(
         error.InvalidHintCvt,
-        instance.executeGlyph(&transaction),
+        instance.executeGlyph(&transaction, null),
     );
     try std.testing.expectEqualSlices(
         outline.Point,

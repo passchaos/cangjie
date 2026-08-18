@@ -161,6 +161,61 @@ test "installed simple glyph programs execute transactionally" {
     if (found == 0) return error.SkipZigTest;
 }
 
+test "installed compound glyph programs execute child-to-parent" {
+    const allocator = std.testing.allocator;
+    const fixtures = [_]struct {
+        path: []const u8,
+        codepoint: u21,
+    }{
+        .{
+            .path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            .codepoint = 0x00c2,
+        },
+        .{
+            .path = "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+            .codepoint = 0x0958,
+        },
+        .{
+            .path = "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+            .codepoint = 0x060b,
+        },
+    };
+    var found: usize = 0;
+    for (fixtures) |fixture| {
+        const bytes = std.Io.Dir.cwd().readFileAlloc(
+            std.testing.io,
+            fixture.path,
+            allocator,
+            .limited(16 * 1024 * 1024),
+        ) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
+        defer allocator.free(bytes);
+        var face = try cangjie.font.Face.parse(allocator, bytes);
+        defer face.deinit();
+        var instance = try face.hintingInstance(allocator, 16, .normal);
+        defer instance.deinit();
+        const glyph_id = try face.glyphs().index(fixture.codepoint);
+        var transaction = face.hintingPointTransaction(
+            allocator,
+            &instance,
+            glyph_id,
+        ) catch |err| switch (err) {
+            error.UnsupportedHintGlyph => continue,
+            else => return err,
+        };
+        defer transaction.deinit();
+        if (!transaction.is_compound) continue;
+        try face.executeHintingTransaction(&instance, &transaction);
+        var pixel = try transaction.toPixelOutline();
+        defer pixel.deinit();
+        try std.testing.expect(pixel.commands.items.len != 0);
+        found += 1;
+    }
+    if (found == 0) return error.SkipZigTest;
+}
+
 test "simple glyf transaction retains raw point and phantom ownership" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildTrueTypeHintingTtf(allocator);
@@ -299,17 +354,7 @@ test "compound point transactions preserve transformed raw topology" {
         matched.unscaled[1],
         matched.unscaled[4],
     );
-    const before = try allocator.dupe(@TypeOf(matched.points[0]), matched.points);
-    defer allocator.free(before);
-    try std.testing.expectError(
-        error.UnsupportedHintGlyph,
-        face.executeHintingTransaction(&instance, &matched),
-    );
-    try std.testing.expectEqualSlices(
-        @TypeOf(matched.points[0]),
-        before,
-        matched.points,
-    );
+    try face.executeHintingTransaction(&instance, &matched);
 
     var nested = try face.hintingPointTransaction(
         allocator,
@@ -355,11 +400,19 @@ test "compound transactions retain parent bytecode and USE_MY_METRICS" {
     defer transaction.deinit();
 
     try std.testing.expect(transaction.is_compound);
-    try std.testing.expectEqualSlices(u8, &.{0x22}, transaction.instructions);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 0xb0, 0, 0x46, 0xb0, 0, 0x23, 0x42 },
+        transaction.instructions,
+    );
     try std.testing.expectEqual(@as(usize, 1), transaction.components.len);
     try std.testing.expect(transaction.components[0].use_my_metrics);
     try std.testing.expect(!transaction.components[0].is_compound);
-    try std.testing.expectEqual(@as(usize, 0), transaction.components[0].instructions.len);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 0xb1, 64, 0, 0x38 },
+        transaction.components[0].instructions,
+    );
     // Top-level glyph 2 advances 1000 FUnits, while USE_MY_METRICS selects
     // component glyph 1's 800-FUnit metric. At 20 PPEM / 1000 UPEM this is
     // exactly 16 pixels, or 1024 in 26.6.
@@ -367,6 +420,65 @@ test "compound transactions retain parent bytecode and USE_MY_METRICS" {
         @as(i32, 1024),
         transaction.phantomPoints()[1].x -
             transaction.phantomPoints()[0].x,
+    );
+    try face.executeHintingTransaction(&instance, &transaction);
+    // Child point 0 moves from 0 to 64, then receives the compound's scaled
+    // +10 FUnit offset (13 in 26.6 at 20 PPEM).
+    try std.testing.expectEqual(@as(i32, 77), transaction.points[0].x);
+    try std.testing.expectEqual(@as(i32, 77), instance.storageValues()[0]);
+    // Parent bytecode resets child touched flags before observing the zone.
+    try std.testing.expect(!transaction.flags[0].touched_x);
+}
+
+test "compound parent failure rolls back child hinting and VM writes" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildTrueTypeCompoundHintingTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var instance = try face.hintingInstance(allocator, 20, .normal);
+    defer instance.deinit();
+    var transaction = try face.hintingPointTransaction(
+        allocator,
+        &instance,
+        2,
+    );
+    defer transaction.deinit();
+    const before_points = try allocator.dupe(
+        @TypeOf(transaction.points[0]),
+        transaction.points,
+    );
+    defer allocator.free(before_points);
+    const before_flags = try allocator.dupe(
+        @TypeOf(transaction.flags[0]),
+        transaction.flags,
+    );
+    defer allocator.free(before_flags);
+    const before_storage = instance.storageValues()[0];
+
+    // Tentatively write storage[0], then fail on an out-of-range CVT read.
+    // The child program has already moved point 0 by the time this parent
+    // program runs, so unchanged points prove rollback spans the full
+    // child-to-parent lifecycle rather than only the failing VM invocation.
+    const failing_program = [_]u8{ 0xb1, 0, 9, 0x42, 0xb0, 99, 0x45 };
+    transaction.instructions = &failing_program;
+    try std.testing.expectError(
+        error.InvalidHintCvt,
+        face.executeHintingTransaction(&instance, &transaction),
+    );
+    try std.testing.expectEqualSlices(
+        @TypeOf(transaction.points[0]),
+        before_points,
+        transaction.points,
+    );
+    try std.testing.expectEqualSlices(
+        @TypeOf(transaction.flags[0]),
+        before_flags,
+        transaction.flags,
+    );
+    try std.testing.expectEqual(
+        before_storage,
+        instance.storageValues()[0],
     );
 }
 

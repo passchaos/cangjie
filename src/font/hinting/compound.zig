@@ -48,7 +48,7 @@ pub fn decode(
         .resolver = resolver,
     };
     defer builder.deinit();
-    const result = try builder.appendGlyph(root, 0);
+    const result = try builder.appendGlyph(root, 0, true);
     if (!result.is_compound) return error.UnsupportedHintGlyph;
 
     const real_point_count = builder.points.items.len;
@@ -89,7 +89,7 @@ const Result = struct {
     is_compound: bool = false,
 };
 
-const FixedTransform = struct {
+pub const FixedTransform = struct {
     xx: i32,
     yx: i32,
     xy: i32,
@@ -124,6 +124,7 @@ const Builder = struct {
         self: *Builder,
         source: Source,
         depth: usize,
+        record_components: bool,
     ) types.Error!Result {
         if (depth > self.max_component_depth) {
             return error.UnsupportedHintGlyph;
@@ -141,7 +142,7 @@ const Builder = struct {
                 .instructions = instructions,
             };
         }
-        return self.appendCompound(source, depth);
+        return self.appendCompound(source, depth, record_components);
     }
 
     fn appendSimple(
@@ -189,6 +190,7 @@ const Builder = struct {
         self: *Builder,
         source: Source,
         depth: usize,
+        record_components: bool,
     ) types.Error!Result {
         var reader = bin.Reader.init(source.data);
         _ = reader.readI16() catch return error.BadSfnt;
@@ -203,7 +205,11 @@ const Builder = struct {
             const child = try self.resolver.resolve(component.glyph_id);
             const child_point_start = self.points.items.len;
             const child_contour_start = self.contours.items.len;
-            const child_result = try self.appendGlyph(child, depth + 1);
+            const child_result = try self.appendGlyph(
+                child,
+                depth + 1,
+                false,
+            );
             const child_point_end = self.points.items.len;
             const transform = fixedTransform(component.fixed_transform);
             self.transformPoints(
@@ -231,16 +237,35 @@ const Builder = struct {
                 child_point_end,
                 offsets,
             );
-            try self.components.append(self.allocator, .{
-                .glyph_id = component.glyph_id,
-                .point_start = child_point_start,
-                .point_len = child_point_end - child_point_start,
-                .contour_start = child_contour_start,
-                .contour_len = self.contours.items.len - child_contour_start,
-                .use_my_metrics = (component.flags & 0x0200) != 0,
-                .is_compound = child_result.is_compound,
-                .instructions = child_result.instructions,
-            });
+            if (record_components) {
+                try self.components.append(self.allocator, .{
+                    .glyph_id = component.glyph_id,
+                    .flags = component.flags,
+                    .point_start = child_point_start,
+                    .point_len = child_point_end - child_point_start,
+                    .contour_start = child_contour_start,
+                    .contour_len = self.contours.items.len - child_contour_start,
+                    .transform = .{
+                        .xx = component.fixed_transform.xx,
+                        .yx = component.fixed_transform.yx,
+                        .xy = component.fixed_transform.xy,
+                        .yy = component.fixed_transform.yy,
+                    },
+                    .placement = switch (component.placement) {
+                        .offset => |offset| .{ .offset = .{
+                            .x = offset.x,
+                            .y = offset.y,
+                        } },
+                        .points => |match| .{ .points = .{
+                            .parent_point = match.parent_point,
+                            .child_point = match.child_point,
+                        } },
+                    },
+                    .use_my_metrics = (component.flags & 0x0200) != 0,
+                    .is_compound = child_result.is_compound,
+                    .instructions = child_result.instructions,
+                });
+            }
             if ((component.flags & 0x0200) != 0) {
                 effective_metrics = child_result.effective_metrics;
             }
@@ -364,7 +389,7 @@ fn fixedTransform(
     };
 }
 
-fn applyTransform(
+pub fn applyTransform(
     point: outline.Point,
     transform: FixedTransform,
 ) outline.Point {
@@ -376,7 +401,7 @@ fn applyTransform(
     };
 }
 
-fn scaleComponentOffset(
+pub fn scaleComponentOffset(
     point: outline.Point,
     transform: FixedTransform,
 ) outline.Point {
@@ -411,7 +436,7 @@ fn mulF2Dot14(value: i32, factor: i32) i32 {
     return @intCast(signed);
 }
 
-fn roundGrid(value: i32) i32 {
+pub fn roundGrid(value: i32) i32 {
     return (value +| 32) & ~@as(i32, 63);
 }
 

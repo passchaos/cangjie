@@ -39,6 +39,7 @@ pub const Limits = struct {
     max_instruction_defs: usize,
     max_stack_elements: usize,
     max_twilight_points: usize,
+    max_component_depth: usize = 100,
 };
 
 pub const Source = struct {

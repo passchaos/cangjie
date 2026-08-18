@@ -5,101 +5,16 @@
 //! here as slices.  Keeping all movement and interpolation behind this
 //! boundary makes the interpreter's commit-on-success contract auditable.
 
-const std = @import("std");
-
+const fixed = @import("fixed.zig");
 const interpolation = @import("interpolation.zig");
+const shifts = @import("shifts.zig");
+const state = @import("state.zig");
 const outline = @import("../outline.zig");
 const types = @import("../types.zig");
 
-pub const Vector = struct {
-    x: i32 = 0x4000,
-    y: i32 = 0,
-
-    pub fn axis(y_axis: bool) Vector {
-        return if (y_axis)
-            .{ .x = 0, .y = 0x4000 }
-        else
-            .{};
-    }
-
-    /// TrueType vectors are normalized signed 2.14 values.  Stack operands
-    /// are only specified by their low 16 bits, so sign extension happens
-    /// before normalization.
-    pub fn normalized(raw_x: i32, raw_y: i32) Vector {
-        const x: i16 = @truncate(raw_x);
-        const y: i16 = @truncate(raw_y);
-        if (x == 0 and y == 0) return .{};
-        const xf: f64 = @floatFromInt(x);
-        const yf: f64 = @floatFromInt(y);
-        const length = @sqrt(xf * xf + yf * yf);
-        const nx: i32 = @intFromFloat(@round(xf * 16384.0 / length));
-        const ny: i32 = @intFromFloat(@round(yf * 16384.0 / length));
-        return .{
-            .x = std.math.clamp(nx, -0x4000, 0x4000),
-            .y = std.math.clamp(ny, -0x4000, 0x4000),
-        };
-    }
-};
-
-/// State reset at the beginning of every font, control-value, or glyph
-/// program.  None of these values are retained in the PPEM instance.
-pub const GraphicsState = struct {
-    projection: Vector = .{},
-    dual_projection: Vector = .{},
-    freedom: Vector = .{},
-    rp0: usize = 0,
-    rp1: usize = 0,
-    rp2: usize = 0,
-    zp0: u8 = 1,
-    zp1: u8 = 1,
-    zp2: u8 = 1,
-    loop: usize = 1,
-    round_mode: types.RoundMode = .grid,
-    super_round_period: i32 = 64,
-    super_round_phase: i32 = 0,
-    super_round_threshold: i32 = 32,
-
-    pub fn round(self: GraphicsState, value: i32) i32 {
-        return switch (self.round_mode) {
-            .off => value,
-            .grid => (value +| 32) & ~@as(i32, 63),
-            .half_grid => (value & ~@as(i32, 63)) +| 32,
-            .double_grid => (value +| 16) & ~@as(i32, 31),
-            .down_to_grid => types.floor26Dot6(value),
-            .up_to_grid => types.ceil26Dot6(value),
-            .super, .super_45 => blk: {
-                const period = self.super_round_period;
-                if (period <= 0) break :blk value;
-                break :blk clampI64(
-                    @as(i64, @divFloor(
-                        value - self.super_round_phase +
-                            self.super_round_threshold,
-                        period,
-                    )) * period + self.super_round_phase,
-                );
-            },
-        };
-    }
-};
-
-pub const Zone = struct {
-    current: []outline.Point,
-    original: []outline.Point,
-    unscaled: []outline.Point,
-    flags: []outline.PointFlag,
-    contours: []const u16 = &.{},
-    real_point_count: usize,
-
-    pub fn validate(self: Zone) types.Error!void {
-        if (self.current.len != self.original.len or
-            self.current.len != self.unscaled.len or
-            self.current.len != self.flags.len or
-            self.real_point_count > self.current.len)
-        {
-            return error.InvalidHintOperand;
-        }
-    }
-};
+pub const Vector = fixed.Vector;
+pub const GraphicsState = state.GraphicsState;
+pub const Zone = state.Zone;
 
 pub const Context = struct {
     twilight: Zone,
@@ -142,7 +57,7 @@ pub const Context = struct {
         const zone = try self.zoneAt(self.state.zp2);
         if (point >= zone.current.len) return error.InvalidHintOperand;
         const value = if (original) zone.original[point] else zone.current[point];
-        return projectPoint(
+        return fixed.projectPoint(
             value,
             if (original)
                 self.state.dual_projection
@@ -182,7 +97,7 @@ pub const Context = struct {
             return error.InvalidHintOperand;
         }
         if (current) {
-            return projectDifference(
+            return fixed.projectDifference(
                 first_zone.current[first],
                 second_zone.current[second],
                 self.state.projection,
@@ -220,7 +135,7 @@ pub const Context = struct {
         if (zone_index == 0) {
             const zone = try self.zoneAt(0);
             if (point >= zone.current.len) return error.InvalidHintOperand;
-            const established = pointAlongVector(cvt_value, self.state.freedom);
+            const established = fixed.pointAlongVector(cvt_value, self.state.freedom);
             zone.original[point] = established;
             zone.unscaled[point] = established;
             zone.current[point] = established;
@@ -229,7 +144,7 @@ pub const Context = struct {
         var target = cvt_value;
         if (do_round) {
             if (zone_index != 0 and
-                absDistance(target, current) >
+                fixed.absDistance(target, current) >
                     retained.control_value_cutin)
             {
                 target = current;
@@ -289,7 +204,7 @@ pub const Context = struct {
                 self.state.zp0,
                 old_rp0,
             );
-            const offset = pointAlongVector(target, self.state.freedom);
+            const offset = fixed.pointAlongVector(target, self.state.freedom);
             const established = outline.Point{
                 .x = reference.x +| offset.x,
                 .y = reference.y +| offset.y,
@@ -313,7 +228,7 @@ pub const Context = struct {
         }
         if ((opcode & 0x04) != 0) {
             if (self.state.zp0 == self.state.zp1 and
-                absDistance(target, original_distance) >
+                fixed.absDistance(target, original_distance) >
                     retained.control_value_cutin)
             {
                 target = original_distance;
@@ -346,6 +261,43 @@ pub const Context = struct {
         try self.move(self.state.zp1, point, 0 -| distance);
     }
 
+    pub fn moveStackIndirectRelative(
+        self: *Context,
+        point: usize,
+        distance: i32,
+        set_rp0: bool,
+    ) types.Error!void {
+        const old_rp0 = self.state.rp0;
+        if (self.state.zp1 == 0) {
+            const reference = try self.originalPoint(
+                self.state.zp0,
+                old_rp0,
+            );
+            const offset = fixed.pointAlongVector(distance, self.state.freedom);
+            const established = outline.Point{
+                .x = reference.x +| offset.x,
+                .y = reference.y +| offset.y,
+            };
+            const twilight = try self.zoneAt(0);
+            if (point >= twilight.current.len) {
+                return error.InvalidHintOperand;
+            }
+            twilight.original[point] = established;
+            twilight.unscaled[point] = established;
+            twilight.current[point] = established;
+        }
+        const current = try self.currentDistance(
+            self.state.zp1,
+            point,
+            self.state.zp0,
+            old_rp0,
+        );
+        try self.move(self.state.zp1, point, distance -| current);
+        self.state.rp1 = old_rp0;
+        self.state.rp2 = point;
+        if (set_rp0) self.state.rp0 = point;
+    }
+
     pub fn interpolatePoint(self: *Context, point: usize) types.Error!void {
         const rp1_current = try self.currentPoint(
             self.state.zp0,
@@ -369,7 +321,7 @@ pub const Context = struct {
             self.state.zp0,
             self.state.rp1,
         );
-        const current_distance = projectDifference(
+        const current_distance = fixed.projectDifference(
             try self.currentPoint(self.state.zp2, point),
             rp1_current,
             self.state.projection,
@@ -379,7 +331,7 @@ pub const Context = struct {
         else if (old_range == 0)
             original_distance
         else
-            mulDivClamped(
+            fixed.mulDivClamped(
                 original_distance,
                 current_range,
                 old_range,
@@ -398,10 +350,52 @@ pub const Context = struct {
     ) types.Error!void {
         const zone = try self.zoneAt(self.state.zp2);
         if (point >= zone.current.len) return error.InvalidHintOperand;
-        const delta = pointAlongVector(distance, self.state.freedom);
+        const delta = fixed.pointAlongVector(distance, self.state.freedom);
         zone.current[point].x +|= delta.x;
         zone.current[point].y +|= delta.y;
         touch(&zone.flags[point], self.state.freedom);
+    }
+
+    pub fn shiftPointsByReference(
+        self: *Context,
+        use_rp1: bool,
+        points: []const usize,
+    ) types.Error!void {
+        return shifts.pointsByReference(
+            &self.twilight,
+            &self.glyph,
+            self.state,
+            use_rp1,
+            points,
+        );
+    }
+
+    pub fn shiftContourByReference(
+        self: *Context,
+        use_rp1: bool,
+        contour: usize,
+    ) types.Error!void {
+        return shifts.contourByReference(
+            &self.twilight,
+            &self.glyph,
+            self.state,
+            use_rp1,
+            contour,
+        );
+    }
+
+    pub fn shiftZoneByReference(
+        self: *Context,
+        use_rp1: bool,
+        zone_index: u8,
+    ) types.Error!void {
+        return shifts.zoneByReference(
+            &self.twilight,
+            &self.glyph,
+            self.state,
+            use_rp1,
+            zone_index,
+        );
     }
 
     pub fn deltaPoint(self: *Context, point: usize, distance: i32) types.Error!void {
@@ -472,7 +466,7 @@ pub const Context = struct {
         point: usize,
     ) types.Error!i32 {
         const value = try self.currentPoint(zone_index, point);
-        return projectPoint(value, self.state.projection);
+        return fixed.projectPoint(value, self.state.projection);
     }
 
     fn currentDistance(
@@ -482,7 +476,7 @@ pub const Context = struct {
         second_zone: u8,
         second: usize,
     ) types.Error!i32 {
-        return projectDifference(
+        return fixed.projectDifference(
             try self.currentPoint(first_zone, first),
             try self.currentPoint(second_zone, second),
             self.state.projection,
@@ -499,7 +493,7 @@ pub const Context = struct {
         if (first_zone == 1 and second_zone == 1) {
             const first_value = try self.unscaledPoint(first);
             const second_value = try self.unscaledPoint(second);
-            return projectDifference(
+            return fixed.projectDifference(
                 .{
                     .x = types.scaleFUnits(
                         first_value.x -| second_value.x,
@@ -514,7 +508,7 @@ pub const Context = struct {
                 self.state.dual_projection,
             );
         }
-        return projectDifference(
+        return fixed.projectDifference(
             try self.originalPoint(first_zone, first),
             try self.originalPoint(second_zone, second),
             self.state.dual_projection,
@@ -529,19 +523,19 @@ pub const Context = struct {
     ) types.Error!void {
         const zone = try self.zoneAt(zone_index);
         if (point >= zone.current.len) return error.InvalidHintOperand;
-        const freedom_dot_projection = vectorDot(
+        const freedom_dot_projection = fixed.vectorDot(
             self.state.freedom,
             self.state.projection,
         );
         if (freedom_dot_projection <= -0x400 or
             freedom_dot_projection >= 0x400)
         {
-            zone.current[point].x +|= mulDivClamped(
+            zone.current[point].x +|= fixed.mulDivClamped(
                 projected_distance,
                 self.state.freedom.x,
                 freedom_dot_projection,
             );
-            zone.current[point].y +|= mulDivClamped(
+            zone.current[point].y +|= fixed.mulDivClamped(
                 projected_distance,
                 self.state.freedom.y,
                 freedom_dot_projection,
@@ -593,7 +587,7 @@ fn applySingleWidth(
         0 -| retained.single_width
     else
         retained.single_width;
-    if (absDistance(distance, signed_width) <
+    if (fixed.absDistance(distance, signed_width) <
         retained.single_width_cutin)
     {
         return signed_width;
@@ -610,70 +604,6 @@ fn applyMinimumDistance(
     if ((opcode & 0x08) == 0) return distance;
     if (original_distance >= 0) return @max(distance, minimum);
     return @min(distance, 0 -| minimum);
-}
-
-fn pointAlongVector(distance: i32, vector: Vector) outline.Point {
-    return .{
-        .x = mulShift14(distance, vector.x),
-        .y = mulShift14(distance, vector.y),
-    };
-}
-
-fn projectPoint(point: outline.Point, vector: Vector) i32 {
-    return dot26Dot6(point.x, point.y, vector);
-}
-
-fn projectDifference(
-    first: outline.Point,
-    second: outline.Point,
-    vector: Vector,
-) i32 {
-    return dot26Dot6(
-        first.x -| second.x,
-        first.y -| second.y,
-        vector,
-    );
-}
-
-fn dot26Dot6(x: i32, y: i32, vector: Vector) i32 {
-    const value = @as(i64, x) * vector.x + @as(i64, y) * vector.y;
-    return roundShift14(value);
-}
-
-fn vectorDot(first: Vector, second: Vector) i32 {
-    const value =
-        @as(i64, first.x) * second.x + @as(i64, first.y) * second.y;
-    return roundShift14(value);
-}
-
-fn mulShift14(value: i32, factor: i32) i32 {
-    return roundShift14(@as(i64, value) * factor);
-}
-
-fn roundShift14(value: i64) i32 {
-    const magnitude: u64 = @intCast(if (value < 0) -value else value);
-    const rounded: i64 = @intCast((magnitude + 0x2000) >> 14);
-    return clampI64(if (value < 0) -rounded else rounded);
-}
-
-fn mulDivClamped(a: i32, b: i32, denominator: i32) i32 {
-    if (denominator == 0) return 0;
-    return clampI64(@divTrunc(
-        @as(i64, a) * b,
-        @as(i64, denominator),
-    ));
-}
-
-fn clampI64(value: i64) i32 {
-    if (value <= std.math.minInt(i32)) return std.math.minInt(i32);
-    if (value >= std.math.maxInt(i32)) return std.math.maxInt(i32);
-    return @intCast(value);
-}
-
-fn absDistance(first: i32, second: i32) i32 {
-    const difference = @as(i64, first) - second;
-    const magnitude = if (difference < 0) -difference else difference;
-    return clampI64(magnitude);
 }
 
 fn touch(flag: *outline.PointFlag, freedom: Vector) void {

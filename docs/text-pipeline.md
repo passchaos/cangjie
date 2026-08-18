@@ -905,11 +905,14 @@ child-to-parent lifecycle.
 `Face.executeHintingTransaction` now runs core point-zone bytecode over private
 working copies of the glyph and persistent PPEM twilight zones. Projection and
 freedom vectors, reference points, zone pointers, loop and rounding state are
-reset per glyph; MDAP/MIAP, MDRP/MIRP, IUP, SHPIX, ALIGNRP, GC/SCFS/MD,
-on-curve edits, CVT, storage, functions, and instruction definitions share the
-same bounded interpreter. Points, flags, twilight state, CVT, and storage
-commit together only after a successful run; any error leaves the transaction
-and instance unchanged.
+reset per glyph; MDAP/MIAP, MDRP/MIRP/MSIRP, IUP/IP, SHP/SHC/SHZ/SHPIX,
+ALIGNPTS/ALIGNRP, ISECT, SDPVTL, GC/SCFS/MD, DELTAP, on-curve edits, CVT,
+storage, functions, and instruction definitions share the same bounded
+interpreter. Points, flags, twilight state, CVT, and storage commit together
+only after a successful run; any error leaves the transaction and instance
+unchanged. Installed-font gates execute representative glyph programs and a
+full mnemonic scan of DejaVu Sans, Noto Sans Devanagari, and Noto Sans Arabic
+shows no uncovered non-variation standard opcode.
 
 `toPixelOutline` then reconstructs a distinct pixel-space path and applies the
 possibly modified left phantom (`pp1`) as the FreeType-compatible glyph
@@ -920,8 +923,8 @@ emboldening because the bytecode has already made pixel-grid decisions.
 Compound glyphs can be decoded, executed, and reconstructed; gvar-backed
 transaction creation still returns `UnsupportedHintGlyph` rather than silently
 losing variation semantics. Transactions reject an instance created from
-another face or PPEM/target. Automatic hinted run rendering and remaining
-less-common point opcodes are the next layer.
+another face or PPEM/target. Automatic hinted run rendering, variation-aware
+cvar/gvar state, and interpreter compatibility modes are the next layers.
 
 The shaping integration suite is similarly rooted at
 `src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,

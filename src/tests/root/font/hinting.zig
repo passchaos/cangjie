@@ -114,6 +114,12 @@ test "installed simple glyph programs execute transactionally" {
         codepoint: u21,
     }{
         .{
+            // DejaVu's X program exercises ISECT in addition to the common
+            // stem-alignment instruction set covered by A.
+            .path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            .codepoint = 'X',
+        },
+        .{
             .path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             .codepoint = 'A',
         },

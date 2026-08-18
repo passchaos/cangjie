@@ -7,6 +7,7 @@
 
 const stack_mod = @import("../stack.zig");
 const types = @import("../types.zig");
+const geometry = @import("geometry.zig");
 const zones = @import("zones.zig");
 
 pub const Runtime = struct {
@@ -70,6 +71,24 @@ pub const Runtime = struct {
                 try self.stack.push(self.transient.freedom.y);
             },
             0x0e => self.transient.freedom = self.transient.projection,
+            0x0f => {
+                const b1 = try self.stack.popIndex();
+                const b0 = try self.stack.popIndex();
+                const a1 = try self.stack.popIndex();
+                const a0 = try self.stack.popIndex();
+                const point = try self.stack.popIndex();
+                var context = try self.pointContext();
+                try geometry.intersect(
+                    &context.twilight,
+                    &context.glyph,
+                    self.transient,
+                    point,
+                    a0,
+                    a1,
+                    b0,
+                    b1,
+                );
+            },
 
             0x10...0x12 => self.setReference(
                 opcode - 0x10,
@@ -84,6 +103,18 @@ pub const Runtime = struct {
                 const loop = try self.stack.popIndex();
                 if (loop == 0) return error.InvalidHintOperand;
                 self.transient.loop = loop;
+            },
+            0x27 => {
+                const second = try self.stack.popIndex();
+                const first = try self.stack.popIndex();
+                var context = try self.pointContext();
+                try geometry.alignPoints(
+                    &context.twilight,
+                    &context.glyph,
+                    self.transient,
+                    first,
+                    second,
+                );
             },
             0x29 => {
                 const point = try self.stack.popIndex();
@@ -167,6 +198,19 @@ pub const Runtime = struct {
                 const first = try self.stack.popIndex();
                 var context = try self.pointContext();
                 try context.setCurveRange(first, last, opcode == 0x81);
+            },
+            0x86, 0x87 => {
+                const second = try self.stack.popIndex();
+                const first = try self.stack.popIndex();
+                var context = try self.pointContext();
+                try geometry.setDualProjectionLine(
+                    &context.twilight,
+                    &context.glyph,
+                    self.transient,
+                    first,
+                    second,
+                    (opcode & 1) != 0,
+                );
             },
             0xc0...0xdf => {
                 const point = try self.stack.popIndex();

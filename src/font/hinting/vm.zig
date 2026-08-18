@@ -253,8 +253,7 @@ pub const Vm = struct {
             0x7a => self.transient.round_mode = .off,
             0x7c => self.transient.round_mode = .up_to_grid,
             0x7d => self.transient.round_mode = .down_to_grid,
-            0x7e => _ = try self.stack.pop(),
-            0x7f => {}, // AA is obsolete and ignored by FreeType.
+            0x7e, 0x7f => _ = try self.stack.pop(),
             0x85 => try self.scanControl(),
             0x88 => try self.getInfo(),
             0x89 => try self.define(true),

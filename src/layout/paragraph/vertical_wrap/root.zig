@@ -109,14 +109,23 @@ fn appendSegment(
             .glyph_end = segment_start,
             .byte_start = segment_byte_start,
             .byte_end = segment_byte_end,
+            .inline_indent = @max(0, options.first_line_indent),
+            .starts_segment = true,
         });
         return;
     }
 
+    const max_inline_size = if (options.max_width > 0 and
+        std.math.isFinite(options.max_width))
+        options.max_width
+    else
+        std.math.inf(f32);
+    const first_indent = @max(0, options.first_line_indent);
+    var first_column = true;
     const limit = if (wrapping_enabled and
         options.max_width > 0 and
         std.math.isFinite(options.max_width))
-        options.max_width
+        @max(0, options.max_width - first_indent)
     else
         std.math.inf(f32);
     if (!std.math.isFinite(limit)) {
@@ -125,6 +134,8 @@ fn appendSegment(
             .glyph_end = segment_end,
             .byte_start = segment_byte_start,
             .byte_end = segment_byte_end,
+            .inline_indent = first_indent,
+            .starts_segment = true,
         });
         return;
     }
@@ -156,18 +167,25 @@ fn appendSegment(
     var glyph_start = segment_start;
     var byte_start = segment_byte_start;
     while (glyph_start < segment_end) {
+        const column_indent = if (first_column) first_indent else 0;
+        const column_limit = if (wrapping_enabled)
+            @max(0, max_inline_size - column_indent)
+        else
+            std.math.inf(f32);
         if (measure.inlineSize(
             glyphs,
             prefix,
             glyph_start,
             segment_end,
             options,
-        ) <= limit) {
+        ) <= column_limit) {
             try output.append(allocator, .{
                 .glyph_start = glyph_start,
                 .glyph_end = segment_end,
                 .byte_start = byte_start,
                 .byte_end = segment_byte_end,
+                .inline_indent = column_indent,
+                .starts_segment = first_column,
             });
             return;
         }
@@ -176,7 +194,7 @@ fn appendSegment(
             prefix,
             glyph_start,
             segment_end,
-            limit,
+            column_limit,
             options,
         );
         const selected = candidates.lastFitting(
@@ -185,7 +203,7 @@ fn appendSegment(
             prefix,
             glyph_start,
             overflow,
-            limit,
+            column_limit,
             options,
         ) orelse if (policy.emergencyAllowedBefore(
             options,
@@ -199,7 +217,7 @@ fn appendSegment(
                 segment_end,
                 segment_byte_end,
                 overflow,
-                limit,
+                column_limit,
                 options,
             )
         else
@@ -217,9 +235,12 @@ fn appendSegment(
             .glyph_end = selected.glyph_end,
             .byte_start = byte_start,
             .byte_end = selected.byte_end,
+            .inline_indent = column_indent,
+            .starts_segment = first_column,
         });
         glyph_start = selected.next_glyph_start;
         byte_start = selected.byte_end;
+        first_column = false;
     }
 }
 

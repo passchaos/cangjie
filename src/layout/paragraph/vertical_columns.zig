@@ -7,7 +7,6 @@
 //! modules. This owner applies resolved metrics and physical RL/LR progression
 //! without importing horizontal regions, tabs, justification, or rollback.
 
-const axes = @import("axes.zig");
 const geometry = @import("../line_break/reflow/geometry.zig");
 const opportunities = @import("../line_break/reflow/opportunities.zig");
 const line_break_opportunity = @import("../line_break/opportunity.zig");
@@ -118,9 +117,15 @@ pub fn build(
             range.glyph_end,
             range.byte_start,
             range.byte_end,
+            range.inline_indent,
         );
     }
-    placeColumns(buffer.lines.items, options.writing_mode);
+    placeColumns(
+        buffer.lines.items,
+        ranges,
+        options.writing_mode,
+        options.paragraph_spacing,
+    );
 }
 
 pub fn contentWidths(
@@ -149,6 +154,7 @@ fn appendColumn(
     glyph_end: usize,
     byte_start: usize,
     byte_end: usize,
+    inline_indent: f32,
 ) !void {
     const line_info = geometry.resolvedLineInfo(
         buffer.runs.items,
@@ -174,7 +180,8 @@ fn appendColumn(
         .byte_start = byte_start,
         .byte_len = byte_end - byte_start,
         .x = 0,
-        .y = 0,
+        .y = inline_indent,
+        .indent = inline_indent,
         .region_x = 0,
         .region_width = block_size,
         .resolved_alignment = .start,
@@ -191,11 +198,16 @@ fn appendColumn(
 
 fn placeColumns(
     lines: anytype,
+    ranges: []const vertical_wrap.Range,
     writing_mode: @import("../../shaping/pipeline/types.zig").WritingMode,
+    paragraph_spacing: f32,
 ) void {
     if (writing_mode == .vertical_lr) {
         var x: f32 = 0;
-        for (lines) |*line| {
+        for (lines, ranges, 0..) |*line, range, index| {
+            if (index != 0 and range.starts_segment) {
+                x += paragraph_spacing;
+            }
             line.x = x;
             line.region_x = x;
             x += line.width;
@@ -204,9 +216,17 @@ fn placeColumns(
     }
 
     var total_width: f32 = 0;
-    for (lines) |line| total_width += line.width;
+    for (lines, ranges, 0..) |line, range, index| {
+        if (index != 0 and range.starts_segment) {
+            total_width += paragraph_spacing;
+        }
+        total_width += line.width;
+    }
     var right = total_width;
-    for (lines) |*line| {
+    for (lines, ranges, 0..) |*line, range, index| {
+        if (index != 0 and range.starts_segment) {
+            right -= paragraph_spacing;
+        }
         right -= line.width;
         line.x = right;
         line.region_x = right;

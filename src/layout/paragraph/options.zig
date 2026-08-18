@@ -149,7 +149,16 @@ pub const Options = struct {
     tab_stops: []const tabs.Stop = &.{},
     letter_spacing: f32 = 0,
     word_spacing: f32 = 0,
+    /// Inline-axis inset reserved before each hard-break segment's first line.
+    ///
+    /// This maps to x horizontally and positive-down y vertically. Negative
+    /// values are accepted for compatibility but clamp to zero at layout.
     first_line_indent: f32 = 0,
+    /// Block-axis distance inserted after each explicit hard-break segment.
+    ///
+    /// This maps to positive-down y horizontally and follows the selected
+    /// left-to-right/right-to-left column progression vertically. Negative
+    /// values intentionally overlap adjacent paragraph segments.
     paragraph_spacing: f32 = 0,
     /// Rectangular paragraph-space areas unavailable to wrapped text.
     ///
@@ -296,8 +305,6 @@ fn validateVerticalForText(text: []const u8, options: Options) !void {
         options.ellipsis or
         options.letter_spacing < 0 or
         options.word_spacing < 0 or
-        options.first_line_indent != 0 or
-        options.paragraph_spacing != 0 or
         options.exclusions.len != 0 or
         options.line_regions.len != 0 or
         options.inline_objects.len != 0 or

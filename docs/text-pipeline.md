@@ -568,12 +568,21 @@ y-axis pen. Public draw-list glyphs therefore retain `y_advance` and
 orientation rather than flattening paragraph output back to horizontal
 coordinates.
 
+Flow-axis paragraph spacing is shared across horizontal and vertical layout.
+`first_line_indent` reserves inline space before the first visual line of each
+hard-break segment—physical x horizontally and positive-down y vertically.
+Soft wraps do not reset it. `paragraph_spacing` appears only between explicit
+hard-break segments—physical y horizontally and block-axis x vertically—and
+therefore mirrors with `vertical_rl` versus `vertical_lr`. Both values affect
+final layout/interaction geometry but not min/max-content intrinsic inline
+sizes.
+
 This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
 axes, vertical paragraph validation rejects bottom-to-top/RTL text, bidi
 controls, tabs, justification,
-ellipsis/line limits, whitespace collapsing, negative spacing, indentation,
-paragraph spacing, exclusions/line regions, inline objects, hyphenation,
+ellipsis/line limits, negative glyph spacing, exclusions/line regions, inline
+objects, hyphenation,
 optical punctuation, and the resumable breaker. Retained whole-paragraph
 layout and intrinsic inline-size measurement are supported and restore the
 pristine vertical shaping snapshot between calls. Returning a concrete

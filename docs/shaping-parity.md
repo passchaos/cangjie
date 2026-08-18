@@ -2217,7 +2217,9 @@ shaping-performance superiority.
   direction. Physical column bounds, y-axis hit testing, horizontal
   caret/selection bars, owned TextGeometry, debug overlays, retained reflow,
   renderer draw-list y pens, and source-preserving `preserve` / `collapse` /
-  `break-spaces` whitespace policy are covered together. Tabs, bidi handling,
+  `break-spaces` whitespace policy are covered together. Flow-axis first-line
+  indentation and hard-segment paragraph spacing map to vertical y and x
+  geometry respectively, including RL/LR mirroring. Tabs, bidi handling,
   exclusions, objects, justification, truncation, and incremental breaking are
   rejected explicitly until they are migrated to the shared inline/block-axis
   model; this is not yet full vertical paragraph parity.

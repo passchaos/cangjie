@@ -164,7 +164,8 @@ pub const ParagraphLine = struct {
     /// Physical top-left corner of the line/column box.
     x: f32,
     y: f32,
-    /// First-line or paragraph-segment indentation reserved before alignment.
+    /// First-line or paragraph-segment inline indentation reserved before
+    /// alignment: physical x horizontally and positive-down y vertically.
     indent: f32 = 0,
     /// Physical x and measure of the selected contiguous line fragment.
     region_x: f32 = 0,

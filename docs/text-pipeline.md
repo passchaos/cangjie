@@ -891,14 +891,18 @@ program, and only then reconstructs public paths and raster input.
 location. It rebuilds the base CVT, applies active cvar tuples in design units,
 scales the varied CVT to 26.6, and only then runs prep; GETVARIATION reads that
 same owned axis-order location. `hintingInstance` delegates with an all-zero
-location. The remaining variation gap is applying gvar to transaction points
-and phantom metrics before glyph scaling and bytecode.
+location. Simple-glyph gvar points and phantoms now use that same location; the
+remaining variation gap is compound component deltas and compatibility modes.
 
 The raw-point boundary now exists for default-instance simple and compound
 `glyf` glyphs as `Face.hintingPointTransaction`. It owns unscaled,
 original-scaled, and mutable 26.6 point arrays; on-curve/touched/overlap flags;
 contour ends; component point/contour ranges; borrowed glyph instruction
-slices; and all four horizontal/vertical phantom points. Compound decoding
+slices; the exact normalized axis-order location; and all four
+horizontal/vertical phantom points. Simple gvar tuples, including per-tuple IUP
+and metric phantom deltas, are applied in design space before 26.6 scaling and
+glyph bytecode. Transactions reject an instance at a different location even
+when face, PPEM, and render target match. Compound decoding
 recursively applies exact 2.14 matrices, scaled/unscaled offsets, grid-rounded
 offsets, nested point matching, and `USE_MY_METRICS` ownership. Compound
 execution recursively runs each child program before component transform and
@@ -923,11 +927,12 @@ origin. `Rasterizer.drawPixelOutline` and `preparePixelOutline` consume that
 path at scale one, applying only caller x/baseline placement; they deliberately
 skip the design-outline UPEM scale, small-glyph alignment, and synthetic
 emboldening because the bytecode has already made pixel-grid decisions.
-Compound glyphs can be decoded, executed, and reconstructed; gvar-backed
+Compound glyphs can be decoded, executed, and reconstructed; compound-gvar
 transaction creation still returns `UnsupportedHintGlyph` rather than silently
-losing variation semantics. Transactions reject an instance created from
-another face or PPEM/target. Automatic hinted run rendering, variation-aware
-cvar/gvar state, and interpreter compatibility modes are the next layers.
+losing component variation semantics. Transactions reject an instance created
+from another face, PPEM, target, or normalized location. Automatic hinted run
+rendering, compound gvar state, and interpreter compatibility modes are the
+next layers.
 
 The shaping integration suite is similarly rooted at
 `src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,

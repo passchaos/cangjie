@@ -1673,10 +1673,24 @@ pub const Font = struct {
                 .max_component_depth = limits.max_component_depth,
             },
         );
+        if (self.gvar) |gvar| {
+            try sfnt.checksum.validate(self.data, gvar);
+            try gvar_validation.validate(
+                self.data,
+                gvar,
+                self.glyph_count,
+                self.fvar_axis_count orelse return error.BadSfnt,
+                .{
+                    .loca = loca,
+                    .glyf = glyf,
+                    .index_to_loc_format = self.index_to_loc_format,
+                },
+            );
+        }
         const data = try self.glyphData(glyph_id);
         if (data.len == 0) return error.UnsupportedHintGlyph;
         const contour_count = try bin.readI16At(data, 0);
-        if (self.gvar != null) {
+        if (self.gvar != null and contour_count < 0) {
             return error.UnsupportedHintGlyph;
         }
         const horizontal = try self.horizontalMetrics(glyph_id);
@@ -1694,7 +1708,17 @@ pub const Font = struct {
             .top_side_bearing = vertical.top_side_bearing,
         };
         if (contour_count >= 0) {
-            return hinting.outline.decodeSimple(
+            const variation: ?hinting.outline.Variation =
+                if (self.gvar) |gvar| .{
+                    .data = self.data,
+                    .table_offset = gvar.offset,
+                    .table_length = gvar.length,
+                    .glyph_count = self.glyph_count,
+                    .axis_count = self.fvar_axis_count orelse
+                        return error.BadSfnt,
+                    .normalized_coords = instance.normalizedCoordinates(),
+                } else null;
+            var transaction = try hinting.outline.decodeSimple(
                 allocator,
                 @intFromPtr(self),
                 instance.target,
@@ -1703,9 +1727,16 @@ pub const Font = struct {
                 @intCast(contour_count),
                 metrics,
                 instance.scale_16_16,
+                variation,
             );
+            errdefer transaction.deinit();
+            transaction.normalized_coords = try allocator.dupe(
+                f32,
+                instance.normalizedCoordinates(),
+            );
+            return transaction;
         }
-        return hinting.compound.decode(
+        var transaction = try hinting.compound.decode(
             allocator,
             @intFromPtr(self),
             instance.target,
@@ -1721,6 +1752,12 @@ pub const Font = struct {
                 .resolveFn = resolveHintingComponent,
             },
         );
+        errdefer transaction.deinit();
+        transaction.normalized_coords = try allocator.dupe(
+            f32,
+            instance.normalizedCoordinates(),
+        );
+        return transaction;
     }
 
     /// Read validated metadata from the optional OpenType `HVAR` table.

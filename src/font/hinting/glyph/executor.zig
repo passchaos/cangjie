@@ -50,7 +50,11 @@ pub fn execute(
     try state.twilight.validate();
     if (transaction.face_identity != state.source.face_identity or
         transaction.scale_16_16 != state.graphics.scale_16_16 or
-        transaction.target != state.graphics.target)
+        transaction.target != state.graphics.target or
+        !locationsEqual(
+            transaction.normalized_coords,
+            state.source.normalized_coords,
+        ))
     {
         return error.StaleHintingInstance;
     }
@@ -283,11 +287,22 @@ const OwnedGlyph = struct {
         errdefer allocator.free(flags);
         const contours = try allocator.dupe(u16, source.contours);
         errdefer allocator.free(contours);
-        const components = try allocator.dupe(
-            outline.ComponentRecord,
-            source.components,
-        );
-        errdefer allocator.free(components);
+        const components: []outline.ComponentRecord =
+            if (source.components.len == 0)
+                @constCast(&.{})
+            else
+                try allocator.dupe(
+                    outline.ComponentRecord,
+                    source.components,
+                );
+        errdefer if (components.len != 0) allocator.free(components);
+        const normalized_coords: []f32 =
+            if (source.normalized_coords.len == 0)
+                @constCast(&.{})
+            else
+                try allocator.dupe(f32, source.normalized_coords);
+        errdefer if (normalized_coords.len != 0)
+            allocator.free(normalized_coords);
         return .{ .transaction = .{
             .allocator = allocator,
             .face_identity = source.face_identity,
@@ -302,6 +317,7 @@ const OwnedGlyph = struct {
             .components = components,
             .instructions = source.instructions,
             .scale_16_16 = source.scale_16_16,
+            .normalized_coords = normalized_coords,
             .is_compound = source.is_compound,
         } };
     }
@@ -332,6 +348,7 @@ const OwnedGlyph = struct {
                 @intCast(contour_count),
                 source.metrics,
                 parent.scale_16_16,
+                null,
             )
         else
             try compound.decode(
@@ -391,6 +408,13 @@ fn emptyTransaction(
         };
         point.* = origin.*;
     }
+    const normalized_coords: []f32 =
+        if (parent.normalized_coords.len == 0)
+            @constCast(&.{})
+        else
+            try allocator.dupe(f32, parent.normalized_coords);
+    errdefer if (normalized_coords.len != 0)
+        allocator.free(normalized_coords);
     return .{
         .allocator = allocator,
         .face_identity = parent.face_identity,
@@ -405,7 +429,16 @@ fn emptyTransaction(
         .components = &.{},
         .instructions = &.{},
         .scale_16_16 = parent.scale_16_16,
+        .normalized_coords = normalized_coords,
     };
+}
+
+fn locationsEqual(first: []const f32, second: []const f32) bool {
+    if (first.len != second.len) return false;
+    for (first, second) |a, b| {
+        if (@as(u32, @bitCast(a)) != @as(u32, @bitCast(b))) return false;
+    }
+    return true;
 }
 
 const ComponentOffsets = struct {

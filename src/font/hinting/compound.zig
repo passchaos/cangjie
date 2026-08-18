@@ -159,6 +159,7 @@ const Builder = struct {
             contour_count,
             source.metrics,
             self.scale_16_16,
+            null,
         );
         defer decoded.deinit();
         const point_start = self.points.items.len;

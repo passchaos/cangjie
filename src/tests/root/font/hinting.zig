@@ -187,6 +187,17 @@ test "installed cvar font owns non-default hinting location" {
     for (instance.normalizedCoordinates()) |coordinate| {
         try std.testing.expectEqual(@as(f32, 0.5), coordinate);
     }
+    const glyph_id = try face.glyphs().index('A');
+    var transaction = try face.hintingPointTransaction(
+        allocator,
+        &instance,
+        glyph_id,
+    );
+    defer transaction.deinit();
+    try face.executeHintingTransaction(&instance, &transaction);
+    var pixel = try transaction.toPixelOutline();
+    defer pixel.deinit();
+    try std.testing.expect(pixel.commands.items.len != 0);
 }
 
 test "installed simple glyph programs execute transactionally" {
@@ -349,7 +360,7 @@ test "simple glyf transaction retains raw point and phantom ownership" {
     }
 }
 
-test "point transactions reject foreign compound and variable ownership" {
+test "point transactions reject foreign and compound-variable ownership" {
     const allocator = std.testing.allocator;
     const first_bytes = try test_font.buildTrueTypeHintingTtf(allocator);
     defer allocator.free(first_bytes);
@@ -381,22 +392,80 @@ test "point transactions reject foreign compound and variable ownership" {
             2,
         ),
     );
+}
 
-    const variable_bytes = try test_font.buildGvarTtf(allocator);
-    defer allocator.free(variable_bytes);
-    var variable = try cangjie.font.Face.parse(allocator, variable_bytes);
-    defer variable.deinit();
-    var variable_instance =
-        try variable.hintingInstance(allocator, 16, .normal);
-    defer variable_instance.deinit();
-    try std.testing.expectError(
-        error.UnsupportedHintGlyph,
-        variable.hintingPointTransaction(
-            allocator,
-            &variable_instance,
-            1,
-        ),
+test "simple gvar transactions apply point and phantom deltas before scaling" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildGvarDeltaTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+
+    var default_instance = try face.hintingInstance(
+        allocator,
+        20,
+        .normal,
     );
+    defer default_instance.deinit();
+    var default_transaction = try face.hintingPointTransaction(
+        allocator,
+        &default_instance,
+        1,
+    );
+    defer default_transaction.deinit();
+
+    var varied_instance = try face.hintingInstanceAt(
+        allocator,
+        20,
+        .normal,
+        &.{0.5},
+    );
+    defer varied_instance.deinit();
+    var varied = try face.hintingPointTransaction(
+        allocator,
+        &varied_instance,
+        1,
+    );
+    defer varied.deinit();
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0.5},
+        varied.normalized_coords,
+    );
+
+    try std.testing.expectEqual(
+        default_transaction.unscaled[0].x + 5,
+        varied.unscaled[0].x,
+    );
+    try std.testing.expectEqual(
+        default_transaction.unscaled[varied.real_point_count].x + 1,
+        varied.unscaled[varied.real_point_count].x,
+    );
+    try std.testing.expectEqual(
+        default_transaction.unscaled[varied.real_point_count + 1].x + 10,
+        varied.unscaled[varied.real_point_count + 1].x,
+    );
+    try std.testing.expectEqual(
+        default_transaction.unscaled[varied.real_point_count + 2].y + 4,
+        varied.unscaled[varied.real_point_count + 2].y,
+    );
+    try std.testing.expectEqual(
+        default_transaction.unscaled[varied.real_point_count + 3].y - 2,
+        varied.unscaled[varied.real_point_count + 3].y,
+    );
+    // Advance delta is 9 FUnits. At 20 PPEM / 1000 UPEM it quantizes to 12
+    // units in 26.6 after gvar is applied in design space.
+    try std.testing.expectEqual(
+        @as(i32, 12),
+        (varied.phantomPoints()[1].x - varied.phantomPoints()[0].x) -
+            (default_transaction.phantomPoints()[1].x -
+                default_transaction.phantomPoints()[0].x),
+    );
+    try std.testing.expectError(
+        error.StaleHintingInstance,
+        face.executeHintingTransaction(&default_instance, &varied),
+    );
+    try face.executeHintingTransaction(&varied_instance, &varied);
 }
 
 test "compound point transactions preserve transformed raw topology" {

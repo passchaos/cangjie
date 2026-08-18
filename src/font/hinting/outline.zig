@@ -10,6 +10,8 @@ const std = @import("std");
 const bin = @import("../../binary.zig");
 const glyph = @import("../../glyph.zig");
 const glyf = @import("../tables/truetype/glyf/root.zig");
+const gvar = @import("../../opentype/gvar.zig");
+const numeric = @import("../outline/numeric.zig");
 const types = @import("types.zig");
 
 pub const Point = struct {
@@ -83,9 +85,13 @@ pub const Transaction = struct {
     components: []ComponentRecord = &.{},
     instructions: []const u8,
     scale_16_16: i32,
+    normalized_coords: []f32 = &.{},
     is_compound: bool = false,
 
     pub fn deinit(self: *Transaction) void {
+        if (self.normalized_coords.len != 0) {
+            self.allocator.free(self.normalized_coords);
+        }
         if (self.components.len != 0) {
             self.allocator.free(self.components);
         }
@@ -158,6 +164,15 @@ pub const Metrics = struct {
     top_side_bearing: i32,
 };
 
+pub const Variation = struct {
+    data: []const u8,
+    table_offset: usize,
+    table_length: usize,
+    glyph_count: usize,
+    axis_count: usize,
+    normalized_coords: []const f32,
+};
+
 pub fn decodeSimple(
     allocator: std.mem.Allocator,
     face_identity: usize,
@@ -167,6 +182,7 @@ pub fn decodeSimple(
     contour_count: u16,
     metrics: Metrics,
     scale_16_16: i32,
+    variation: ?Variation,
 ) types.Error!Transaction {
     var reader = bin.Reader.init(data);
     _ = reader.readI16() catch return error.BadSfnt;
@@ -286,6 +302,39 @@ pub fn decodeSimple(
         .y = metrics.bounds.y_max + metrics.top_side_bearing -
             metrics.vertical_advance,
     };
+    if (variation) |context| {
+        const deltas = gvar.accumulateSimpleGlyphPointDeltasWithReader(
+            allocator,
+            context.data,
+            context.table_offset,
+            context.table_length,
+            context.glyph_count,
+            context.axis_count,
+            glyph_id,
+            context.normalized_coords,
+            []const Point,
+            unscaled[0..real_point_count],
+            real_point_count,
+            readPointForVariation,
+            contours,
+            true,
+        ) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => error.BadSfnt,
+        };
+        defer if (deltas) |owned| allocator.free(owned);
+        if (deltas) |active| {
+            if (active.len != point_count) return error.BadSfnt;
+            for (unscaled, active) |*point, delta| {
+                point.x = roundVariationCoordinate(
+                    @as(f32, @floatFromInt(point.x)) + delta.x,
+                );
+                point.y = roundVariationCoordinate(
+                    @as(f32, @floatFromInt(point.y)) + delta.y,
+                );
+            }
+        }
+    }
     for (unscaled, original, points) |raw, *origin, *point| {
         origin.* = .{
             .x = types.scaleFUnits(raw.x, scale_16_16),
@@ -307,6 +356,24 @@ pub fn decodeSimple(
         .instructions = instructions,
         .scale_16_16 = scale_16_16,
     };
+}
+
+fn readPointForVariation(points: []const Point, index: usize) gvar.Point {
+    return .{
+        .x = @floatFromInt(points[index].x),
+        .y = @floatFromInt(points[index].y),
+    };
+}
+
+fn roundVariationCoordinate(value: f32) i32 {
+    const rounded = numeric.roundOpenType(value);
+    if (rounded <= @as(f32, @floatFromInt(std.math.minInt(i32)))) {
+        return std.math.minInt(i32);
+    }
+    if (rounded >= @as(f32, @floatFromInt(std.math.maxInt(i32)))) {
+        return std.math.maxInt(i32);
+    }
+    return @intFromFloat(rounded);
 }
 
 fn appendContour(

@@ -32,6 +32,7 @@ pub fn Result(comptime TextStyle: type) type {
         inline_objects: []inline_object.Positioned,
         style_runs: []StyleRun(TextStyle),
         decorations: []decorations.Segment,
+        content_widths: paragraph_types.ContentWidths,
         paragraph: paragraph_types.ParagraphLayout,
 
         /// `TextStyle` can contain borrowed strings and feature/variation
@@ -138,6 +139,8 @@ pub fn layoutResolved(
         .inline_objects = inline_objects,
         .style_runs = style_runs,
         .decorations = decoration_segments,
+        .content_widths = styled.contentWidths() orelse
+            return error.InvalidParagraphLayout,
         .paragraph = .{
             .glyphs = glyphs,
             .runs = font_runs,

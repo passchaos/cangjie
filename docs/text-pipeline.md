@@ -697,6 +697,20 @@ reflow can switch among all three policies without reshaping or losing source
 atoms. Only U+0020 and U+0009 are collapsible—NBSP and other Unicode space
 characters retain their UAX #14 semantics.
 
+`ShapedParagraph.contentWidths` reports policy-aware intrinsic inline bounds
+from width-independent paragraph content. `ContentWidths.max` is the widest
+hard-break segment when no soft opportunity is taken; `ContentWidths.min` is
+the widest fragment when every current policy-allowed safe soft opportunity is
+taken. The calculation scans retained UAX/dictionary/hyphenation analysis
+directly instead of approximating min-content with an arbitrary tiny
+container. Visible discretionary-hyphen advances, aligned tab fields, in-flow
+objects, paragraph/styled spacing, white-space policy, and shaping safety
+therefore participate exactly. `overflow-wrap: break-word` does not reduce
+min-content, while `anywhere` and `word-break: break-all` do. Container width,
+alignment, line limits, exclusions, and out-of-flow placements do not affect
+intrinsic widths. The operation validates retained shaping/object identities
+and performs no GSUB/GPOS pass.
+
 `ParagraphOptions.tab_stops` adds an explicit paragraph tab ruler. Each
 `TabStop.position` is a finite, positive, strictly increasing advance from the
 selected line fragment's logical inline start; this keeps the same ruler

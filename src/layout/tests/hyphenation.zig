@@ -264,6 +264,50 @@ test "word break all suppresses automatic hyphen materialization" {
     }
 }
 
+test "intrinsic min content includes selected automatic hyphen width" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCodepointSetTtf(
+        allocator,
+        &latin_codepoints,
+    );
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = font_fallback.Cascade.init(&.{&font});
+    var dictionary = try englishDictionary(allocator);
+    defer dictionary.deinit();
+
+    var shape_buffer = context_output.Buffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try shaping_orchestrator.TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        "hyphenation",
+        20,
+        .{
+            .max_width = 1000,
+            .hyphenation = .{ .dictionary = &dictionary },
+        },
+    );
+    defer paragraph.deinit();
+    const widths = try paragraph.contentWidths(.{
+        .max_width = 1,
+        .hyphenation = .{ .dictionary = &dictionary },
+    });
+    const hyphen_width = try hyphenAdvance(&font, 20);
+    // The first authored boundary is "hy-". Its intrinsic fragment must
+    // include the source-neutral visible glyph rather than only source letters.
+    try std.testing.expect(
+        widths.min >=
+            paragraph.glyphs[0].x_advance +
+                paragraph.glyphs[1].x_advance +
+                hyphen_width -
+                0.001,
+    );
+    try std.testing.expect(widths.min < widths.max);
+}
+
 test "retained automatic hyphenation is repeatable across widths" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildCodepointSetTtf(

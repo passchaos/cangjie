@@ -17,6 +17,7 @@ pub const Metadata = styled_paragraph.GlyphMetadata;
 pub const Buffer = struct {
     allocator: std.mem.Allocator,
     metadata: std.ArrayList(Metadata) = .empty,
+    content_widths: ?@import("types/paragraph.zig").ContentWidths = null,
 
     pub fn init(allocator: std.mem.Allocator) Buffer {
         return .{ .allocator = allocator };
@@ -29,10 +30,17 @@ pub const Buffer = struct {
 
     pub fn clear(self: *Buffer) void {
         self.metadata.clearRetainingCapacity();
+        self.content_widths = null;
     }
 
     pub fn glyphMetadata(self: *const Buffer) []const Metadata {
         return self.metadata.items;
+    }
+
+    pub fn contentWidths(
+        self: *const Buffer,
+    ) ?@import("types/paragraph.zig").ContentWidths {
+        return self.content_widths;
     }
 };
 

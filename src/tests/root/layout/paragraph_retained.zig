@@ -259,6 +259,159 @@ test "retained reflow switches whitespace collapse without source loss" {
     );
 }
 
+test "retained paragraph reports policy-aware intrinsic content widths" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    const text = "AAAA AAA";
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        text,
+        20,
+        .{ .max_width = 100 },
+    );
+    defer paragraph.deinit();
+
+    const normal = try paragraph.contentWidths(.{
+        .max_width = 1,
+        .overflow_wrap = .normal,
+    });
+    const break_word = try paragraph.contentWidths(.{
+        .max_width = 999,
+        .overflow_wrap = .break_word,
+    });
+    try std.testing.expectApproxEqAbs(normal.min, break_word.min, 0.001);
+    try std.testing.expectApproxEqAbs(normal.max, break_word.max, 0.001);
+    try std.testing.expect(normal.min < normal.max);
+
+    const anywhere = try paragraph.contentWidths(.{
+        .max_width = 999,
+        .overflow_wrap = .anywhere,
+    });
+    try std.testing.expect(anywhere.min < break_word.min);
+    try std.testing.expectApproxEqAbs(normal.max, anywhere.max, 0.001);
+
+    const break_all = try paragraph.contentWidths(.{
+        .max_width = 999,
+        .word_break = .break_all,
+        .overflow_wrap = .normal,
+    });
+    try std.testing.expectApproxEqAbs(anywhere.min, break_all.min, 0.001);
+    try std.testing.expectApproxEqAbs(normal.max, break_all.max, 0.001);
+
+    const no_wrap = try paragraph.contentWidths(.{
+        .max_width = 1,
+        .wrap_mode = .no_wrap,
+        .word_break = .break_all,
+        .overflow_wrap = .anywhere,
+    });
+    try std.testing.expectApproxEqAbs(no_wrap.max, no_wrap.min, 0.001);
+}
+
+test "engine exposes one-shot intrinsic content widths" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const face_mod = @import("../../../font/face/root.zig");
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var engine = support.Engine.init(allocator, .{});
+    defer engine.deinit();
+    const cascade = face_mod.Cascade.init(
+        &.{face_mod.backend.face(&font)},
+    );
+
+    const widths = try engine.contentWidths(cascade, .{
+        .text = "AAAA AAA",
+        .font_size = 20,
+        .options = .{
+            .max_width = 1,
+            .overflow_wrap = .anywhere,
+        },
+    });
+    try std.testing.expect(widths.min < widths.max);
+}
+
+test "intrinsic widths honor hard breaks whitespace tabs and objects" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    const marker = @import("../../../layout/inline_object/root.zig");
+    const text = " A  A\nA\t" ++ marker.object_replacement_utf8 ++ " A";
+    const objects = [_]@import("../../../layout/inline_object/root.zig").Object{
+        .{
+            .id = 77,
+            .byte_index = " A  A\nA\t".len,
+            .width = 30,
+            .height = 20,
+        },
+    };
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        text,
+        20,
+        .{
+            .max_width = 100,
+            .inline_objects = &objects,
+        },
+    );
+    defer paragraph.deinit();
+
+    const preserved = try paragraph.contentWidths(.{
+        .max_width = 1,
+        .inline_objects = &objects,
+        .tab_stops = &.{.{ .position = 80 }},
+    });
+    try std.testing.expect(preserved.min >= 30);
+    try std.testing.expect(preserved.max >= preserved.min);
+
+    const collapsed = try paragraph.contentWidths(.{
+        .max_width = 999,
+        .inline_objects = &objects,
+        .tab_stops = &.{.{ .position = 80 }},
+        .white_space_collapse = .collapse,
+    });
+    try std.testing.expect(collapsed.max < preserved.max);
+    try std.testing.expect(collapsed.min >= 30);
+
+    const break_spaces = try paragraph.contentWidths(.{
+        .max_width = 999,
+        .inline_objects = &objects,
+        .tab_stops = &.{.{ .position = 80 }},
+        .white_space_collapse = .break_spaces,
+    });
+    try std.testing.expect(break_spaces.min <= break_spaces.max);
+    // break-spaces keeps each authored blank in intrinsic measurement rather
+    // than trimming it like normal UAX whitespace.
+    try std.testing.expect(break_spaces.max >= collapsed.max);
+}
+
 test "retained paragraphs own run variation coordinates" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

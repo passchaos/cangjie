@@ -97,6 +97,14 @@ pub const TextMetrics = struct {
     leading: f32,
 };
 
+/// Intrinsic inline-size bounds independent from a chosen container width.
+pub const ContentWidths = struct {
+    /// Widest fragment when every policy-allowed soft opportunity is taken.
+    min: f32,
+    /// Widest hard-break segment when no soft opportunity is taken.
+    max: f32,
+};
+
 /// A laid-out visual line. Glyph and run ranges are indexes into the owning
 /// ParagraphLayout arrays, keeping line objects small and cheap to copy.
 pub const ParagraphLine = struct {

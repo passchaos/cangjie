@@ -34,6 +34,7 @@ pub const WhiteSpaceCollapse = paragraph_types.WhiteSpaceCollapse;
 pub const LineBreakStrategy = paragraph_types.LineBreakStrategy;
 pub const BaselineMetrics = reflow.BaselineMetrics;
 pub const TextMetrics = paragraph_types.TextMetrics;
+pub const ContentWidths = paragraph_types.ContentWidths;
 pub const InlineObject = inline_object.Object;
 pub const InlineObjectKind = inline_object.Kind;
 pub const PositionedInlineObject = inline_object.Positioned;

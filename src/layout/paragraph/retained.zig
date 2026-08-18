@@ -11,6 +11,7 @@ const jstf_justification = @import("../justification/jstf.zig");
 const jstf_extender = @import("../justification/jstf/extender.zig");
 const kashida_justification = @import("../justification/kashida.zig");
 const paragraph_options = @import("options.zig");
+const content_widths = @import("content_widths.zig");
 const line_break_opportunity = @import("../line_break/opportunity.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 const run_types = @import("../types/runs.zig");
@@ -68,6 +69,41 @@ pub const ShapedParagraph = struct {
             .runs = self.runs,
             .normalized_variation_coords = self.normalized_variation_coords,
         };
+    }
+
+    /// Calculate intrinsic inline-size bounds without another shaping pass.
+    ///
+    /// Geometry-only options such as width, alignment, line limits,
+    /// exclusions, and out-of-flow placements do not affect these bounds.
+    pub fn contentWidths(
+        self: *const ShapedParagraph,
+        options: paragraph_options.Options,
+    ) !paragraph_types.ContentWidths {
+        try paragraph_options.validate(options);
+        try inline_object.validate(self.text, options.inline_objects);
+        if (options.word_break_dictionary != self.word_break_dictionary or
+            options.hyphenation.dictionary != self.hyphenation_dictionary or
+            !inline_object.indexesMatch(
+                self.inline_object_indexes,
+                options.inline_objects,
+            ) or
+            !paragraph_options.matchesShapeKey(
+                self.text,
+                options,
+                self.shape_key,
+            ))
+        {
+            return error.ParagraphShapingOptionsChanged;
+        }
+        return content_widths.calculate(
+            self.allocator,
+            self.text,
+            self.glyphs,
+            self.runs,
+            self.grapheme_clusters,
+            self.line_breaks,
+            options,
+        );
     }
 
     /// Rebuild visual lines without repeating whole-paragraph shaping or

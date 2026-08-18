@@ -63,6 +63,54 @@ test "unified attributed paragraph wraps sizes and preserves paint runs" {
     try std.testing.expectEqual(@as(u8, 255), result.style_runs[1].style.color.b);
 }
 
+test "attributed layout exposes final styled intrinsic widths" {
+    const allocator = std.testing.allocator;
+    var owned = try OwnedFont.init(
+        allocator,
+        try test_font.buildLastResortCmapTtfWithKern(
+            allocator,
+            false,
+        ),
+    );
+    defer owned.deinit();
+    const fonts = [_]*const font_mod.Font{&owned.font};
+    const text = "AAAA AAA";
+    const spans = [_]style.StyleSpan{
+        .{
+            .byte_range = .{ .start = 0, .len = 5 },
+            .style = .{ .font_size = 20 },
+        },
+        .{
+            .byte_range = .{ .start = 5, .len = text.len - 5 },
+            .style = .{
+                .font_size = 30,
+                .letter_spacing = 2,
+            },
+        },
+    };
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
+        allocator,
+        font_fallback.Cascade.init(&fonts),
+        .{
+            .text = text,
+            .spans = &spans,
+            .paragraph_style = .{
+                .overflow_wrap = .anywhere,
+            },
+        },
+        60,
+    );
+    defer result.deinit();
+
+    try std.testing.expect(
+        result.content_widths.min < result.content_widths.max,
+    );
+    try std.testing.expect(result.content_widths.min > 16);
+    try std.testing.expect(
+        result.content_widths.max >= result.paragraph.width,
+    );
+}
+
 test "attributed balanced wrapping keeps style metadata aligned" {
     const allocator = std.testing.allocator;
     var owned = try OwnedFont.init(

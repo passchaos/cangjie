@@ -77,6 +77,7 @@ pub const Engine = struct {
     pub const StyledParagraph = struct {
         layout: paragraph_types.ParagraphLayout,
         glyph_metadata: []const styled_buffer.Metadata,
+        content_widths: paragraph_types.ContentWidths,
     };
 
     pub fn init(
@@ -260,7 +261,33 @@ pub const Engine = struct {
         return .{
             .layout = paragraph,
             .glyph_metadata = state.styled_output.glyphMetadata(),
+            .content_widths = state.styled_output.contentWidths() orelse
+                return error.InvalidParagraphLayout,
         };
+    }
+
+    /// Shape once, then calculate policy-aware intrinsic paragraph widths.
+    pub fn contentWidths(
+        self: *Engine,
+        cascade: face_mod.Cascade,
+        request: ParagraphRequest,
+    ) !paragraph_types.ContentWidths {
+        const state = self.getStateForWork();
+        var paragraph =
+            try text_shaper.TextShaper.shapeParagraphUtf8WithCaches(
+                state.allocator,
+                internalCascade(cascade),
+                if (state.cache_font_data) &state.font_fallback else null,
+                if (state.cache_font_data) &state.glyph_metrics else null,
+                if (state.cache_font_data) &state.glyph_indices else null,
+                state.shapedRunCache(),
+                &state.output,
+                request.text,
+                request.font_size,
+                request.options,
+            );
+        defer paragraph.deinit();
+        return paragraph.contentWidths(request.options);
     }
 
     pub fn measure(

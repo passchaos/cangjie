@@ -14,6 +14,8 @@ const styled_reshape = @import("reshape/styled.zig");
 const punctuation_compression = @import("../punctuation/compression.zig");
 const punctuation_hanging = @import("../punctuation/hanging.zig");
 const paragraph_options = @import("options.zig");
+const content_widths = @import("content_widths.zig");
+const line_break_analysis = @import("../line_break/analysis.zig");
 const source_items = @import("source_items.zig");
 const tabs = @import("tabs.zig");
 const paragraph_types = @import("../types/paragraph.zig");
@@ -205,6 +207,30 @@ const Driver = struct {
         try styled_buffer.applySpacing(
             self.styled.metadata.items,
             self.buffer.glyphs.items,
+        );
+        const intrinsic_graphemes = try unicode.itemizeGraphemeClusters(
+            self.buffer.allocator,
+            self.text,
+        );
+        defer self.buffer.allocator.free(intrinsic_graphemes);
+        const intrinsic_breaks = try line_break_analysis.itemizeWithHyphenation(
+            self.buffer.allocator,
+            self.text,
+            intrinsic_graphemes,
+            self.options.word_break_dictionary,
+            self.options.hyphenation.dictionary,
+            .normal,
+            .break_word,
+        );
+        defer self.buffer.allocator.free(intrinsic_breaks);
+        self.styled.content_widths = try content_widths.calculate(
+            self.buffer.allocator,
+            self.text,
+            self.buffer.glyphs.items,
+            self.buffer.runs.items,
+            intrinsic_graphemes,
+            intrinsic_breaks,
+            self.options,
         );
 
         var line_options = self.options;

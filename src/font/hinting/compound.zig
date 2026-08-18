@@ -39,6 +39,9 @@ pub fn decode(
     allocator: std.mem.Allocator,
     face_identity: usize,
     target: types.Target,
+    interpreter: types.Interpreter,
+    hinting_enabled: bool,
+    backward_compatibility: bool,
     root: Source,
     scale_16_16: i32,
     max_component_depth: u16,
@@ -47,6 +50,10 @@ pub fn decode(
 ) types.Error!outline.Transaction {
     var builder = Builder{
         .allocator = allocator,
+        .target = target,
+        .interpreter = interpreter,
+        .hinting_enabled = hinting_enabled,
+        .backward_compatibility = backward_compatibility,
         .scale_16_16 = scale_16_16,
         .max_component_depth = max_component_depth,
         .resolver = resolver,
@@ -74,6 +81,7 @@ pub fn decode(
         .allocator = allocator,
         .face_identity = face_identity,
         .target = target,
+        .interpreter = interpreter,
         .glyph_id = root.glyph_id,
         .real_point_count = real_point_count,
         .points = points,
@@ -86,6 +94,8 @@ pub fn decode(
         .scale_16_16 = scale_16_16,
         .variation = variation,
         .is_compound = true,
+        .hinting_enabled = hinting_enabled,
+        .backward_compatibility = backward_compatibility,
     };
 }
 
@@ -110,6 +120,10 @@ const Offsets = struct {
 
 const Builder = struct {
     allocator: std.mem.Allocator,
+    target: types.Target,
+    interpreter: types.Interpreter,
+    hinting_enabled: bool,
+    backward_compatibility: bool,
     scale_16_16: i32,
     max_component_depth: u16,
     resolver: Resolver,
@@ -140,7 +154,7 @@ const Builder = struct {
         if (source.data.len == 0) {
             return .{
                 .effective_metrics = source.metrics,
-                .effective_phantoms = phantoms(source.metrics),
+                .effective_phantoms = self.phantoms(source.metrics),
             };
         }
         const contour_count = bin.readI16At(source.data, 0) catch
@@ -170,7 +184,8 @@ const Builder = struct {
         var decoded = try outline.decodeSimple(
             self.allocator,
             0,
-            .normal,
+            self.target,
+            self.interpreter,
             source.glyph_id,
             source.data,
             contour_count,
@@ -228,7 +243,7 @@ const Builder = struct {
         );
         defer if (variation_deltas) |owned| self.allocator.free(owned);
         var effective_phantoms = variedCompoundPhantoms(
-            phantoms(source.metrics),
+            self.phantoms(source.metrics),
             variation_deltas,
             component_count,
         );
@@ -403,8 +418,12 @@ const Builder = struct {
             .y = types.scaleFUnits(unscaled.y, self.scale_16_16),
         };
         if ((component_flags & 0x0004) != 0) {
-            scaled.x = roundGrid(scaled.x);
-            scaled.y = roundGrid(scaled.y);
+            if (self.hinting_enabled) {
+                if (!self.backward_compatibility) {
+                    scaled.x = roundGrid(scaled.x);
+                }
+                scaled.y = roundGrid(scaled.y);
+            }
         }
         return .{ .scaled = scaled, .unscaled = unscaled };
     }
@@ -466,6 +485,28 @@ const Builder = struct {
             });
             try self.flags.append(self.allocator, .{});
         }
+    }
+
+    fn phantoms(self: Builder, metrics: outline.Metrics) [4]outline.Point {
+        const left = metrics.bounds.x_min - metrics.left_side_bearing;
+        const vertical_x = outline.verticalPhantomX(
+            self.interpreter,
+            self.target,
+            metrics.advance_width,
+        );
+        return .{
+            .{ .x = left, .y = 0 },
+            .{ .x = left + metrics.advance_width, .y = 0 },
+            .{
+                .x = vertical_x,
+                .y = metrics.bounds.y_max + metrics.top_side_bearing,
+            },
+            .{
+                .x = vertical_x,
+                .y = metrics.bounds.y_max + metrics.top_side_bearing -
+                    metrics.vertical_advance,
+            },
+        };
     }
 };
 
@@ -531,6 +572,50 @@ pub fn roundGrid(value: i32) i32 {
     return (value +| 32) & ~@as(i32, 63);
 }
 
+test "compound offset rounding follows hinting compatibility policy" {
+    var builder = Builder{
+        .allocator = std.testing.allocator,
+        .target = .normal,
+        .interpreter = .cleartype,
+        .hinting_enabled = true,
+        .backward_compatibility = true,
+        .scale_16_16 = 0x10000,
+        .max_component_depth = 1,
+        .resolver = undefined,
+        .variation = null,
+    };
+    const transform = FixedTransform{
+        .xx = 0x4000,
+        .yx = 0,
+        .xy = 0,
+        .yy = 0x4000,
+    };
+    const compatible = builder.offsetPlacement(
+        10,
+        10,
+        0x0004,
+        transform,
+    );
+    try std.testing.expectEqual(
+        outline.Point{ .x = 10, .y = 0 },
+        compatible.scaled,
+    );
+
+    builder.backward_compatibility = false;
+    const native = builder.offsetPlacement(10, 10, 0x0004, transform);
+    try std.testing.expectEqual(
+        outline.Point{ .x = 0, .y = 0 },
+        native.scaled,
+    );
+
+    builder.hinting_enabled = false;
+    const disabled = builder.offsetPlacement(10, 10, 0x0004, transform);
+    try std.testing.expectEqual(
+        outline.Point{ .x = 10, .y = 10 },
+        disabled.scaled,
+    );
+}
+
 fn compoundInstructions(
     data: []const u8,
     offset: usize,
@@ -540,23 +625,6 @@ fn compoundInstructions(
     const start = offset + 2;
     if (len > data.len - start) return error.BadSfnt;
     return data[start .. start + len];
-}
-
-fn phantoms(metrics: outline.Metrics) [4]outline.Point {
-    const left = metrics.bounds.x_min - metrics.left_side_bearing;
-    return .{
-        .{ .x = left, .y = 0 },
-        .{ .x = left + metrics.advance_width, .y = 0 },
-        .{
-            .x = 0,
-            .y = metrics.bounds.y_max + metrics.top_side_bearing,
-        },
-        .{
-            .x = 0,
-            .y = metrics.bounds.y_max + metrics.top_side_bearing -
-                metrics.vertical_advance,
-        },
-    };
 }
 
 fn variationDelta(

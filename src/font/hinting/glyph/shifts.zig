@@ -2,6 +2,7 @@
 
 const std = @import("std");
 
+const compatibility = @import("compatibility.zig");
 const fixed = @import("fixed.zig");
 const outline = @import("../outline.zig");
 const state = @import("state.zig");
@@ -11,6 +12,7 @@ pub fn pointsByReference(
     twilight: *state.Zone,
     glyph: *state.Zone,
     graphics: *const state.GraphicsState,
+    policy: compatibility.State,
     use_rp1: bool,
     points: []const usize,
 ) types.Error!void {
@@ -18,6 +20,7 @@ pub fn pointsByReference(
         twilight,
         glyph,
         graphics,
+        policy,
         use_rp1,
     );
     const target = try zoneAt(twilight, glyph, graphics.zp2);
@@ -36,6 +39,7 @@ pub fn contourByReference(
     twilight: *state.Zone,
     glyph: *state.Zone,
     graphics: *const state.GraphicsState,
+    policy: compatibility.State,
     use_rp1: bool,
     contour: usize,
 ) types.Error!void {
@@ -43,6 +47,7 @@ pub fn contourByReference(
         twilight,
         glyph,
         graphics,
+        policy,
         use_rp1,
     );
     const target = try zoneAt(twilight, glyph, graphics.zp2);
@@ -84,6 +89,7 @@ pub fn zoneByReference(
     twilight: *state.Zone,
     glyph: *state.Zone,
     graphics: *const state.GraphicsState,
+    policy: compatibility.State,
     use_rp1: bool,
     zone_index: u8,
 ) types.Error!void {
@@ -92,6 +98,7 @@ pub fn zoneByReference(
         twilight,
         glyph,
         graphics,
+        policy,
         use_rp1,
     );
     const target = try zoneAt(twilight, glyph, zone_index);
@@ -117,6 +124,7 @@ fn referenceDisplacement(
     twilight: *state.Zone,
     glyph: *state.Zone,
     graphics: *const state.GraphicsState,
+    policy: compatibility.State,
     use_rp1: bool,
 ) types.Error!ReferenceDisplacement {
     const zone_index = if (use_rp1) graphics.zp0 else graphics.zp1;
@@ -131,10 +139,11 @@ fn referenceDisplacement(
         graphics.projection,
     );
     return .{
-        .delta = fixed.movementAlongFreedom(
+        .delta = fixed.compatibleMovement(
             projected,
             graphics.freedom,
             graphics.projection,
+            policy,
         ),
         .zone = zone_index,
         .point = point_index,
@@ -202,8 +211,9 @@ test "SHC and SHZ leave an in-zone reference point unmoved" {
     const graphics = state.GraphicsState{
         .rp2 = 1,
     };
+    const policy = compatibility.State{};
 
-    try contourByReference(&twilight, &glyph, &graphics, false, 0);
+    try contourByReference(&twilight, &glyph, &graphics, policy, false, 0);
     try std.testing.expectEqual(@as(i32, 64), current[0].x);
     try std.testing.expectEqual(@as(i32, 64), current[1].x);
     try std.testing.expectEqual(@as(i32, 164), current[2].x);
@@ -213,7 +223,7 @@ test "SHC and SHZ leave an in-zone reference point unmoved" {
         .{ .x = 64, .y = 0 },
         .{ .x = 100, .y = 0 },
     };
-    try zoneByReference(&twilight, &glyph, &graphics, false, 1);
+    try zoneByReference(&twilight, &glyph, &graphics, policy, false, 1);
     try std.testing.expectEqual(@as(i32, 64), current[0].x);
     try std.testing.expectEqual(@as(i32, 64), current[1].x);
     try std.testing.expectEqual(@as(i32, 164), current[2].x);

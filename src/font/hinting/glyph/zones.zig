@@ -7,6 +7,7 @@
 
 const std = @import("std");
 
+const compatibility = @import("compatibility.zig");
 const fixed = @import("fixed.zig");
 const interpolation = @import("interpolation.zig");
 const shifts = @import("shifts.zig");
@@ -22,6 +23,7 @@ pub const Context = struct {
     twilight: Zone,
     glyph: Zone,
     state: *GraphicsState,
+    compatibility: *compatibility.State,
     scale_16_16: i32,
 
     pub fn validate(self: Context) types.Error!void {
@@ -364,9 +366,20 @@ pub const Context = struct {
         const zone = try self.zoneAt(self.state.zp2);
         if (point >= zone.current.len) return error.InvalidHintOperand;
         const delta = fixed.pointAlongVector(distance, self.state.freedom);
-        zone.current[point].x +|= delta.x;
-        zone.current[point].y +|= delta.y;
-        touch(&zone.flags[point], self.state.freedom);
+        const allowed = self.compatibility.allowShiftPixel(
+            self.state.*,
+            zone.flags[point].touched_y,
+        );
+        if (allowed) {
+            // v40 compatibility always suppresses SHPIX's X component.
+            if (!self.compatibility.active()) {
+                zone.current[point].x +|= delta.x;
+            }
+            if (self.compatibility.directAxes(self.state.freedom).y) {
+                zone.current[point].y +|= delta.y;
+            }
+            touch(&zone.flags[point], self.state.freedom);
+        }
     }
 
     pub fn shiftPointsByReference(
@@ -378,6 +391,7 @@ pub const Context = struct {
             &self.twilight,
             &self.glyph,
             self.state,
+            self.compatibility.*,
             use_rp1,
             points,
         );
@@ -392,6 +406,7 @@ pub const Context = struct {
             &self.twilight,
             &self.glyph,
             self.state,
+            self.compatibility.*,
             use_rp1,
             contour,
         );
@@ -406,6 +421,7 @@ pub const Context = struct {
             &self.twilight,
             &self.glyph,
             self.state,
+            self.compatibility.*,
             use_rp1,
             zone_index,
         );
@@ -423,9 +439,9 @@ pub const Context = struct {
     }
 
     pub fn flipPoint(self: *Context, point: usize) types.Error!void {
-        const zone = try self.zoneAt(self.state.zp0);
-        if (point >= zone.flags.len) return error.InvalidHintOperand;
-        zone.flags[point].on_curve = !zone.flags[point].on_curve;
+        if (point >= self.glyph.flags.len) return error.InvalidHintOperand;
+        self.glyph.flags[point].on_curve =
+            !self.glyph.flags[point].on_curve;
     }
 
     pub fn setCurveRange(
@@ -434,11 +450,10 @@ pub const Context = struct {
         last: usize,
         on_curve: bool,
     ) types.Error!void {
-        const zone = try self.zoneAt(self.state.zp0);
-        if (first > last or last >= zone.flags.len) {
+        if (first > last or last >= self.glyph.flags.len) {
             return error.InvalidHintOperand;
         }
-        for (zone.flags[first .. last + 1]) |*flag| {
+        for (self.glyph.flags[first .. last + 1]) |*flag| {
             flag.on_curve = on_curve;
         }
     }
@@ -559,10 +574,11 @@ pub const Context = struct {
     ) types.Error!void {
         const zone = try self.zoneAt(zone_index);
         if (point >= zone.current.len) return error.InvalidHintOperand;
-        const delta = fixed.movementAlongFreedom(
+        const delta = fixed.compatibleMovement(
             projected_distance,
             self.state.freedom,
             self.state.projection,
+            self.compatibility.*,
         );
         zone.current[point].x +|= delta.x;
         zone.current[point].y +|= delta.y;
@@ -659,6 +675,7 @@ test "IP derives glyph-zone ratios from unscaled coordinates" {
         .rp1 = 0,
         .rp2 = 2,
     };
+    var compatibility_state = compatibility.State{};
     var context = Context{
         .twilight = .{
             .current = &twilight_points,
@@ -676,6 +693,7 @@ test "IP derives glyph-zone ratios from unscaled coordinates" {
             .real_point_count = current.len,
         },
         .state = &graphics,
+        .compatibility = &compatibility_state,
         .scale_16_16 = 0x10000,
     };
 

@@ -37,6 +37,29 @@ test "TrueType hinting instance executes fpgm and prep" {
         cangjie.font.HintingTarget.light,
         larger.graphicsState().target,
     );
+
+    var clear_type = try face.hintingInstanceWithOptions(
+        allocator,
+        16,
+        .{ .interpreter = .cleartype },
+    );
+    defer clear_type.deinit();
+    try std.testing.expectEqual(
+        cangjie.font.HintingInterpreter.cleartype,
+        clear_type.interpreter,
+    );
+    var clear_type_transaction = try face.hintingPointTransaction(
+        allocator,
+        &clear_type,
+        1,
+    );
+    defer clear_type_transaction.deinit();
+    const raw_phantoms = clear_type_transaction.unscaled[clear_type_transaction.real_point_count..][0..4];
+    try std.testing.expectEqual(
+        @divTrunc(raw_phantoms[1].x - raw_phantoms[0].x, 2),
+        raw_phantoms[2].x,
+    );
+    try std.testing.expectEqual(raw_phantoms[2].x, raw_phantoms[3].x);
 }
 
 test "TrueType hinting rejects invalid sizes and borrowed mutations" {
@@ -791,6 +814,17 @@ test "hint transaction execution rejects stale PPEM ownership" {
     try std.testing.expectError(
         error.StaleHintingInstance,
         face.executeHintingTransaction(&other_size, &transaction),
+    );
+
+    var clear_type = try face.hintingInstanceWithOptions(
+        allocator,
+        16,
+        .{ .interpreter = .cleartype },
+    );
+    defer clear_type.deinit();
+    try std.testing.expectError(
+        error.StaleHintingInstance,
+        face.executeHintingTransaction(&clear_type, &transaction),
     );
 }
 

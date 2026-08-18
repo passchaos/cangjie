@@ -33,6 +33,21 @@ pub const Program = enum(u2) {
     glyph,
 };
 
+/// TrueType bytecode interpreter behavior exposed by one PPEM instance.
+pub const Interpreter = enum {
+    /// Microsoft rasterizer v1.7 / FreeType interpreter version 35.
+    classic,
+    /// FreeType's minimal ClearType-compatible interpreter version 40.
+    cleartype,
+
+    pub fn advertisedVersion(self: Interpreter) i32 {
+        return switch (self) {
+            .classic => 35,
+            .cleartype => 40,
+        };
+    }
+};
+
 pub const Limits = struct {
     max_storage: usize,
     max_function_defs: usize,
@@ -56,6 +71,9 @@ pub const Source = struct {
     normalized_coords: []const f32 = &.{},
     /// Borrowed validated cvar table payload, empty when absent.
     control_value_variation_data: []const u8 = &.{},
+    interpreter: Interpreter = .classic,
+    /// FreeType-classified legacy faces bypass v40 compatibility hacks.
+    tricky: bool = false,
     limits: Limits,
 };
 
@@ -82,6 +100,11 @@ pub const Target = enum {
     pub fn isGrayscaleClearType(self: Target) bool {
         return self == .normal or self == .light;
     }
+};
+
+pub const Options = struct {
+    target: Target = .normal,
+    interpreter: Interpreter = .classic,
 };
 
 pub const RoundMode = enum {

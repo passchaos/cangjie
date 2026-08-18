@@ -15,6 +15,7 @@ pub const Instance = struct {
     source: types.Source,
     ppem: u16,
     target: types.Target,
+    interpreter: types.Interpreter,
     scale_16_16: i32,
     functions: []program.Definition,
     instructions: []program.Definition,
@@ -22,6 +23,7 @@ pub const Instance = struct {
     storage: []i32,
     stack: []i32,
     graphics: types.RetainedGraphicsState,
+    hinting_enabled: bool,
     normalized_coords: []f32,
     twilight_points: []outline.Point,
     twilight_original: []outline.Point,
@@ -125,6 +127,7 @@ pub const Instance = struct {
             .source = owned_source,
             .ppem = ppem,
             .target = target,
+            .interpreter = source.interpreter,
             .scale_16_16 = scale_16_16,
             .functions = functions,
             .instructions = instructions,
@@ -132,6 +135,7 @@ pub const Instance = struct {
             .storage = storage,
             .stack = stack,
             .graphics = defaultGraphics(scale_16_16, ppem, target),
+            .hinting_enabled = true,
             .normalized_coords = normalized_coords,
             .twilight_points = twilight_points,
             .twilight_original = twilight_original,
@@ -157,6 +161,14 @@ pub const Instance = struct {
         @memset(result.storage, 0);
         interpreter = result.vm();
         try interpreter.run(.control_value);
+        // FreeType first snapshots whether this load is disabled, then honors
+        // INSTCTRL selector 2 by reverting retained graphics to defaults.
+        // These are independent decisions when a prep program sets both bits.
+        result.hinting_enabled =
+            (result.graphics.instruct_control & 1) == 0;
+        if ((result.graphics.instruct_control & 2) != 0) {
+            result.graphics = defaultGraphics(scale_16_16, ppem, target);
+        }
         return result;
     }
 
@@ -175,7 +187,14 @@ pub const Instance = struct {
     }
 
     pub fn isEnabled(self: *const Instance) bool {
-        return (self.graphics.instruct_control & 1) == 0;
+        return self.hinting_enabled;
+    }
+
+    pub fn usesBackwardCompatibility(self: *const Instance) bool {
+        return self.source.interpreter == .cleartype and
+            self.target != .mono and
+            !self.source.tricky and
+            (self.graphics.instruct_control & 4) == 0;
     }
 
     pub fn controlValues(self: *const Instance) []const i32 {
@@ -216,6 +235,7 @@ pub const Instance = struct {
                 .cvt = self.cvt,
                 .storage = self.storage,
                 .graphics = self.graphics,
+                .hinting_enabled = self.hinting_enabled,
                 .twilight = .{
                     .points = self.twilight_points,
                     .original = self.twilight_original,
@@ -386,6 +406,40 @@ test "instance executes prep control flow and instruction control" {
     defer instance.deinit();
     try std.testing.expectEqual(@as(i32, 9), instance.storageValues()[0]);
     try std.testing.expect(!instance.isEnabled());
+}
+
+test "prep instruction-control reset preserves disabled load decision" {
+    const source = types.Source{
+        .units_per_em = 1000,
+        .font_program = &.{},
+        .control_value_program = &.{
+            0xb1, 72, 0x1d, // SCVTCI 72.
+            0xb1, 1, 1, 0x8e, // Disable glyph execution.
+            0xb1, 2, 2, 0x8e, // Reset retained graphics to defaults.
+        },
+        .control_value_data = &.{},
+        .limits = .{
+            .max_storage = 0,
+            .max_function_defs = 0,
+            .max_instruction_defs = 0,
+            .max_stack_elements = 8,
+            .max_twilight_points = 0,
+        },
+    };
+    var instance = try Instance.init(
+        std.testing.allocator,
+        source,
+        16,
+        .normal,
+    );
+    defer instance.deinit();
+
+    try std.testing.expect(!instance.isEnabled());
+    try std.testing.expectEqual(
+        @as(i32, 68),
+        instance.graphicsState().control_value_cutin,
+    );
+    try std.testing.expectEqual(@as(u8, 0), instance.graphicsState().instruct_control);
 }
 
 test "instance owns normalized coordinates and GETVARIATION exposes F2Dot14" {
@@ -635,6 +689,7 @@ fn glyphTestTransaction(
         .allocator = allocator,
         .face_identity = face_identity,
         .target = .normal,
+        .interpreter = .classic,
         .glyph_id = 1,
         .real_point_count = 3,
         .points = points,

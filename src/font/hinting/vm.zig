@@ -7,6 +7,7 @@
 const std = @import("std");
 
 const decode = @import("decode.zig");
+const compatibility_mod = @import("glyph/compatibility.zig");
 const glyph_opcodes = @import("glyph/opcodes.zig");
 const zones = @import("glyph/zones.zig");
 const program_mod = @import("program.zig");
@@ -30,6 +31,8 @@ pub const Vm = struct {
     backward_jumps: usize = 0,
     loop_calls: usize = 0,
     transient: zones.GraphicsState = .{},
+    compatibility: compatibility_mod.State = .{},
+    is_compound: bool = false,
 
     pub fn init(
         source: types.Source,
@@ -47,6 +50,12 @@ pub const Vm = struct {
             .cvt = cvt,
             .storage = storage,
             .graphics = graphics,
+            .compatibility = compatibility_mod.State.init(
+                source.interpreter,
+                graphics.target,
+                graphics.instruct_control,
+                source.tricky,
+            ),
         };
     }
 
@@ -57,6 +66,12 @@ pub const Vm = struct {
         self.backward_jumps = 0;
         self.loop_calls = 0;
         self.transient = .{};
+        if (program_value == .glyph) {
+            self.compatibility.beginGlyph(self.is_compound);
+        } else {
+            // Font and prep programs always run without v40 movement hacks.
+            self.compatibility = .{};
+        }
         while (true) {
             const bytecode = self.cursor.bytes();
             if (self.cursor.pc >= bytecode.len) {
@@ -80,12 +95,14 @@ pub const Vm = struct {
         twilight: zones.Zone,
         glyph: zones.Zone,
         point_scale_16_16: i32,
+        is_compound: bool,
     ) types.Error!void {
         try twilight.validate();
         try glyph.validate();
         self.twilight = twilight;
         self.glyph = glyph;
         self.point_scale_16_16 = point_scale_16_16;
+        self.is_compound = is_compound;
     }
 
     fn dispatch(
@@ -107,6 +124,7 @@ pub const Vm = struct {
             .cvt = self.cvt,
             .retained = self.graphics,
             .transient = &self.transient,
+            .compatibility = &self.compatibility,
             .twilight = self.twilight,
             .glyph = self.glyph,
             .point_scale_16_16 = self.point_scale_16_16,
@@ -143,12 +161,13 @@ pub const Vm = struct {
             0x44 => try self.writeCvtPixels(),
             0x45 => try self.readCvt(),
             0x4b => try self.stack.push(self.graphics.ppem),
-            0x4c => try self.stack.push(
+            0x4c => try self.stack.push(if (self.source.interpreter == .classic)
+                self.graphics.ppem
+            else
                 @min(
                     @as(i32, std.math.maxInt(i32)),
                     @as(i32, self.graphics.ppem) * 64,
-                ),
-            ),
+                )),
             0x4d => self.graphics.auto_flip = true,
             0x4e => self.graphics.auto_flip = false,
             0x4f => _ = try self.stack.pop(),
@@ -532,9 +551,19 @@ pub const Vm = struct {
         if (selector < 1 or selector > 3) return;
         const flag: u8 = @as(u8, 1) << @intCast(selector - 1);
         if (value != 0 and value != flag) return;
-        if (self.cursor.initial_program != .control_value) return;
-        self.graphics.instruct_control &= ~flag;
-        self.graphics.instruct_control |= @intCast(value);
+        switch (self.cursor.initial_program) {
+            .control_value => {
+                self.graphics.instruct_control &= ~flag;
+                self.graphics.instruct_control |= @intCast(value);
+            },
+            .glyph => if (selector == 3) {
+                self.compatibility.setGlyphInstructionControl(
+                    self.source.interpreter,
+                    @intCast(value),
+                );
+            },
+            .font => {},
+        }
     }
 
     fn scanControl(self: *Vm) types.Error!void {
@@ -561,21 +590,38 @@ pub const Vm = struct {
     fn getInfo(self: *Vm) types.Error!void {
         const selector = try self.stack.pop();
         var result: i32 = 0;
-        // The point VM currently implements the classic v35 interpreter.
-        // Advertising v40 would let fonts select ClearType compatibility
-        // branches whose movement suppression semantics we do not implement.
-        if ((selector & 1) != 0) result = 35;
+        if ((selector & 1) != 0) {
+            result = self.source.interpreter.advertisedVersion();
+        }
         if ((selector & (1 << 3)) != 0 and
             self.source.normalized_coords.len != 0)
         {
             result |= 1 << 10;
         }
-        // Classic FreeType reports conventional grayscale rendering through
-        // selector bit 5; the v40-only subpixel flags remain clear.
-        if ((selector & (1 << 5)) != 0 and
+        // FreeType v40 reports ClearType capabilities instead of the classic
+        // grayscale bit, even for its normal grayscale render target.
+        if (self.source.interpreter == .classic and
+            (selector & (1 << 5)) != 0 and
             self.graphics.target.isSmooth())
         {
             result |= 1 << 12;
+        }
+        if (self.source.interpreter == .cleartype and
+            self.graphics.target != .mono)
+        {
+            if ((selector & (1 << 6)) != 0) result |= 1 << 13;
+            if ((selector & (1 << 8)) != 0 and
+                self.graphics.target.isVerticalLcd())
+            {
+                result |= 1 << 15;
+            }
+            if ((selector & (1 << 10)) != 0) result |= 1 << 17;
+            if ((selector & (1 << 11)) != 0) result |= 1 << 18;
+            if ((selector & (1 << 12)) != 0 and
+                self.graphics.target.isGrayscaleClearType())
+            {
+                result |= 1 << 19;
+            }
         }
         try self.stack.push(result);
     }
@@ -694,7 +740,7 @@ test "definition scanner ignores ENDF bytes inside push immediates" {
     );
 }
 
-test "GETINFO advertises only implemented classic interpreter capabilities" {
+test "GETINFO advertises selected interpreter capabilities" {
     var stack_values: [4]i32 = undefined;
     var graphics = types.RetainedGraphicsState{
         .scale_16_16 = 0x10000,
@@ -739,4 +785,96 @@ test "GETINFO advertises only implemented classic interpreter capabilities" {
         @as(i32, 35 | (1 << 10) | (1 << 12)),
         vm.stack.values[0],
     );
+
+    var clear_type_source = source;
+    clear_type_source.interpreter = .cleartype;
+    vm = Vm.init(
+        clear_type_source,
+        .{ .functions = &.{}, .instructions = &.{} },
+        &stack_values,
+        &.{},
+        &.{},
+        &graphics,
+    );
+    try vm.run(.glyph);
+    try std.testing.expectEqual(
+        @as(i32, 40 | (1 << 10) | (1 << 13) |
+            (1 << 17) | (1 << 18) | (1 << 19)),
+        vm.stack.values[0],
+    );
+
+    graphics.target = .vertical_lcd;
+    vm = Vm.init(
+        clear_type_source,
+        .{ .functions = &.{}, .instructions = &.{} },
+        &stack_values,
+        &.{},
+        &.{},
+        &graphics,
+    );
+    try vm.run(.glyph);
+    try std.testing.expectEqual(
+        @as(i32, 40 | (1 << 10) | (1 << 13) |
+            (1 << 15) | (1 << 17) | (1 << 18)),
+        vm.stack.values[0],
+    );
+
+    graphics.target = .mono;
+    vm = Vm.init(
+        clear_type_source,
+        .{ .functions = &.{}, .instructions = &.{} },
+        &stack_values,
+        &.{},
+        &.{},
+        &graphics,
+    );
+    try vm.run(.glyph);
+    try std.testing.expectEqual(
+        @as(i32, 40 | (1 << 10)),
+        vm.stack.values[0],
+    );
+}
+
+test "MPS follows selected interpreter point-size contract" {
+    var stack_values: [2]i32 = undefined;
+    var graphics = types.RetainedGraphicsState{
+        .scale_16_16 = 0x10000,
+        .ppem = 16,
+    };
+    var source = types.Source{
+        .units_per_em = 1000,
+        .font_program = &.{},
+        .control_value_program = &.{},
+        .glyph_program = &.{0x4c},
+        .control_value_data = &.{},
+        .limits = .{
+            .max_storage = 0,
+            .max_function_defs = 0,
+            .max_instruction_defs = 0,
+            .max_stack_elements = stack_values.len,
+            .max_twilight_points = 0,
+        },
+    };
+    var vm = Vm.init(
+        source,
+        .{ .functions = &.{}, .instructions = &.{} },
+        &stack_values,
+        &.{},
+        &.{},
+        &graphics,
+    );
+    try vm.run(.glyph);
+    try std.testing.expectEqual(@as(i32, 16), vm.stack.values[0]);
+
+    source.interpreter = .cleartype;
+    vm = Vm.init(
+        source,
+        .{ .functions = &.{}, .instructions = &.{} },
+        &stack_values,
+        &.{},
+        &.{},
+        &graphics,
+    );
+    try vm.run(.glyph);
+    try std.testing.expectEqual(@as(i32, 1024), vm.stack.values[0]);
 }

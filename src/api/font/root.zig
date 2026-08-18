@@ -19,8 +19,10 @@ pub const Error = font_mod.FontError;
 pub const Format = font_mod.FontFormat;
 pub const HintingInstance = font_mod.TrueTypeHintingInstance;
 pub const HintingTarget = font_mod.TrueTypeHintingTarget;
+pub const HintingInterpreter = font_mod.TrueTypeHintingInterpreter;
+pub const HintingOptions = font_mod.TrueTypeHintingOptions;
 pub const HintingError = font_mod.TrueTypeHintingError;
-/// Default-instance glyf point owner; compound execution remains explicit.
+/// Interpreter-bound glyf point owner with atomic simple/compound execution.
 pub const HintingPointTransaction = font_mod.TrueTypePointTransaction;
 /// Path coordinates are pixels and must not be scaled by units-per-em again.
 pub const PixelOutline = font_mod.TrueTypePixelOutline;

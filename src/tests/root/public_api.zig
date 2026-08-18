@@ -16,10 +16,22 @@ test "public facade uses domain names without legacy aliases" {
         @typeInfo(cangjie.font.HintingTarget) == .@"enum",
     );
     try std.testing.expect(
+        @typeInfo(cangjie.font.HintingInterpreter) == .@"enum",
+    );
+    try std.testing.expect(
+        @typeInfo(cangjie.font.HintingOptions) == .@"struct",
+    );
+    try std.testing.expect(
         @typeInfo(cangjie.font.HintingError) == .error_set,
     );
     try std.testing.expect(@hasDecl(cangjie.font.Face, "hintingInstance"));
     try std.testing.expect(@hasDecl(cangjie.font.Face, "hintingInstanceAt"));
+    try std.testing.expect(
+        @hasDecl(cangjie.font.Face, "hintingInstanceWithOptions"),
+    );
+    try std.testing.expect(
+        @hasDecl(cangjie.font.Face, "hintingInstanceAtWithOptions"),
+    );
     try std.testing.expect(
         @typeInfo(cangjie.font.HintingPointTransaction) == .@"struct",
     );

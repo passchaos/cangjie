@@ -75,6 +75,7 @@ pub const Transaction = struct {
     /// Stable identity of the face whose validated `glyf` bytes are borrowed.
     face_identity: usize,
     target: types.Target,
+    interpreter: types.Interpreter,
     glyph_id: glyph.GlyphId,
     real_point_count: usize,
     points: []Point,
@@ -89,6 +90,11 @@ pub const Transaction = struct {
     /// Borrowed face-wide gvar context used by recursively loaded components.
     variation: ?Variation = null,
     is_compound: bool = false,
+    hinting_enabled: bool = true,
+    backward_compatibility: bool = false,
+    /// v40 keeps unrounded phantom origins while the base layer rounds
+    /// reported advances independently.
+    grid_fit_metrics: bool = false,
 
     pub fn deinit(self: *Transaction) void {
         if (self.normalized_coords.len != 0) {
@@ -113,16 +119,28 @@ pub const Transaction = struct {
         return @ptrCast(self.points[self.real_point_count..].ptr);
     }
 
+    pub fn horizontalAdvance(self: *const Transaction) i32 {
+        const phantoms = self.phantomPoints();
+        const value = phantoms[1].x -| phantoms[0].x;
+        return if (self.grid_fit_metrics) roundGrid(value) else value;
+    }
+
+    pub fn verticalAdvance(self: *const Transaction) i32 {
+        const phantoms = self.phantomPoints();
+        const value = phantoms[2].y -| phantoms[3].y;
+        return if (self.grid_fit_metrics) roundGrid(value) else value;
+    }
+
     /// Rebuild a pixel-space quadratic path after hinting.
     pub fn toPixelOutline(self: *const Transaction) types.Error!PixelOutline {
         const origin_shift = self.points[self.real_point_count].x;
         var result = PixelOutline{
             .allocator = self.allocator,
             .glyph_id = self.glyph_id,
-            .advance_width = @as(f32, @floatFromInt(
-                self.points[self.real_point_count + 1].x -
-                    self.points[self.real_point_count].x,
-            )) / 64.0,
+            .advance_width = @as(
+                f32,
+                @floatFromInt(self.horizontalAdvance()),
+            ) / 64.0,
             .left_side_bearing = leftBearing: {
                 if (self.real_point_count == 0) break :leftBearing 0;
                 var x_min = self.points[0].x;
@@ -158,6 +176,10 @@ pub const Transaction = struct {
     }
 };
 
+fn roundGrid(value: i32) i32 {
+    return (value +| 32) & ~@as(i32, 63);
+}
+
 pub const Metrics = struct {
     bounds: glyph.Bounds,
     advance_width: i32,
@@ -179,6 +201,7 @@ pub fn decodeSimple(
     allocator: std.mem.Allocator,
     face_identity: usize,
     target: types.Target,
+    interpreter: types.Interpreter,
     glyph_id: glyph.GlyphId,
     data: []const u8,
     contour_count: u16,
@@ -296,11 +319,19 @@ pub fn decodeSimple(
         .y = 0,
     };
     unscaled[real_point_count + 2] = .{
-        .x = 0,
+        .x = verticalPhantomX(
+            interpreter,
+            target,
+            metrics.advance_width,
+        ),
         .y = metrics.bounds.y_max + metrics.top_side_bearing,
     };
     unscaled[real_point_count + 3] = .{
-        .x = 0,
+        .x = verticalPhantomX(
+            interpreter,
+            target,
+            metrics.advance_width,
+        ),
         .y = metrics.bounds.y_max + metrics.top_side_bearing -
             metrics.vertical_advance,
     };
@@ -385,6 +416,7 @@ pub fn decodeSimple(
         .allocator = allocator,
         .face_identity = face_identity,
         .target = target,
+        .interpreter = interpreter,
         .glyph_id = glyph_id,
         .real_point_count = real_point_count,
         .points = points,
@@ -421,6 +453,17 @@ fn hasNonDefaultLocation(normalized_coords: []const f32) bool {
         if (coordinate != 0) return true;
     }
     return false;
+}
+
+pub fn verticalPhantomX(
+    interpreter: types.Interpreter,
+    target: types.Target,
+    advance_width: i32,
+) i32 {
+    if (interpreter == .cleartype and target.isGrayscaleClearType()) {
+        return @divTrunc(advance_width, 2);
+    }
+    return 0;
 }
 
 fn scaleVariationCoordinate(value: f32, scale_16_16: i32) i32 {
@@ -471,6 +514,21 @@ test "fractional gvar coordinates survive scaling into 26.6" {
     try std.testing.expectEqual(
         @as(i32, -121),
         types.scaleFUnits(-1883, 4194),
+    );
+}
+
+test "v40 grayscale targets center vertical phantom points" {
+    try std.testing.expectEqual(
+        @as(i32, 600),
+        verticalPhantomX(.cleartype, .normal, 1200),
+    );
+    try std.testing.expectEqual(
+        @as(i32, 0),
+        verticalPhantomX(.cleartype, .lcd, 1200),
+    );
+    try std.testing.expectEqual(
+        @as(i32, 0),
+        verticalPhantomX(.classic, .normal, 1200),
     );
 }
 

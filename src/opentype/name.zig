@@ -23,6 +23,8 @@ pub const NameId = enum(u16) {
     typographic_subfamily = 17,
     compatible_full_name = 18,
     sample_text = 19,
+    wws_family = 21,
+    wws_subfamily = 22,
     _,
 };
 

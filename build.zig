@@ -2602,7 +2602,7 @@ pub fn build(b: *std.Build) void {
     );
     const hinting_freetype_test_step = b.step(
         "hinting-freetype-test",
-        "Compare classic hinted TrueType outlines with FreeType v35",
+        "Compare hinted TrueType outlines with FreeType v35 and v40",
     );
     hinting_freetype_test_step.dependOn(
         &b.addRunArtifact(hinting_freetype_tests).step,

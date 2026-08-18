@@ -1,9 +1,9 @@
-//! TrueType embedded-hinting size instances.
+//! TrueType embedded-hinting instances and raw pixel-outline ownership.
 //!
-//! This first slice executes font- and size-level programs. Glyph point-zone
-//! execution is intentionally not exposed until raw glyf point ownership is
-//! connected to the same VM. Instances currently represent the default
-//! variation location and do not yet apply cvar deltas.
+//! Instances own PPEM, target, interpreter mode, variation coordinates, CVT,
+//! storage, twilight points, and retained prep state. Glyph transactions keep
+//! point-zone execution atomic and can be reconstructed directly as
+//! pixel-space paths.
 
 pub const types = @import("types.zig");
 pub const compound = @import("compound.zig");
@@ -12,6 +12,8 @@ pub const outline = @import("outline.zig");
 pub const PointTransaction = outline.Transaction;
 pub const PixelOutline = outline.PixelOutline;
 pub const Target = types.Target;
+pub const Interpreter = types.Interpreter;
+pub const Options = types.Options;
 pub const Source = types.Source;
 pub const Error = types.Error;
 
@@ -24,4 +26,6 @@ test {
     _ = @import("vm.zig");
     _ = @import("instance.zig");
     _ = @import("outline.zig");
+    _ = @import("tricky.zig");
+    _ = @import("glyph/compatibility_tests.zig");
 }

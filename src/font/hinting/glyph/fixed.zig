@@ -2,6 +2,7 @@
 
 const std = @import("std");
 
+const compatibility = @import("compatibility.zig");
 const outline = @import("../outline.zig");
 
 pub const Vector = struct {
@@ -99,6 +100,19 @@ pub fn movementAlongFreedom(
         .x = mulFix16Clamped(distance, move_x),
         .y = mulFix16Clamped(distance, move_y),
     };
+}
+
+pub fn compatibleMovement(
+    distance: i32,
+    freedom: Vector,
+    projection: Vector,
+    policy: compatibility.State,
+) outline.Point {
+    var result = movementAlongFreedom(distance, freedom, projection);
+    const axes = policy.directAxes(freedom);
+    if (!axes.x) result.x = 0;
+    if (!axes.y) result.y = 0;
+    return result;
 }
 
 pub fn mulDivClamped(a: i32, b: i32, denominator: i32) i32 {

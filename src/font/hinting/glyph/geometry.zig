@@ -5,6 +5,7 @@
 //! their zone-pointer and projection contracts explicit.
 
 const fixed = @import("fixed.zig");
+const compatibility = @import("compatibility.zig");
 const outline = @import("../outline.zig");
 const state = @import("state.zig");
 const types = @import("../types.zig");
@@ -15,6 +16,7 @@ pub fn alignPoints(
     graphics: *const state.GraphicsState,
     first: usize,
     second: usize,
+    policy: compatibility.State,
 ) types.Error!void {
     const first_zone = try zoneAt(twilight, glyph, graphics.zp1);
     const second_zone = try zoneAt(twilight, glyph, graphics.zp0);
@@ -36,12 +38,14 @@ pub fn alignPoints(
         &first_zone.flags[first],
         distance,
         graphics,
+        policy,
     );
     moveProjected(
         &second_zone.current[second],
         &second_zone.flags[second],
         0 -| distance,
         graphics,
+        policy,
     );
 }
 
@@ -161,11 +165,13 @@ fn moveProjected(
     flag: *outline.PointFlag,
     distance: i32,
     graphics: *const state.GraphicsState,
+    policy: compatibility.State,
 ) void {
-    const delta = fixed.movementAlongFreedom(
+    const delta = fixed.compatibleMovement(
         distance,
         graphics.freedom,
         graphics.projection,
+        policy,
     );
     point.x +|= delta.x;
     point.y +|= delta.y;
@@ -247,7 +253,14 @@ test "ALIGNPTS meets two projected points halfway" {
         .real_point_count = 0,
     };
     var graphics = state.GraphicsState{};
-    try alignPoints(&empty, &zone, &graphics, 0, 1);
+    try alignPoints(
+        &empty,
+        &zone,
+        &graphics,
+        0,
+        1,
+        .{},
+    );
     try std.testing.expectEqual(@as(i32, 50), current[0].x);
     try std.testing.expectEqual(@as(i32, 50), current[1].x);
     try std.testing.expect(flags[0].touched_x);

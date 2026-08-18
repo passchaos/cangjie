@@ -106,6 +106,20 @@ pub const Face = struct {
         );
     }
 
+    /// Execute TrueType size programs with explicit interpreter semantics.
+    pub fn hintingInstanceWithOptions(
+        self: *const Face,
+        allocator: std.mem.Allocator,
+        ppem: u16,
+        options: font_mod.TrueTypeHintingOptions,
+    ) (font_mod.FontError || @import("../hinting/root.zig").Error)!font_mod.TrueTypeHintingInstance {
+        return self.implementation.hintingInstanceWithOptions(
+            allocator,
+            ppem,
+            options,
+        );
+    }
+
     /// Execute TrueType size programs at a complete normalized fvar location.
     pub fn hintingInstanceAt(
         self: *const Face,
@@ -122,7 +136,23 @@ pub const Face = struct {
         );
     }
 
-    /// Decode a default-instance simple glyf into raw 26.6 point state.
+    /// Execute size programs at a location and explicit interpreter mode.
+    pub fn hintingInstanceAtWithOptions(
+        self: *const Face,
+        allocator: std.mem.Allocator,
+        ppem: u16,
+        options: font_mod.TrueTypeHintingOptions,
+        normalized_coords: []const f32,
+    ) (font_mod.FontError || @import("../hinting/root.zig").Error)!font_mod.TrueTypeHintingInstance {
+        return self.implementation.hintingInstanceAtWithOptions(
+            allocator,
+            ppem,
+            options,
+            normalized_coords,
+        );
+    }
+
+    /// Decode a simple or compound glyf into raw 26.6 point state.
     ///
     /// Glyph bytecode has not run; use the returned owner as the atomic input
     /// to point-zone execution and pixel-path reconstruction.

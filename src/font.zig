@@ -10,6 +10,7 @@ const cff_mod = @import("cff.zig");
 const cff2_mod = @import("opentype/cff2.zig");
 const cvar_mod = @import("opentype/cvar.zig");
 const hinting = @import("font/hinting/root.zig");
+const hinting_tricky = @import("font/hinting/tricky.zig");
 const glyph_mod = @import("glyph.zig");
 const gvar_mod = @import("opentype/gvar.zig");
 const gpos_mod = @import("gpos.zig");
@@ -142,6 +143,8 @@ pub const TrueTypeProgramInstructionInfo = tt_program_mod.Instruction;
 pub const TrueTypeProgramKind = tt_program_mod.Kind;
 pub const TrueTypeHintingInstance = hinting.Instance;
 pub const TrueTypeHintingTarget = hinting.Target;
+pub const TrueTypeHintingInterpreter = hinting.Interpreter;
+pub const TrueTypeHintingOptions = hinting.Options;
 pub const TrueTypeHintingError = hinting.Error;
 pub const TrueTypePointTransaction = hinting.PointTransaction;
 pub const TrueTypePixelOutline = hinting.PixelOutline;
@@ -1527,11 +1530,9 @@ pub const Font = struct {
     /// PPEM. Mutable VM state is owned by the result while fpgm/prep bytes stay
     /// borrowed from this face.
     ///
-    /// Glyph point-zone execution is not exposed by this first hinting slice;
-    /// size programs containing point-only opcodes return
-    /// `UnsupportedHintInstruction` instead of silently ignoring them. The
-    /// current instance represents the default variation location; cvar and
-    /// GETVARIATION join the API with normalized-coordinate ownership.
+    /// This compatibility constructor selects classic v35 semantics at the
+    /// default variation location. Use `hintingInstanceWithOptions` to select
+    /// v40 ClearType compatibility explicitly.
     pub fn hintingInstance(
         self: *const Font,
         allocator: std.mem.Allocator,
@@ -1555,12 +1556,52 @@ pub const Font = struct {
         );
     }
 
+    /// Execute embedded programs with explicit interpreter semantics.
+    pub fn hintingInstanceWithOptions(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        ppem: u16,
+        options: TrueTypeHintingOptions,
+    ) (FontError || hinting.Error)!TrueTypeHintingInstance {
+        const axis_count = self.fvar_axis_count orelse 0;
+        var inline_default: [32]f32 = .{0} ** 32;
+        const default_location = if (axis_count <= inline_default.len)
+            inline_default[0..axis_count]
+        else
+            try allocator.alloc(f32, axis_count);
+        defer if (axis_count > inline_default.len)
+            allocator.free(default_location);
+        if (axis_count > inline_default.len) @memset(default_location, 0);
+        return self.hintingInstanceAtWithOptions(
+            allocator,
+            ppem,
+            options,
+            default_location,
+        );
+    }
+
     /// Execute fpgm/prep for one PPEM and a complete normalized fvar location.
     pub fn hintingInstanceAt(
         self: *const Font,
         allocator: std.mem.Allocator,
         ppem: u16,
         target: TrueTypeHintingTarget,
+        normalized_coords: []const f32,
+    ) (FontError || hinting.Error)!TrueTypeHintingInstance {
+        return self.hintingInstanceAtWithOptions(
+            allocator,
+            ppem,
+            .{ .target = target },
+            normalized_coords,
+        );
+    }
+
+    /// Execute fpgm/prep at one normalized location and interpreter mode.
+    pub fn hintingInstanceAtWithOptions(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        ppem: u16,
+        options: TrueTypeHintingOptions,
         normalized_coords: []const f32,
     ) (FontError || hinting.Error)!TrueTypeHintingInstance {
         if (self.format != .truetype) return error.UnsupportedGlyph;
@@ -1608,6 +1649,11 @@ pub const Font = struct {
                 .control_value_data = cvt_data,
                 .normalized_coords = normalized_coords,
                 .control_value_variation_data = cvar_data,
+                .interpreter = options.interpreter,
+                .tricky = if (options.interpreter == .cleartype)
+                    try self.hasFreeTypeTrickyHinting(allocator)
+                else
+                    false,
                 .limits = .{
                     .max_storage = maxp_info.max_storage orelse
                         return error.BadSfnt,
@@ -1624,15 +1670,77 @@ pub const Font = struct {
                 },
             },
             ppem,
-            target,
+            options.target,
         );
     }
 
-    /// Decode one default-instance simple glyf outline into a raw point
-    /// transaction suitable for TrueType glyph-program execution.
-    ///
-    /// Compound and variable glyphs remain explicit errors until their
-    /// component/gvar deltas can enter the same atomic transaction.
+    fn hasFreeTypeTrickyHinting(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+    ) (FontError || std.mem.Allocator.Error)!bool {
+        if (self.name) |name_table| {
+            const capacity = std.math.mul(
+                usize,
+                name_table.length,
+                2,
+            ) catch return error.OutOfMemory;
+            const family_buffer = try allocator.alloc(u8, capacity);
+            defer allocator.free(family_buffer);
+            const wws_only = if (self.os2) |os2| blk: {
+                try sfnt.checksum.validate(self.data, os2);
+                break :blk (try bin.readU16At(
+                    self.data,
+                    os2.offset + 62,
+                ) & 0x0100) != 0;
+            } else false;
+            const family = if (wws_only)
+                (try self.trickyFamilyName(
+                    .typographic_family,
+                    family_buffer,
+                )) orelse try self.trickyFamilyName(.family, family_buffer)
+            else
+                (try self.trickyFamilyName(
+                    .wws_family,
+                    family_buffer,
+                )) orelse
+                    (try self.trickyFamilyName(
+                        .typographic_family,
+                        family_buffer,
+                    )) orelse
+                    try self.trickyFamilyName(.family, family_buffer);
+            if (family) |value| {
+                if (hinting_tricky.familyMatches(value)) return true;
+            }
+        }
+        const records = [_]?TableRecord{ self.cvt, self.fpgm, self.prep };
+        var ids: [3]?hinting_tricky.TableId = .{ null, null, null };
+        for (records, &ids) |record, *id| {
+            if (record) |table| {
+                id.* = .{
+                    .checksum = try sfnt.checksum.table(self.data, table),
+                    .length = table.length,
+                };
+            }
+        }
+        return hinting_tricky.sfntIdsMatch(ids);
+    }
+
+    fn trickyFamilyName(
+        self: *const Font,
+        name_id: NameId,
+        out: []u8,
+    ) FontError!?[]const u8 {
+        return self.nameString(name_id, out) catch |err| switch (err) {
+            // FreeType leaves an undecodable family name unset and continues
+            // with table signatures; classification must not turn that
+            // compatibility fallback into an instance-construction failure.
+            error.InvalidName => null,
+            else => return err,
+        };
+    }
+
+    /// Decode one simple or compound glyf outline into an interpreter-bound
+    /// raw transaction suitable for atomic TrueType glyph-program execution.
     pub fn hintingPointTransaction(
         self: *const Font,
         allocator: std.mem.Allocator,
@@ -1719,6 +1827,7 @@ pub const Font = struct {
                 allocator,
                 @intFromPtr(self),
                 instance.target,
+                instance.source.interpreter,
                 glyph_id,
                 data,
                 @intCast(contour_count),
@@ -1734,6 +1843,9 @@ pub const Font = struct {
             if (transaction.variation) |*context| {
                 context.normalized_coords = transaction.normalized_coords;
             }
+            transaction.hinting_enabled = instance.isEnabled();
+            transaction.backward_compatibility =
+                instance.usesBackwardCompatibility();
             return transaction;
         }
         const variation: ?hinting.compound.Variation =
@@ -1750,6 +1862,9 @@ pub const Font = struct {
             allocator,
             @intFromPtr(self),
             instance.target,
+            instance.source.interpreter,
+            instance.isEnabled(),
+            instance.usesBackwardCompatibility(),
             .{
                 .glyph_id = glyph_id,
                 .data = data,

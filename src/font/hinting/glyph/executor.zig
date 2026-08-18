@@ -13,6 +13,7 @@ const outline = @import("../outline.zig");
 const program = @import("../program.zig");
 const types = @import("../types.zig");
 const vm_mod = @import("../vm.zig");
+const compatibility = @import("compatibility.zig");
 const zones = @import("zones.zig");
 
 pub const Twilight = struct {
@@ -38,6 +39,7 @@ pub const InstanceState = struct {
     cvt: []i32,
     storage: []i32,
     graphics: types.RetainedGraphicsState,
+    hinting_enabled: bool,
     twilight: Twilight,
 };
 
@@ -51,6 +53,15 @@ pub fn execute(
     if (transaction.face_identity != state.source.face_identity or
         transaction.scale_16_16 != state.graphics.scale_16_16 or
         transaction.target != state.graphics.target or
+        transaction.interpreter != state.source.interpreter or
+        transaction.hinting_enabled != state.hinting_enabled or
+        transaction.backward_compatibility !=
+            compatibility.State.init(
+                state.source.interpreter,
+                state.graphics.target,
+                state.graphics.instruct_control,
+                state.source.tricky,
+            ).active() or
         !locationsEqual(
             transaction.normalized_coords,
             state.source.normalized_coords,
@@ -71,6 +82,7 @@ pub fn execute(
     @memcpy(transaction.original, glyph.transaction.original);
     @memcpy(transaction.unscaled, glyph.transaction.unscaled);
     @memcpy(transaction.flags, glyph.transaction.flags);
+    transaction.grid_fit_metrics = glyph.transaction.grid_fit_metrics;
     work.commit(state);
 }
 
@@ -85,6 +97,7 @@ const Work = struct {
     twilight_unscaled: []outline.Point,
     twilight_flags: []outline.PointFlag,
     retained: types.RetainedGraphicsState,
+    compatibility: compatibility.State,
     depth: usize = 0,
 
     fn init(
@@ -127,6 +140,12 @@ const Work = struct {
             .twilight_unscaled = twilight_unscaled,
             .twilight_flags = twilight_flags,
             .retained = state.graphics,
+            .compatibility = compatibility.State.init(
+                state.source.interpreter,
+                state.graphics.target,
+                state.graphics.instruct_control,
+                state.source.tricky,
+            ),
         };
     }
 
@@ -158,19 +177,34 @@ const Work = struct {
         }
         self.depth += 1;
         defer self.depth -= 1;
+        // Clear only IUP tracking. A glyph-local INSTCTRL waiver persists
+        // through sibling components and parent bytecode in this atomic
+        // top-level load, then Work disposal resets it for the next glyph.
+        self.compatibility.beginGlyph(transaction.is_compound);
+        transaction.grid_fit_metrics = false;
+        if (!self.state.hinting_enabled) return;
         if (transaction.is_compound) {
-            return self.executeCompound(transaction);
+            try self.executeCompound(transaction);
+        } else {
+            const metric_phantoms = transaction.phantomPoints().*;
+            roundPhantomPoints(
+                transaction.points,
+                transaction.real_point_count,
+            );
+            if (transaction.instructions.len != 0) {
+                try self.runProgram(
+                    transaction,
+                    transaction.scale_16_16,
+                    false,
+                );
+            }
+            // v40 keeps the unrounded phantom origin/metrics owner; the
+            // public accessor applies base-layer advance rounding.
+            if (self.compatibility.active()) {
+                transaction.mutablePhantomPoints().* = metric_phantoms;
+            }
         }
-        roundPhantomPoints(
-            transaction.points,
-            transaction.real_point_count,
-        );
-        if ((self.retained.instruct_control & 1) != 0 or
-            transaction.instructions.len == 0)
-        {
-            return;
-        }
-        return self.runProgram(transaction, transaction.scale_16_16);
+        transaction.grid_fit_metrics = true;
     }
 
     fn executeCompound(
@@ -197,6 +231,7 @@ const Work = struct {
                 transaction,
                 component_record,
                 &child.transaction,
+                self.compatibility,
             );
             if (component_record.use_my_metrics) {
                 @memcpy(
@@ -206,11 +241,7 @@ const Work = struct {
             }
         }
 
-        if ((self.retained.instruct_control & 1) != 0 or
-            transaction.instructions.len == 0)
-        {
-            return;
-        }
+        if (transaction.instructions.len == 0) return;
         // Parent bytecode observes already-hinted, placed component points.
         // FreeType resets touched flags and treats this device-space geometry
         // as both original and unscaled, so projection scaling is identity.
@@ -220,22 +251,28 @@ const Work = struct {
             flag.touched_x = false;
             flag.touched_y = false;
         }
+        // USE_MY_METRICS may have selected a child's phantom owner.
+        const metric_phantoms = transaction.phantomPoints().*;
         roundPhantomPoints(
             transaction.points,
             transaction.real_point_count,
         );
-        return self.runProgram(transaction, 0x10000);
+        try self.runProgram(transaction, 0x10000, true);
+        if (self.compatibility.active()) {
+            transaction.mutablePhantomPoints().* = metric_phantoms;
+        }
     }
 
     fn runProgram(
         self: *Work,
         transaction: *outline.Transaction,
         point_scale_16_16: i32,
+        is_compound: bool,
     ) types.Error!void {
         // Every glyph program starts from the retained prep graphics state.
-        // CVT, storage, and twilight are shared through the compound load, but
-        // transient/program graphics changes from one child must not seed the
-        // next child or its parent.
+        // CVT, storage, twilight, and the glyph-local native-ClearType waiver
+        // are shared through a compound load. Other transient graphics
+        // changes must not seed the next child or its parent.
         self.retained = self.state.graphics;
         var source = self.state.source;
         source.glyph_program = transaction.instructions;
@@ -247,6 +284,7 @@ const Work = struct {
             self.storage,
             &self.retained,
         );
+        interpreter.compatibility = self.compatibility;
         try interpreter.attachZones(
             zone(
                 self.twilight_points,
@@ -265,8 +303,10 @@ const Work = struct {
                 transaction.real_point_count,
             ),
             point_scale_16_16,
+            is_compound,
         );
-        return interpreter.run(.glyph);
+        try interpreter.run(.glyph);
+        self.compatibility = interpreter.compatibility;
     }
 };
 
@@ -307,6 +347,7 @@ const OwnedGlyph = struct {
             .allocator = allocator,
             .face_identity = source.face_identity,
             .target = source.target,
+            .interpreter = source.interpreter,
             .glyph_id = source.glyph_id,
             .real_point_count = source.real_point_count,
             .points = points,
@@ -320,6 +361,9 @@ const OwnedGlyph = struct {
             .normalized_coords = normalized_coords,
             .variation = source.variation,
             .is_compound = source.is_compound,
+            .hinting_enabled = source.hinting_enabled,
+            .backward_compatibility = source.backward_compatibility,
+            .grid_fit_metrics = source.grid_fit_metrics,
         };
         if (transaction.variation) |*context| {
             context.normalized_coords = normalized_coords;
@@ -348,6 +392,7 @@ const OwnedGlyph = struct {
                 allocator,
                 parent.face_identity,
                 parent.target,
+                parent.interpreter,
                 source.glyph_id,
                 source.data,
                 @intCast(contour_count),
@@ -364,6 +409,9 @@ const OwnedGlyph = struct {
                 allocator,
                 parent.face_identity,
                 parent.target,
+                parent.interpreter,
+                parent.hinting_enabled,
+                parent.backward_compatibility,
                 source,
                 parent.scale_16_16,
                 max_component_depth,
@@ -409,12 +457,20 @@ fn emptyTransaction(
         .y = 0,
     };
     unscaled[2] = .{
-        .x = 0,
+        .x = outline.verticalPhantomX(
+            parent.interpreter,
+            parent.target,
+            source.metrics.advance_width,
+        ),
         .y = source.metrics.bounds.y_max +
             source.metrics.top_side_bearing,
     };
     unscaled[3] = .{
-        .x = 0,
+        .x = outline.verticalPhantomX(
+            parent.interpreter,
+            parent.target,
+            source.metrics.advance_width,
+        ),
         .y = source.metrics.bounds.y_max +
             source.metrics.top_side_bearing -
             source.metrics.vertical_advance,
@@ -437,6 +493,7 @@ fn emptyTransaction(
         .allocator = allocator,
         .face_identity = parent.face_identity,
         .target = parent.target,
+        .interpreter = parent.interpreter,
         .glyph_id = source.glyph_id,
         .real_point_count = 0,
         .points = points,
@@ -449,6 +506,8 @@ fn emptyTransaction(
         .scale_16_16 = parent.scale_16_16,
         .normalized_coords = normalized_coords,
         .variation = parent.variation,
+        .hinting_enabled = parent.hinting_enabled,
+        .backward_compatibility = parent.backward_compatibility,
     };
 }
 
@@ -469,6 +528,7 @@ fn placeComponent(
     parent: *outline.Transaction,
     record: outline.ComponentRecord,
     child: *const outline.Transaction,
+    policy: compatibility.State,
 ) types.Error!void {
     const point_end = record.point_start + record.point_len;
     if (point_end > parent.real_point_count or
@@ -525,7 +585,9 @@ fn placeComponent(
                 ),
             };
             if ((record.flags & 0x0004) != 0) {
-                scaled.x = compound.roundGrid(scaled.x);
+                if (!policy.active()) {
+                    scaled.x = compound.roundGrid(scaled.x);
+                }
                 scaled.y = compound.roundGrid(scaled.y);
             }
             break :blk ComponentOffsets{
@@ -610,4 +672,81 @@ fn roundPhantomPoints(points: []outline.Point, real_point_count: usize) void {
         (points[real_point_count + 2].y +| 32) & ~@as(i32, 63);
     points[real_point_count + 3].y =
         (points[real_point_count + 3].y +| 32) & ~@as(i32, 63);
+}
+
+test "v40 skips component X grid rounding" {
+    var parent_points = [_]outline.Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 10, .y = 0 },
+        .{ .x = 650, .y = 0 },
+        .{ .x = 0, .y = 650 },
+        .{ .x = 0, .y = -650 },
+    };
+    var parent_original = parent_points;
+    var parent_unscaled = parent_points;
+    var parent_flags = [_]outline.PointFlag{.{}} ** parent_points.len;
+    var child_points = [_]outline.Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 0, .y = 0 },
+        .{ .x = 640, .y = 0 },
+        .{ .x = 0, .y = 640 },
+        .{ .x = 0, .y = -640 },
+    };
+    var child_original = child_points;
+    var child_unscaled = child_points;
+    var child_flags = [_]outline.PointFlag{.{}} ** child_points.len;
+    var parent = outline.Transaction{
+        .allocator = std.testing.allocator,
+        .face_identity = 1,
+        .target = .normal,
+        .interpreter = .cleartype,
+        .glyph_id = 2,
+        .real_point_count = 1,
+        .points = &parent_points,
+        .original = &parent_original,
+        .unscaled = &parent_unscaled,
+        .flags = &parent_flags,
+        .contours = @constCast(&[_]u16{0}),
+        .instructions = &.{},
+        .scale_16_16 = 0x10000,
+    };
+    const child = outline.Transaction{
+        .allocator = std.testing.allocator,
+        .face_identity = 1,
+        .target = .normal,
+        .interpreter = .cleartype,
+        .glyph_id = 1,
+        .real_point_count = 1,
+        .points = &child_points,
+        .original = &child_original,
+        .unscaled = &child_unscaled,
+        .flags = &child_flags,
+        .contours = @constCast(&[_]u16{0}),
+        .instructions = &.{},
+        .scale_16_16 = 0x10000,
+    };
+    const record = outline.ComponentRecord{
+        .glyph_id = 1,
+        .flags = 0x0004,
+        .point_start = 0,
+        .point_len = 1,
+        .contour_start = 0,
+        .contour_len = 1,
+        .transform = .{},
+        .placement = .{ .offset = .{ .x = 10, .y = 10 } },
+        .use_my_metrics = false,
+        .is_compound = false,
+        .instructions = &.{},
+    };
+
+    try placeComponent(
+        &parent,
+        record,
+        &child,
+        compatibility.State.init(.cleartype, .normal, 0, false),
+    );
+    try std.testing.expectEqual(
+        outline.Point{ .x = 10, .y = 0 },
+        parent.points[0],
+    );
 }

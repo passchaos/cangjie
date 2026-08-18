@@ -879,23 +879,18 @@ value stack follows FreeType's deployed-font compatibility bound:
 `maxStackElements + max(maxStackElements / 2, 128)`, remaining fixed-size
 rather than growing during execution.
 
-This size-program instance is intentionally not yet presented as hinted glyph
-output. The existing public outline is a path-command stream and no longer
-contains the raw glyf point flags, contour ends, phantom points, or glyph
-instructions required by the TrueType point-zone model. Point-only opcodes in
-`fpgm`/`prep` therefore report `UnsupportedHintInstruction` instead of becoming
-silent no-ops. The next hinting slice introduces an atomic raw glyf point
-transaction, applies gvar/phantom deltas before scaling, runs the glyph
-program, and only then reconstructs public paths and raster input.
+Font and prep programs intentionally have no attached glyph zone: point-only
+opcodes there report `UnsupportedHintInstruction` instead of becoming silent
+no-ops. Glyph execution uses the separate atomic raw-point transaction below,
+then reconstructs public pixel paths and raster input.
 `Face.hintingInstanceAt` owns a complete, F2Dot14-quantized normalized fvar
 location. It rebuilds the base CVT, applies active cvar tuples in design units,
 scales the varied CVT to 26.6, and only then runs prep; GETVARIATION reads that
 same owned axis-order location. `hintingInstance` delegates with an all-zero
 location. Simple-glyph points/phantoms and compound component/phantom gvar
-deltas use that same location; the remaining variation gap is interpreter
-compatibility modes and automatic run integration.
+deltas use that same location.
 
-The raw-point boundary now exists for default-instance simple and compound
+The raw-point boundary exists for simple and compound
 `glyf` glyphs as `Face.hintingPointTransaction`. It owns unscaled,
 original-scaled, and mutable 26.6 point arrays; on-curve/touched/overlap flags;
 contour ends; component point/contour ranges; borrowed glyph instruction
@@ -924,15 +919,27 @@ only after a successful run; any error leaves the transaction and instance
 unchanged. Installed-font gates execute representative glyph programs and a
 full mnemonic scan of DejaVu Sans, Noto Sans Devanagari, and Noto Sans Arabic
 shows no uncovered non-variation standard opcode.
-The point VM identifies itself through GETINFO as the classic v35 interpreter;
-it does not advertise FreeType v40 ClearType compatibility flags because the
-associated horizontal-movement suppression is not implemented. The optional
-`zig build hinting-freetype-test` gate selects FreeType v35 explicitly and
-requires exact contour, on-curve-tag, final 26.6-point, and horizontal-advance
-parity for representative simple, compound, Arabic, Devanagari, and variable
-glyphs. Its IP and IUP math preserves the classic interpreter's unscaled
-glyph-zone ratios and staged 16.16 fixed-point rounding rather than collapsing
-equivalent real-number formulas that differ by a 26.6 unit.
+Hinting instances select either classic v35 or minimal ClearType-compatible
+v40 semantics explicitly through `HintingOptions.interpreter`; existing
+target-only constructors retain classic behavior. GETINFO advertises the
+selected version and its target-specific grayscale/ClearType capabilities.
+The v40 state tracks IUP on both axes, honors prep or glyph INSTCTRL native
+ClearType waivers, suppresses compatibility X and post-IUP movement, filters
+SHPIX/DELTAP and post-IUP curve edits, preserves unrounded phantom origins
+while separately grid-fitting public advances, skips X grid-rounding of
+compound component offsets, reports v40 MPS point size, and falls back to
+native semantics for FreeType's complete tricky-font family/signature list.
+The optional
+`zig build hinting-freetype-test` gate selects FreeType v35 and v40 explicitly
+and requires exact contour, on-curve-tag, final 26.6-point, and
+horizontal-advance parity for representative simple, compound, Arabic,
+Devanagari, and variable glyphs across normal, LCD, vertical-LCD, and mono
+native targets. FreeType's native light outline changed between 2.13.2 and
+2.14.3 despite identical v40 bytecode traces; the same full light corpus is
+therefore gated only when the linked oracle is FreeType 2.14 or newer. IP and
+IUP preserve unscaled glyph-zone ratios and staged 16.16 fixed-point rounding
+rather than collapsing equivalent real-number formulas that differ by a 26.6
+unit.
 
 `toPixelOutline` then reconstructs a distinct pixel-space path and applies the
 possibly modified left phantom (`pp1`) as the FreeType-compatible glyph
@@ -947,8 +954,7 @@ while preserving shaping advances/offsets and rejecting a mismatched variation
 location; it does not hide PPEM-instance lifetime or cache policy.
 Compound glyphs, including gvar component placement and metric phantoms, can be
 decoded, executed, and reconstructed. Transactions reject an instance created
-from another face, PPEM, target, or normalized location. FreeType v40
-compatibility mode remains the next interpreter layer.
+from another face, PPEM, target, interpreter, or normalized location.
 
 The shaping integration suite is similarly rooted at
 `src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,

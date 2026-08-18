@@ -1,10 +1,9 @@
-//! Differential TrueType hinted-outline gates against installed FreeType v35.
+//! Differential TrueType hinted-outline gates against installed FreeType.
 //!
 //! FreeType translates a hinted outline by `-pp1` before exposing the glyph
 //! slot. Cangjie's raw transaction retains pp1, so the comparison applies the
 //! same origin shift while preserving the unrounded 26.6 point coordinates.
-//! The test bridge explicitly selects the classic interpreter because
-//! Cangjie's VM does not yet implement FreeType v40 compatibility suppression.
+//! The test bridge explicitly selects v35 or v40 for every comparison.
 
 const std = @import("std");
 const cangjie = @import("cangjie");
@@ -17,52 +16,122 @@ const Fixture = struct {
     location: []const f32 = &.{},
 };
 
-test "hinted outlines match FreeType representative corpus" {
-    const fixtures = [_]Fixture{
-        .{
-            .path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            .codepoint = 'A',
-            .ppem = 9,
-        },
-        .{
-            .path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            .codepoint = 'X',
-            .ppem = 16,
-        },
-        .{
-            .path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            .codepoint = 0x00c2,
-            .ppem = 20,
-        },
-        .{
-            .path = "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
-            .codepoint = 0x0915,
-            .ppem = 16,
-        },
-        .{
-            .path = "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
-            .codepoint = 0x0627,
-            .ppem = 16,
-        },
-        .{
-            .path = "/usr/share/fonts/truetype/cascadia-code/CascadiaCode.ttf",
-            .codepoint = 'A',
-            .ppem = 16,
-            .location = &.{0.5},
-        },
-        .{
-            .path = "/usr/share/fonts/truetype/cascadia-code/CascadiaCode.ttf",
-            .codepoint = 0x00c2,
-            .ppem = 16,
-            .location = &.{0.5},
-        },
-    };
+const Target = enum {
+    normal,
+    light,
+    lcd,
+    vertical_lcd,
+    mono,
+
+    fn cangjieTarget(self: Target) cangjie.font.HintingTarget {
+        return switch (self) {
+            .normal => .normal,
+            .light => .light,
+            .lcd => .lcd,
+            .vertical_lcd => .vertical_lcd,
+            .mono => .mono,
+        };
+    }
+
+    fn freeTypeFlag(self: Target) ft.FT_Int32 {
+        return @intCast(switch (self) {
+            .normal => ft.FT_LOAD_TARGET_NORMAL,
+            .light => ft.FT_LOAD_TARGET_LIGHT,
+            .lcd => ft.FT_LOAD_TARGET_LCD,
+            .vertical_lcd => ft.FT_LOAD_TARGET_LCD_V,
+            .mono => ft.FT_LOAD_TARGET_MONO,
+        });
+    }
+};
+
+const fixtures = [_]Fixture{
+    .{
+        .path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        .codepoint = 'A',
+        .ppem = 9,
+    },
+    .{
+        .path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        .codepoint = 'X',
+        .ppem = 16,
+    },
+    .{
+        .path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        .codepoint = 0x00c2,
+        .ppem = 20,
+    },
+    .{
+        .path = "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+        .codepoint = 0x0915,
+        .ppem = 16,
+    },
+    .{
+        .path = "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+        .codepoint = 0x0627,
+        .ppem = 16,
+    },
+    .{
+        .path = "/usr/share/fonts/truetype/cascadia-code/CascadiaCode.ttf",
+        .codepoint = 'A',
+        .ppem = 16,
+        .location = &.{0.5},
+    },
+    .{
+        .path = "/usr/share/fonts/truetype/cascadia-code/CascadiaCode.ttf",
+        .codepoint = 0x00c2,
+        .ppem = 16,
+        .location = &.{0.5},
+    },
+};
+
+test "classic hinted outlines match FreeType v35" {
     for (fixtures) |fixture| {
-        try compareFixture(fixture);
+        try compareFixture(fixture, .classic, .normal);
     }
 }
 
-fn compareFixture(fixture: Fixture) !void {
+test "ClearType hinted outlines match FreeType v40" {
+    for (fixtures) |fixture| {
+        try compareFixture(fixture, .cleartype, .normal);
+    }
+}
+
+test "ClearType target modes match FreeType v40" {
+    // Native `light` outlines changed between FreeType 2.13.2 and 2.14.3
+    // despite identical v40 instruction traces. Keep this interpreter gate
+    // on target modes whose native bytecode semantics are version-stable;
+    // light rendering policy belongs to the raster/auto-hinter comparison.
+    for ([_]Target{ .lcd, .vertical_lcd, .mono }) |target| {
+        for (fixtures) |fixture| {
+            try compareFixture(fixture, .cleartype, target);
+        }
+    }
+}
+
+test "ClearType light target matches stable FreeType v40" {
+    if (!try freeTypeVersionAtLeast(2, 14)) return error.SkipZigTest;
+    for (fixtures) |fixture| {
+        try compareFixture(fixture, .cleartype, .light);
+    }
+}
+
+fn freeTypeVersionAtLeast(wanted_major: c_int, wanted_minor: c_int) !bool {
+    var library: ft.FT_Library = null;
+    if (ft.FT_Init_FreeType(&library) != 0) return error.FreeTypeFailed;
+    defer _ = ft.FT_Done_FreeType(library);
+    var major: c_int = 0;
+    var minor: c_int = 0;
+    var patch: c_int = 0;
+    ft.FT_Library_Version(library, &major, &minor, &patch);
+    return major > wanted_major or
+        (major == wanted_major and minor >= wanted_minor);
+}
+
+fn compareFixture(
+    fixture: Fixture,
+    interpreter: cangjie.font.HintingInterpreter,
+    target: Target,
+) !void {
     const allocator = std.testing.allocator;
     const bytes = try std.Io.Dir.cwd().readFileAlloc(
         std.testing.io,
@@ -75,12 +144,22 @@ fn compareFixture(fixture: Fixture) !void {
     defer face.deinit();
     const glyph_id = try face.glyphs().index(fixture.codepoint);
     var instance = if (fixture.location.len == 0)
-        try face.hintingInstance(allocator, fixture.ppem, .normal)
-    else
-        try face.hintingInstanceAt(
+        try face.hintingInstanceWithOptions(
             allocator,
             fixture.ppem,
-            .normal,
+            .{
+                .target = target.cangjieTarget(),
+                .interpreter = interpreter,
+            },
+        )
+    else
+        try face.hintingInstanceAtWithOptions(
+            allocator,
+            fixture.ppem,
+            .{
+                .target = target.cangjieTarget(),
+                .interpreter = interpreter,
+            },
             fixture.location,
         );
     defer instance.deinit();
@@ -98,11 +177,20 @@ fn compareFixture(fixture: Fixture) !void {
         glyph_id,
         fixture.ppem,
         fixture.location,
+        interpreter,
+        target,
     );
     defer expected.deinit(allocator);
     errdefer |err| std.debug.print(
-        "hint diff font={s} cp=U+{x} ppem={d}: {s}\n",
-        .{ fixture.path, fixture.codepoint, fixture.ppem, @errorName(err) },
+        "hint diff version={s} target={s} font={s} cp=U+{x} ppem={d}: {s}\n",
+        .{
+            @tagName(interpreter),
+            @tagName(target),
+            fixture.path,
+            fixture.codepoint,
+            fixture.ppem,
+            @errorName(err),
+        },
     );
     try expectEqual(
         usize,
@@ -143,9 +231,14 @@ fn compareFixture(fixture: Fixture) !void {
             actual_flag.on_curve,
         );
     }
-    const actual_advance = transaction.phantomPoints()[1].x -
-        transaction.phantomPoints()[0].x;
-    try expectEqual(i32, expected.advance, actual_advance);
+    const actual_advance = transaction.horizontalAdvance();
+    if (expected.advance != actual_advance) {
+        std.debug.print(
+            "advance ft={d} cj={d}\n",
+            .{ expected.advance, actual_advance },
+        );
+        return error.HintingMismatch;
+    }
 }
 
 fn expectEqual(comptime T: type, expected: T, actual: T) !void {
@@ -184,12 +277,18 @@ fn freeTypeOutline(
     glyph_id: cangjie.font.GlyphId,
     ppem: u16,
     location: []const f32,
+    interpreter: cangjie.font.HintingInterpreter,
+    target: Target,
 ) !FtOutline {
     var library: ft.FT_Library = null;
     if (ft.FT_Init_FreeType(&library) != 0) return error.FreeTypeFailed;
     defer _ = ft.FT_Done_FreeType(library);
-    if (ft.cangjie_ft_select_classic_interpreter(library) != 0) {
-        return error.FreeTypeClassicInterpreterUnavailable;
+    const version: ft.FT_UInt = switch (interpreter) {
+        .classic => 35,
+        .cleartype => 40,
+    };
+    if (ft.cangjie_ft_select_interpreter(library, version) != 0) {
+        return error.FreeTypeInterpreterUnavailable;
     }
     var face: ft.FT_Face = null;
     if (ft.FT_New_Memory_Face(
@@ -218,7 +317,10 @@ fn freeTypeOutline(
     if (ft.FT_Load_Glyph(
         face,
         glyph_id,
-        ft.FT_LOAD_NO_BITMAP | ft.FT_LOAD_TARGET_NORMAL,
+        @as(ft.FT_Int32, @intCast(
+            ft.FT_LOAD_NO_BITMAP | ft.FT_LOAD_NO_AUTOHINT,
+        )) |
+            target.freeTypeFlag(),
     ) != 0) return error.FreeTypeFailed;
     const slot = face.*.glyph;
     if (slot == null or slot.*.format != ft.FT_GLYPH_FORMAT_OUTLINE) {

@@ -7,6 +7,7 @@
 
 const stack_mod = @import("../stack.zig");
 const types = @import("../types.zig");
+const compatibility_mod = @import("compatibility.zig");
 const geometry = @import("geometry.zig");
 const zones = @import("zones.zig");
 
@@ -15,6 +16,7 @@ pub const Runtime = struct {
     cvt: []i32,
     retained: *types.RetainedGraphicsState,
     transient: *zones.GraphicsState,
+    compatibility: *compatibility_mod.State,
     twilight: ?zones.Zone,
     glyph: ?zones.Zone,
     point_scale_16_16: i32,
@@ -114,6 +116,7 @@ pub const Runtime = struct {
                     self.transient,
                     first,
                     second,
+                    self.compatibility.*,
                 );
             },
             0x29 => {
@@ -132,8 +135,11 @@ pub const Runtime = struct {
                 try context.mdap(point, (opcode & 1) != 0);
             },
             0x30, 0x31 => {
-                var context = try self.pointContext();
-                try context.interpolateUntouched((opcode & 1) != 0);
+                const x_axis = (opcode & 1) != 0;
+                if (self.compatibility.beginIup(x_axis)) {
+                    var context = try self.pointContext();
+                    try context.interpolateUntouched(x_axis);
+                }
             },
             0x32, 0x33 => try self.shiftPointsByReference(opcode),
             0x34, 0x35 => {
@@ -196,8 +202,14 @@ pub const Runtime = struct {
             0x81, 0x82 => {
                 const last = try self.stack.popIndex();
                 const first = try self.stack.popIndex();
-                var context = try self.pointContext();
-                try context.setCurveRange(first, last, opcode == 0x81);
+                if (!self.compatibility.postIup()) {
+                    var context = try self.pointContext();
+                    try context.setCurveRange(
+                        first,
+                        last,
+                        opcode == 0x81,
+                    );
+                }
             },
             0x86, 0x87 => {
                 const second = try self.stack.popIndex();
@@ -230,6 +242,7 @@ pub const Runtime = struct {
             .glyph = self.glyph orelse
                 return error.UnsupportedHintInstruction,
             .state = self.transient,
+            .compatibility = self.compatibility,
             .scale_16_16 = self.point_scale_16_16,
         };
     }
@@ -345,7 +358,6 @@ pub const Runtime = struct {
             0x72 => @as(i32, 32),
             else => @as(i32, 0),
         };
-        var context = try self.pointContext();
         for (0..count) |_| {
             const point = try self.stack.popIndex();
             var packed_delta = try self.stack.pop();
@@ -355,18 +367,38 @@ pub const Runtime = struct {
             if (packed_delta >= 0) packed_delta += 1;
             const multiplier: i32 =
                 @as(i32, 1) << @intCast(6 - self.retained.delta_shift);
-            context.deltaPoint(point, packed_delta *| multiplier) catch |err| {
-                if (err != error.InvalidHintOperand) return err;
+            const target = switch (self.transient.zp0) {
+                0 => self.twilight orelse
+                    return error.UnsupportedHintInstruction,
+                1 => self.glyph orelse
+                    return error.UnsupportedHintInstruction,
+                else => return error.InvalidHintOperand,
             };
+            if (point >= target.flags.len) continue;
+            if (self.compatibility.allowPatternMove(
+                self.transient.freedom,
+                target.flags[point].touched_y,
+            )) {
+                var context = try self.pointContext();
+                context.deltaPoint(
+                    point,
+                    packed_delta *| multiplier,
+                ) catch |err| {
+                    if (err != error.InvalidHintOperand) return err;
+                };
+            }
         }
     }
 
     fn flipPoints(self: *Runtime) types.Error!void {
         const loop = self.transient.loop;
         if (loop > self.stack.depth()) return error.HintStackUnderflow;
-        var context = try self.pointContext();
         for (0..loop) |_| {
-            try context.flipPoint(try self.stack.popIndex());
+            const point = try self.stack.popIndex();
+            if (!self.compatibility.postIup()) {
+                var context = try self.pointContext();
+                try context.flipPoint(point);
+            }
         }
         self.transient.loop = 1;
     }

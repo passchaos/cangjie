@@ -24,7 +24,7 @@ test "vertical shaping uses vmtx and keeps horizontal behavior isolated" {
     const horizontal = try TextShaper.shapeUtf8(&font, &buffer, "AA", 20);
     try std.testing.expect(horizontal.width() > 0);
     try std.testing.expectApproxEqAbs(@as(f32, 0), horizontal.height(), 0.001);
-    try std.testing.expect(!horizontal.glyphs[0].vertical);
+    try std.testing.expect(!horizontal.glyphs[0].isVertical());
 
     const vertical = try TextShaper.shapeUtf8WithOptions(
         &font,
@@ -37,7 +37,10 @@ test "vertical shaping uses vmtx and keeps horizontal behavior isolated" {
     try std.testing.expectApproxEqAbs(@as(f32, 0), vertical.width(), 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 40), vertical.height(), 0.001);
     for (vertical.glyphs) |glyph| {
-        try std.testing.expect(glyph.vertical);
+        try std.testing.expectEqual(
+            support.GlyphOrientation.upright,
+            glyph.orientation,
+        );
         try std.testing.expectApproxEqAbs(@as(f32, 0), glyph.x_advance, 0.001);
         try std.testing.expectApproxEqAbs(@as(f32, 20), glyph.y_advance, 0.001);
         try std.testing.expectApproxEqAbs(@as(f32, 8), glyph.x_offset, 0.001);
@@ -95,6 +98,10 @@ test "vertical sideways text uses horizontal advance for rotated glyphs" {
         .{ .writing_mode = .vertical_rl, .text_orientation = .sideways },
     );
     try std.testing.expectEqual(@as(usize, 2), sideways.glyphs.len);
+    try std.testing.expectEqual(
+        support.GlyphOrientation.sideways,
+        sideways.glyphs[0].orientation,
+    );
     try std.testing.expectApproxEqAbs(@as(f32, 16), sideways.glyphs[0].y_advance, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 32), sideways.height(), 0.001);
 
@@ -105,8 +112,12 @@ test "vertical sideways text uses horizontal advance for rotated glyphs" {
         20,
         .{ .writing_mode = .vertical_rl },
     );
-    try std.testing.expectApproxEqAbs(@as(f32, 20), mixed.glyphs[0].y_advance, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 40), mixed.height(), 0.001);
+    try std.testing.expectEqual(
+        support.GlyphOrientation.sideways,
+        mixed.glyphs[0].orientation,
+    );
+    try std.testing.expectApproxEqAbs(@as(f32, 16), mixed.glyphs[0].y_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 32), mixed.height(), 0.001);
 
     const upright = try TextShaper.shapeUtf8WithOptions(
         &font,
@@ -115,8 +126,66 @@ test "vertical sideways text uses horizontal advance for rotated glyphs" {
         20,
         .{ .writing_mode = .vertical_rl, .text_orientation = .upright },
     );
+    try std.testing.expectEqual(
+        support.GlyphOrientation.upright,
+        upright.glyphs[0].orientation,
+    );
     try std.testing.expectApproxEqAbs(@as(f32, 20), upright.glyphs[0].y_advance, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 40), upright.height(), 0.001);
+}
+
+test "mixed vertical orientation follows CSS UAX 50 resolution" {
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        std.testing.allocator,
+        false,
+    );
+    defer std.testing.allocator.free(bytes);
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(std.testing.allocator);
+    defer buffer.deinit();
+
+    const mixed = try TextShaper.shapeUtf8WithOptions(
+        &font,
+        &buffer,
+        "A中、〈",
+        20,
+        .{ .writing_mode = .vertical_rl },
+    );
+    try std.testing.expectEqual(@as(usize, 4), mixed.glyphs.len);
+    try std.testing.expectEqual(
+        support.GlyphOrientation.sideways,
+        mixed.glyphs[0].orientation,
+    );
+    try std.testing.expectEqual(
+        support.GlyphOrientation.upright,
+        mixed.glyphs[1].orientation,
+    );
+    // CSS mixed keeps both Tu and Tr upright after vertical substitution had a
+    // chance to supply their typographic variants.
+    try std.testing.expectEqual(
+        support.GlyphOrientation.upright,
+        mixed.glyphs[2].orientation,
+    );
+    try std.testing.expectEqual(
+        support.GlyphOrientation.upright,
+        mixed.glyphs[3].orientation,
+    );
+
+    const upright = try TextShaper.shapeUtf8WithOptions(
+        &font,
+        &buffer,
+        "A中",
+        20,
+        .{ .writing_mode = .vertical_rl, .text_orientation = .upright },
+    );
+    for (upright.glyphs) |glyph| {
+        try std.testing.expectEqual(
+            support.GlyphOrientation.upright,
+            glyph.orientation,
+        );
+    }
 }
 
 test "vertical presentation fallback survives bottom-to-top shaping" {

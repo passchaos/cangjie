@@ -2,9 +2,10 @@
 
 ## Unicode Character Database
 
-Generated boundary blobs under `src/unicode/` contain derived Unicode
-properties. Their conformance fixtures are compact encodings of the official
-Unicode 17 segmentation and line-breaking test files.
+Generated property tables and boundary blobs under `src/unicode/` contain
+derived Unicode data, including UAX #50 vertical orientation. Their
+conformance fixtures are compact encodings of the official Unicode 17
+segmentation and line-breaking test files.
 
 - Project: <https://www.unicode.org/>
 - Copyright: Unicode, Inc.

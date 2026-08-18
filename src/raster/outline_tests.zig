@@ -86,3 +86,43 @@ test "large glyph alignment leaves outline unchanged" {
     try std.testing.expect(@abs(lines[0].a.x - 2.3) < 0.001);
     try std.testing.expect(@abs(lines[0].b.y - 9.7) < 0.001);
 }
+
+test "clockwise orientation rotates around the shaped glyph origin" {
+    var outline = glyph_mod.GlyphOutline.init(
+        std.testing.allocator,
+        1,
+        .{ .x_min = 0, .y_min = 0, .x_max = 20, .y_max = 10 },
+        20,
+        0,
+    );
+    defer outline.deinit();
+    try outline.commands.appendSlice(std.testing.allocator, &.{
+        .{ .move_to = .{ .x = 0, .y = 0 } },
+        .{ .line_to = .{ .x = 20, .y = 0 } },
+        .{ .line_to = .{ .x = 20, .y = 10 } },
+        .close,
+    });
+    var lines: [3]Line = undefined;
+    var list = std.ArrayList(Line).initBuffer(&lines);
+    outline_raster.flattenOriented(
+        &list,
+        &outline,
+        1,
+        30,
+        40,
+        .clockwise,
+    );
+
+    try std.testing.expectEqual(
+        glyph_mod.Point{ .x = 30, .y = 40 },
+        list.items[0].a,
+    );
+    try std.testing.expectEqual(
+        glyph_mod.Point{ .x = 30, .y = 60 },
+        list.items[0].b,
+    );
+    try std.testing.expectEqual(
+        glyph_mod.Point{ .x = 40, .y = 60 },
+        list.items[1].b,
+    );
+}

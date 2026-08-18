@@ -6,7 +6,9 @@
 
 const std = @import("std");
 
-const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
+const glyph_position = @import("../../glyph_position.zig");
+const GlyphOrientation = glyph_position.Orientation;
+const GlyphPosition = glyph_position.GlyphPosition;
 const discretionary_hyphen = @import("../../discretionary_hyphen.zig");
 const geometry = @import("geometry.zig");
 const opportunity = @import("../opportunity.zig");
@@ -33,7 +35,7 @@ pub const AutomaticHyphen = struct {
     byte_offset: usize,
     run_index: usize,
     resolved: discretionary_hyphen.Resolved,
-    vertical: bool,
+    orientation: GlyphOrientation,
 };
 
 pub const Cursor = struct {
@@ -144,7 +146,7 @@ pub fn recordSoft(
                         .byte_offset = byte_offset,
                         .run_index = resolved.run_index,
                         .resolved = resolved.resolved,
-                        .vertical = current.vertical,
+                        .orientation = current.orientation,
                     },
                 };
             } else {
@@ -210,7 +212,7 @@ pub fn recordSoft(
                     .byte_offset = byte_offset,
                     .run_index = resolved.run_index,
                     .resolved = resolved.resolved,
-                    .vertical = glyphs[owner_index].vertical,
+                    .orientation = glyphs[owner_index].orientation,
                 },
             };
         } else {

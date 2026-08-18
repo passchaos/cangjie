@@ -32,6 +32,7 @@ pub const FeatureRange = unicode.GsubFeatureRange;
 
 pub const Metrics = cache.GlyphMetrics;
 pub const Glyph = glyph_position.GlyphPosition;
+pub const GlyphOrientation = glyph_position.Orientation;
 pub const Run = run_types.GlyphRun;
 pub const FontRun = run_types.CascadeRun;
 pub const Text = run_types.ShapedText;

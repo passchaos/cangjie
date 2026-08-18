@@ -531,10 +531,16 @@ font-space positive-up Y while CPU render targets grow down; both `x_advance`
 and `y_advance` then update the pen, including for non-rendering inline-object
 atoms. Shaped-text rendering also applies both `CascadeRun.x_offset` and
 `CascadeRun.y_offset`, so vertical fallback runs continue one column rather
-than collapsing onto the first glyph. This contract covers placement and
-upright vertical outlines; per-glyph sideways rotation remains an explicit
-renderer transform rather than being inferred from the coarse `vertical`
-position flag.
+than collapsing onto the first glyph.
+
+`Glyph.orientation` records final `.horizontal`, `.upright`, or `.sideways`
+geometry without increasing the compact 48-byte positioned-glyph record.
+Explicit `text-orientation: upright`/`sideways` applies to every vertical
+glyph; mixed orientation follows CSS Writing Modes by keeping U, Tu, and Tr
+upright and rotating UAX #50 R glyphs 90 degrees clockwise. The renderer
+rotates each sideways outline, color layer, or post-hinting pixel outline
+around its shaping origin before advancing the unchanged two-dimensional pen,
+so Latin and CJK can share one vertical run without rotating the whole column.
 
 Before discrete Kashida or spacing expansion, a justified non-terminal line
 may also reshape through one variable-font expansion axis. Cangjie prefers an
@@ -997,8 +1003,10 @@ and `extender.zig` retains the established word and shaping-source boundary
 tailoring. `root.zig` keeps those meanings distinct while exposing the stable
 Mn, spacing-mark, and combined mark queries through `src/unicode.zig`.
 UAX #50 orientation ranges and compatibility presentation-form mappings live
-in `src/unicode/vertical.zig`; the root Unicode API supplies only the resolved
-script-family proof needed by that independent policy.
+under `src/unicode/vertical*`. `vertical_data.zig` is generated from Unicode
+17 `VerticalOrientation.txt`; its default-R table plus 189 merged U/Tu/Tr
+ranges classifies all 1,114,112 code points, while `vertical.zig` keeps lookup
+and the compatibility-form map independent from script itemization.
 
 Cangjie deliberately does not own an editor or mutable text-buffer model.
 Applications and UI toolkits compose the public Unicode segmentation,
@@ -1337,6 +1345,20 @@ The generated property/bracket/mirror blob SHA-256 is
 `9e9f9937100d6019f7308743916c3606bdb31c9cc4f142eb605becf45a210c3f`;
 the 861,948-case fixture SHA-256 is
 `40d4b9145779f8aad815e1f5ea5201ccd9cc5daeb73c8bf73b06c6f1c76d9a26`.
+
+Unicode 17 vertical-orientation data is generated with:
+
+```sh
+tools/unicode/vertical/generate_data.py \
+  path/to/VerticalOrientation.txt \
+  src/unicode/vertical_data.zig
+```
+
+The generator pins the `VerticalOrientation-17.0.0.txt` header, its 2,470
+source ranges, and source SHA-256
+`dcef09c3fb24d356b042569c328ec341efc5b53447700d799f2fb4834c3cd3cd`.
+The normal test suite checks generated range ordering and exhaustively
+classifies every Unicode code point against the generated U/R/Tu/Tr totals.
 
 On a fixed-core mixed Latin/Arabic/Hebrew paragraph microbenchmark, the
 earlier retained `BidiMap` adapter measured about `3.43 µs` versus `2.64 µs`

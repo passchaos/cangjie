@@ -25,6 +25,41 @@ pub fn blendPixels(target: []Rgba, source: []const Rgba) void {
     }
 }
 
+/// Rotate one premultiplied source layer clockwise and composite it.
+///
+/// `source` is the inverse-rotated target viewport, so its dimensions must be
+/// target height × target width. Rasterizing into that preimage avoids clipping
+/// a glyph before rotation and makes the final mapping an exact pixel-center
+/// transpose rather than a second interpolating image resample.
+pub fn blendClockwise(
+    target: []Rgba,
+    target_width: u32,
+    target_height: u32,
+    source: []const Rgba,
+    source_width: u32,
+    source_height: u32,
+) void {
+    if (source_width != target_height or source_height != target_width) return;
+    for (0..source_height) |sy_value| {
+        const sy: u32 = @intCast(sy_value);
+        for (0..source_width) |sx_value| {
+            const sx: u32 = @intCast(sx_value);
+            const source_index = @as(usize, sy) * source_width + sx;
+            if (source_index >= source.len) continue;
+            const src = source[source_index];
+            if (src.a == 0) continue;
+            const dx = target_width - 1 - sy;
+            const dy = sx;
+            const target_index = @as(usize, dy) * target_width + dx;
+            if (target_index >= target.len) continue;
+            blendPixel(
+                &target[target_index],
+                src,
+            );
+        }
+    }
+}
+
 pub fn compositePixels(source: []const Rgba, backdrop: []Rgba, mode: CompositeMode) void {
     for (source[0..@min(source.len, backdrop.len)], backdrop) |src, *dst| {
         dst.* = compositePixel(src, dst.*, mode);

@@ -856,6 +856,27 @@ pub const Rasterizer = struct {
     }
 
     pub fn renderGlyph(self: *Rasterizer, target: *RenderTarget, outline: *const glyph_mod.GlyphOutline, x: f32, baseline_y: f32, font_size: f32, units_per_em: u16) !void {
+        return self.renderGlyphOriented(
+            target,
+            outline,
+            x,
+            baseline_y,
+            font_size,
+            units_per_em,
+            .upright,
+        );
+    }
+
+    fn renderGlyphOriented(
+        self: *Rasterizer,
+        target: *RenderTarget,
+        outline: *const glyph_mod.GlyphOutline,
+        x: f32,
+        baseline_y: f32,
+        font_size: f32,
+        units_per_em: u16,
+        orientation: outline_raster.Orientation,
+    ) !void {
         const flattened_capacity =
             outline_raster.lineCapacity(outline.commands.items);
         var inline_flattened: [128]Line = undefined;
@@ -865,15 +886,24 @@ pub const Rasterizer = struct {
             try std.ArrayList(Line).initCapacity(self.allocator, flattened_capacity);
         defer if (flattened_capacity > inline_flattened.len) flattened.deinit(self.allocator);
         const scale = font_size / @as(f32, @floatFromInt(units_per_em));
-        outline_raster.flatten(&flattened, outline, scale, x, baseline_y);
-        const hint_size = self.hint_size_px orelse font_size;
-        outline_raster.alignSmallGlyphToPixelGrid(
-            flattened.items,
+        outline_raster.flattenOriented(
+            &flattened,
             outline,
             scale,
-            font_size,
-            hint_size,
+            x,
+            baseline_y,
+            orientation,
         );
+        const hint_size = self.hint_size_px orelse font_size;
+        if (orientation == .upright) {
+            outline_raster.alignSmallGlyphToPixelGrid(
+                flattened.items,
+                outline,
+                scale,
+                font_size,
+                hint_size,
+            );
+        }
         try self.fillLines(target, flattened.items, .non_zero);
         if (self.embolden_small_glyphs and hint_size <= 20.0) {
             try self.emboldenSmallGlyph(target, flattened.items, hint_size);
@@ -888,6 +918,23 @@ pub const Rasterizer = struct {
         x: f32,
         baseline_y: f32,
     ) !void {
+        return self.renderPixelOutlineOriented(
+            target,
+            outline,
+            x,
+            baseline_y,
+            .upright,
+        );
+    }
+
+    pub fn renderPixelOutlineOriented(
+        self: *Rasterizer,
+        target: *RenderTarget,
+        outline: *const hinting_outline.PixelOutline,
+        x: f32,
+        baseline_y: f32,
+        orientation: outline_raster.Orientation,
+    ) !void {
         const flattened_capacity =
             outline_raster.lineCapacity(outline.commands.items);
         var inline_flattened: [128]Line = undefined;
@@ -900,11 +947,12 @@ pub const Rasterizer = struct {
             );
         defer if (flattened_capacity > inline_flattened.len)
             flattened.deinit(self.allocator);
-        outline_raster.flattenPixelCommands(
+        outline_raster.flattenPixelCommandsOriented(
             &flattened,
             outline.commands.items,
             x,
             baseline_y,
+            orientation,
         );
         try self.fillLines(target, flattened.items, .non_zero);
     }
@@ -937,7 +985,15 @@ pub const Rasterizer = struct {
                     try font_raster.glyphOutlineAtCoords(font, self.allocator, position.glyph_id, normalized_variation_coords);
                 defer outline.deinit();
                 const origin = pen.glyphOrigin(position);
-                try self.renderGlyph(target, &outline, origin.x, origin.baseline_y, run.font_size, font.units_per_em);
+                try self.renderGlyphOriented(
+                    target,
+                    &outline,
+                    origin.x,
+                    origin.baseline_y,
+                    run.font_size,
+                    font.units_per_em,
+                    run_geometry.rasterOrientation(position),
+                );
             }
             pen.advance(position);
         }
@@ -995,7 +1051,46 @@ pub const Rasterizer = struct {
         for (run.glyphs) |position| {
             if (!position.isInlineObject()) {
                 const origin = pen.glyphOrigin(position);
-                try self.renderColorGlyphAtCoords(target, face_mod.backend.font(run.font), position.glyph_id, run.font_size, origin.x, origin.baseline_y, palette_index, normalized_variation_coords);
+                if (position.isSideways()) {
+                    var glyph_layer = try ColorRenderTarget.init(
+                        self.allocator,
+                        target.height,
+                        target.width,
+                    );
+                    defer glyph_layer.deinit();
+                    // Render the inverse-rotated target viewport. Its local
+                    // glyph origin is derived from the clockwise mapping
+                    // (x, y) -> (origin.x - y, origin.y + x).
+                    try self.renderColorGlyphAtCoords(
+                        &glyph_layer,
+                        face_mod.backend.font(run.font),
+                        position.glyph_id,
+                        run.font_size,
+                        origin.baseline_y,
+                        @as(f32, @floatFromInt(target.width)) - origin.x,
+                        palette_index,
+                        normalized_variation_coords,
+                    );
+                    composite_mod.blendClockwise(
+                        target.pixels,
+                        target.width,
+                        target.height,
+                        glyph_layer.pixels,
+                        glyph_layer.width,
+                        glyph_layer.height,
+                    );
+                } else {
+                    try self.renderColorGlyphAtCoords(
+                        target,
+                        face_mod.backend.font(run.font),
+                        position.glyph_id,
+                        run.font_size,
+                        origin.x,
+                        origin.baseline_y,
+                        palette_index,
+                        normalized_variation_coords,
+                    );
+                }
             }
             pen.advance(position);
         }

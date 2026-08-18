@@ -15,6 +15,7 @@ pub const Result = struct {
     vertical_advance: f32,
     x_offset: f32,
     y_offset: f32,
+    orientation: @import("../../../../layout/glyph_position.zig").Orientation,
 };
 
 pub fn resolve(
@@ -107,12 +108,12 @@ pub fn resolve(
             @as(f32, @floatFromInt(kerx_adjustment.x_advance))) *
             input.scale +
             kern_x_advance;
-    const use_sideways_vertical_advance =
-        input.options.writing_mode.isVertical() and
-        policy.glyphUsesSidewaysAdvance(
-            source_codepoint,
-            input.options.text_orientation,
-        );
+    const orientation = policy.glyphOrientation(
+        source_codepoint,
+        input.options.writing_mode,
+        input.options.text_orientation,
+    );
+    const use_sideways_vertical_advance = orientation == .sideways;
     const vertical_metrics =
         if (input.options.writing_mode.isVertical())
             try policy.verticalMetrics(
@@ -245,5 +246,6 @@ pub fn resolve(
         .vertical_advance = vertical_advance,
         .x_offset = x_offset,
         .y_offset = y_offset,
+        .orientation = orientation,
     };
 }

@@ -40,18 +40,11 @@ pub const JoiningType = joining.Type;
 pub const JoiningForm = joining.Form;
 
 pub const VerticalOrientation = vertical.Orientation;
+pub const vertical_orientation_unicode_version = vertical.unicode_version;
 
-/// Compact UAX #50 classifier for the script families and punctuation used by
-/// desktop UI text. The default is Rotated, while ideographic/kana/hangul,
-/// fullwidth, emoji, and vertical-form ranges stay upright. Transformable CJK
-/// punctuation is separated so `vert`/`vrt2` can select its vertical glyph.
+/// Complete Unicode 17 UAX #50 classifier.
 pub fn verticalOrientationForCodepoint(codepoint: u21) VerticalOrientation {
-    const script = scriptForCodepoint(codepoint);
-    const upright_script =
-        script == .han or script == .hiragana or script == .katakana or
-        script == .hangul or script == .yi or script == .nushu or
-        script == .canadian_aboriginal;
-    return vertical.orientation(codepoint, upright_script);
+    return vertical.orientation(codepoint);
 }
 
 pub fn verticalPresentationCodepoint(codepoint: u21) ?u21 {

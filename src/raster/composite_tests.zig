@@ -47,3 +47,35 @@ test "COLR composite operator invariants cover transparent and opaque edges" {
     try std.testing.expectEqual(Rgba{ .r = 0, .g = 0, .b = 0, .a = 255 }, composite.compositePixel(red, Rgba{ .r = 0, .g = 0, .b = 0, .a = 255 }, .color_dodge));
     try std.testing.expectEqual(Rgba{ .r = 255, .g = 255, .b = 255, .a = 255 }, composite.compositePixel(Rgba{ .r = 0, .g = 0, .b = 0, .a = 255 }, Rgba{ .r = 255, .g = 255, .b = 255, .a = 255 }, .color_burn));
 }
+
+test "clockwise color-layer rotation is an exact pixel transpose" {
+    const source = [_]Rgba{
+        .{ .r = 255, .g = 0, .b = 0, .a = 255 },
+        .{ .r = 0, .g = 255, .b = 0, .a = 255 },
+        .{ .r = 0, .g = 0, .b = 255, .a = 255 },
+        .{ .r = 255, .g = 255, .b = 0, .a = 255 },
+        .{ .r = 255, .g = 0, .b = 255, .a = 255 },
+        .{ .r = 0, .g = 255, .b = 255, .a = 255 },
+    };
+    var target = [_]Rgba{.{ .r = 0, .g = 0, .b = 0, .a = 0 }} ** 6;
+    composite.blendClockwise(
+        &target,
+        3,
+        2,
+        &source,
+        2,
+        3,
+    );
+    try std.testing.expectEqualSlices(
+        Rgba,
+        &.{
+            source[4],
+            source[2],
+            source[0],
+            source[5],
+            source[3],
+            source[1],
+        },
+        &target,
+    );
+}

@@ -1049,6 +1049,54 @@ test "hinted run rendering honors two-dimensional shaping geometry" {
     );
 }
 
+test "hinted run rotates sideways glyphs after grid fitting" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildTrueTypeHintingTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var instance = try face.hintingInstance(
+        allocator,
+        16,
+        .normal,
+    );
+    defer instance.deinit();
+    var target = try cangjie.render.GrayTarget.init(
+        allocator,
+        64,
+        64,
+    );
+    defer target.deinit();
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
+    defer rasterizer.deinit();
+    const glyphs = [_]cangjie.shaping.Glyph{.{
+        .glyph_id = 1,
+        .codepoint = 'A',
+        .cluster = 0,
+        .source_byte_len = 1,
+        .x_advance = 0,
+        .y_advance = 20,
+        .orientation = .sideways,
+    }};
+    try rasterizer.drawHintedRun(
+        &target,
+        .{
+            .font = &face,
+            .font_size = 16,
+            .glyphs = &glyphs,
+        },
+        &instance,
+        10,
+        22,
+    );
+
+    const bounds = coverageBounds(&target) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expect(
+        bounds.max_y - bounds.min_y > bounds.max_x - bounds.min_x,
+    );
+}
+
 test "hinted run rendering rejects a different variation location" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildGvarDeltaTtf(allocator);

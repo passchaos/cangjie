@@ -553,7 +553,7 @@ test "Linux Noto Sans CJK vertical shaping uses real vert substitutions and vmtx
     try std.testing.expect(horizontal_ids[1] != vertical.glyphs[1].glyph_id);
     try std.testing.expect(horizontal_ids[2] != vertical.glyphs[2].glyph_id);
     for (vertical.glyphs) |glyph| {
-        try std.testing.expect(glyph.vertical);
+        try std.testing.expect(glyph.isVertical());
         try std.testing.expectApproxEqAbs(@as(f32, 0), glyph.x_advance, 0.001);
         try std.testing.expectApproxEqAbs(@as(f32, 32), glyph.y_advance, 0.01);
     }

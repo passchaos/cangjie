@@ -6,6 +6,7 @@
 
 const Font = @import("../font.zig").Font;
 const GlyphId = @import("../glyph.zig").GlyphId;
+const GlyphOrientation = @import("glyph_position.zig").Orientation;
 const run_types = @import("types/runs.zig");
 
 pub const soft_hyphen: u21 = 0x00ad;
@@ -93,7 +94,7 @@ pub fn materialize(glyph: anytype, resolved: Resolved) void {
 pub fn synthetic(
     resolved: Resolved,
     byte_offset: usize,
-    vertical: bool,
+    orientation: GlyphOrientation,
 ) @import("glyph_position.zig").GlyphPosition {
     return .{
         .glyph_id = resolved.glyph_id,
@@ -101,7 +102,7 @@ pub fn synthetic(
         .cluster = byte_offset,
         .source_byte_len = 0,
         .x_advance = resolved.x_advance,
-        .vertical = vertical,
+        .orientation = orientation,
         .flags = .{
             .discretionary_hyphen = true,
             .automatic_hyphen = true,

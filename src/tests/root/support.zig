@@ -235,6 +235,8 @@ pub const GlyphOutline = @import("../../glyph.zig").GlyphOutline;
 pub const OutlineBuilder = @import("../../glyph.zig").OutlineBuilder;
 pub const BaselineMetrics = @import("../../layout/line_break/reflow/root.zig").BaselineMetrics;
 pub const GlyphRun = @import("../../layout/types/runs.zig").GlyphRun;
+pub const GlyphOrientation =
+    @import("../../layout/glyph_position.zig").Orientation;
 pub const GlyphPosition = @import("../../layout/glyph_position.zig").GlyphPosition;
 pub const BridgeOptions = @import("../../render/bridge/root.zig").BridgeOptions;
 pub const ColorGlyphDrawCommand = @import("../../render/bridge/root.zig").ColorGlyphDrawCommand;

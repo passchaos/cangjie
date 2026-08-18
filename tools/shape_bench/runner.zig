@@ -311,7 +311,7 @@ fn glyphYAdvances(allocator: std.mem.Allocator, font: *const cangjie.font.Face, 
     const values = try allocator.alloc(i32, glyphs.len);
     for (glyphs, values) |glyph, *value| {
         const runtime_value = fontUnitPosition(font, font_size, glyph.y_advance);
-        value.* = if (usesHarfBuzzVerticalSummary(options.direction) and glyph.vertical and runtime_value > 0)
+        value.* = if (usesHarfBuzzVerticalSummary(options.direction) and glyph.isVertical() and runtime_value > 0)
             try harfBuzzVerticalAdvance(font, glyph)
         else
             runtime_value;
@@ -330,7 +330,7 @@ fn glyphXOffsets(
     const values = try allocator.alloc(i32, glyphs.len);
     const preserve_vertical_position_delta = verticalKerningFeatureRequested(options);
     for (glyphs, values) |glyph, *value| {
-        if (usesHarfBuzzVerticalSummary(options.direction) and glyph.vertical) {
+        if (usesHarfBuzzVerticalSummary(options.direction) and glyph.isVertical()) {
             const origin = try syntheticVerticalOriginX(font, glyph.glyph_id, options, normalized_variation_coords);
             if (preserve_vertical_position_delta) {
                 const default_runtime_origin = @as(f32, @floatFromInt((try font.metrics().horizontalAt(glyph.glyph_id, normalized_variation_coords)).advance_width)) *
@@ -372,7 +372,7 @@ fn verticalKerningFeatureRequested(options: options_mod.Options) bool {
 fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.font.Face, font_size: f32, options: options_mod.Options, normalized_variation_coords: []const f32, glyphs: []const cangjie.shaping.Glyph) ![]const i32 {
     const values = try allocator.alloc(i32, glyphs.len);
     for (glyphs, values) |glyph, *value| {
-        value.* = if (usesHarfBuzzVerticalSummary(options.direction) and glyph.vertical) vertical: {
+        value.* = if (usesHarfBuzzVerticalSummary(options.direction) and glyph.isVertical()) vertical: {
             if (options.font_slant != 0 or options.font_bold_x != 0 or options.font_bold_y != 0) {
                 break :vertical -try syntheticVerticalOriginY(font, glyph.glyph_id, options, normalized_variation_coords);
             }

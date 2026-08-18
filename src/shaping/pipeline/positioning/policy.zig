@@ -5,6 +5,7 @@ const GlyphClass = @import("../../../font.zig").GlyphClass;
 const GlyphId = @import("../../../glyph.zig").GlyphId;
 const indic = @import("../../../indic.zig");
 const ligature_provenance = @import("../../../ligature_provenance.zig");
+const glyph_position = @import("../../../layout/glyph_position.zig");
 const cache = @import("../../context/cache/root.zig");
 const pipeline_types = @import("../types.zig");
 const unicode = @import("../../../unicode.zig");
@@ -71,16 +72,23 @@ pub fn markAdvanceZeroing(
     };
 }
 
-pub fn glyphUsesSidewaysAdvance(
-    _: u21,
+pub fn glyphOrientation(
+    codepoint: u21,
+    writing_mode: pipeline_types.WritingMode,
     orientation: pipeline_types.TextOrientation,
-) bool {
+) glyph_position.Orientation {
+    if (!writing_mode.isVertical()) return .horizontal;
     return switch (orientation) {
-        .sideways => true,
-        .upright => false,
-        // Mixed remains on vertical metrics until the browser/CSS reference
-        // gate is independent of Pango's rotated-line geometry.
-        .mixed => false,
+        .sideways => .sideways,
+        .upright => .upright,
+        // CSS Writing Modes keeps U, Tu, and Tr upright in mixed text. Tr's
+        // rotated fallback belongs to lower-level UAX #50 renderers; CSS
+        // requests upright geometry after `vert`/`vrt2` had a chance to
+        // provide the typographic vertical glyph.
+        .mixed => switch (unicode.verticalOrientationForCodepoint(codepoint)) {
+            .rotated => .sideways,
+            .upright, .transformed_upright, .transformed_rotated => .upright,
+        },
     };
 }
 

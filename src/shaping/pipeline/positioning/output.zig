@@ -275,7 +275,7 @@ pub fn emit(input: Input) !Result {
                 @as(f32, @floatFromInt(adjustment.y_advance)) * input.scale,
             .x_offset = resolved.x_offset,
             .y_offset = resolved.y_offset,
-            .vertical = input.options.writing_mode.isVertical(),
+            .orientation = resolved.orientation,
         });
         if (input.options.writing_mode.isVertical() and active_kern != 0) {
             if (previous_kern_output_index) |previous_output_index| {

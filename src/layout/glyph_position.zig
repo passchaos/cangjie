@@ -5,6 +5,20 @@ const std = @import("std");
 
 const GlyphId = @import("../glyph.zig").GlyphId;
 
+/// Final glyph orientation after writing-mode and text-orientation resolution.
+///
+/// This is intentionally output geometry rather than another shaping option:
+/// one mixed vertical run can contain upright CJK and sideways Latin glyphs.
+pub const Orientation = enum(u8) {
+    horizontal,
+    upright,
+    sideways,
+
+    pub fn isVertical(self: Orientation) bool {
+        return self != .horizontal;
+    }
+};
+
 /// Compact flags deliberately share one byte. Positioned glyphs are retained
 /// in large paragraph arrays, so adding independent booleans would raise the
 /// public record from 48 to 56 bytes solely because of trailing alignment.
@@ -65,8 +79,16 @@ pub const GlyphPosition = struct {
     /// right and positive Y moves the glyph up from its current baseline.
     x_offset: f32 = 0,
     y_offset: f32 = 0,
-    vertical: bool = false,
+    orientation: Orientation = .horizontal,
     flags: Flags = .{},
+
+    pub fn isVertical(self: GlyphPosition) bool {
+        return self.orientation.isVertical();
+    }
+
+    pub fn isSideways(self: GlyphPosition) bool {
+        return self.orientation == .sideways;
+    }
 
     pub fn outputGlyphId(self: GlyphPosition) u32 {
         return self.synthetic_glyph_id orelse self.glyph_id;
@@ -122,4 +144,12 @@ pub const GlyphPosition = struct {
 
 test "positioned glyph flags preserve the compact public layout" {
     try std.testing.expectEqual(@as(usize, 48), @sizeOf(GlyphPosition));
+    const sideways = GlyphPosition{
+        .glyph_id = 1,
+        .codepoint = 'A',
+        .cluster = 0,
+        .x_advance = 0,
+        .orientation = .sideways,
+    };
+    try std.testing.expect(sideways.isVertical());
 }

@@ -307,6 +307,13 @@ test "public facade uses domain names without legacy aliases" {
         cangjie.shaping.Glyph,
         "isKashida",
     ));
+    try std.testing.expect(
+        @typeInfo(cangjie.shaping.GlyphOrientation) == .@"enum",
+    );
+    try std.testing.expect(@hasDecl(
+        cangjie.shaping.Glyph,
+        "isSideways",
+    ));
 }
 
 test "concrete face views cover the normal application workflow" {
@@ -639,6 +646,10 @@ test "text domains are usable without font or shaping state" {
     try std.testing.expectEqual(
         cangjie.text.vertical.Orientation.upright,
         cangjie.text.vertical.orientation(0x4e00),
+    );
+    try std.testing.expectEqualStrings(
+        "17.0.0",
+        cangjie.text.vertical.unicode_version,
     );
 }
 

@@ -8,6 +8,8 @@
 
 const GlyphPosition =
     @import("../layout/glyph_position.zig").GlyphPosition;
+pub const RasterOrientation =
+    @import("../raster/outline.zig").Orientation;
 
 pub const Origin = struct {
     x: f32,
@@ -54,6 +56,10 @@ pub fn offsetOrigin(
     };
 }
 
+pub fn rasterOrientation(glyph: GlyphPosition) RasterOrientation {
+    return if (glyph.isSideways()) .clockwise else .upright;
+}
+
 test "run pen converts shaping offsets and advances both axes" {
     const std = @import("std");
 
@@ -89,5 +95,15 @@ test "run pen converts shaping offsets and advances both axes" {
     try std.testing.expectEqual(
         Origin{ .x = 17, .baseline_y = 63 },
         offsetOrigin(10, 40, 7, 23),
+    );
+    try std.testing.expectEqual(
+        RasterOrientation.clockwise,
+        rasterOrientation(.{
+            .glyph_id = 1,
+            .codepoint = 'A',
+            .cluster = 0,
+            .x_advance = 0,
+            .orientation = .sideways,
+        }),
     );
 }

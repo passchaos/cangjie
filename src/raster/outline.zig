@@ -7,6 +7,11 @@ const curves = @import("curves.zig");
 const Line = @import("scanline.zig").Line;
 const Point = glyph_mod.Point;
 
+pub const Orientation = enum {
+    upright,
+    clockwise,
+};
+
 pub fn alignSmallGlyphToPixelGrid(
     lines: []Line,
     outline: *const glyph_mod.GlyphOutline,
@@ -57,6 +62,17 @@ pub fn flatten(
     x: f32,
     baseline_y: f32,
 ) void {
+    flattenOriented(lines, outline, scale, x, baseline_y, .upright);
+}
+
+pub fn flattenOriented(
+    lines: *std.ArrayList(Line),
+    outline: *const glyph_mod.GlyphOutline,
+    scale: f32,
+    x: f32,
+    baseline_y: f32,
+    orientation: Orientation,
+) void {
     flattenCommandsTransformed(
         lines,
         outline.commands.items,
@@ -64,6 +80,7 @@ pub fn flatten(
         scale,
         x,
         baseline_y,
+        orientation,
     );
 }
 
@@ -76,6 +93,22 @@ pub fn flattenPixelCommands(
     x: f32,
     baseline_y: f32,
 ) void {
+    flattenPixelCommandsOriented(
+        lines,
+        commands,
+        x,
+        baseline_y,
+        .upright,
+    );
+}
+
+pub fn flattenPixelCommandsOriented(
+    lines: *std.ArrayList(Line),
+    commands: []const glyph_mod.PathCommand,
+    x: f32,
+    baseline_y: f32,
+    orientation: Orientation,
+) void {
     flattenCommandsTransformed(
         lines,
         commands,
@@ -83,6 +116,7 @@ pub fn flattenPixelCommands(
         1,
         x,
         baseline_y,
+        orientation,
     );
 }
 
@@ -101,6 +135,7 @@ pub fn flattenTransformed(
         scale,
         x,
         baseline_y,
+        .upright,
     );
 }
 
@@ -111,6 +146,7 @@ fn flattenCommandsTransformed(
     scale: f32,
     x: f32,
     baseline_y: f32,
+    orientation: Orientation,
 ) void {
     var start: ?Point = null;
     var current: ?Point = null;
@@ -122,6 +158,7 @@ fn flattenCommandsTransformed(
                     scale,
                     x,
                     baseline_y,
+                    orientation,
                 );
                 start = pixel;
                 current = pixel;
@@ -133,6 +170,7 @@ fn flattenCommandsTransformed(
                     scale,
                     x,
                     baseline_y,
+                    orientation,
                 );
                 lines.appendAssumeCapacity(.{ .a = a, .b = b });
                 current = b;
@@ -144,12 +182,14 @@ fn flattenCommandsTransformed(
                     scale,
                     x,
                     baseline_y,
+                    orientation,
                 );
                 const end = fontToPixel(
                     transform.apply(quad.end),
                     scale,
                     x,
                     baseline_y,
+                    orientation,
                 );
                 const segments = curves.quadSegmentCount(a, control, end);
                 var previous = a;
@@ -172,18 +212,21 @@ fn flattenCommandsTransformed(
                     scale,
                     x,
                     baseline_y,
+                    orientation,
                 );
                 const c1 = fontToPixel(
                     transform.apply(cubic.c1),
                     scale,
                     x,
                     baseline_y,
+                    orientation,
                 );
                 const end = fontToPixel(
                     transform.apply(cubic.end),
                     scale,
                     x,
                     baseline_y,
+                    orientation,
                 );
                 const segments = curves.cubicSegmentCount(a, c0, c1, end);
                 var previous = a;
@@ -231,10 +274,24 @@ fn fontToPixel(
     scale: f32,
     x: f32,
     baseline_y: f32,
+    orientation: Orientation,
 ) Point {
-    return .{
-        .x = x + point.x * scale,
-        .y = baseline_y - point.y * scale,
+    const local = Point{
+        .x = point.x * scale,
+        .y = 0 - point.y * scale,
+    };
+    return switch (orientation) {
+        .upright => .{
+            .x = x + local.x,
+            .y = baseline_y + local.y,
+        },
+        // Positive 90 degrees is clockwise in the target's y-down coordinate
+        // system. Rotate around the shaped glyph origin, never around its
+        // bounds, so upright and sideways glyphs share identical pen geometry.
+        .clockwise => .{
+            .x = x - local.y,
+            .y = baseline_y + local.x,
+        },
     };
 }
 

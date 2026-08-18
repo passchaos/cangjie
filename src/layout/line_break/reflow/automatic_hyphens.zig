@@ -33,7 +33,7 @@ pub fn appendSelected(
         .glyph = discretionary_hyphen.synthetic(
             candidate.resolved,
             candidate.byte_offset,
-            candidate.vertical,
+            candidate.orientation,
         ),
     });
 }

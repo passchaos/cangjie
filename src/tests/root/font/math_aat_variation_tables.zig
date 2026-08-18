@@ -555,9 +555,9 @@ test "shaping applies normalized variation metric coordinates" {
     try std.testing.expectError(error.BadSfnt, TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .normalized_variation_coords = &.{1.1} }));
 
     const vertical_default = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .writing_mode = .vertical_rl });
-    try std.testing.expectApproxEqAbs(@as(f32, 20.0), vertical_default.height(), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 16.0), vertical_default.height(), 0.001);
     const vertical_varied = try TextShaper.shapeUtf8WithOptions(&font, &layout_buffer, "A", 20, .{ .writing_mode = .vertical_rl, .normalized_variation_coords = &.{0.5} });
-    try std.testing.expectApproxEqAbs(@as(f32, 20.08), vertical_varied.height(), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 16.08), vertical_varied.height(), 0.001);
 
     var fallback_cache = FontFallbackCache.init(allocator);
     defer fallback_cache.deinit();

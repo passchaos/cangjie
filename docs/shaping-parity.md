@@ -2198,6 +2198,11 @@ shaping-performance superiority.
   origin `(-512,578)` and advance `-1024` instead of using half the line height
   as the y origin. The Font-level origin API is shared by layout output and the
   parity runner so renderers receive the same complete vertical translation.
+  Positioned output now also retains the resolved per-glyph orientation:
+  explicit upright/sideways policy applies uniformly, while CSS mixed mode
+  keeps U/Tu/Tr upright and marks only UAX #50 R glyphs sideways. CPU
+  grayscale, color, and TrueType-hinted run renderers rotate those glyphs
+  clockwise around the shaping origin without changing advances.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari

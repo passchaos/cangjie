@@ -1,5 +1,7 @@
 //! UAX #50 vertical orientation policy and compatibility presentation forms.
 
+const data = @import("vertical_data.zig");
+
 pub const Orientation = enum {
     upright,
     rotated,
@@ -7,41 +9,29 @@ pub const Orientation = enum {
     transformed_rotated,
 };
 
-/// Classify one scalar after the caller has resolved script membership.
-///
-/// `upright_script` is true for script families whose ordinary letters remain
-/// upright in vertical text. Accepting that proof keeps this policy independent
-/// of the repository's larger script itemizer.
-pub fn orientation(codepoint: u21, upright_script: bool) Orientation {
-    if (codepoint == 0x3001 or codepoint == 0x3002 or
-        codepoint == 0xFF01 or codepoint == 0xFF0C or
-        codepoint == 0xFF0E or codepoint == 0xFF1F)
-    {
-        return .transformed_upright;
-    }
-    if ((codepoint >= 0x3008 and codepoint <= 0x301F) or
-        codepoint == 0x3030 or codepoint == 0x30A0 or
-        codepoint == 0x30FC or
-        (codepoint >= 0xFE59 and codepoint <= 0xFE5E) or
-        codepoint == 0xFF08 or codepoint == 0xFF09 or
-        (codepoint >= 0xFF1A and codepoint <= 0xFF1B) or
-        codepoint == 0xFF3B or codepoint == 0xFF3D or
-        (codepoint >= 0xFF5B and codepoint <= 0xFF60))
-    {
-        return .transformed_rotated;
-    }
+pub const unicode_version = "17.0.0";
 
-    if (upright_script) return .upright;
-    if ((codepoint >= 0x2E80 and codepoint <= 0xA4CF) or
-        (codepoint >= 0xAC00 and codepoint <= 0xD7FF) or
-        (codepoint >= 0xE000 and codepoint <= 0xFAFF) or
-        (codepoint >= 0xFE10 and codepoint <= 0xFE48) or
-        (codepoint >= 0xFF01 and codepoint <= 0xFF60) or
-        (codepoint >= 0xFFE0 and codepoint <= 0xFFE7) or
-        (codepoint >= 0x1F000 and codepoint <= 0x1FAFF) or
-        (codepoint >= 0x20000 and codepoint <= 0x3FFFD))
-    {
-        return .upright;
+/// Return the complete Unicode 17 `Vertical_Orientation` value for one scalar.
+///
+/// Unicode assigns R by default. The generated table therefore stores only
+/// U/Tu/Tr ranges and keeps the common rotated lookup as a compact miss.
+pub fn orientation(codepoint: u21) Orientation {
+    var low: usize = 0;
+    var high: usize = data.ranges.len;
+    while (low < high) {
+        const middle = low + (high - low) / 2;
+        const range = data.ranges[middle];
+        if (codepoint < range.start) {
+            high = middle;
+        } else if (codepoint > range.end) {
+            low = middle + 1;
+        } else {
+            return switch (range.value) {
+                .upright => .upright,
+                .transformed_upright => .transformed_upright,
+                .transformed_rotated => .transformed_rotated,
+            };
+        }
     }
     return .rotated;
 }
@@ -78,4 +68,34 @@ pub fn presentationCodepoint(codepoint: u21) ?u21 {
         0xff1f => 0xfe16,
         else => null,
     };
+}
+
+test "Unicode 17 vertical orientation table is ordered and complete" {
+    const std = @import("std");
+
+    try std.testing.expectEqual(@as(usize, 2470), data.source_range_count);
+    try std.testing.expectEqual(data.explicit_range_count, data.ranges.len);
+
+    var previous_end: ?u21 = null;
+    for (data.ranges) |range| {
+        try std.testing.expect(range.start <= range.end);
+        if (previous_end) |end| {
+            try std.testing.expect(end < range.start);
+        }
+        previous_end = range.end;
+    }
+
+    var counts = [_]usize{0} ** 4;
+    for (0..0x110000) |raw| {
+        const value = orientation(@intCast(raw));
+        counts[@intFromEnum(value)] += 1;
+    }
+    try std.testing.expectEqual(data.upright_count, counts[0]);
+    try std.testing.expectEqual(data.rotated_count, counts[1]);
+    try std.testing.expectEqual(data.transformed_upright_count, counts[2]);
+    try std.testing.expectEqual(data.transformed_rotated_count, counts[3]);
+    try std.testing.expectEqual(
+        @as(usize, 0x110000),
+        counts[0] + counts[1] + counts[2] + counts[3],
+    );
 }

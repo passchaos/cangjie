@@ -154,6 +154,34 @@ pub const Rasterizer = struct {
         return self.drawPixelOutline(target, &outline, x, baseline_y);
     }
 
+    fn drawHintedGlyphOriented(
+        self: *Rasterizer,
+        target: *raster.RenderTarget,
+        face: *const face_mod.Face,
+        instance: *font_mod.TrueTypeHintingInstance,
+        glyph_id: glyph_mod.GlyphId,
+        x: f32,
+        baseline_y: f32,
+        orientation: @import("../run_geometry.zig").RasterOrientation,
+    ) !void {
+        var transaction = try face.hintingPointTransaction(
+            self.implementation.allocator,
+            instance,
+            glyph_id,
+        );
+        defer transaction.deinit();
+        try face.executeHintingTransaction(instance, &transaction);
+        var outline = try transaction.toPixelOutline();
+        defer outline.deinit();
+        return self.implementation.renderPixelOutlineOriented(
+            target,
+            &outline,
+            x,
+            baseline_y,
+            orientation,
+        );
+    }
+
     /// Draw a shaped run using one caller-owned hinting instance.
     ///
     /// Shaping retains ownership of advances and offsets; only outline
@@ -182,13 +210,14 @@ pub const Rasterizer = struct {
         for (run.glyphs) |position| {
             if (!position.isInlineObject()) {
                 const origin = pen.glyphOrigin(position);
-                try self.drawHintedGlyph(
+                try self.drawHintedGlyphOriented(
                     target,
                     run.font,
                     instance,
                     position.glyph_id,
                     origin.x,
                     origin.baseline_y,
+                    run_geometry.rasterOrientation(position),
                 );
             }
             pen.advance(position);

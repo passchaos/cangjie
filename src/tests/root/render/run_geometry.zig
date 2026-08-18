@@ -17,6 +17,21 @@ const RenderTarget = support.RenderTarget;
 const Rgba = support.Rgba;
 const TextShaper = support.TextShaper;
 
+const CoverageBounds = struct {
+    min_x: u32,
+    min_y: u32,
+    max_x: u32,
+    max_y: u32,
+
+    fn width(self: CoverageBounds) u32 {
+        return self.max_x - self.min_x + 1;
+    }
+
+    fn height(self: CoverageBounds) u32 {
+        return self.max_y - self.min_y + 1;
+    }
+};
+
 test "grayscale run rendering honors two-dimensional shaping geometry" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalTtf(allocator);
@@ -159,6 +174,47 @@ test "vertical shaping flows through grayscale run rendering" {
         reference.pixels,
         run_target.pixels,
     );
+}
+
+test "grayscale run rotates only mixed vertical sideways glyphs" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const glyphs = [_]GlyphPosition{
+        .{
+            .glyph_id = 1,
+            .codepoint = 0x4e00,
+            .cluster = 0,
+            .source_byte_len = 3,
+            .x_advance = 0,
+            .y_advance = 24,
+            .orientation = .upright,
+        },
+        .{
+            .glyph_id = 1,
+            .codepoint = 'A',
+            .cluster = 3,
+            .source_byte_len = 1,
+            .x_advance = 0,
+            .y_advance = 24,
+            .orientation = .sideways,
+        },
+    };
+    const run = run_types.initGlyphRun(&font, 20, &glyphs, &.{});
+    var target = try RenderTarget.init(allocator, 72, 96);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    rasterizer.embolden_small_glyphs = false;
+    try rasterizer.renderRun(&target, run, 12, 32);
+
+    const upright = coverageBounds(&target, 0, 50) orelse
+        return error.TestUnexpectedResult;
+    const sideways = coverageBounds(&target, 50, target.height) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expect(upright.width() > upright.height());
+    try std.testing.expect(sideways.height() > sideways.width());
 }
 
 test "run rendering advances through two-dimensional inline objects" {
@@ -335,4 +391,79 @@ test "color run rendering honors two-dimensional shaping geometry" {
     var covered: usize = 0;
     for (run_target.pixels) |pixel| covered += @intFromBool(pixel.a != 0);
     try std.testing.expect(covered > 10);
+}
+
+test "color run rotates a sideways COLR glyph around its shaping origin" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildColorTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const glyph = [_]GlyphPosition{.{
+        .glyph_id = 1,
+        .codepoint = 'A',
+        .cluster = 0,
+        .source_byte_len = 1,
+        .x_advance = 0,
+        .y_advance = 24,
+        .orientation = .sideways,
+    }};
+    const run = run_types.initGlyphRun(&font, 20, &glyph, &.{});
+    var target = try ColorRenderTarget.init(allocator, 72, 72);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    rasterizer.embolden_small_glyphs = false;
+    try rasterizer.renderColorRun(&target, run, 12, 24, 0);
+
+    const bounds = colorCoverageBounds(&target) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expect(bounds.height() > bounds.width());
+}
+
+fn coverageBounds(
+    target: *const RenderTarget,
+    min_y: u32,
+    max_y: u32,
+) ?CoverageBounds {
+    var result: ?CoverageBounds = null;
+    for (min_y..@min(max_y, target.height)) |y_value| {
+        const y: u32 = @intCast(y_value);
+        for (0..target.width) |x_value| {
+            const x: u32 = @intCast(x_value);
+            if (target.at(x, y) == 0) continue;
+            includeCoverage(&result, x, y);
+        }
+    }
+    return result;
+}
+
+fn colorCoverageBounds(
+    target: *const ColorRenderTarget,
+) ?CoverageBounds {
+    var result: ?CoverageBounds = null;
+    for (0..target.height) |y_value| {
+        const y: u32 = @intCast(y_value);
+        for (0..target.width) |x_value| {
+            const x: u32 = @intCast(x_value);
+            if (target.at(x, y).a == 0) continue;
+            includeCoverage(&result, x, y);
+        }
+    }
+    return result;
+}
+
+fn includeCoverage(result: *?CoverageBounds, x: u32, y: u32) void {
+    if (result.*) |*bounds| {
+        bounds.min_x = @min(bounds.min_x, x);
+        bounds.min_y = @min(bounds.min_y, y);
+        bounds.max_x = @max(bounds.max_x, x);
+        bounds.max_y = @max(bounds.max_y, y);
+    } else {
+        result.* = .{
+            .min_x = x,
+            .min_y = y,
+            .max_x = x,
+            .max_y = y,
+        };
+    }
 }

@@ -11,6 +11,7 @@ const hinting_outline = @import("../../font/hinting/outline.zig");
 const glyph_mod = @import("../../glyph.zig");
 const run_types = @import("../../layout/types/runs.zig");
 const raster = @import("../../raster.zig");
+const run_geometry = @import("../run_geometry.zig");
 
 pub const Rasterizer = struct {
     /// Source-visible implementation storage; its layout is not API-stable.
@@ -177,19 +178,20 @@ pub const Rasterizer = struct {
         )) {
             return error.StaleHintingInstance;
         }
-        var pen_x = x;
+        var pen = run_geometry.Pen.init(x, baseline_y);
         for (run.glyphs) |position| {
             if (!position.isInlineObject()) {
+                const origin = pen.glyphOrigin(position);
                 try self.drawHintedGlyph(
                     target,
                     run.font,
                     instance,
                     position.glyph_id,
-                    pen_x + position.x_offset,
-                    baseline_y + position.y_offset,
+                    origin.x,
+                    origin.baseline_y,
                 );
             }
-            pen_x += position.x_advance;
+            pen.advance(position);
         }
     }
 

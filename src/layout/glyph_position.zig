@@ -57,8 +57,12 @@ pub const GlyphPosition = struct {
     /// extent next to the cluster start lets caret logic recover the trailing
     /// source byte offset even when there is no following glyph.
     source_byte_len: usize = 0,
+    /// Pen advances in renderer user space. X grows right; positive Y grows
+    /// down, matching vertical column progression.
     x_advance: f32,
     y_advance: f32 = 0,
+    /// Offsets follow the OpenType/HarfBuzz shaping coordinate system. X grows
+    /// right and positive Y moves the glyph up from its current baseline.
     x_offset: f32 = 0,
     y_offset: f32 = 0,
     vertical: bool = false,

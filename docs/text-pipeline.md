@@ -524,6 +524,18 @@ GPOS, HVAR/VVAR advances, and line geometry; callers no longer have to repeat a
 single paragraph-wide coordinate slice at the rendering boundary. Explicit
 renderer-coordinate overrides remain available for low-level callers.
 
+Direct grayscale, color, and hinted run rendering consume the complete
+two-dimensional shaping pen. Each glyph is drawn at
+`(pen.x + x_offset, pen.y - y_offset)` because OpenType/HarfBuzz offsets use
+font-space positive-up Y while CPU render targets grow down; both `x_advance`
+and `y_advance` then update the pen, including for non-rendering inline-object
+atoms. Shaped-text rendering also applies both `CascadeRun.x_offset` and
+`CascadeRun.y_offset`, so vertical fallback runs continue one column rather
+than collapsing onto the first glyph. This contract covers placement and
+upright vertical outlines; per-glyph sideways rotation remains an explicit
+renderer transform rather than being inferred from the coarse `vertical`
+position flag.
+
 Before discrete Kashida or spacing expansion, a justified non-terminal line
 may also reshape through one variable-font expansion axis. Cangjie prefers an
 fvar `jstf` axis (the convention used by HarfBuzz's experimental API), then the

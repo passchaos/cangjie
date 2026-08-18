@@ -11,6 +11,7 @@ const composite_mod = @import("raster/composite.zig");
 const curves = @import("raster/curves.zig");
 const outline_raster = @import("raster/outline.zig");
 const prepared_mod = @import("raster/prepared.zig");
+const run_geometry = @import("render/run_geometry.zig");
 const scanline = @import("raster/scanline.zig");
 const prepared_scanline = @import("raster/prepared_scanline.zig");
 const targets = @import("raster/targets.zig");
@@ -925,31 +926,36 @@ pub const Rasterizer = struct {
     }
 
     pub fn renderRunAtCoords(self: *Rasterizer, target: *RenderTarget, run: run_types.GlyphRun, x: f32, baseline_y: f32, normalized_variation_coords: []const f32) !void {
-        var pen_x = x;
+        var pen = run_geometry.Pen.init(x, baseline_y);
         const font = face_mod.backend.font(run.font);
         const use_default_outline = normalizedVariationCoordinatesAreDefault(normalized_variation_coords);
         for (run.glyphs) |position| {
-            if (position.isInlineObject()) {
-                pen_x += position.x_advance;
-                continue;
+            if (!position.isInlineObject()) {
+                var outline = if (use_default_outline)
+                    try font_raster.glyphOutline(font, self.allocator, position.glyph_id)
+                else
+                    try font_raster.glyphOutlineAtCoords(font, self.allocator, position.glyph_id, normalized_variation_coords);
+                defer outline.deinit();
+                const origin = pen.glyphOrigin(position);
+                try self.renderGlyph(target, &outline, origin.x, origin.baseline_y, run.font_size, font.units_per_em);
             }
-            var outline = if (use_default_outline)
-                try font_raster.glyphOutline(font, self.allocator, position.glyph_id)
-            else
-                try font_raster.glyphOutlineAtCoords(font, self.allocator, position.glyph_id, normalized_variation_coords);
-            defer outline.deinit();
-            try self.renderGlyph(target, &outline, pen_x + position.x_offset, baseline_y + position.y_offset, run.font_size, font.units_per_em);
-            pen_x += position.x_advance;
+            pen.advance(position);
         }
     }
 
     pub fn renderShapedText(self: *Rasterizer, target: *RenderTarget, shaped: run_types.ShapedText, x: f32, baseline_y: f32) !void {
         for (shaped.runs) |run| {
+            const origin = run_geometry.offsetOrigin(
+                x,
+                baseline_y,
+                run.x_offset,
+                run.y_offset,
+            );
             try self.renderRunAtCoords(
                 target,
                 run.glyphRun(shaped),
-                x + run.x_offset,
-                baseline_y,
+                origin.x,
+                origin.baseline_y,
                 run.normalizedVariationCoords(shaped),
             );
         }
@@ -957,7 +963,19 @@ pub const Rasterizer = struct {
 
     pub fn renderShapedTextAtCoords(self: *Rasterizer, target: *RenderTarget, shaped: run_types.ShapedText, x: f32, baseline_y: f32, normalized_variation_coords: []const f32) !void {
         for (shaped.runs) |run| {
-            try self.renderRunAtCoords(target, run.glyphRun(shaped), x + run.x_offset, baseline_y, normalized_variation_coords);
+            const origin = run_geometry.offsetOrigin(
+                x,
+                baseline_y,
+                run.x_offset,
+                run.y_offset,
+            );
+            try self.renderRunAtCoords(
+                target,
+                run.glyphRun(shaped),
+                origin.x,
+                origin.baseline_y,
+                normalized_variation_coords,
+            );
         }
     }
 
@@ -973,24 +991,29 @@ pub const Rasterizer = struct {
     }
 
     pub fn renderColorRunAtCoords(self: *Rasterizer, target: *ColorRenderTarget, run: run_types.GlyphRun, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
-        var pen_x = x;
+        var pen = run_geometry.Pen.init(x, baseline_y);
         for (run.glyphs) |position| {
-            if (position.isInlineObject()) {
-                pen_x += position.x_advance;
-                continue;
+            if (!position.isInlineObject()) {
+                const origin = pen.glyphOrigin(position);
+                try self.renderColorGlyphAtCoords(target, face_mod.backend.font(run.font), position.glyph_id, run.font_size, origin.x, origin.baseline_y, palette_index, normalized_variation_coords);
             }
-            try self.renderColorGlyphAtCoords(target, face_mod.backend.font(run.font), position.glyph_id, run.font_size, pen_x + position.x_offset, baseline_y + position.y_offset, palette_index, normalized_variation_coords);
-            pen_x += position.x_advance;
+            pen.advance(position);
         }
     }
 
     pub fn renderColorShapedText(self: *Rasterizer, target: *ColorRenderTarget, shaped: run_types.ShapedText, x: f32, baseline_y: f32, palette_index: u16) !void {
         for (shaped.runs) |run| {
+            const origin = run_geometry.offsetOrigin(
+                x,
+                baseline_y,
+                run.x_offset,
+                run.y_offset,
+            );
             try self.renderColorRunAtCoords(
                 target,
                 run.glyphRun(shaped),
-                x + run.x_offset,
-                baseline_y,
+                origin.x,
+                origin.baseline_y,
                 palette_index,
                 run.normalizedVariationCoords(shaped),
             );
@@ -999,7 +1022,20 @@ pub const Rasterizer = struct {
 
     pub fn renderColorShapedTextAtCoords(self: *Rasterizer, target: *ColorRenderTarget, shaped: run_types.ShapedText, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
         for (shaped.runs) |run| {
-            try self.renderColorRunAtCoords(target, run.glyphRun(shaped), x + run.x_offset, baseline_y, palette_index, normalized_variation_coords);
+            const origin = run_geometry.offsetOrigin(
+                x,
+                baseline_y,
+                run.x_offset,
+                run.y_offset,
+            );
+            try self.renderColorRunAtCoords(
+                target,
+                run.glyphRun(shaped),
+                origin.x,
+                origin.baseline_y,
+                palette_index,
+                normalized_variation_coords,
+            );
         }
     }
 

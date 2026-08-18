@@ -2,6 +2,7 @@
 
 test {
     _ = @import("color_paints.zig");
+    _ = @import("run_geometry.zig");
     _ = @import("svg/root.zig");
     _ = @import("variable_raster.zig");
 }

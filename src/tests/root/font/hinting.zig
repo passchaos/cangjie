@@ -959,6 +959,96 @@ test "hinted glyph and run rendering share the public pipeline" {
     );
 }
 
+test "hinted run rendering honors two-dimensional shaping geometry" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildTrueTypeHintingTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var run_instance = try face.hintingInstance(
+        allocator,
+        16,
+        .normal,
+    );
+    defer run_instance.deinit();
+    var reference_instance = try face.hintingInstance(
+        allocator,
+        16,
+        .normal,
+    );
+    defer reference_instance.deinit();
+    var run_target = try cangjie.render.GrayTarget.init(
+        allocator,
+        72,
+        72,
+    );
+    defer run_target.deinit();
+    var reference = try cangjie.render.GrayTarget.init(
+        allocator,
+        72,
+        72,
+    );
+    defer reference.deinit();
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
+    defer rasterizer.deinit();
+    const glyphs = [_]cangjie.shaping.Glyph{
+        .{
+            .glyph_id = 1,
+            .codepoint = 'A',
+            .cluster = 0,
+            .source_byte_len = 1,
+            .x_advance = 18,
+            .y_advance = 22,
+            .x_offset = 3,
+            .y_offset = 5,
+        },
+        .{
+            .glyph_id = 1,
+            .codepoint = 'A',
+            .cluster = 1,
+            .source_byte_len = 1,
+            .x_advance = 0,
+            .y_advance = 0,
+            .x_offset = -2,
+            .y_offset = -4,
+        },
+    };
+    const run = cangjie.shaping.Run{
+        .font = &face,
+        .font_size = 16,
+        .glyphs = &glyphs,
+    };
+
+    try rasterizer.drawHintedRun(
+        &run_target,
+        run,
+        &run_instance,
+        8,
+        28,
+    );
+    try rasterizer.drawHintedGlyph(
+        &reference,
+        &face,
+        &reference_instance,
+        1,
+        11,
+        23,
+    );
+    try rasterizer.drawHintedGlyph(
+        &reference,
+        &face,
+        &reference_instance,
+        1,
+        24,
+        54,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        reference.pixels,
+        run_target.pixels,
+    );
+}
+
 test "hinted run rendering rejects a different variation location" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildGvarDeltaTtf(allocator);

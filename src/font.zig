@@ -1690,9 +1690,6 @@ pub const Font = struct {
         const data = try self.glyphData(glyph_id);
         if (data.len == 0) return error.UnsupportedHintGlyph;
         const contour_count = try bin.readI16At(data, 0);
-        if (self.gvar != null and contour_count < 0) {
-            return error.UnsupportedHintGlyph;
-        }
         const horizontal = try self.horizontalMetrics(glyph_id);
         const bounds = try self.glyphBoundsFromParsedTables(glyph_id);
         const vertical = (try self.verticalMetrics(glyph_id)) orelse
@@ -1734,8 +1731,21 @@ pub const Font = struct {
                 f32,
                 instance.normalizedCoordinates(),
             );
+            if (transaction.variation) |*context| {
+                context.normalized_coords = transaction.normalized_coords;
+            }
             return transaction;
         }
+        const variation: ?hinting.compound.Variation =
+            if (self.gvar) |gvar| .{
+                .data = self.data,
+                .table_offset = gvar.offset,
+                .table_length = gvar.length,
+                .glyph_count = self.glyph_count,
+                .axis_count = self.fvar_axis_count orelse
+                    return error.BadSfnt,
+                .normalized_coords = instance.normalizedCoordinates(),
+            } else null;
         var transaction = try hinting.compound.decode(
             allocator,
             @intFromPtr(self),
@@ -1751,12 +1761,16 @@ pub const Font = struct {
                 .context = self,
                 .resolveFn = resolveHintingComponent,
             },
+            variation,
         );
         errdefer transaction.deinit();
         transaction.normalized_coords = try allocator.dupe(
             f32,
             instance.normalizedCoordinates(),
         );
+        if (transaction.variation) |*context| {
+            context.normalized_coords = transaction.normalized_coords;
+        }
         return transaction;
     }
 

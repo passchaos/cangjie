@@ -10,6 +10,7 @@ const std = @import("std");
 
 const bin = @import("../../binary.zig");
 const glyph = @import("../../glyph.zig");
+const gvar = @import("../../opentype/gvar.zig");
 const outline = @import("outline.zig");
 const truetype_compound = @import("../outline/truetype/compound.zig");
 const types = @import("types.zig");
@@ -19,6 +20,8 @@ pub const Source = struct {
     data: []const u8,
     metrics: outline.Metrics,
 };
+
+pub const Variation = outline.Variation;
 
 pub const Resolver = struct {
     context: *const anyopaque,
@@ -40,19 +43,21 @@ pub fn decode(
     scale_16_16: i32,
     max_component_depth: u16,
     resolver: Resolver,
+    variation: ?Variation,
 ) types.Error!outline.Transaction {
     var builder = Builder{
         .allocator = allocator,
         .scale_16_16 = scale_16_16,
         .max_component_depth = max_component_depth,
         .resolver = resolver,
+        .variation = variation,
     };
     defer builder.deinit();
     const result = try builder.appendGlyph(root, 0, true);
     if (!result.is_compound) return error.UnsupportedHintGlyph;
 
     const real_point_count = builder.points.items.len;
-    try builder.appendPhantoms(result.effective_metrics);
+    try builder.appendPhantoms(result.effective_phantoms);
     const points = try builder.points.toOwnedSlice(allocator);
     errdefer allocator.free(points);
     const original = try allocator.dupe(outline.Point, points);
@@ -79,12 +84,14 @@ pub fn decode(
         .components = components,
         .instructions = result.instructions,
         .scale_16_16 = scale_16_16,
+        .variation = variation,
         .is_compound = true,
     };
 }
 
 const Result = struct {
     effective_metrics: outline.Metrics,
+    effective_phantoms: [4]outline.Point,
     instructions: []const u8 = &.{},
     is_compound: bool = false,
 };
@@ -106,6 +113,7 @@ const Builder = struct {
     scale_16_16: i32,
     max_component_depth: u16,
     resolver: Resolver,
+    variation: ?Variation,
     points: std.ArrayList(outline.Point) = .empty,
     unscaled: std.ArrayList(outline.Point) = .empty,
     flags: std.ArrayList(outline.PointFlag) = .empty,
@@ -130,17 +138,15 @@ const Builder = struct {
             return error.UnsupportedHintGlyph;
         }
         if (source.data.len == 0) {
-            return .{ .effective_metrics = source.metrics };
+            return .{
+                .effective_metrics = source.metrics,
+                .effective_phantoms = phantoms(source.metrics),
+            };
         }
         const contour_count = bin.readI16At(source.data, 0) catch
             return error.BadSfnt;
         if (contour_count >= 0) {
-            const instructions =
-                try self.appendSimple(source, @intCast(contour_count));
-            return .{
-                .effective_metrics = source.metrics,
-                .instructions = instructions,
-            };
+            return self.appendSimple(source, @intCast(contour_count));
         }
         return self.appendCompound(source, depth, record_components);
     }
@@ -149,7 +155,18 @@ const Builder = struct {
         self: *Builder,
         source: Source,
         contour_count: u16,
-    ) types.Error![]const u8 {
+    ) types.Error!Result {
+        const variation: ?outline.Variation = if (self.variation) |context|
+            .{
+                .data = context.data,
+                .table_offset = context.table_offset,
+                .table_length = context.table_length,
+                .glyph_count = context.glyph_count,
+                .axis_count = context.axis_count,
+                .normalized_coords = context.normalized_coords,
+            }
+        else
+            null;
         var decoded = try outline.decodeSimple(
             self.allocator,
             0,
@@ -159,7 +176,7 @@ const Builder = struct {
             contour_count,
             source.metrics,
             self.scale_16_16,
-            null,
+            variation,
         );
         defer decoded.deinit();
         const point_start = self.points.items.len;
@@ -184,7 +201,11 @@ const Builder = struct {
             if (adjusted > std.math.maxInt(u16)) return error.BadSfnt;
             try self.contours.append(self.allocator, @intCast(adjusted));
         }
-        return decoded.instructions;
+        return .{
+            .effective_metrics = source.metrics,
+            .effective_phantoms = decoded.unscaled[decoded.real_point_count..][0..4].*,
+            .instructions = decoded.instructions,
+        };
     }
 
     fn appendCompound(
@@ -199,6 +220,19 @@ const Builder = struct {
         const parent_point_start = self.points.items.len;
         var last_flags: u16 = 0;
         var effective_metrics = source.metrics;
+        const component_count = gvar.glyfVariationPointCount(source.data) catch
+            return error.BadSfnt;
+        const variation_deltas = try self.compoundVariationDeltas(
+            source.glyph_id,
+            component_count,
+        );
+        defer if (variation_deltas) |owned| self.allocator.free(owned);
+        var effective_phantoms = variedCompoundPhantoms(
+            phantoms(source.metrics),
+            variation_deltas,
+            component_count,
+        );
+        var component_index: usize = 0;
         while (true) {
             const component = truetype_compound.readComponent(&reader) catch
                 return error.BadSfnt;
@@ -218,7 +252,30 @@ const Builder = struct {
                 child_point_end,
                 transform,
             );
-            const offsets = switch (component.placement) {
+            const varied_placement: outline.ComponentPlacement =
+                switch (component.placement) {
+                    .offset => |raw| .{ .offset = .{
+                        .x = addRoundedDelta(
+                            raw.x,
+                            variationDelta(
+                                variation_deltas,
+                                component_index,
+                            ).x,
+                        ),
+                        .y = addRoundedDelta(
+                            raw.y,
+                            variationDelta(
+                                variation_deltas,
+                                component_index,
+                            ).y,
+                        ),
+                    } },
+                    .points => |match| .{ .points = .{
+                        .parent_point = match.parent_point,
+                        .child_point = match.child_point,
+                    } },
+                };
+            const offsets = switch (varied_placement) {
                 .offset => |raw| self.offsetPlacement(
                     raw.x,
                     raw.y,
@@ -252,16 +309,7 @@ const Builder = struct {
                         .xy = component.fixed_transform.xy,
                         .yy = component.fixed_transform.yy,
                     },
-                    .placement = switch (component.placement) {
-                        .offset => |offset| .{ .offset = .{
-                            .x = offset.x,
-                            .y = offset.y,
-                        } },
-                        .points => |match| .{ .points = .{
-                            .parent_point = match.parent_point,
-                            .child_point = match.child_point,
-                        } },
-                    },
+                    .placement = varied_placement,
                     .use_my_metrics = (component.flags & 0x0200) != 0,
                     .is_compound = child_result.is_compound,
                     .instructions = child_result.instructions,
@@ -269,18 +317,60 @@ const Builder = struct {
             }
             if ((component.flags & 0x0200) != 0) {
                 effective_metrics = child_result.effective_metrics;
+                effective_phantoms = child_result.effective_phantoms;
             }
+            component_index += 1;
             if (!component.hasMore()) break;
         }
+        if (component_index != component_count) return error.BadSfnt;
         const instructions = if ((last_flags & 0x0100) != 0)
             try compoundInstructions(source.data, reader.offset)
         else
             &.{};
         return .{
             .effective_metrics = effective_metrics,
+            .effective_phantoms = effective_phantoms,
             .instructions = instructions,
             .is_compound = true,
         };
+    }
+
+    fn compoundVariationDeltas(
+        self: *Builder,
+        glyph_id: glyph.GlyphId,
+        component_count: usize,
+    ) types.Error!?[]gvar.ScaledPointDelta {
+        const context = self.variation orelse return null;
+        const target_count = component_count + 4;
+        const raw = try self.allocator.alloc(gvar.PointDelta, target_count);
+        defer self.allocator.free(raw);
+        const deltas = try self.allocator.alloc(
+            gvar.ScaledPointDelta,
+            target_count,
+        );
+        errdefer self.allocator.free(deltas);
+        const count = gvar.accumulateGlyphPointDeltasForPointCountRawScratchWithFlags(
+            context.data,
+            context.table_offset,
+            context.table_length,
+            context.glyph_count,
+            context.axis_count,
+            glyph_id,
+            context.normalized_coords,
+            target_count,
+            raw,
+            deltas,
+            null,
+        ) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => error.BadSfnt,
+        };
+        if (count == 0) {
+            self.allocator.free(deltas);
+            return null;
+        }
+        if (count != target_count) return error.BadSfnt;
+        return deltas;
     }
 
     fn transformPoints(
@@ -299,8 +389,8 @@ const Builder = struct {
 
     fn offsetPlacement(
         self: *Builder,
-        x: i16,
-        y: i16,
+        x: i32,
+        y: i32,
         component_flags: u16,
         transform: FixedTransform,
     ) Offsets {
@@ -366,9 +456,9 @@ const Builder = struct {
 
     fn appendPhantoms(
         self: *Builder,
-        metrics: outline.Metrics,
+        values: [4]outline.Point,
     ) types.Error!void {
-        for (phantoms(metrics)) |point| {
+        for (values) |point| {
             try self.unscaled.append(self.allocator, point);
             try self.points.append(self.allocator, .{
                 .x = types.scaleFUnits(point.x, self.scale_16_16),
@@ -467,4 +557,41 @@ fn phantoms(metrics: outline.Metrics) [4]outline.Point {
                 metrics.vertical_advance,
         },
     };
+}
+
+fn variationDelta(
+    deltas: ?[]const gvar.ScaledPointDelta,
+    index: usize,
+) gvar.ScaledPointDelta {
+    const values = deltas orelse return .{
+        .point = @intCast(index),
+        .x = 0,
+        .y = 0,
+    };
+    return values[index];
+}
+
+fn variedCompoundPhantoms(
+    base: [4]outline.Point,
+    deltas: ?[]const gvar.ScaledPointDelta,
+    component_count: usize,
+) [4]outline.Point {
+    var result = base;
+    const values = deltas orelse return result;
+    for (&result, values[component_count..]) |*point, delta| {
+        point.x = addRoundedDelta(point.x, delta.x);
+        point.y = addRoundedDelta(point.y, delta.y);
+    }
+    return result;
+}
+
+fn addRoundedDelta(value: i32, delta: f32) i32 {
+    const result = @as(f64, @floatFromInt(value)) + delta;
+    if (result <= @as(f64, @floatFromInt(std.math.minInt(i32)))) {
+        return std.math.minInt(i32);
+    }
+    if (result >= @as(f64, @floatFromInt(std.math.maxInt(i32)))) {
+        return std.math.maxInt(i32);
+    }
+    return @intFromFloat(@round(result));
 }

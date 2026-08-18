@@ -303,7 +303,7 @@ const OwnedGlyph = struct {
                 try allocator.dupe(f32, source.normalized_coords);
         errdefer if (normalized_coords.len != 0)
             allocator.free(normalized_coords);
-        return .{ .transaction = .{
+        var transaction = outline.Transaction{
             .allocator = allocator,
             .face_identity = source.face_identity,
             .target = source.target,
@@ -318,8 +318,13 @@ const OwnedGlyph = struct {
             .instructions = source.instructions,
             .scale_16_16 = source.scale_16_16,
             .normalized_coords = normalized_coords,
+            .variation = source.variation,
             .is_compound = source.is_compound,
-        } };
+        };
+        if (transaction.variation) |*context| {
+            context.normalized_coords = normalized_coords;
+        }
+        return .{ .transaction = transaction };
     }
 
     fn decode(
@@ -359,8 +364,17 @@ const OwnedGlyph = struct {
                 parent.scale_16_16,
                 max_component_depth,
                 resolver,
+                parent.variation,
             );
-        return .{ .transaction = transaction };
+        var owned = transaction;
+        owned.normalized_coords = if (parent.normalized_coords.len == 0)
+            @constCast(&.{})
+        else
+            try allocator.dupe(f32, parent.normalized_coords);
+        if (owned.variation) |*context| {
+            context.normalized_coords = owned.normalized_coords;
+        }
+        return .{ .transaction = owned };
     }
 
     fn deinit(self: *OwnedGlyph) void {
@@ -430,6 +444,7 @@ fn emptyTransaction(
         .instructions = &.{},
         .scale_16_16 = parent.scale_16_16,
         .normalized_coords = normalized_coords,
+        .variation = parent.variation,
     };
 }
 

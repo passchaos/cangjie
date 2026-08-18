@@ -27,7 +27,7 @@ pub const ComponentTransform = struct {
 };
 
 pub const ComponentPlacement = union(enum) {
-    offset: struct { x: i16, y: i16 },
+    offset: struct { x: i32, y: i32 },
     points: struct {
         parent_point: u16,
         child_point: u16,
@@ -86,6 +86,8 @@ pub const Transaction = struct {
     instructions: []const u8,
     scale_16_16: i32,
     normalized_coords: []f32 = &.{},
+    /// Borrowed face-wide gvar context used by recursively loaded components.
+    variation: ?Variation = null,
     is_compound: bool = false,
 
     pub fn deinit(self: *Transaction) void {
@@ -355,6 +357,7 @@ pub fn decodeSimple(
         .contours = contours,
         .instructions = instructions,
         .scale_16_16 = scale_16_16,
+        .variation = variation,
     };
 }
 

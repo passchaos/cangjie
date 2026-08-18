@@ -200,6 +200,49 @@ test "installed cvar font owns non-default hinting location" {
     try std.testing.expect(pixel.commands.items.len != 0);
 }
 
+test "installed compound gvar glyph executes at non-default location" {
+    const allocator = std.testing.allocator;
+    const path =
+        "/usr/share/fonts/truetype/cascadia-code/CascadiaCode.ttf";
+    const bytes = std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        path,
+        allocator,
+        .limited(32 * 1024 * 1024),
+    ) catch |err| switch (err) {
+        error.FileNotFound => return error.SkipZigTest,
+        else => return err,
+    };
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    const axes = try face.variations().axes(allocator);
+    defer allocator.free(axes);
+    if (axes.len == 0) return error.SkipZigTest;
+    const location = try allocator.alloc(f32, axes.len);
+    defer allocator.free(location);
+    @memset(location, 0.5);
+    var instance = try face.hintingInstanceAt(
+        allocator,
+        16,
+        .normal,
+        location,
+    );
+    defer instance.deinit();
+    const glyph_id = try face.glyphs().index(0x00c2);
+    var transaction = try face.hintingPointTransaction(
+        allocator,
+        &instance,
+        glyph_id,
+    );
+    defer transaction.deinit();
+    if (!transaction.is_compound) return error.SkipZigTest;
+    try face.executeHintingTransaction(&instance, &transaction);
+    var pixel = try transaction.toPixelOutline();
+    defer pixel.deinit();
+    try std.testing.expect(pixel.commands.items.len != 0);
+}
+
 test "installed simple glyph programs execute transactionally" {
     const allocator = std.testing.allocator;
     const fixtures = [_]struct {
@@ -360,7 +403,7 @@ test "simple glyf transaction retains raw point and phantom ownership" {
     }
 }
 
-test "point transactions reject foreign and compound-variable ownership" {
+test "point transactions reject foreign ownership" {
     const allocator = std.testing.allocator;
     const first_bytes = try test_font.buildTrueTypeHintingTtf(allocator);
     defer allocator.free(first_bytes);
@@ -375,22 +418,6 @@ test "point transactions reject foreign and compound-variable ownership" {
     try std.testing.expectError(
         error.StaleHintingInstance,
         second.hintingPointTransaction(allocator, &instance, 1),
-    );
-
-    const compound_bytes = try test_font.buildGvarCompoundTtf(allocator);
-    defer allocator.free(compound_bytes);
-    var compound = try cangjie.font.Face.parse(allocator, compound_bytes);
-    defer compound.deinit();
-    var compound_instance =
-        try compound.hintingInstance(allocator, 16, .normal);
-    defer compound_instance.deinit();
-    try std.testing.expectError(
-        error.UnsupportedHintGlyph,
-        compound.hintingPointTransaction(
-            allocator,
-            &compound_instance,
-            2,
-        ),
     );
 }
 
@@ -466,6 +493,104 @@ test "simple gvar transactions apply point and phantom deltas before scaling" {
         face.executeHintingTransaction(&default_instance, &varied),
     );
     try face.executeHintingTransaction(&varied_instance, &varied);
+}
+
+test "compound gvar transactions vary XY placement and metric phantoms" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildGvarCompoundTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var default_instance = try face.hintingInstance(
+        allocator,
+        20,
+        .normal,
+    );
+    defer default_instance.deinit();
+    var varied_instance = try face.hintingInstanceAt(
+        allocator,
+        20,
+        .normal,
+        &.{0.5},
+    );
+    defer varied_instance.deinit();
+    var default_transaction = try face.hintingPointTransaction(
+        allocator,
+        &default_instance,
+        2,
+    );
+    defer default_transaction.deinit();
+    var varied = try face.hintingPointTransaction(
+        allocator,
+        &varied_instance,
+        2,
+    );
+    defer varied.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), varied.components.len);
+    try std.testing.expectEqual(
+        @as(i32, 20),
+        varied.components[0].placement.offset.x,
+    );
+    try std.testing.expectEqual(
+        default_transaction.unscaled[0].x + 10,
+        varied.unscaled[0].x,
+    );
+    try std.testing.expectEqual(
+        @as(i32, 12),
+        (varied.phantomPoints()[1].x - varied.phantomPoints()[0].x) -
+            (default_transaction.phantomPoints()[1].x -
+                default_transaction.phantomPoints()[0].x),
+    );
+    try face.executeHintingTransaction(&varied_instance, &varied);
+    var pixel = try varied.toPixelOutline();
+    defer pixel.deinit();
+    var design = try face.glyphs().outlineAt(
+        allocator,
+        2,
+        &.{0.5},
+    );
+    defer design.deinit();
+    try std.testing.expectEqual(
+        design.commands.items.len,
+        pixel.commands.items.len,
+    );
+    const scale =
+        20.0 / @as(f32, @floatFromInt(face.properties().units_per_em));
+    for (design.commands.items, pixel.commands.items) |expected, actual| {
+        try expectScaledCommand(expected, actual, scale);
+    }
+}
+
+test "compound gvar ignores point-matched component translation deltas" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildGvarPointMatchTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var instance = try face.hintingInstanceAt(
+        allocator,
+        20,
+        .normal,
+        &.{0.5},
+    );
+    defer instance.deinit();
+    var transaction = try face.hintingPointTransaction(
+        allocator,
+        &instance,
+        4,
+    );
+    defer transaction.deinit();
+    try std.testing.expectEqual(@as(usize, 2), transaction.components.len);
+    try std.testing.expectEqual(
+        @as(i32, 20),
+        transaction.components[0].placement.offset.x,
+    );
+    try std.testing.expectEqual(
+        transaction.unscaled[1],
+        transaction.unscaled[3],
+    );
+    try face.executeHintingTransaction(&instance, &transaction);
 }
 
 test "compound point transactions preserve transformed raw topology" {

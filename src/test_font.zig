@@ -302,6 +302,51 @@ pub fn buildTrueTypeProgramTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try trueTypeProgramTtfTables(allocator));
 }
 
+/// Build executable fpgm/prep programs for PPEM hint-instance tests.
+pub fn buildTrueTypeHintingTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const base = try minimalTtfTables(allocator);
+    const tables = allocator.alloc(Table, base.len + 3) catch |err| {
+        for (base) |table| allocator.free(table.data);
+        allocator.free(base);
+        return err;
+    };
+    @memcpy(tables[0..base.len], base);
+    allocator.free(base);
+    var initialized = base.len;
+    var owns_tables = true;
+    errdefer if (owns_tables) {
+        for (tables[0..initialized]) |table| allocator.free(table.data);
+        allocator.free(tables);
+    };
+    // Replace maxp with VM limits large enough for the executable programs.
+    for (tables[0..base.len]) |*table| {
+        if (!std.mem.eql(u8, table.tag, "maxp")) continue;
+        const replacement = try hintingMaxpTable(allocator);
+        allocator.free(table.data);
+        table.data = replacement;
+        break;
+    }
+    tables[base.len] = .{
+        .tag = "cvt ",
+        .data = try hintingCvtTable(allocator),
+    };
+    initialized += 1;
+    tables[base.len + 1] = .{
+        .tag = "fpgm",
+        .data = try hintingFontProgram(allocator),
+    };
+    initialized += 1;
+    tables[base.len + 2] = .{
+        .tag = "prep",
+        .data = try hintingPrepProgram(allocator),
+    };
+    initialized += 1;
+    owns_tables = false; // buildSfnt takes ownership of every table payload.
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
 pub fn buildAnkrTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try ankrTtfTables(allocator));
 }
@@ -5062,6 +5107,46 @@ fn cvtTable(allocator: std.mem.Allocator) ![]u8 {
     writeI16(bytes, 4, -5);
     writeI16(bytes, 6, 0);
     return bytes;
+}
+
+fn hintingMaxpTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try maxpTable(allocator);
+    writeU16(bytes, 16, 2); // maxTwilightPoints.
+    writeU16(bytes, 18, 2); // maxStorage.
+    writeU16(bytes, 20, 2); // maxFunctionDefs.
+    writeU16(bytes, 22, 1); // maxInstructionDefs.
+    writeU16(bytes, 24, 16); // maxStackElements.
+    writeU16(bytes, 26, 16); // maxSizeOfInstructions.
+    return bytes;
+}
+
+fn hintingCvtTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 4);
+    writeI16(bytes, 0, 10);
+    writeI16(bytes, 2, -5);
+    return bytes;
+}
+
+fn hintingFontProgram(allocator: std.mem.Allocator) ![]u8 {
+    // FDEF 0: add 2 to the top stack value.
+    return allocator.dupe(u8, &.{
+        0xb0, 0, // PUSHB[1] function id.
+        0x2c, // FDEF.
+        0xb0, 2, // PUSHB[1] 2.
+        0x60, // ADD.
+        0x2d, // ENDF.
+    });
+}
+
+fn hintingPrepProgram(allocator: std.mem.Allocator) ![]u8 {
+    // storage[0] = FDEF0(MPPEM), cvt[0] = 96, cut-in = 72.
+    return allocator.dupe(u8, &.{
+        0x4b, // MPPEM.
+        0xb0, 0, 0x2b, // CALL function 0.
+        0xb0, 0, 0x23, 0x42, // SWAP; WS storage[0].
+        0xb1, 0, 96, 0x44, // WCVTP cvt[0] = 96.
+        0xb0, 72, 0x1d, // SCVTCI 72.
+    });
 }
 
 fn cvarTable(allocator: std.mem.Allocator) ![]u8 {

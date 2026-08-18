@@ -866,6 +866,31 @@ rasterizer engine.
 glyph images into premultiplied targets, including transparent-border sampling
 that prevents hidden RGB from producing emoji edge fringes.
 
+TrueType embedded hinting is staged under `src/font/hinting/`.
+`Face.hintingInstance` creates concrete, allocator-owned state for one PPEM and
+one normal/light/LCD/vertical-LCD/monochrome target. It revalidates borrowed
+`maxp`, `cvt `, `fpgm`, and `prep` bytes, scales the CVT into signed 26.6
+pixels, executes the font program before the control-value program, and
+retains function/IDEF definitions, storage, CVT changes, instruction-control,
+cut-in, delta, and scan state. Stack, storage, definitions, calls, backward
+jumps, and total instructions are bounded by `maxp` and explicit execution
+budgets; malformed or non-terminating programs fail deterministically. The
+value stack follows FreeType's deployed-font compatibility bound:
+`maxStackElements + max(maxStackElements / 2, 128)`, remaining fixed-size
+rather than growing during execution.
+
+This size-program instance is intentionally not yet presented as hinted glyph
+output. The existing public outline is a path-command stream and no longer
+contains the raw glyf point flags, contour ends, phantom points, or glyph
+instructions required by the TrueType point-zone model. Point-only opcodes in
+`fpgm`/`prep` therefore report `UnsupportedHintInstruction` instead of becoming
+silent no-ops. The next hinting slice introduces an atomic raw glyf point
+transaction, applies gvar/phantom deltas before scaling, runs the glyph
+program, and only then reconstructs public paths and raster input.
+The current size instance is also the default variation location; cvar and
+GETVARIATION require the same normalized-coordinate ownership and are deferred
+to that raw-point slice rather than approximated independently.
+
 The shaping integration suite is similarly rooted at
 `src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,
 GSUB, GPOS/AAT, attachment, pipeline-state, and vertical-layout modules. Tests

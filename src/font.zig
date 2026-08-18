@@ -9,6 +9,7 @@ const bin = @import("binary.zig");
 const cff_mod = @import("cff.zig");
 const cff2_mod = @import("opentype/cff2.zig");
 const cvar_mod = @import("opentype/cvar.zig");
+const hinting = @import("font/hinting/root.zig");
 const glyph_mod = @import("glyph.zig");
 const gvar_mod = @import("opentype/gvar.zig");
 const gpos_mod = @import("gpos.zig");
@@ -139,6 +140,9 @@ pub const CvarTupleInfo = cvar_mod.TupleInfo;
 pub const TrueTypeProgramInfo = tt_program_mod.Info;
 pub const TrueTypeProgramInstructionInfo = tt_program_mod.Instruction;
 pub const TrueTypeProgramKind = tt_program_mod.Kind;
+pub const TrueTypeHintingInstance = hinting.Instance;
+pub const TrueTypeHintingTarget = hinting.Target;
+pub const TrueTypeHintingError = hinting.Error;
 pub const VarcInfo = varc_mod.Info;
 
 pub const FontTableInfo = struct {
@@ -1515,6 +1519,64 @@ pub const Font = struct {
 
     pub fn freeTrueTypeProgramInfo(_: *const Font, allocator: std.mem.Allocator, info_value: TrueTypeProgramInfo) void {
         tt_program_mod.free(allocator, info_value);
+    }
+
+    /// Execute the embedded TrueType font and control-value programs for one
+    /// PPEM. Mutable VM state is owned by the result while fpgm/prep bytes stay
+    /// borrowed from this face.
+    ///
+    /// Glyph point-zone execution is not exposed by this first hinting slice;
+    /// size programs containing point-only opcodes return
+    /// `UnsupportedHintInstruction` instead of silently ignoring them. The
+    /// current instance represents the default variation location; cvar and
+    /// GETVARIATION join the API with normalized-coordinate ownership.
+    pub fn hintingInstance(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        ppem: u16,
+        target: TrueTypeHintingTarget,
+    ) (FontError || hinting.Error)!TrueTypeHintingInstance {
+        if (self.format != .truetype) return error.UnsupportedGlyph;
+        const head_info = try self.headInfo();
+        const maxp_info = try self.maxpInfo();
+        const cvt_data = if (self.cvt) |cvt| blk: {
+            try sfnt.checksum.validate(self.data, cvt);
+            _ = try validateCvtTable(cvt);
+            break :blk self.data[cvt.offset .. cvt.offset + cvt.length];
+        } else &.{};
+        const font_program = if (self.fpgm) |fpgm| blk: {
+            try sfnt.checksum.validate(self.data, fpgm);
+            try validateTrueTypeProgramTable(self.data, fpgm);
+            break :blk self.data[fpgm.offset .. fpgm.offset + fpgm.length];
+        } else &.{};
+        const control_value_program = if (self.prep) |prep| blk: {
+            try sfnt.checksum.validate(self.data, prep);
+            try validateTrueTypeProgramTable(self.data, prep);
+            break :blk self.data[prep.offset .. prep.offset + prep.length];
+        } else &.{};
+        return hinting.Instance.init(
+            allocator,
+            .{
+                .units_per_em = head_info.units_per_em,
+                .font_program = font_program,
+                .control_value_program = control_value_program,
+                .control_value_data = cvt_data,
+                .limits = .{
+                    .max_storage = maxp_info.max_storage orelse
+                        return error.BadSfnt,
+                    .max_function_defs = maxp_info.max_function_defs orelse
+                        return error.BadSfnt,
+                    .max_instruction_defs = maxp_info.max_instruction_defs orelse
+                        return error.BadSfnt,
+                    .max_stack_elements = maxp_info.max_stack_elements orelse
+                        return error.BadSfnt,
+                    .max_twilight_points = maxp_info.max_twilight_points orelse
+                        return error.BadSfnt,
+                },
+            },
+            ppem,
+            target,
+        );
     }
 
     /// Read validated metadata from the optional OpenType `HVAR` table.

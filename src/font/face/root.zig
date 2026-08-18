@@ -91,6 +91,20 @@ pub const Face = struct {
     pub fn color(self: *const Face) Color {
         return .{ .implementation = &self.implementation };
     }
+
+    /// Execute TrueType `fpgm` and `prep` for one PPEM.
+    pub fn hintingInstance(
+        self: *const Face,
+        allocator: std.mem.Allocator,
+        ppem: u16,
+        target: font_mod.TrueTypeHintingTarget,
+    ) (font_mod.FontError || @import("../hinting/root.zig").Error)!font_mod.TrueTypeHintingInstance {
+        return self.implementation.hintingInstance(
+            allocator,
+            ppem,
+            target,
+        );
+    }
 };
 
 /// An ordered fallback list. The slice and every face are borrowed.

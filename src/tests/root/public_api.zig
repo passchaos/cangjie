@@ -9,6 +9,16 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(!@hasDecl(cangjie, "editor"));
     try std.testing.expect(@hasDecl(cangjie.font, "Face"));
     try std.testing.expect(@hasDecl(cangjie.font, "Cascade"));
+    try std.testing.expect(
+        @typeInfo(cangjie.font.HintingInstance) == .@"struct",
+    );
+    try std.testing.expect(
+        @typeInfo(cangjie.font.HintingTarget) == .@"enum",
+    );
+    try std.testing.expect(
+        @typeInfo(cangjie.font.HintingError) == .error_set,
+    );
+    try std.testing.expect(@hasDecl(cangjie.font.Face, "hintingInstance"));
     try std.testing.expect(@hasDecl(cangjie.font.container, "OwnedFace"));
     try std.testing.expect(@hasDecl(cangjie.shaping, "Glyph"));
     try std.testing.expect(@hasDecl(cangjie.shaping, "Engine"));

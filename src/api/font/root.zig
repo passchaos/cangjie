@@ -17,6 +17,9 @@ pub const Variations = face.Variations;
 pub const Color = face.Color;
 pub const Error = font_mod.FontError;
 pub const Format = font_mod.FontFormat;
+pub const HintingInstance = font_mod.TrueTypeHintingInstance;
+pub const HintingTarget = font_mod.TrueTypeHintingTarget;
+pub const HintingError = font_mod.TrueTypeHintingError;
 
 pub const GlyphId = glyph.GlyphId;
 pub const Bounds = glyph.Bounds;

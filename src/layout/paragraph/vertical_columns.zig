@@ -13,6 +13,7 @@ const opportunities = @import("../line_break/reflow/opportunities.zig");
 const line_break_opportunity = @import("../line_break/opportunity.zig");
 const paragraph_options = @import("options.zig");
 const vertical_wrap = @import("vertical_wrap.zig");
+const white_space = @import("white_space.zig");
 const GlyphPosition = @import("../glyph_position.zig").GlyphPosition;
 const unicode = @import("../../unicode.zig");
 
@@ -39,6 +40,11 @@ pub fn build(
             options,
         );
     }
+    white_space.prepareVertical(
+        buffer.glyphs.items,
+        options.white_space_collapse,
+        white_space.defaultVerticalSpaceAdvance(buffer.glyphs.items),
+    );
 
     var owned_graphemes: ?[]unicode.GraphemeCluster = null;
     defer if (owned_graphemes) |items| buffer.allocator.free(items);
@@ -75,7 +81,35 @@ pub fn build(
         options,
     );
     defer buffer.allocator.free(ranges);
+    if (options.white_space_collapse == .collapse) {
+        var previous_end: usize = 0;
+        for (ranges) |range| {
+            white_space.zeroVerticalCollapsedRange(
+                buffer.glyphs.items,
+                previous_end,
+                range.glyph_start,
+            );
+            previous_end = range.glyph_end;
+        }
+        white_space.zeroVerticalCollapsedRange(
+            buffer.glyphs.items,
+            previous_end,
+            buffer.glyphs.items.len,
+        );
+    }
     for (ranges) |range| {
+        if (options.white_space_collapse == .collapse) {
+            white_space.trimVerticalLineStart(
+                buffer.glyphs.items,
+                range.glyph_start,
+                range.glyph_end,
+            );
+            white_space.trimVerticalLineEnd(
+                buffer.glyphs.items,
+                range.glyph_start,
+                range.glyph_end,
+            );
+        }
         try appendColumn(
             buffer,
             options,

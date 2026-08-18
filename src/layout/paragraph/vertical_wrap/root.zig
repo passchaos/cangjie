@@ -9,6 +9,7 @@ const emergency = @import("emergency.zig");
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const intrinsic = @import("intrinsic.zig");
 const line_break_opportunity = @import("../../line_break/opportunity.zig");
+const measure = @import("measure.zig");
 const paragraph_options = @import("../options.zig");
 const policy = @import("policy.zig");
 const shared = @import("shared.zig");
@@ -38,7 +39,7 @@ pub fn build(
     const wrapping_enabled = policy.anyWrappingEnabled(text.len, options);
     const prefix = try allocator.alloc(f32, glyphs.len + 1);
     defer allocator.free(prefix);
-    shared.fillPrefix(prefix, glyphs);
+    measure.fillPrefix(prefix, glyphs);
 
     var segment_start: usize = 0;
     var segment_byte_start: usize = 0;
@@ -141,10 +142,27 @@ fn appendSegment(
         segment_byte_start,
         segment_byte_end,
     );
+    try candidates.appendBreakSpaces(
+        &items,
+        allocator,
+        glyphs,
+        graphemes,
+        segment_start,
+        segment_end,
+        segment_byte_start,
+        segment_byte_end,
+        options,
+    );
     var glyph_start = segment_start;
     var byte_start = segment_byte_start;
     while (glyph_start < segment_end) {
-        if (shared.advance(prefix, glyph_start, segment_end) <= limit) {
+        if (measure.inlineSize(
+            glyphs,
+            prefix,
+            glyph_start,
+            segment_end,
+            options,
+        ) <= limit) {
             try output.append(allocator, .{
                 .glyph_start = glyph_start,
                 .glyph_end = segment_end,
@@ -153,18 +171,22 @@ fn appendSegment(
             });
             return;
         }
-        const overflow = firstOverflow(
+        const overflow = measure.firstOverflow(
+            glyphs,
             prefix,
             glyph_start,
             segment_end,
             limit,
+            options,
         );
         const selected = candidates.lastFitting(
             items.items,
+            glyphs,
             prefix,
             glyph_start,
             overflow,
             limit,
+            options,
         ) orelse if (policy.emergencyAllowedBefore(
             options,
             glyphs[overflow - 1].sourceByteEnd(),
@@ -199,21 +221,6 @@ fn appendSegment(
         glyph_start = selected.next_glyph_start;
         byte_start = selected.byte_end;
     }
-}
-
-fn firstOverflow(
-    prefix: []const f32,
-    glyph_start: usize,
-    glyph_end: usize,
-    limit: f32,
-) usize {
-    var index = glyph_start + 1;
-    while (index <= glyph_end and
-        shared.advance(prefix, glyph_start, index) <= limit)
-    {
-        index += 1;
-    }
-    return @min(index, glyph_end);
 }
 
 fn isMandatory(codepoint: u21) bool {

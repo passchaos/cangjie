@@ -2216,7 +2216,8 @@ shaping-performance superiority.
   or left-to-right block progression independently from TTB/BTT inline
   direction. Physical column bounds, y-axis hit testing, horizontal
   caret/selection bars, owned TextGeometry, debug overlays, retained reflow,
-  and renderer draw-list y pens are covered together. Tabs, bidi handling,
+  renderer draw-list y pens, and source-preserving `preserve` / `collapse` /
+  `break-spaces` whitespace policy are covered together. Tabs, bidi handling,
   exclusions, objects, justification, truncation, and incremental breaking are
   rejected explicitly until they are migrated to the shared inline/block-axis
   model; this is not yet full vertical paragraph parity.

@@ -14,6 +14,37 @@ pub fn prepare(
     mode: paragraph_types.WhiteSpaceCollapse,
     ordinary_space_advance: f32,
 ) void {
+    prepareAxis(glyphs, mode, ordinary_space_advance, .horizontal);
+}
+
+/// Vertical counterpart of `prepare`.
+///
+/// Public vertical shaping advances are positive-down, so the same collapse
+/// state machine can operate directly on `y_advance`; no HarfBuzz sign
+/// conversion belongs in paragraph layout.
+pub fn prepareVertical(
+    glyphs: []GlyphPosition,
+    mode: paragraph_types.WhiteSpaceCollapse,
+    ordinary_space_advance: f32,
+) void {
+    prepareAxis(glyphs, mode, ordinary_space_advance, .vertical);
+}
+
+pub fn defaultVerticalSpaceAdvance(glyphs: []const GlyphPosition) f32 {
+    for (glyphs) |glyph| {
+        if (glyph.codepoint == ' ') return @max(glyph.y_advance, 1);
+    }
+    return 1;
+}
+
+const Axis = enum { horizontal, vertical };
+
+fn prepareAxis(
+    glyphs: []GlyphPosition,
+    mode: paragraph_types.WhiteSpaceCollapse,
+    ordinary_space_advance: f32,
+    axis: Axis,
+) void {
     for (glyphs) |*glyph| {
         glyph.flags.collapsed_whitespace = false;
     }
@@ -35,16 +66,16 @@ pub fn prepare(
 
         glyph.flags.collapsed_whitespace = true;
         if (!at_segment_start and !visible_blank_in_run) {
-            glyph.x_advance = @max(
+            setAdvance(glyph, axis, @max(
                 0,
                 if (glyph.isTab())
                     ordinary_space_advance
                 else
-                    glyph.x_advance,
-            );
+                    advance(glyph.*, axis),
+            ));
             visible_blank_in_run = true;
         } else {
-            glyph.x_advance = 0;
+            setAdvance(glyph, axis, 0);
         }
     }
 }
@@ -73,6 +104,47 @@ pub fn trimLineEnd(
     {
         index -= 1;
         glyphs[index].x_advance = 0;
+    }
+}
+
+pub fn trimVerticalLineStart(
+    glyphs: []GlyphPosition,
+    start: usize,
+    end: usize,
+) void {
+    var index = @min(start, glyphs.len);
+    const actual_end = @min(end, glyphs.len);
+    while (index < actual_end and
+        glyphs[index].isCollapsedWhitespace())
+    {
+        glyphs[index].y_advance = 0;
+        index += 1;
+    }
+}
+
+pub fn trimVerticalLineEnd(
+    glyphs: []GlyphPosition,
+    start: usize,
+    end: usize,
+) void {
+    const actual_start = @min(start, glyphs.len);
+    var index = @min(end, glyphs.len);
+    while (index > actual_start and
+        glyphs[index - 1].isCollapsedWhitespace())
+    {
+        index -= 1;
+        glyphs[index].y_advance = 0;
+    }
+}
+
+/// Zero collapsed source atoms omitted between adjacent visible line ranges.
+pub fn zeroVerticalCollapsedRange(
+    glyphs: []GlyphPosition,
+    start: usize,
+    end: usize,
+) void {
+    for (glyphs[@min(start, glyphs.len)..@min(end, glyphs.len)]) |*glyph| {
+        if (glyph.isCollapsedWhitespace()) glyph.y_advance = 0;
     }
 }
 
@@ -118,6 +190,31 @@ pub fn measureRange(
     return width;
 }
 
+pub fn measureVerticalRange(
+    glyphs: []const GlyphPosition,
+    prefix: []const f32,
+    start: usize,
+    end: usize,
+    mode: paragraph_types.WhiteSpaceCollapse,
+) f32 {
+    const actual_end = @min(end, glyphs.len);
+    var visible_start = @min(start, actual_end);
+    var visible_end = actual_end;
+    if (mode == .collapse) {
+        while (visible_start < visible_end and
+            glyphs[visible_start].isCollapsedWhitespace())
+        {
+            visible_start += 1;
+        }
+        while (visible_end > visible_start and
+            glyphs[visible_end - 1].isCollapsedWhitespace())
+        {
+            visible_end -= 1;
+        }
+    }
+    return prefix[visible_end] - prefix[visible_start];
+}
+
 pub fn shouldDiscardAfterSoftWrap(
     mode: paragraph_types.WhiteSpaceCollapse,
 ) bool {
@@ -135,6 +232,20 @@ fn isMandatory(codepoint: u21) bool {
         .mandatory, .carriage_return, .line_feed, .next_line => true,
         else => false,
     };
+}
+
+fn advance(glyph: GlyphPosition, axis: Axis) f32 {
+    return switch (axis) {
+        .horizontal => glyph.x_advance,
+        .vertical => glyph.y_advance,
+    };
+}
+
+fn setAdvance(glyph: *GlyphPosition, axis: Axis, value: f32) void {
+    switch (axis) {
+        .horizontal => glyph.x_advance = value,
+        .vertical => glyph.y_advance = value,
+    }
 }
 
 test "collapse retains source atoms with one visible interior blank" {

@@ -807,8 +807,9 @@ retained shaping relationship. Retained paragraphs keep policy-neutral
 UAX/dictionary/hyphenation analysis and tailor it per reflow, so callers can
 change these policies without reshaping.
 
-`ParagraphOptions.white_space_collapse` controls ASCII horizontal whitespace
-without rewriting the caller's UTF-8 source:
+`ParagraphOptions.white_space_collapse` controls ASCII inline whitespace
+without rewriting the caller's UTF-8 source. The same source policy drives
+horizontal x advances and vertical positive-down y advances:
 
 - `.preserve` keeps authored U+0020 advances and tab-ruler behavior, retaining
   Cangjie's previous default.
@@ -822,8 +823,11 @@ Collapsed atoms stay in the glyph-parallel source/style sidecars with zero
 advance. Caret, selection, bidi, attributed paint, decorations, text geometry,
 and accessibility therefore keep original UTF-8 byte coordinates; retained
 reflow can switch among all three policies without reshaping or losing source
-atoms. Only U+0020 and U+0009 are collapsible—NBSP and other Unicode space
-characters retain their UAX #14 semantics.
+atoms. Vertical columns apply the same leading/trailing and soft-edge trimming,
+and `break_spaces` keeps each authored blank in the preceding visible column.
+Only U+0020 and U+0009 are collapsible—NBSP and other Unicode space characters
+retain their UAX #14 semantics. Vertical tabs remain explicitly unsupported
+until tab-ruler placement is converted to the flow-axis model.
 
 `ShapedParagraph.contentWidths` reports policy-aware intrinsic inline bounds
 from width-independent paragraph content. `ContentWidths.max` is the widest

@@ -6,6 +6,7 @@
 //! a disabled range until ordinary or emergency wrapping becomes legal again.
 
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
+const measure = @import("measure.zig");
 const paragraph_options = @import("../options.zig");
 const policy = @import("policy.zig");
 const shaped_boundary = @import("../../line_break/shaped_boundary.zig");
@@ -26,7 +27,13 @@ pub fn fittingOrNext(
     var last_fitting: ?usize = null;
     var candidate = glyph_start + 1;
     while (candidate <= @min(overflow, segment_end)) : (candidate += 1) {
-        if (shared.advance(prefix, glyph_start, candidate) <= limit and
+        if (measure.inlineSize(
+            glyphs,
+            prefix,
+            glyph_start,
+            candidate,
+            options,
+        ) <= limit and
             reusableAndAllowed(
                 glyphs,
                 graphemes,

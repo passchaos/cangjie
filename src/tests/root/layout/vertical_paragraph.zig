@@ -9,4 +9,5 @@ test {
     _ = @import("vertical_paragraph/wrapping.zig");
     _ = @import("vertical_paragraph/wrapping_policy.zig");
     _ = @import("vertical_paragraph/ranged_policy.zig");
+    _ = @import("vertical_paragraph/whitespace.zig");
 }

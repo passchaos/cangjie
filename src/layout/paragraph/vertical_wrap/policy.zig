@@ -76,3 +76,14 @@ pub fn emergencyAllowedBefore(
         (selected.overflow_wrap != .normal or
             selected.word_break == .break_all);
 }
+
+pub fn wrappingAllowedBefore(
+    options: paragraph_options.Options,
+    byte_offset: usize,
+) bool {
+    return line_break_policy.beforeBoundary(
+        paragraph_options.defaultLineBreakPolicy(options),
+        options.line_break_policy_ranges,
+        byte_offset,
+    ).wrap_mode != .no_wrap;
+}

@@ -133,7 +133,8 @@ pub const Options = struct {
     /// `max_width` as their inline-size/height measure. Global and ranged
     /// `wrap_mode`, `word_break`, and `overflow_wrap` tailor safe UAX #14
     /// opportunities; emergency modes use grapheme boundaries that remain
-    /// safe for shaped-output reuse. `vertical_rl` and `vertical_lr` select
+    /// safe for shaped-output reuse. `white_space_collapse` applies along the
+    /// same positive-down inline axis. `vertical_rl` and `vertical_lr` select
     /// physical column progression.
     writing_mode: pipeline_types.WritingMode = .horizontal_tb,
     text_orientation: pipeline_types.TextOrientation = .mixed,
@@ -293,7 +294,6 @@ fn validateVerticalForText(text: []const u8, options: Options) !void {
         options.alignment != .start or
         options.max_lines != null or
         options.ellipsis or
-        options.white_space_collapse != .preserve or
         options.letter_spacing < 0 or
         options.word_spacing < 0 or
         options.first_line_indent != 0 or

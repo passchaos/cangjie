@@ -274,15 +274,17 @@ pub const Runtime = struct {
 
     fn shiftPixels(self: *Runtime) types.Error!void {
         const loop = self.transient.loop;
-        if (loop >= self.stack.depth()) return error.HintStackUnderflow;
-        const first_point = self.stack.depth() - loop;
-        const distance_index = first_point - 1;
-        const distance = self.stack.values[distance_index];
+        if (self.stack.depth() < loop + 1) {
+            return error.HintStackUnderflow;
+        }
+        // SHPIX has one fixed operand at the top of the stack (distance),
+        // followed by `loop` point operands beneath it. This differs from a
+        // tempting "distance, points..." reading of the prose notation and
+        // is observable in real ttfautohint-generated function programs.
+        const distance = try self.stack.pop();
         var context = try self.pointContext();
-        var index = self.stack.depth();
-        while (index > first_point) {
-            index -= 1;
-            const point_value = self.stack.values[index];
+        for (0..loop) |_| {
+            const point_value = try self.stack.pop();
             if (point_value < 0) continue;
             // FreeType-compatible non-pedantic execution ignores invalid
             // point references in deployed fonts instead of abandoning the
@@ -291,7 +293,6 @@ pub const Runtime = struct {
                 if (err != error.InvalidHintOperand) return err;
             };
         }
-        self.stack.len = distance_index;
         self.transient.loop = 1;
     }
 

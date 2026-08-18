@@ -4106,7 +4106,7 @@ fn gvarDeltaTable(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn gvarCompoundTable(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 56);
+    const bytes = try allocator.alloc(u8, 72);
     @memset(bytes, 0);
     writeU16(bytes, 0, 1);
     writeU16(bytes, 2, 0);
@@ -4118,24 +4118,39 @@ fn gvarCompoundTable(allocator: std.mem.Allocator) ![]u8 {
     writeU32(bytes, 16, 36); // glyphVariationDataArrayOffset after offset array.
     writeU32(bytes, 20, 0);
     writeU32(bytes, 24, 0);
-    writeU32(bytes, 28, 0);
-    writeU32(bytes, 32, 20);
+    writeU32(bytes, 28, 16);
+    writeU32(bytes, 32, 36);
 
-    writeU16(bytes, 36, 1); // one tuple.
-    writeU16(bytes, 38, 10); // tuple data starts after one 6-byte header.
-    writeU16(bytes, 40, 10); // tuple payload size.
-    writeU16(bytes, 42, 0xa000); // embedded peak + private point numbers.
+    // Glyph 1: move child outline point 0 by +16 at the peak. Compound
+    // execution must inherit this tuple when it re-decodes the child.
+    writeU16(bytes, 36, 1);
+    writeU16(bytes, 38, 10);
+    writeU16(bytes, 40, 6);
+    writeU16(bytes, 42, 0xa000);
     writeF2Dot14(bytes, 44, 1.0);
-    bytes[46] = 3; // component point 0, left phantom, right phantom.
-    bytes[47] = 2; // one byte run with three point-number deltas.
-    bytes[48] = 0; // component point id 0.
-    bytes[49] = 1; // left phantom point id 1.
-    bytes[50] = 1; // right phantom point id 2.
-    bytes[51] = 2; // three x deltas.
-    bytes[52] = 20; // component offset x delta.
-    bytes[53] = 0; // left phantom x delta.
-    bytes[54] = 18; // right phantom x delta.
-    bytes[55] = 0x82; // three y deltas are zero.
+    bytes[46] = 1; // one private point.
+    bytes[47] = 0; // one byte point-number run.
+    bytes[48] = 0; // point 0.
+    bytes[49] = 0; // one byte X-delta run.
+    bytes[50] = 16;
+    bytes[51] = 0x80; // one zero Y delta.
+
+    const compound = 52;
+    writeU16(bytes, compound + 0, 1); // one tuple.
+    writeU16(bytes, compound + 2, 10); // data after one 6-byte header.
+    writeU16(bytes, compound + 4, 10); // tuple payload size.
+    writeU16(bytes, compound + 6, 0xa000);
+    writeF2Dot14(bytes, compound + 8, 1.0);
+    bytes[compound + 10] = 3;
+    bytes[compound + 11] = 2;
+    bytes[compound + 12] = 0; // component point id 0.
+    bytes[compound + 13] = 1; // left phantom point id 1.
+    bytes[compound + 14] = 1; // right phantom point id 2.
+    bytes[compound + 15] = 2;
+    bytes[compound + 16] = 20; // component offset x delta.
+    bytes[compound + 17] = 0; // left phantom x delta.
+    bytes[compound + 18] = 18; // right phantom x delta.
+    bytes[compound + 19] = 0x82; // three y deltas are zero.
     return bytes;
 }
 
@@ -6806,8 +6821,8 @@ fn trueTypeCompoundHintingGlyfTable(
     writeU16(bytes, child + 10, 2);
     writeU16(bytes, child + 12, 4);
     bytes[child + 14] = 0xb1;
-    bytes[child + 15] = 64;
-    bytes[child + 16] = 0;
+    bytes[child + 15] = 0;
+    bytes[child + 16] = 64;
     bytes[child + 17] = 0x38;
     bytes[child + 18] = 0x31;
     bytes[child + 19] = 0x21;

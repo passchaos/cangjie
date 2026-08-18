@@ -353,7 +353,11 @@ const OwnedGlyph = struct {
                 @intCast(contour_count),
                 source.metrics,
                 parent.scale_16_16,
-                null,
+                // A compound child must execute against the same varied
+                // outline that was expanded into the parent transaction.
+                // Re-decoding a simple child at the default instance would
+                // silently replace its gvar-adjusted points before hinting.
+                parent.variation,
             )
         else
             try compound.decode(

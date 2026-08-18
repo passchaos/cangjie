@@ -924,6 +924,15 @@ only after a successful run; any error leaves the transaction and instance
 unchanged. Installed-font gates execute representative glyph programs and a
 full mnemonic scan of DejaVu Sans, Noto Sans Devanagari, and Noto Sans Arabic
 shows no uncovered non-variation standard opcode.
+The point VM identifies itself through GETINFO as the classic v35 interpreter;
+it does not advertise FreeType v40 ClearType compatibility flags because the
+associated horizontal-movement suppression is not implemented. The optional
+`zig build hinting-freetype-test` gate selects FreeType v35 explicitly and
+requires exact contour, on-curve-tag, final 26.6-point, and horizontal-advance
+parity for representative simple, compound, Arabic, Devanagari, and variable
+glyphs. Its IP and IUP math preserves the classic interpreter's unscaled
+glyph-zone ratios and staged 16.16 fixed-point rounding rather than collapsing
+equivalent real-number formulas that differ by a 26.6 unit.
 
 `toPixelOutline` then reconstructs a distinct pixel-space path and applies the
 possibly modified left phantom (`pp1`) as the FreeType-compatible glyph
@@ -938,8 +947,8 @@ while preserving shaping advances/offsets and rejecting a mismatched variation
 location; it does not hide PPEM-instance lifetime or cache policy.
 Compound glyphs, including gvar component placement and metric phantoms, can be
 decoded, executed, and reconstructed. Transactions reject an instance created
-from another face, PPEM, target, or normalized location. Automatic hinted run
-rendering and interpreter compatibility modes are the next layers.
+from another face, PPEM, target, or normalized location. FreeType v40
+compatibility mode remains the next interpreter layer.
 
 The shaping integration suite is similarly rooted at
 `src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,

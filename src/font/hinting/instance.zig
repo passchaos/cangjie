@@ -511,7 +511,7 @@ test "glyph execution moves points and commits VM working state" {
         0xb0, 0, 0x2f, // MDAP[round] point 0: 35 -> 64.
         0xb1, 1, 0, 0x3f, // MIAP[round] point 1 to CVT[0]: 96 -> 64.
         0xb0, 2, 0xc4, // MDRP[round] point 2 relative to point 1: -> 128.
-        0xb1, 64, 2, 0x38, // SHPIX point 2 by +1px: -> 192.
+        0xb1, 2, 64, 0x38, // SHPIX point 2 by +1px: -> 192.
         0xb0, 2, 0x46, // GC[current] point 2.
         0xb0, 0, 0x23, 0x42, // storage[0] = projected coordinate.
     };

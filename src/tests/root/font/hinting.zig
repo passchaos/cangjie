@@ -533,9 +533,12 @@ test "compound gvar transactions vary XY placement and metric phantoms" {
         varied.components[0].placement.offset.x,
     );
     try std.testing.expectEqual(
-        default_transaction.unscaled[0].x + 10,
+        // +8 from the child's varied point and +10 from the parent's
+        // varied component placement at the half-axis location.
+        default_transaction.unscaled[0].x + 18,
         varied.unscaled[0].x,
     );
+    const before_execution = varied.points[0];
     try std.testing.expectEqual(
         @as(i32, 12),
         (varied.phantomPoints()[1].x - varied.phantomPoints()[0].x) -
@@ -543,6 +546,10 @@ test "compound gvar transactions vary XY placement and metric phantoms" {
                 default_transaction.phantomPoints()[0].x),
     );
     try face.executeHintingTransaction(&varied_instance, &varied);
+    // The compound's child is decoded again before its program runs. It must
+    // retain the child's +8-FUnit gvar delta instead of reverting to the
+    // default outline and keeping only the parent's +10 placement delta.
+    try std.testing.expectEqual(before_execution, varied.points[0]);
     var pixel = try varied.toPixelOutline();
     defer pixel.deinit();
     var design = try face.glyphs().outlineAt(
@@ -692,7 +699,7 @@ test "compound transactions retain parent bytecode and USE_MY_METRICS" {
     try std.testing.expect(!transaction.components[0].is_compound);
     try std.testing.expectEqualSlices(
         u8,
-        &.{ 0xb1, 64, 0, 0x38 },
+        &.{ 0xb1, 0, 64, 0x38 },
         transaction.components[0].instructions,
     );
     // Top-level glyph 2 advances 1000 FUnits, while USE_MY_METRICS selects

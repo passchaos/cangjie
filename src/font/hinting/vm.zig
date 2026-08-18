@@ -225,7 +225,7 @@ pub const Vm = struct {
             }.call),
             0x63 => try self.binaryArithmetic(struct {
                 fn call(a: i32, b: i32) types.Error!i32 {
-                    return types.mulDiv(a, b, 64);
+                    return types.mulDivNearest(a, b, 64);
                 }
             }.call),
             0x64 => {
@@ -561,21 +561,21 @@ pub const Vm = struct {
     fn getInfo(self: *Vm) types.Error!void {
         const selector = try self.stack.pop();
         var result: i32 = 0;
-        if ((selector & 1) != 0) result = 40;
-        if (self.graphics.target.isSmooth()) {
-            if ((selector & (1 << 6)) != 0) result |= 1 << 13;
-            if ((selector & (1 << 8)) != 0 and
-                self.graphics.target.isVerticalLcd())
-            {
-                result |= 1 << 15;
-            }
-            if ((selector & (1 << 10)) != 0) result |= 1 << 17;
-            if ((selector & (1 << 11)) != 0) result |= 1 << 18;
-            if ((selector & (1 << 12)) != 0 and
-                self.graphics.target.isGrayscaleClearType())
-            {
-                result |= 1 << 19;
-            }
+        // The point VM currently implements the classic v35 interpreter.
+        // Advertising v40 would let fonts select ClearType compatibility
+        // branches whose movement suppression semantics we do not implement.
+        if ((selector & 1) != 0) result = 35;
+        if ((selector & (1 << 3)) != 0 and
+            self.source.normalized_coords.len != 0)
+        {
+            result |= 1 << 10;
+        }
+        // Classic FreeType reports conventional grayscale rendering through
+        // selector bit 5; the v40-only subpixel flags remain clear.
+        if ((selector & (1 << 5)) != 0 and
+            self.graphics.target.isSmooth())
+        {
+            result |= 1 << 12;
         }
         try self.stack.push(result);
     }
@@ -691,5 +691,52 @@ test "definition scanner ignores ENDF bytes inside push immediates" {
     try std.testing.expectEqual(
         @as(usize, source.font_program.len),
         (try vm.definitions.get(false, 0)).end,
+    );
+}
+
+test "GETINFO advertises only implemented classic interpreter capabilities" {
+    var stack_values: [4]i32 = undefined;
+    var graphics = types.RetainedGraphicsState{
+        .scale_16_16 = 0x10000,
+        .ppem = 16,
+        .target = .normal,
+    };
+    const selector: u16 =
+        1 | (1 << 3) | (1 << 5) | (1 << 6) | (1 << 8) |
+        (1 << 10) | (1 << 11) | (1 << 12);
+    const source = types.Source{
+        .units_per_em = 1000,
+        .font_program = &.{},
+        .control_value_program = &.{},
+        .normalized_coords = &.{0},
+        .glyph_program = &.{
+            0xb8,
+            @intCast(selector >> 8),
+            @truncate(selector),
+            0x88,
+        },
+        .control_value_data = &.{},
+        .limits = .{
+            .max_storage = 0,
+            .max_function_defs = 0,
+            .max_instruction_defs = 0,
+            .max_stack_elements = stack_values.len,
+            .max_twilight_points = 0,
+        },
+    };
+    var vm = Vm.init(
+        source,
+        .{ .functions = &.{}, .instructions = &.{} },
+        &stack_values,
+        &.{},
+        &.{},
+        &graphics,
+    );
+
+    try vm.run(.glyph);
+    try std.testing.expectEqual(@as(usize, 1), vm.stack.depth());
+    try std.testing.expectEqual(
+        @as(i32, 35 | (1 << 10) | (1 << 12)),
+        vm.stack.values[0],
     );
 }

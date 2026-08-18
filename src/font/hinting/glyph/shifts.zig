@@ -1,5 +1,7 @@
 //! Bulk SHP/SHC/SHZ point displacement over TrueType zones.
 
+const std = @import("std");
+
 const fixed = @import("fixed.zig");
 const outline = @import("../outline.zig");
 const state = @import("state.zig");
@@ -12,7 +14,7 @@ pub fn pointsByReference(
     use_rp1: bool,
     points: []const usize,
 ) types.Error!void {
-    const displacement = try referenceDisplacement(
+    const reference = try referenceDisplacement(
         twilight,
         glyph,
         graphics,
@@ -24,7 +26,7 @@ pub fn pointsByReference(
         shiftPoint(
             &target.current[point],
             &target.flags[point],
-            displacement,
+            reference.delta,
             graphics.freedom,
         );
     }
@@ -37,7 +39,7 @@ pub fn contourByReference(
     use_rp1: bool,
     contour: usize,
 ) types.Error!void {
-    const displacement = try referenceDisplacement(
+    const reference = try referenceDisplacement(
         twilight,
         glyph,
         graphics,
@@ -61,10 +63,18 @@ pub fn contourByReference(
         };
     };
     for (start..end) |point| {
+        // FreeType excludes the reference itself when it belongs to the
+        // contour being shifted. Moving it would make a subsequent SHC/SHZ
+        // observe displacement that did not exist in the source program.
+        if (reference.zone == graphics.zp2 and
+            reference.point == point)
+        {
+            continue;
+        }
         shiftPoint(
             &target.current[point],
             &target.flags[point],
-            displacement,
+            reference.delta,
             graphics.freedom,
         );
     }
@@ -78,7 +88,7 @@ pub fn zoneByReference(
     zone_index: u8,
 ) types.Error!void {
     if (zone_index > 1) return error.InvalidHintOperand;
-    const displacement = try referenceDisplacement(
+    const reference = try referenceDisplacement(
         twilight,
         glyph,
         graphics,
@@ -86,18 +96,29 @@ pub fn zoneByReference(
     );
     const target = try zoneAt(twilight, glyph, zone_index);
     const limit = @min(target.real_point_count, target.current.len);
-    for (target.current[0..limit]) |*point| {
-        if (graphics.freedom.x != 0) point.x +|= displacement.x;
-        if (graphics.freedom.y != 0) point.y +|= displacement.y;
+    for (target.current[0..limit], 0..) |*point, point_index| {
+        if (reference.zone == zone_index and
+            reference.point == point_index)
+        {
+            continue;
+        }
+        if (graphics.freedom.x != 0) point.x +|= reference.delta.x;
+        if (graphics.freedom.y != 0) point.y +|= reference.delta.y;
     }
 }
+
+const ReferenceDisplacement = struct {
+    delta: outline.Point,
+    zone: u8,
+    point: usize,
+};
 
 fn referenceDisplacement(
     twilight: *state.Zone,
     glyph: *state.Zone,
     graphics: *const state.GraphicsState,
     use_rp1: bool,
-) types.Error!outline.Point {
+) types.Error!ReferenceDisplacement {
     const zone_index = if (use_rp1) graphics.zp0 else graphics.zp1;
     const point_index = if (use_rp1) graphics.rp1 else graphics.rp2;
     const target = try zoneAt(twilight, glyph, zone_index);
@@ -109,7 +130,15 @@ fn referenceDisplacement(
         target.original[point_index],
         graphics.projection,
     );
-    return fixed.pointAlongVector(projected, graphics.freedom);
+    return .{
+        .delta = fixed.movementAlongFreedom(
+            projected,
+            graphics.freedom,
+            graphics.projection,
+        ),
+        .zone = zone_index,
+        .point = point_index,
+    };
 }
 
 fn zoneAt(
@@ -138,4 +167,54 @@ fn shiftPoint(
         point.y +|= displacement.y;
         flag.touched_y = true;
     }
+}
+
+test "SHC and SHZ leave an in-zone reference point unmoved" {
+    var twilight_points = [_]outline.Point{.{ .x = 0, .y = 0 }};
+    var twilight_flags = [_]outline.PointFlag{.{}};
+    var current = [_]outline.Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 64, .y = 0 },
+        .{ .x = 100, .y = 0 },
+    };
+    var original = [_]outline.Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 0, .y = 0 },
+        .{ .x = 100, .y = 0 },
+    };
+    var unscaled = original;
+    var flags = [_]outline.PointFlag{.{}} ** current.len;
+    var twilight = state.Zone{
+        .current = &twilight_points,
+        .original = &twilight_points,
+        .unscaled = &twilight_points,
+        .flags = &twilight_flags,
+        .real_point_count = twilight_points.len,
+    };
+    var glyph = state.Zone{
+        .current = &current,
+        .original = &original,
+        .unscaled = &unscaled,
+        .flags = &flags,
+        .contours = &.{2},
+        .real_point_count = current.len,
+    };
+    const graphics = state.GraphicsState{
+        .rp2 = 1,
+    };
+
+    try contourByReference(&twilight, &glyph, &graphics, false, 0);
+    try std.testing.expectEqual(@as(i32, 64), current[0].x);
+    try std.testing.expectEqual(@as(i32, 64), current[1].x);
+    try std.testing.expectEqual(@as(i32, 164), current[2].x);
+
+    current = .{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 64, .y = 0 },
+        .{ .x = 100, .y = 0 },
+    };
+    try zoneByReference(&twilight, &glyph, &graphics, false, 1);
+    try std.testing.expectEqual(@as(i32, 64), current[0].x);
+    try std.testing.expectEqual(@as(i32, 64), current[1].x);
+    try std.testing.expectEqual(@as(i32, 164), current[2].x);
 }

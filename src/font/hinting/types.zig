@@ -128,6 +128,31 @@ pub fn mulDiv(a: i32, b: i32, c: i32) Error!i32 {
     return clampI64ToI32(@divTrunc(product, @as(i64, c)));
 }
 
+/// Signed multiply/divide with the nearest rounding used by TrueType MUL.
+///
+/// DIV deliberately uses `mulDiv` above because its bytecode contract
+/// truncates instead. Keeping separate helpers prevents scalar VM arithmetic
+/// from accidentally sharing two observably different rounding rules.
+pub fn mulDivNearest(a: i32, b: i32, c: i32) Error!i32 {
+    if (c == 0) return error.DivideByZero;
+    const product = @as(i64, a) * b;
+    const divisor: i64 = c;
+    const product_magnitude: u64 =
+        @intCast(if (product < 0) -product else product);
+    const divisor_magnitude: u64 =
+        @intCast(if (divisor < 0) -divisor else divisor);
+    const quotient: i64 = @intCast(
+        (product_magnitude + (divisor_magnitude >> 1)) /
+            divisor_magnitude,
+    );
+    return clampI64ToI32(
+        if ((product < 0) != (divisor < 0))
+            -quotient
+        else
+            quotient,
+    );
+}
+
 pub fn floor26Dot6(value: i32) i32 {
     return value & ~@as(i32, 63);
 }
@@ -145,6 +170,9 @@ fn clampI64ToI32(value: i64) i32 {
 test "26.6 scaling follows signed nearest fixed multiplication" {
     try std.testing.expectEqual(@as(i32, 640), scaleFUnits(1000, 41943));
     try std.testing.expectEqual(@as(i32, -640), scaleFUnits(-1000, 41943));
+    try std.testing.expectEqual(@as(i32, 1), try mulDiv(1, 3, 2));
+    try std.testing.expectEqual(@as(i32, 2), try mulDivNearest(1, 3, 2));
+    try std.testing.expectEqual(@as(i32, -2), try mulDivNearest(-1, 3, 2));
     try std.testing.expectEqual(@as(i32, 64), floor26Dot6(127));
     try std.testing.expectEqual(@as(i32, -128), floor26Dot6(-65));
     try std.testing.expectEqual(@as(i32, 128), ceil26Dot6(65));

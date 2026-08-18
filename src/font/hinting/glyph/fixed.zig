@@ -61,12 +61,77 @@ pub fn vectorDot(first: Vector, second: Vector) i32 {
     return roundShift14(value);
 }
 
+/// Convert projected distance into an XY move along the freedom vector.
+///
+/// The TrueType interpreter first quantizes `freedom / dot(projection,
+/// freedom)` to a signed 16.16 move vector, then multiplies the requested
+/// 26.6 distance by that vector. Combining those operations into one rational
+/// multiply changes non-axis-aligned moves by a 26.6 unit.
+pub fn movementAlongFreedom(
+    distance: i32,
+    freedom: Vector,
+    projection: Vector,
+) outline.Point {
+    const dot_product =
+        @as(i64, projection.x) * freedom.x +
+        @as(i64, projection.y) * freedom.y;
+    // FreeType's Compute_Funcs uses this exact positive rounding phase.
+    const dot = clampI64((dot_product + 0x2000) >> 14);
+    const move_x, const move_y = if (dot >= 0x3ffe)
+        .{
+            clampI64(@as(i64, freedom.x) * 4),
+            clampI64(@as(i64, freedom.y) * 4),
+        }
+    else if (dot > -0x400 and dot < 0x400)
+        .{ @as(i32, 0), @as(i32, 0) }
+    else
+        .{
+            clampI64(@divTrunc(
+                @as(i64, freedom.x) * 0x10000,
+                @as(i64, dot),
+            )),
+            clampI64(@divTrunc(
+                @as(i64, freedom.y) * 0x10000,
+                @as(i64, dot),
+            )),
+        };
+    return .{
+        .x = mulFix16Clamped(distance, move_x),
+        .y = mulFix16Clamped(distance, move_y),
+    };
+}
+
 pub fn mulDivClamped(a: i32, b: i32, denominator: i32) i32 {
     if (denominator == 0) return 0;
-    return clampI64(@divTrunc(
-        @as(i64, a) * b,
-        @as(i64, denominator),
-    ));
+    const product = @as(i64, a) * b;
+    const divisor: i64 = denominator;
+    const product_magnitude: u64 =
+        @intCast(if (product < 0) -product else product);
+    const divisor_magnitude: u64 =
+        @intCast(if (divisor < 0) -divisor else divisor);
+    const quotient: i64 = @intCast(
+        (product_magnitude + (divisor_magnitude >> 1)) /
+            divisor_magnitude,
+    );
+    return clampI64(
+        if ((product < 0) != (divisor < 0))
+            -quotient
+        else
+            quotient,
+    );
+}
+
+/// Divide into a signed 16.16 ratio with FreeType/TrueType nearest rounding.
+///
+/// IUP intentionally computes its scale first and then multiplies by that
+/// quantized scale. Collapsing the two operations into one rational multiply
+/// changes deployed outlines by one 26.6 unit.
+pub fn divFix16Clamped(numerator: i32, denominator: i32) i32 {
+    return mulDivClamped(numerator, 0x10000, denominator);
+}
+
+pub fn mulFix16Clamped(value: i32, factor: i32) i32 {
+    return mulDivClamped(value, factor, 0x10000);
 }
 
 pub fn clampI64(value: i64) i32 {
@@ -94,4 +159,29 @@ fn roundShift14(value: i64) i32 {
     const magnitude: u64 = @intCast(if (value < 0) -value else value);
     const rounded: i64 = @intCast((magnitude + 0x2000) >> 14);
     return clampI64(if (value < 0) -rounded else rounded);
+}
+
+test "fixed multiply divide rounds signed results to nearest" {
+    try std.testing.expectEqual(@as(i32, 2), mulDivClamped(1, 3, 2));
+    try std.testing.expectEqual(@as(i32, -2), mulDivClamped(-1, 3, 2));
+    try std.testing.expectEqual(
+        @as(i32, 0x18000),
+        divFix16Clamped(3, 2),
+    );
+    try std.testing.expectEqual(
+        @as(i32, -2),
+        mulFix16Clamped(-3, 0x8000),
+    );
+}
+
+test "projected movement preserves staged 16.16 vector quantization" {
+    const moved = movementAlongFreedom(
+        -193,
+        .{ .x = 13421, .y = 9397 },
+        .{ .x = -16322, .y = 1428 },
+    );
+    try std.testing.expectEqual(
+        outline.Point{ .x = 206, .y = 144 },
+        moved,
+    );
 }

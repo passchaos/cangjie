@@ -2573,6 +2573,41 @@ pub fn build(b: *std.Build) void {
     });
     freetype_c.linkSystemLibrary("freetype2", .{ .use_pkg_config = .force });
 
+    const hinting_freetype_c = b.addTranslateC(.{
+        .root_source_file = b.path("tests/hinting_freetype.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    hinting_freetype_c.linkSystemLibrary(
+        "freetype2",
+        .{ .use_pkg_config = .force },
+    );
+    const hinting_freetype_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/hinting_freetype_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "cangjie", .module = mod },
+                .{
+                    .name = "freetype",
+                    .module = hinting_freetype_c.createModule(),
+                },
+            },
+        }),
+    });
+    hinting_freetype_tests.root_module.linkSystemLibrary(
+        "freetype2",
+        .{ .use_pkg_config = .force },
+    );
+    const hinting_freetype_test_step = b.step(
+        "hinting-freetype-test",
+        "Compare classic hinted TrueType outlines with FreeType v35",
+    );
+    hinting_freetype_test_step.dependOn(
+        &b.addRunArtifact(hinting_freetype_tests).step,
+    );
+
     const shape_bench_options = b.addOptions();
     shape_bench_options.addOption(bool, "enable_harfbuzz", enable_harfbuzz);
     const shape_bench_mod = b.createModule(.{

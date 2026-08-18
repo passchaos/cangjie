@@ -162,19 +162,13 @@ fn moveProjected(
     distance: i32,
     graphics: *const state.GraphicsState,
 ) void {
-    const dot = fixed.vectorDot(graphics.freedom, graphics.projection);
-    if (dot <= -0x400 or dot >= 0x400) {
-        point.x +|= fixed.mulDivClamped(
-            distance,
-            graphics.freedom.x,
-            dot,
-        );
-        point.y +|= fixed.mulDivClamped(
-            distance,
-            graphics.freedom.y,
-            dot,
-        );
-    }
+    const delta = fixed.movementAlongFreedom(
+        distance,
+        graphics.freedom,
+        graphics.projection,
+    );
+    point.x +|= delta.x;
+    point.y +|= delta.y;
     if (graphics.freedom.x != 0) flag.touched_x = true;
     if (graphics.freedom.y != 0) flag.touched_y = true;
 }

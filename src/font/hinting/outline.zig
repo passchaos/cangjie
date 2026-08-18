@@ -304,7 +304,15 @@ pub fn decodeSimple(
         .y = metrics.bounds.y_max + metrics.top_side_bearing -
             metrics.vertical_advance,
     };
+    var scaled_from_fractional_variation = false;
+    var use_variation_scaling = false;
     if (variation) |context| {
+        // FreeType uses its fractional `unrounded` scaling path for every
+        // glyph at a non-default instance, even when this glyph has no active
+        // tuple. This can differ from scaling integer design coordinates
+        // directly by one 26.6 unit.
+        use_variation_scaling =
+            hasNonDefaultLocation(context.normalized_coords);
         const deltas = gvar.accumulateSimpleGlyphPointDeltasWithReader(
             allocator,
             context.data,
@@ -327,21 +335,50 @@ pub fn decodeSimple(
         defer if (deltas) |owned| allocator.free(owned);
         if (deltas) |active| {
             if (active.len != point_count) return error.BadSfnt;
-            for (unscaled, active) |*point, delta| {
-                point.x = roundVariationCoordinate(
-                    @as(f32, @floatFromInt(point.x)) + delta.x,
-                );
-                point.y = roundVariationCoordinate(
-                    @as(f32, @floatFromInt(point.y)) + delta.y,
-                );
+            for (unscaled, original, active) |*point, *origin, delta| {
+                const varied_x =
+                    @as(f32, @floatFromInt(point.x)) + delta.x;
+                const varied_y =
+                    @as(f32, @floatFromInt(point.y)) + delta.y;
+                // The VM's dual projection reads integer design points, but
+                // FreeType scales a separate `unrounded` varied coordinate.
+                // Rounding to design units before scaling loses fractional
+                // gvar precision and shifts some 26.6 points by one unit.
+                point.x = roundVariationCoordinate(varied_x);
+                point.y = roundVariationCoordinate(varied_y);
+                origin.* = .{
+                    .x = scaleVariationCoordinate(
+                        varied_x,
+                        scale_16_16,
+                    ),
+                    .y = scaleVariationCoordinate(
+                        varied_y,
+                        scale_16_16,
+                    ),
+                };
             }
+            scaled_from_fractional_variation = true;
         }
     }
     for (unscaled, original, points) |raw, *origin, *point| {
-        origin.* = .{
-            .x = types.scaleFUnits(raw.x, scale_16_16),
-            .y = types.scaleFUnits(raw.y, scale_16_16),
-        };
+        if (!scaled_from_fractional_variation) {
+            origin.* = if (use_variation_scaling)
+                .{
+                    .x = scaleVariationCoordinate(
+                        @floatFromInt(raw.x),
+                        scale_16_16,
+                    ),
+                    .y = scaleVariationCoordinate(
+                        @floatFromInt(raw.y),
+                        scale_16_16,
+                    ),
+                }
+            else
+                .{
+                    .x = types.scaleFUnits(raw.x, scale_16_16),
+                    .y = types.scaleFUnits(raw.y, scale_16_16),
+                };
+        }
         point.* = origin.*;
     }
     return .{
@@ -377,6 +414,64 @@ fn roundVariationCoordinate(value: f32) i32 {
         return std.math.maxInt(i32);
     }
     return @intFromFloat(rounded);
+}
+
+fn hasNonDefaultLocation(normalized_coords: []const f32) bool {
+    for (normalized_coords) |coordinate| {
+        if (coordinate != 0) return true;
+    }
+    return false;
+}
+
+fn scaleVariationCoordinate(value: f32, scale_16_16: i32) i32 {
+    if (!std.math.isFinite(value)) {
+        return if (value < 0) std.math.minInt(i32) else std.math.maxInt(i32);
+    }
+    const integral = @floor(value);
+    if (integral <= @as(f32, @floatFromInt(std.math.minInt(i32))) or
+        integral >= @as(f32, @floatFromInt(std.math.maxInt(i32))))
+    {
+        return if (value < 0) std.math.minInt(i32) else std.math.maxInt(i32);
+    }
+    const base: i32 = @intFromFloat(integral);
+    const fraction = value - integral;
+    // FreeType carries varied coordinates through an intermediate 26.6
+    // `unrounded` array, then applies the size's 16.16 scale and rounds the
+    // result back to 26.6. Reproduce those two fixed-point boundaries rather
+    // than relying on host floating-point rounding.
+    const fractional_26_6: i32 = @intFromFloat(@floor(
+        fraction * 64.0 + 0.5,
+    ));
+    const unrounded = @as(i64, base) * 64 + fractional_26_6;
+    const bounded = if (unrounded <= std.math.minInt(i32))
+        std.math.minInt(i32)
+    else if (unrounded >= std.math.maxInt(i32))
+        std.math.maxInt(i32)
+    else
+        @as(i32, @intCast(unrounded));
+    const scaled = types.scaleFUnits(bounded, scale_16_16);
+    return @divFloor(scaled +| 32, 64);
+}
+
+test "fractional gvar coordinates survive scaling into 26.6" {
+    try std.testing.expectEqual(
+        @as(i32, 37),
+        roundVariationCoordinate(36.5),
+    );
+    try std.testing.expectEqual(
+        @as(i32, 18),
+        scaleVariationCoordinate(36.5, 0x8000),
+    );
+    // A non-default variable instance retains FreeType's intermediate 26.6
+    // boundary even when a glyph has no active tuple.
+    try std.testing.expectEqual(
+        @as(i32, -120),
+        scaleVariationCoordinate(-1883, 4194),
+    );
+    try std.testing.expectEqual(
+        @as(i32, -121),
+        types.scaleFUnits(-1883, 4194),
+    );
 }
 
 fn appendContour(

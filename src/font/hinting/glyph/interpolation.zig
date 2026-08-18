@@ -6,6 +6,7 @@
 
 const std = @import("std");
 
+const fixed = @import("fixed.zig");
 const outline = @import("../outline.zig");
 const types = @import("../types.zig");
 
@@ -149,6 +150,17 @@ fn interpolateRange(
     const high_current = coordinate(current[high_ref], x_axis);
     const low_delta = low_current -| low_original;
     const high_delta = high_current -| high_original;
+    // FreeType and the Microsoft interpreter quantize the interpolation
+    // ratio to 16.16 once per reference pair. Reusing that ratio is both the
+    // specified fixed-point data flow and observably different from one
+    // combined integer division near half-unit boundaries.
+    const scale = if (low_unscaled == high_unscaled)
+        0
+    else
+        fixed.divFix16Clamped(
+            high_current -| low_current,
+            high_unscaled -| low_unscaled,
+        );
 
     for (start..end + 1) |point| {
         const original_value = coordinate(original[point], x_axis);
@@ -159,27 +171,12 @@ fn interpolateRange(
         else if (low_unscaled == high_unscaled or low_current == high_current)
             low_current
         else
-            low_current +| mulDivClamped(
+            low_current +| fixed.mulFix16Clamped(
                 coordinate(unscaled[point], x_axis) -| low_unscaled,
-                high_current -| low_current,
-                high_unscaled -| low_unscaled,
+                scale,
             );
         setCoordinate(&current[point], x_axis, result);
     }
-}
-
-fn mulDivClamped(a: i32, b: i32, denominator: i32) i32 {
-    if (denominator == 0) return 0;
-    return clampI64(@divTrunc(
-        @as(i64, a) * b,
-        @as(i64, denominator),
-    ));
-}
-
-fn clampI64(value: i64) i32 {
-    if (value <= std.math.minInt(i32)) return std.math.minInt(i32);
-    if (value >= std.math.maxInt(i32)) return std.math.maxInt(i32);
-    return @intCast(value);
 }
 
 fn isTouched(flag: outline.PointFlag, x_axis: bool) bool {

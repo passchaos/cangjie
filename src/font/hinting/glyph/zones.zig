@@ -5,6 +5,8 @@
 //! here as slices.  Keeping all movement and interpolation behind this
 //! boundary makes the interpreter's commit-on-success contract auditable.
 
+const std = @import("std");
+
 const fixed = @import("fixed.zig");
 const interpolation = @import("interpolation.zig");
 const shifts = @import("shifts.zig");
@@ -303,11 +305,21 @@ pub const Context = struct {
             self.state.zp0,
             self.state.rp1,
         );
-        const old_range = self.originalDistance(
+        // IP uses unscaled outline coordinates whenever all three zone
+        // pointers address the glyph zone. Scaling both distances first is
+        // mathematically equivalent over reals, but not after 26.6 rounding:
+        // deployed fonts can differ by one unit. If any pointer addresses
+        // twilight, the interpreter instead uses the original 26.6 arrays.
+        const use_unscaled =
+            self.state.zp0 != 0 and
+            self.state.zp1 != 0 and
+            self.state.zp2 != 0;
+        const old_range = self.interpolationOriginalDistance(
             self.state.zp1,
             self.state.rp2,
             self.state.zp0,
             self.state.rp1,
+            use_unscaled,
         ) catch 0;
         const current_range = self.currentDistance(
             self.state.zp1,
@@ -315,11 +327,12 @@ pub const Context = struct {
             self.state.zp0,
             self.state.rp1,
         ) catch 0;
-        const original_distance = try self.originalDistance(
+        const original_distance = try self.interpolationOriginalDistance(
             self.state.zp2,
             point,
             self.state.zp0,
             self.state.rp1,
+            use_unscaled,
         );
         const current_distance = fixed.projectDifference(
             try self.currentPoint(self.state.zp2, point),
@@ -515,6 +528,29 @@ pub const Context = struct {
         );
     }
 
+    fn interpolationOriginalDistance(
+        self: *Context,
+        first_zone: u8,
+        first: usize,
+        second_zone: u8,
+        second: usize,
+        use_unscaled: bool,
+    ) types.Error!i32 {
+        if (use_unscaled) {
+            std.debug.assert(first_zone == 1 and second_zone == 1);
+            return fixed.projectDifference(
+                try self.unscaledPoint(first),
+                try self.unscaledPoint(second),
+                self.state.dual_projection,
+            );
+        }
+        return fixed.projectDifference(
+            try self.originalPoint(first_zone, first),
+            try self.originalPoint(second_zone, second),
+            self.state.dual_projection,
+        );
+    }
+
     fn move(
         self: *Context,
         zone_index: u8,
@@ -523,24 +559,13 @@ pub const Context = struct {
     ) types.Error!void {
         const zone = try self.zoneAt(zone_index);
         if (point >= zone.current.len) return error.InvalidHintOperand;
-        const freedom_dot_projection = fixed.vectorDot(
+        const delta = fixed.movementAlongFreedom(
+            projected_distance,
             self.state.freedom,
             self.state.projection,
         );
-        if (freedom_dot_projection <= -0x400 or
-            freedom_dot_projection >= 0x400)
-        {
-            zone.current[point].x +|= fixed.mulDivClamped(
-                projected_distance,
-                self.state.freedom.x,
-                freedom_dot_projection,
-            );
-            zone.current[point].y +|= fixed.mulDivClamped(
-                projected_distance,
-                self.state.freedom.y,
-                freedom_dot_projection,
-            );
-        }
+        zone.current[point].x +|= delta.x;
+        zone.current[point].y +|= delta.y;
         touch(&zone.flags[point], self.state.freedom);
     }
 
@@ -609,4 +634,53 @@ fn applyMinimumDistance(
 fn touch(flag: *outline.PointFlag, freedom: Vector) void {
     if (freedom.x != 0) flag.touched_x = true;
     if (freedom.y != 0) flag.touched_y = true;
+}
+
+test "IP derives glyph-zone ratios from unscaled coordinates" {
+    var current = [_]outline.Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 1, .y = 0 },
+        .{ .x = 5, .y = 0 },
+    };
+    var original = [_]outline.Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 1, .y = 0 },
+        .{ .x = 2, .y = 0 },
+    };
+    var unscaled = [_]outline.Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 1, .y = 0 },
+        .{ .x = 3, .y = 0 },
+    };
+    var flags = [_]outline.PointFlag{.{}} ** 3;
+    var twilight_points = [_]outline.Point{};
+    var twilight_flags = [_]outline.PointFlag{};
+    var graphics = GraphicsState{
+        .rp1 = 0,
+        .rp2 = 2,
+    };
+    var context = Context{
+        .twilight = .{
+            .current = &twilight_points,
+            .original = &twilight_points,
+            .unscaled = &twilight_points,
+            .flags = &twilight_flags,
+            .real_point_count = twilight_points.len,
+        },
+        .glyph = .{
+            .current = &current,
+            .original = &original,
+            .unscaled = &unscaled,
+            .flags = &flags,
+            .contours = &.{2},
+            .real_point_count = current.len,
+        },
+        .state = &graphics,
+        .scale_16_16 = 0x10000,
+    };
+
+    // Unscaled interpolation yields round(1 * 5 / 3) = 2. Reusing the
+    // independently rounded original 26.6 coordinates would yield 3.
+    try context.interpolatePoint(1);
+    try std.testing.expectEqual(@as(i32, 2), current[1].x);
 }

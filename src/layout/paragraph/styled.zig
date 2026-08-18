@@ -301,6 +301,7 @@ const Driver = struct {
                     std.math.inf(f32),
                 paragraph_reflow.resolvedAlignment(self.options),
                 paragraph_reflow.alignedLineX,
+                self.options,
             );
         }
         styled_buffer.applyMinimumLineHeights(

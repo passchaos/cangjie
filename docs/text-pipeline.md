@@ -628,18 +628,25 @@ logical pen. After the final explicit stop, the existing `tab_width × ordinary
 space advance` interval repeats from that final position. An empty ruler
 therefore preserves the legacy repeating-grid behavior.
 
-`TabStop.alignment` makes following-field alignment part of the concrete ruler
-record; the first public level accepts `.start`. Center, physical left/right,
-and decimal-field modes require measuring the complete following field and are
-not silently approximated by this implementation. A visible line containing a
-tab is pinned to logical paragraph start even when paragraph alignment requests
-center, right, or justification; otherwise moving the complete line after
-resolving the ruler would invalidate every tab column. The line persists that
-resolved physical alignment so ellipsis and optical-punctuation post-processing
-cannot move it again. Tabs remain source/caret/selection atoms but the render
-bridge suppresses their font glyph, and styled word spacing never shifts the
-following field past its selected stop. Retained reflow may change the ruler
-without reshaping.
+`TabStop.alignment` supports `.start`, `.center`, `.end`, and `.decimal`.
+Alignment is resolved from final shaped glyph advances, including kerning,
+inline-object widths, and paragraph/styled letter or word spacing. Decimal
+stops use `decimal_point` (U+002E by default), and fall back to `.end` when the
+field has no matching scalar. A field ends at the next tab or mandatory line
+break. If centering or ending a field would move it before the current pen, the
+tab clamps to zero advance rather than overlapping preceding content. When
+wrapping truncates a prospective field at a soft or emergency break, Cangjie
+re-resolves the tab against the actual committed prefix (and any visible
+hyphen) before accepting line geometry.
+
+A visible line containing a tab is pinned to logical paragraph start even when
+paragraph alignment requests center, right, or justification; otherwise moving
+the complete line after resolving the ruler would invalidate every tab column.
+The line persists that resolved physical alignment so ellipsis and
+optical-punctuation post-processing cannot move it again. Tabs remain
+source/caret/selection atoms but the render bridge suppresses their font glyph,
+and styled word spacing never shifts the following field past its selected
+stop. Retained reflow may change the ruler or alignment without reshaping.
 
 `cangjie.shaping.Engine` is the public ownership boundary for this pipeline.
 It is a concrete value type that owns reusable output/scratch arrays

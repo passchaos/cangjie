@@ -104,6 +104,7 @@ pub fn buildWithJstfShrinkage(
     const space_advance = geometry.defaultSpaceAdvance(buffer.glyphs.items);
     const fallback_tab_interval =
         @as(f32, @floatFromInt(@max(1, options.tab_width))) * space_advance;
+    try prepareAdvances(buffer.glyphs.items, options);
 
     // Retained paragraphs carry width-independent grapheme and line-break
     // analysis. One-shot layout allocates only when emergency wrapping or a
@@ -141,14 +142,6 @@ pub fn buildWithJstfShrinkage(
     // safe grapheme boundary, never splitting a shaped source atom.
     glyph_loop: while (index < buffer.glyphs.items.len) : (index += 1) {
         var glyph = &buffer.glyphs.items[index];
-        if (glyph.isInlineObject()) {
-            const object = inline_object.find(
-                options.inline_objects,
-                glyph.cluster,
-            ) orelse return error.InvalidInlineObjects;
-            glyph.x_advance =
-                if (object.kind == .in_flow) object.width else 0;
-        }
         if (opportunities.isMandatory(glyph.codepoint)) {
             const break_end_index =
                 if (glyph.codepoint == '\r' and
@@ -207,6 +200,7 @@ pub fn buildWithJstfShrinkage(
                     max_width,
                     alignment,
                     true,
+                    options,
                 );
                 return;
             }
@@ -238,17 +232,24 @@ pub fn buildWithJstfShrinkage(
 
         if (glyph.isTab()) {
             // Tabs depend on the current line pen, not only font metrics.
+            const explicit_stop = tabs.nextExplicitStop(
+                line_width,
+                options.tab_stops,
+            );
             glyph.x_advance = tabs.advance(
                 line_width,
                 options.tab_stops,
                 fallback_tab_interval,
                 space_advance,
-            );
-        }
-        if (!glyph.isTab()) {
-            glyph.x_advance += geometry.spacingForGlyph(
-                glyph.codepoint,
-                options,
+                tabs.measureField(
+                    buffer.glyphs.items,
+                    index + 1,
+                    if (explicit_stop) |stop|
+                        stop.decimal_point
+                    else
+                        '.',
+                    0,
+                ),
             );
         }
         line_width += glyph.x_advance;
@@ -433,11 +434,21 @@ pub fn buildWithJstfShrinkage(
                         candidate_hanging_fraction,
                         options.punctuation.convention,
                     );
-                if (@max(0, last_break.width - candidate_hanging) >
+                const candidate_hyphen_advance =
+                    visibleHyphenAdvance(last_break);
+                const candidate_width = tabs.measureRangeWithTerminal(
+                    buffer.glyphs.items[line_start..candidate_index],
+                    options.tab_stops,
+                    fallback_tab_interval,
+                    space_advance,
+                    candidate_hyphen_advance,
+                );
+                if (@max(0, candidate_width - candidate_hanging) >
                     candidate_width_limit + candidate_compression)
                 {
                     break :candidate null;
                 }
+                last_break.width = candidate_width;
                 break :candidate candidate_index;
             };
             const overflow_break = shaped_boundary.chooseOverflowBreak(
@@ -451,14 +462,6 @@ pub fn buildWithJstfShrinkage(
             const break_end = overflow_break.index;
             const uses_last_break = fitting_last_break != null and
                 break_end == fitting_last_break.?;
-            const break_width = if (overflow_break.uses_current_discardable)
-                line_width - glyph.x_advance
-            else if (uses_last_break)
-                last_break.width
-            else
-                geometry.lineWidth(
-                    buffer.glyphs.items[line_start..break_end],
-                );
             var selected_visible_hyphen = false;
             if (uses_last_break) {
                 if (last_break.hyphen) |candidate| {
@@ -478,6 +481,25 @@ pub fn buildWithJstfShrinkage(
                     selected_visible_hyphen = true;
                 }
             }
+            const visible_hyphen_advance = if (uses_last_break)
+                visibleHyphenAdvance(last_break)
+            else
+                0;
+            const break_width = if (overflow_break.uses_current_discardable)
+                tabs.recomputeRange(
+                    buffer.glyphs.items[line_start..break_end],
+                    options.tab_stops,
+                    fallback_tab_interval,
+                    space_advance,
+                )
+            else
+                tabs.recomputeRangeWithTerminal(
+                    buffer.glyphs.items[line_start..break_end],
+                    options.tab_stops,
+                    fallback_tab_interval,
+                    space_advance,
+                    @max(0, visible_hyphen_advance),
+                );
             var next_line_start = break_end;
             geometry.trimLeadingSoftBreaks(
                 buffer.glyphs.items,
@@ -553,6 +575,7 @@ pub fn buildWithJstfShrinkage(
                     max_width,
                     alignment,
                     true,
+                    options,
                 );
                 // Truncation makes this the terminal visible line. A pending
                 // target would otherwise trigger Kashida/space expansion even
@@ -623,8 +646,9 @@ pub fn buildWithJstfShrinkage(
                 index = line_start - 1;
                 continue :glyph_loop;
             }
-            line_width = tabs.recomputeRange(
-                buffer.glyphs.items[line_start .. index + 1],
+            line_width = tabs.recomputePrefix(
+                buffer.glyphs.items[line_start..],
+                index + 1 - line_start,
                 options.tab_stops,
                 fallback_tab_interval,
                 space_advance,
@@ -707,6 +731,7 @@ pub fn buildWithJstfShrinkage(
         max_width,
         alignment,
         false,
+        options,
     );
     try automatic_hyphens.materialize(
         buffer,
@@ -723,6 +748,36 @@ fn lineAlignment(
         return if (direction == .rtl) .right else .left;
     }
     return paragraph_alignment;
+}
+
+fn visibleHyphenAdvance(candidate: opportunities.Candidate) f32 {
+    if (candidate.hyphen) |item| return item.resolved.x_advance;
+    if (candidate.automatic_hyphen) |item| {
+        return item.resolved.x_advance;
+    }
+    return 0;
+}
+
+fn prepareAdvances(glyphs: anytype, options: anytype) !void {
+    for (glyphs) |*glyph| {
+        if (glyph.isInlineObject()) {
+            const object = inline_object.find(
+                options.inline_objects,
+                glyph.cluster,
+            ) orelse return error.InvalidInlineObjects;
+            glyph.x_advance =
+                if (object.kind == .in_flow) object.width else 0;
+            continue;
+        }
+        if (glyph.isTab()) {
+            glyph.x_advance = 0;
+            continue;
+        }
+        glyph.x_advance += geometry.spacingForGlyph(
+            glyph.codepoint,
+            options,
+        );
+    }
 }
 
 const NoShrinkageRecipe = struct {

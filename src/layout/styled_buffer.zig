@@ -1,5 +1,6 @@
 const std = @import("std");
 const run_types = @import("types/runs.zig");
+const ellipsis_runs = @import("line_break/reflow/ellipsis_runs.zig");
 const reflow_regions = @import("line_break/reflow/regions.zig");
 const tabs = @import("paragraph/tabs.zig");
 const styled_paragraph = @import("styled_paragraph.zig");
@@ -155,6 +156,7 @@ pub fn appendEllipsis(
     max_width: f32,
     alignment: anytype,
     alignedLineX: anytype,
+    options: anytype,
 ) !void {
     if (list.items.len != buffer.glyphs.items.len) {
         return error.InvalidStyleSpans;
@@ -164,20 +166,28 @@ pub fn appendEllipsis(
     const line = &buffer.lines.items[buffer.lines.items.len - 1];
     const ellipsis_count: usize = 3;
     const run_index = line.run_start + line.run_len - 1;
-    var run = &buffer.runs.items[run_index];
-    const font = run_types.fontForBackend(run.*);
+    const run_template = buffer.runs.items[run_index];
+    const font = run_types.fontForBackend(run_template);
     const dot_metrics = try font.horizontalMetrics(try font.glyphIndex('.'));
     const dot_advance = @as(f32, @floatFromInt(dot_metrics.advance_width)) *
-        (run.font_size / @as(f32, @floatFromInt(font.units_per_em)));
+        (run_template.font_size /
+            @as(f32, @floatFromInt(font.units_per_em)));
     const ellipsis_width = dot_advance * @as(f32, @floatFromInt(ellipsis_count));
+    const space_advance = defaultSpaceAdvance(buffer.glyphs.items);
+    const fallback_tab_interval =
+        @as(f32, @floatFromInt(@max(1, options.tab_width))) *
+        space_advance;
     const region = reflow_regions.stored(line.*, max_width);
     const width_limit = region.width;
     // Optical punctuation hanging is invalid once ellipsis changes the
     // terminal glyph. Restore the full advance sum before fitting the dots.
-    line.width = 0;
-    for (buffer.glyphs.items[line.glyph_start .. line.glyph_start + line.glyph_len]) |glyph| {
-        line.width += glyph.x_advance;
-    }
+    line.width = tabs.recomputeRangeWithTerminal(
+        buffer.glyphs.items[line.glyph_start .. line.glyph_start + line.glyph_len],
+        options.tab_stops,
+        fallback_tab_interval,
+        space_advance,
+        ellipsis_width,
+    );
     // Capture paint and minimum-line-height state before the fit loop can
     // remove every visible glyph. Synthetic dots intentionally do not inherit
     // source letter/word spacing.
@@ -204,15 +214,27 @@ pub fn appendEllipsis(
         line.width -= buffer.glyphs.items[remove_index].x_advance;
         _ = buffer.glyphs.pop();
         line.glyph_len -= 1;
-        if (run.glyph_len > 0) run.glyph_len -= 1;
+        line.width = tabs.recomputeRangeWithTerminal(
+            buffer.glyphs.items[line.glyph_start .. line.glyph_start + line.glyph_len],
+            options.tab_stops,
+            fallback_tab_interval,
+            space_advance,
+            ellipsis_width,
+        );
     }
 
-    while (line.glyph_len > 0 and line.width + ellipsis_width > width_limit) {
+    while (line.glyph_len > 0 and line.width > width_limit) {
         const remove_index = line.glyph_start + line.glyph_len - 1;
         line.width -= buffer.glyphs.items[remove_index].x_advance;
         _ = buffer.glyphs.pop();
         line.glyph_len -= 1;
-        if (run.glyph_len > 0) run.glyph_len -= 1;
+        line.width = tabs.recomputeRangeWithTerminal(
+            buffer.glyphs.items[line.glyph_start .. line.glyph_start + line.glyph_len],
+            options.tab_stops,
+            fallback_tab_interval,
+            space_advance,
+            ellipsis_width,
+        );
     }
 
     const dot_glyph = try font.glyphIndex('.');
@@ -220,6 +242,11 @@ pub fn appendEllipsis(
         buffer.glyphs.items[line.glyph_start + line.glyph_len - 1].cluster
     else
         0;
+    const synthetic_run_index = try ellipsis_runs.prepare(
+        buffer,
+        buffer.glyphs.items.len,
+        run_template,
+    );
     for (0..ellipsis_count) |_| {
         try buffer.glyphs.append(buffer.allocator, .{
             .glyph_id = dot_glyph,
@@ -228,8 +255,11 @@ pub fn appendEllipsis(
             .x_advance = dot_advance,
         });
         line.glyph_len += 1;
-        run.glyph_len += 1;
-        line.width += dot_advance;
+    }
+    buffer.runs.items[synthetic_run_index].glyph_len += ellipsis_count;
+    line.width = 0;
+    for (buffer.glyphs.items[line.glyph_start .. line.glyph_start + line.glyph_len]) |glyph| {
+        line.width += glyph.x_advance;
     }
     try replaceTailWithSynthetic(
         list,
@@ -256,6 +286,21 @@ pub fn appendEllipsis(
         region.width,
         final_alignment,
     );
+}
+
+fn defaultSpaceAdvance(glyphs: anytype) f32 {
+    for (glyphs) |glyph| {
+        if (glyph.codepoint == ' ') return @max(glyph.x_advance, 1);
+    }
+    for (glyphs) |glyph| {
+        if (!glyph.isTab() and
+            glyph.codepoint != '\n' and
+            glyph.x_advance > 0)
+        {
+            return glyph.x_advance;
+        }
+    }
+    return 1;
 }
 
 pub fn reorderByPermutation(

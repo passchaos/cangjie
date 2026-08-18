@@ -580,7 +580,7 @@ sizes.
 This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
 axes, vertical paragraph validation rejects bottom-to-top/RTL text, bidi
-controls, tabs, justification,
+controls, justification,
 ellipsis/line limits, negative glyph spacing, exclusions/line regions, inline
 objects, hyphenation,
 optical punctuation, and the resumable breaker. Retained whole-paragraph
@@ -835,8 +835,13 @@ reflow can switch among all three policies without reshaping or losing source
 atoms. Vertical columns apply the same leading/trailing and soft-edge trimming,
 and `break_spaces` keeps each authored blank in the preceding visible column.
 Only U+0020 and U+0009 are collapsible—NBSP and other Unicode space characters
-retain their UAX #14 semantics. Vertical tabs remain explicitly unsupported
-until tab-ruler placement is converted to the flow-axis model.
+retain their UAX #14 semantics. Vertical tab rulers use the same logical inline
+distances and start/center/end/decimal field alignment as horizontal layout,
+but resolve marker advances along positive-down y. The repeating `tab_width`
+grid, explicit stops after first-line indentation, hard/soft column resets,
+retained reflow, styled metadata, and owned interaction geometry share that
+result. Collapsed tabs remain source-visible zero-advance blanks rather than
+active ruler commands.
 
 `ShapedParagraph.contentWidths` reports policy-aware intrinsic inline bounds
 from width-independent paragraph content. `ContentWidths.max` is the widest

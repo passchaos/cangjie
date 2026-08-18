@@ -12,6 +12,7 @@ const opportunities = @import("../line_break/reflow/opportunities.zig");
 const line_break_opportunity = @import("../line_break/opportunity.zig");
 const paragraph_options = @import("options.zig");
 const vertical_wrap = @import("vertical_wrap.zig");
+const vertical_tabs = @import("vertical_wrap/tabs.zig");
 const white_space = @import("white_space.zig");
 const GlyphPosition = @import("../glyph_position.zig").GlyphPosition;
 const unicode = @import("../../unicode.zig");
@@ -34,10 +35,12 @@ pub fn build(
             glyph.y_advance = 0;
             continue;
         }
-        glyph.y_advance += geometry.spacingForGlyph(
-            glyph.codepoint,
-            options,
-        );
+        if (!glyph.isTab()) {
+            glyph.y_advance += geometry.spacingForGlyph(
+                glyph.codepoint,
+                options,
+            );
+        }
     }
     white_space.prepareVertical(
         buffer.glyphs.items,
@@ -109,6 +112,15 @@ pub fn build(
                 range.glyph_end,
             );
         }
+        const fallback_advance =
+            white_space.defaultVerticalSpaceAdvance(buffer.glyphs.items);
+        _ = vertical_tabs.recomputeRange(
+            buffer.glyphs.items[range.glyph_start..range.glyph_end],
+            options.tab_stops,
+            @as(f32, @floatFromInt(@max(1, options.tab_width))) *
+                fallback_advance,
+            fallback_advance,
+        );
         try appendColumn(
             buffer,
             options,

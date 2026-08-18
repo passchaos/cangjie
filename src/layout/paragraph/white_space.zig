@@ -34,6 +34,14 @@ pub fn defaultVerticalSpaceAdvance(glyphs: []const GlyphPosition) f32 {
     for (glyphs) |glyph| {
         if (glyph.codepoint == ' ') return @max(glyph.y_advance, 1);
     }
+    for (glyphs) |glyph| {
+        if (!glyph.isTab() and
+            !isMandatory(glyph.codepoint) and
+            glyph.y_advance > 0)
+        {
+            return glyph.y_advance;
+        }
+    }
     return 1;
 }
 

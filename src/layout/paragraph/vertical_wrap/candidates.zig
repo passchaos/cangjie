@@ -55,7 +55,9 @@ pub fn appendBreakSpaces(
     if (options.white_space_collapse != .break_spaces) return;
     var index = segment_start;
     while (index < segment_end) : (index += 1) {
-        if (glyphs[index].codepoint != ' ') continue;
+        if (glyphs[index].codepoint != ' ' and !glyphs[index].isTab()) {
+            continue;
+        }
         const byte_offset = glyphs[index].sourceByteEnd();
         if (byte_offset <= segment_byte_start or
             byte_offset >= segment_byte_end or
@@ -172,7 +174,7 @@ fn forSourceBoundary(
     var visible_end = break_index;
     if (trim_trailing_spaces) {
         while (visible_end > segment_start and
-            glyphs[visible_end - 1].codepoint == ' ')
+            isDiscardable(glyphs[visible_end - 1]))
         {
             visible_end -= 1;
         }
@@ -207,4 +209,8 @@ fn insertSortedUnique(
         return;
     }
     try output.insert(allocator, index, candidate);
+}
+
+fn isDiscardable(glyph: GlyphPosition) bool {
+    return glyph.codepoint == ' ' or glyph.isTab();
 }

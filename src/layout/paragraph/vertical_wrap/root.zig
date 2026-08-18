@@ -194,6 +194,7 @@ fn appendSegment(
             prefix,
             glyph_start,
             segment_end,
+            segment_end,
             column_limit,
             options,
         );

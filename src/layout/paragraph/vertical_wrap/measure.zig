@@ -2,6 +2,8 @@
 
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const paragraph_options = @import("../options.zig");
+const tabs = @import("../tabs.zig");
+const vertical_tabs = @import("tabs.zig");
 const white_space = @import("../white_space.zig");
 
 pub fn fillPrefix(prefix: []f32, glyphs: []const GlyphPosition) void {
@@ -18,11 +20,93 @@ pub fn inlineSize(
     end: usize,
     options: paragraph_options.Options,
 ) f32 {
+    const actual_end = @min(end, glyphs.len);
+    var visible_start = @min(start, actual_end);
+    var visible_end = actual_end;
+    if (options.white_space_collapse == .collapse) {
+        while (visible_start < visible_end and
+            glyphs[visible_start].isCollapsedWhitespace())
+        {
+            visible_start += 1;
+        }
+        while (visible_end > visible_start and
+            glyphs[visible_end - 1].isCollapsedWhitespace())
+        {
+            visible_end -= 1;
+        }
+    }
+    const visible = glyphs[visible_start..visible_end];
+    if (vertical_tabs.contains(visible)) {
+        const fallback_advance =
+            white_space.defaultVerticalSpaceAdvance(glyphs);
+        const fallback_interval =
+            @as(f32, @floatFromInt(@max(1, options.tab_width))) *
+            fallback_advance;
+        return vertical_tabs.measureRange(
+            visible,
+            options.tab_stops,
+            fallback_interval,
+            fallback_advance,
+        );
+    }
     return white_space.measureVerticalRange(
         glyphs,
         prefix,
-        start,
-        end,
+        visible_start,
+        visible_end,
+        options.white_space_collapse,
+    );
+}
+
+/// Measure a growing column prefix with complete tab-field lookahead.
+///
+/// Exact candidate and committed-column measurement intentionally truncates a
+/// tab field at the selected boundary. Prospective overflow scanning instead
+/// matches horizontal greedy behavior and inspects the complete following
+/// field before deciding whether the tab can remain in this column.
+pub fn prospectiveInlineSize(
+    glyphs: []const GlyphPosition,
+    prefix: []const f32,
+    start: usize,
+    end: usize,
+    segment_end: usize,
+    options: paragraph_options.Options,
+) f32 {
+    const actual_end = @min(end, glyphs.len);
+    const actual_segment_end = @min(segment_end, glyphs.len);
+    var visible_start = @min(start, actual_end);
+    var visible_end = actual_end;
+    if (options.white_space_collapse == .collapse) {
+        while (visible_start < visible_end and
+            glyphs[visible_start].isCollapsedWhitespace())
+        {
+            visible_start += 1;
+        }
+        while (visible_end > visible_start and
+            glyphs[visible_end - 1].isCollapsedWhitespace())
+        {
+            visible_end -= 1;
+        }
+    }
+    if (vertical_tabs.contains(glyphs[visible_start..visible_end])) {
+        const fallback_advance =
+            white_space.defaultVerticalSpaceAdvance(glyphs);
+        const fallback_interval =
+            @as(f32, @floatFromInt(@max(1, options.tab_width))) *
+            fallback_advance;
+        return vertical_tabs.measurePrefix(
+            glyphs[visible_start..actual_segment_end],
+            visible_end - visible_start,
+            options.tab_stops,
+            fallback_interval,
+            fallback_advance,
+        );
+    }
+    return white_space.measureVerticalRange(
+        glyphs,
+        prefix,
+        visible_start,
+        visible_end,
         options.white_space_collapse,
     );
 }
@@ -32,12 +116,20 @@ pub fn firstOverflow(
     prefix: []const f32,
     glyph_start: usize,
     glyph_end: usize,
+    segment_end: usize,
     limit: f32,
     options: paragraph_options.Options,
 ) usize {
     var index = glyph_start + 1;
     while (index <= glyph_end and
-        inlineSize(glyphs, prefix, glyph_start, index, options) <= limit)
+        prospectiveInlineSize(
+            glyphs,
+            prefix,
+            glyph_start,
+            index,
+            segment_end,
+            options,
+        ) <= limit)
     {
         index += 1;
     }

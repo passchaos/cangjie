@@ -1,8 +1,8 @@
 //! Explicit paragraph tab rulers and repeating fallback stops.
 //!
-//! Stop positions are advances from the selected line fragment's logical
-//! inline start. The scalar distance is therefore direction-neutral: per-line
-//! bidi later maps the same logical geometry to the physical left or right.
+//! Stop positions are advances from the selected line/column fragment's
+//! logical inline start. The scalar ruler is direction- and axis-neutral;
+//! horizontal and vertical flow map resolved marker advances to x or y.
 
 const std = @import("std");
 

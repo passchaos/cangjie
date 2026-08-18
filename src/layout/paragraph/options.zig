@@ -143,9 +143,10 @@ pub const Options = struct {
     ellipsis: bool = false,
     /// Width in ordinary space advances of the repeating fallback grid.
     ///
-    /// This remains active after the final explicit `tab_stops` entry.
+    /// This remains active after the final explicit `tab_stops` entry and maps
+    /// to the current writing mode's inline axis.
     tab_width: usize = 4,
-    /// Start-aligned absolute stops from each line fragment's logical start.
+    /// Absolute stops from each line/column fragment's logical inline start.
     tab_stops: []const tabs.Stop = &.{},
     letter_spacing: f32 = 0,
     word_spacing: f32 = 0,
@@ -309,7 +310,6 @@ fn validateVerticalForText(text: []const u8, options: Options) !void {
         options.line_regions.len != 0 or
         options.inline_objects.len != 0 or
         options.out_of_flow_placements.len != 0 or
-        options.tab_stops.len != 0 or
         options.word_break_dictionary != null or
         options.hyphenation.dictionary != null or
         options.hyphenation.character != null or
@@ -322,7 +322,7 @@ fn validateVerticalForText(text: []const u8, options: Options) !void {
 
     var iterator = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
     while (iterator.nextCodepoint()) |codepoint| {
-        if (codepoint == '\t' or switch (unicode.exactBidiClassForCodepoint(codepoint)) {
+        if (switch (unicode.exactBidiClassForCodepoint(codepoint)) {
             .r,
             .al,
             .rle,
@@ -492,12 +492,10 @@ test "vertical paragraph validation admits only implemented columns" {
         .wrap_mode = .no_wrap,
         .writing_mode = .vertical_rl,
     });
-    try std.testing.expectError(
-        error.UnsupportedVerticalParagraphText,
-        validateForText("A\tA", .{
-            .max_width = 100,
-            .wrap_mode = .no_wrap,
-            .writing_mode = .vertical_rl,
-        }),
-    );
+    try validateForText("A\tA", .{
+        .max_width = 100,
+        .wrap_mode = .no_wrap,
+        .tab_stops = &.{.{ .position = 40 }},
+        .writing_mode = .vertical_rl,
+    });
 }

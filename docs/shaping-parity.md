@@ -2219,7 +2219,8 @@ shaping-performance superiority.
   renderer draw-list y pens, and source-preserving `preserve` / `collapse` /
   `break-spaces` whitespace policy are covered together. Flow-axis first-line
   indentation and hard-segment paragraph spacing map to vertical y and x
-  geometry respectively, including RL/LR mirroring. Tabs, bidi handling,
+  geometry respectively, including RL/LR mirroring. Explicit and repeating tab
+  rulers support start/center/end/decimal y-axis fields. Bidi handling,
   exclusions, objects, justification, truncation, and incremental breaking are
   rejected explicitly until they are migrated to the shared inline/block-axis
   model; this is not yet full vertical paragraph parity.

@@ -29,10 +29,12 @@ pub fn measure(
             glyph.y_advance = 0;
             continue;
         }
-        glyph.y_advance += geometry.spacingForGlyph(
-            glyph.codepoint,
-            options,
-        );
+        if (!glyph.isTab()) {
+            glyph.y_advance += geometry.spacingForGlyph(
+                glyph.codepoint,
+                options,
+            );
+        }
     }
     white_space.prepareVertical(
         working,

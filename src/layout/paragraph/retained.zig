@@ -2,27 +2,28 @@
 
 const std = @import("std");
 
-const bidi_reorder = @import("../bidi/reorder/root.zig");
 const font_fallback = @import("../../shaping/fallback/font/root.zig");
 const glyph_position = @import("../glyph_position.zig");
 const inline_object = @import("../inline_object/root.zig");
-const font_expansion = @import("../justification/font_expansion.zig");
-const jstf_justification = @import("../justification/jstf.zig");
-const jstf_extender = @import("../justification/jstf/extender.zig");
-const kashida_justification = @import("../justification/kashida.zig");
 const paragraph_options = @import("options.zig");
 const content_widths = @import("content_widths.zig");
 const line_break_opportunity = @import("../line_break/opportunity.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 const run_types = @import("../types/runs.zig");
 const paragraph_reflow = @import("../line_break/reflow/root.zig");
+const breaker = @import("retained/breaker.zig");
+const presentation = @import("retained/presentation.zig");
 const reshape = @import("reshape.zig");
-const punctuation_compression = @import("../punctuation/compression.zig");
-const punctuation_hanging = @import("../punctuation/hanging.zig");
 const shaping_output = @import("../../shaping/context/output.zig");
 const shaping_plan = @import("../../shaping/plan/root.zig");
 const segmentation = @import("../../text/segmentation/root.zig");
 const unicode = @import("../../unicode.zig");
+
+pub const Breaker = breaker.Breaker;
+pub const BreakerInput = breaker.Input;
+pub const BreakerStep = breaker.Step;
+pub const BreakerCheckpoint = breaker.Checkpoint;
+pub const BreakerHeightExceeded = breaker.HeightExceeded;
 
 /// Width-independent, owning paragraph content.
 ///
@@ -118,23 +119,7 @@ pub const ShapedParagraph = struct {
         reflow: *ReflowBuffer,
         options: paragraph_options.Options,
     ) !paragraph_types.ParagraphLayout {
-        try paragraph_options.validate(options);
-        try inline_object.validate(self.text, options.inline_objects);
-        if (options.word_break_dictionary != self.word_break_dictionary or
-            options.hyphenation.dictionary != self.hyphenation_dictionary or
-            !inline_object.indexesMatch(
-                self.inline_object_indexes,
-                options.inline_objects,
-            ) or
-            !paragraph_options.matchesShapeKey(
-                self.text,
-                options,
-                self.shape_key,
-            ))
-        {
-            return error.ParagraphShapingOptionsChanged;
-        }
-
+        try self.validateLayoutOptions(options);
         try reflow.restore(self);
         errdefer reflow.buffer.clear();
         const recipe = reshape.Uniform{
@@ -154,51 +139,76 @@ pub const ShapedParagraph = struct {
             self.hyphenation_dictionary,
             recipe,
         );
-        try jstf_justification.apply(
-            &reflow.buffer,
-            options,
-            recipe,
-        );
-        try jstf_extender.apply(
+        try presentation.apply(
             &reflow.buffer,
             self.text,
             options,
             recipe,
-        );
-        try font_expansion.apply(
-            &reflow.buffer,
-            options,
-            recipe,
-        );
-        try kashida_justification.apply(
-            &reflow.buffer,
-            self.text,
-            options,
-            recipe,
-        );
-        paragraph_reflow.applyPendingJustification(&reflow.buffer);
-        try punctuation_compression.apply(&reflow.buffer, options);
-        if (self.needs_bidi_reorder) {
-            try bidi_reorder.applyLines(
-                &reflow.buffer,
-                self.text,
-                options.direction == .rtl,
-            );
-        }
-        punctuation_hanging.apply(&reflow.buffer, options);
-        bidi_reorder.recomputeRunOffsets(&reflow.buffer);
-        try inline_object.position(
-            &reflow.buffer,
-            options.inline_objects,
-            options.out_of_flow_placements,
+            self.needs_bidi_reorder,
         );
         return reflow.buffer.paragraphLayout();
+    }
+
+    /// Start caller-driven, resumable greedy line breaking.
+    ///
+    /// The returned breaker borrows this paragraph and `reflow`; both must
+    /// outlive it and neither may be reused until the breaker is deinitialized.
+    pub fn breakLines(
+        self: *const ShapedParagraph,
+        reflow: *ReflowBuffer,
+        options: paragraph_options.Options,
+    ) !breaker.Breaker {
+        try self.validateLayoutOptions(options);
+        if (options.line_break_strategy != .greedy) {
+            return error.ResumableBreakerRequiresGreedyStrategy;
+        }
+        try reflow.restore(self);
+        errdefer reflow.buffer.clear();
+        return breaker.Breaker.create(.{
+            .allocator = reflow.buffer.allocator,
+            .buffer = &reflow.buffer,
+            .buffer_generation = &reflow.generation,
+            .session_generation = reflow.generation,
+            .text = self.text,
+            .options = options,
+            .default_metrics = self.default_metrics,
+            .grapheme_clusters = self.grapheme_clusters,
+            .line_breaks = self.line_breaks,
+            .word_break_dictionary = self.word_break_dictionary,
+            .hyphenation_dictionary = self.hyphenation_dictionary,
+            .needs_bidi_reorder = self.needs_bidi_reorder,
+            .cascade_fonts = self.cascade_fonts,
+            .font_size = self.font_size,
+        });
+    }
+
+    fn validateLayoutOptions(
+        self: *const ShapedParagraph,
+        options: paragraph_options.Options,
+    ) !void {
+        try paragraph_options.validate(options);
+        try inline_object.validate(self.text, options.inline_objects);
+        if (options.word_break_dictionary != self.word_break_dictionary or
+            options.hyphenation.dictionary != self.hyphenation_dictionary or
+            !inline_object.indexesMatch(
+                self.inline_object_indexes,
+                options.inline_objects,
+            ) or
+            !paragraph_options.matchesShapeKey(
+                self.text,
+                options,
+                self.shape_key,
+            ))
+        {
+            return error.ParagraphShapingOptionsChanged;
+        }
     }
 };
 
 /// Reusable output storage for reflowing a retained paragraph.
 pub const ReflowBuffer = struct {
     buffer: shaping_output.Buffer,
+    generation: u64 = 0,
 
     pub fn init(allocator: std.mem.Allocator) ReflowBuffer {
         return .{ .buffer = shaping_output.Buffer.init(allocator) };
@@ -213,6 +223,7 @@ pub const ReflowBuffer = struct {
         self: *ReflowBuffer,
         paragraph: *const ShapedParagraph,
     ) !void {
+        self.bumpGeneration();
         self.buffer.clear();
         try self.buffer.variation_coords.appendSlice(
             self.buffer.allocator,
@@ -227,5 +238,10 @@ pub const ReflowBuffer = struct {
             self.buffer.allocator,
             paragraph.runs,
         );
+    }
+
+    fn bumpGeneration(self: *ReflowBuffer) void {
+        self.generation +%= 1;
+        if (self.generation == 0) self.generation = 1;
     }
 };

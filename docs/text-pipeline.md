@@ -107,7 +107,11 @@ longer allocates a full line-break array.
 Paragraph reflow is organized under `src/layout/line_break/reflow/` rather
 than embedded in the shaping implementation:
 
-- `root.zig` owns the greedy line-selection state machine.
+- `root.zig` is the narrow integration surface.
+- `greedy.zig` owns single-line advancement, while `greedy/state.zig` owns
+  persistent cursor and checkpoint records.
+- `orchestration.zig` owns whole-layout greedy/balanced dispatch and probe
+  storage without expanding the resumable state-machine module.
 - `opportunities.zig` maps streaming or retained Unicode opportunities onto
   shaped output while enforcing `unsafe-to-break`.
 - `geometry.zig` owns line struts, alignment, indentation, spacing, and run
@@ -654,6 +658,31 @@ without another GSUB/GPOS pass and without accumulating mutations. Reflow
 rejects direction, script, language, feature, or variation changes because
 those options require reshaping.
 
+`ShapedParagraph.breakLines` exposes the retained greedy breaker as a concrete
+resumable owner. `Breaker.advance` commits at most one logical visual line and
+may receive an `x/y/width` region for exactly that line. A caller can therefore
+paginate or fill columns without replaying lines already accepted. Supplying a
+per-line `max_height` runs that attempted line transactionally: an oversized
+line returns `.height_exceeded` with its required height and source range, and
+the cursor and output remain at the preceding line.
+
+`Breaker.save` creates an explicitly owned checkpoint containing the logical
+cursor plus the mutable reflow transaction. `restore` can then retry the same
+source line at another position or measure; forward-only callers do not pay
+that copy cost. The breaker rejects stale checkpoints and detects reuse of its
+borrowed `ReflowBuffer`. Lines remain in logical source order while breaking.
+After the cursor reaches the end, JSTF/Kashida/font expansion, ordinary
+justification, punctuation processing, per-line bidi, run offsets, and inline
+objects execute once through the same final-presentation sequence used by
+ordinary retained `layout`.
+
+The resumable API intentionally accepts `.greedy` only. Balanced breaking
+optimizes a complete hard-break segment and therefore still uses ordinary
+whole-paragraph retained layout. Styled one-shot layout likewise remains on
+its existing complete pipeline until it has a width-independent attributed
+owner whose glyph-parallel metadata can participate in checkpoints; neither
+case silently falls back to replay while claiming to be incremental.
+
 `ParagraphOptions.line_break_strategy` independently selects greedy or
 balanced soft-boundary policy. `.balanced` first obtains the current greedy
 line-count contract, then performs bounded dynamic programming over every
@@ -982,11 +1011,12 @@ The protocol works with one-shot and styled layout, but retained
 `ShapedParagraph` plus `ReflowBuffer` is the intended repeated-placement path:
 Unicode analysis and whole-paragraph shaping stay immutable while each
 response deterministically rebuilds only paragraph presentation. The current
-implementation deliberately replays reflow after a response so exclusions,
+generic resolver deliberately replays reflow after a response so exclusions,
 dynamic line heights, ellipsis, justification, punctuation, bidi, caret
 geometry, and rendering all observe one ordinary final layout. The internal
-breaker can later retain an incremental checkpoint without changing this
-public concrete protocol.
+retained greedy breaker now avoids that replay when the caller can supply
+regions directly through `ShapedParagraph.breakLines`; the resolver remains
+the one-shot/styled-compatible protocol and its public contract is unchanged.
 This follows Parley's per-line ordering model while keeping standalone shaping
 APIs in their existing HarfBuzz-compatible visual buffer order.
 

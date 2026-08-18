@@ -109,6 +109,18 @@ test "public facade uses domain names without legacy aliases" {
         @hasField(cangjie.paragraph.Options, "line_regions"),
     );
     try std.testing.expect(
+        @typeInfo(cangjie.paragraph.Breaker) == .@"struct",
+    );
+    try std.testing.expect(
+        @typeInfo(cangjie.paragraph.BreakerCheckpoint) == .@"struct",
+    );
+    try std.testing.expect(
+        @typeInfo(cangjie.paragraph.BreakerStep) == .@"union",
+    );
+    try std.testing.expect(
+        @hasDecl(cangjie.paragraph.Shaped, "breakLines"),
+    );
+    try std.testing.expect(
         @hasField(cangjie.text.style.Paragraph, "line_break_strategy"),
     );
     try std.testing.expectEqual(

@@ -58,6 +58,11 @@ pub const object_replacement_utf8 = inline_object.object_replacement_utf8;
 
 pub const Shaped = retained.ShapedParagraph;
 pub const ReflowBuffer = retained.ReflowBuffer;
+pub const Breaker = retained.Breaker;
+pub const BreakerInput = retained.BreakerInput;
+pub const BreakerStep = retained.BreakerStep;
+pub const BreakerCheckpoint = retained.BreakerCheckpoint;
+pub const BreakerHeightExceeded = retained.BreakerHeightExceeded;
 pub const Layout = paragraph_types.ParagraphLayout;
 pub const Line = paragraph_types.ParagraphLine;
 pub const Position = paragraph_types.TextPosition;

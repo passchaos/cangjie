@@ -98,13 +98,11 @@ pub const Buffer = struct {
         var max_width: f32 = 0;
         var height: f32 = 0;
         for (self.lines.items) |line| {
-            // `line.x` is the first glyph origin. `width` starts after any
-            // physical-start hanging, so add that optical offset back when
-            // reporting the occupied paragraph measure.
-            max_width = @max(
-                max_width,
-                line.x + line.hang_start + line.width,
-            );
+            const occupied_right = if (writing_mode.isVertical())
+                line.x + line.width
+            else
+                line.x + line.hang_start + line.width;
+            max_width = @max(max_width, occupied_right);
             height = @max(height, line.y + line.height);
         }
         return .{

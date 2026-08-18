@@ -282,7 +282,9 @@ fn lineIndexAtPoint(geometry: View, x: f32, y: f32) usize {
         else
             0;
         const distance = dx * dx + dy * dy;
-        if (line.span_len == 0 and dy == 0) {
+        const inside_empty_line_block_band =
+            if (geometry.writing_mode.isVertical()) dx == 0 else dy == 0;
+        if (line.span_len == 0 and inside_empty_line_block_band) {
             return line_index;
         }
         if (distance < best_distance or

@@ -153,8 +153,10 @@ pub const Direction = enum {
     pub fn writingMode(self: Direction) cangjie.shaping.WritingMode {
         return switch (self) {
             .ltr, .rtl => .horizontal_tb,
-            .ttb => .vertical_rl,
-            .btt => .vertical_lr,
+            // HarfBuzz TTB/BTT differ in inline direction, not in CSS column
+            // progression. Keep the benchmark on one vertical writing mode
+            // and let `textDirection` request the reverse BTT buffer.
+            .ttb, .btt => .vertical_rl,
         };
     }
 

@@ -548,10 +548,13 @@ public offset contract, and parity tools no longer reconstruct ordinary
 vertical origins out of band.
 
 Paragraph layout now admits an explicit first vertical writing contract through
-`ParagraphOptions.writing_mode` and `text_orientation`. A
-`.vertical_rl` + `.no_wrap` request shapes one top-to-bottom column, treats
-`max_width` as the inline-size/column-height measure, and reports physical
-column bounds (`width` is block size, `height` is inline extent). Paragraph
+`ParagraphOptions.writing_mode` and `text_orientation`. A `.no_wrap` request
+shapes each hard-break segment as one top-to-bottom column, treats `max_width`
+as the inline-size/column-height measure, and reports physical column bounds
+(`width` is block size, `height` is inline extent). `vertical_rl` places
+source-order columns from right to left; `vertical_lr` places them left to
+right. This block progression is independent from HarfBuzz-style BTT, which
+remains an inline-direction request rather than a CSS writing mode. Paragraph
 hit testing, caret/selection rectangles, owned `TextGeometry`, debug overlays,
 and renderer draw lists all consume the same y-axis pen. Public draw-list glyphs
 therefore retain `y_advance` and orientation rather than flattening paragraph
@@ -559,8 +562,8 @@ output back to horizontal coordinates.
 
 This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
-axes, vertical paragraph validation rejects soft wrapping, `vertical_lr`,
-bottom-to-top/RTL text, bidi controls, hard breaks, tabs, justification,
+axes, vertical paragraph validation rejects soft wrapping,
+bottom-to-top/RTL text, bidi controls, tabs, justification,
 ellipsis/line limits, whitespace collapsing, negative spacing, indentation,
 paragraph spacing, exclusions/line regions, inline objects, hyphenation,
 optical punctuation, and the resumable breaker. Retained whole-paragraph
@@ -729,10 +732,10 @@ whole-paragraph retained layout. Styled one-shot layout likewise remains on
 its existing complete pipeline until it has a width-independent attributed
 owner whose glyph-parallel metadata can participate in checkpoints; neither
 case silently falls back to replay while claiming to be incremental.
-The current single-column vertical paragraph path also rejects
-`breakLines`: its region and `max_height` protocol still names horizontal
-line-box geometry, while whole-layout retained vertical reflow is already
-available through `ShapedParagraph.layout`.
+The current hard-break vertical column path also rejects `breakLines`: its
+region and `max_height` protocol still names horizontal line-box geometry,
+while whole-layout retained vertical reflow is already available through
+`ShapedParagraph.layout`.
 
 `ParagraphOptions.line_break_strategy` independently selects greedy or
 balanced soft-boundary policy. `.balanced` first obtains the current greedy

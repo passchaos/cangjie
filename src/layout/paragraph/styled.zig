@@ -18,6 +18,7 @@ const content_widths = @import("content_widths.zig");
 const line_break_analysis = @import("../line_break/analysis.zig");
 const source_items = @import("source_items.zig");
 const tabs = @import("tabs.zig");
+const vertical_columns = @import("vertical_columns.zig");
 const vertical_align = @import("vertical_align.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 const run_types = @import("../types/runs.zig");
@@ -182,7 +183,10 @@ const Driver = struct {
                     .direction = self.options.direction,
                     .reorder_bidi = false,
                     .native_direction_shaping = true,
-                    .writing_mode = self.options.writing_mode,
+                    .writing_mode = if (self.options.writing_mode.isVertical())
+                        .vertical_rl
+                    else
+                        .horizontal_tb,
                     .text_orientation = self.options.text_orientation,
                     .features = span.features,
                     .normalized_variation_coords = span.normalized_variation_coords,
@@ -253,29 +257,21 @@ const Driver = struct {
         );
         defer self.buffer.allocator.free(intrinsic_breaks);
         self.styled.content_widths =
-            if (resolved_options.writing_mode.isVertical()) widths: {
-                var inline_size: f32 = 0;
-                for (self.buffer.glyphs.items) |glyph| {
-                    inline_size += glyph.y_advance +
-                        @import("../line_break/reflow/geometry.zig")
-                            .spacingForGlyph(
-                            glyph.codepoint,
-                            resolved_options,
-                        );
-                }
-                break :widths .{
-                    .min = inline_size,
-                    .max = inline_size,
-                };
-            } else try content_widths.calculate(
-                self.buffer.allocator,
-                self.text,
-                self.buffer.glyphs.items,
-                self.buffer.runs.items,
-                intrinsic_graphemes,
-                intrinsic_breaks,
-                resolved_options,
-            );
+            if (resolved_options.writing_mode.isVertical())
+                vertical_columns.contentWidths(
+                    self.buffer.glyphs.items,
+                    resolved_options,
+                )
+            else
+                try content_widths.calculate(
+                    self.buffer.allocator,
+                    self.text,
+                    self.buffer.glyphs.items,
+                    self.buffer.runs.items,
+                    intrinsic_graphemes,
+                    intrinsic_breaks,
+                    resolved_options,
+                );
 
         var line_options = resolved_options;
         // Build the truncated prefix first. Synthetic dots are appended after

@@ -15,7 +15,7 @@ const line_break_opportunity = @import("../opportunity.zig");
 const line_break_policy = @import("../../paragraph/line_break_policy.zig");
 const paragraph_options = @import("../../paragraph/options.zig");
 const segmentation = @import("../../../text/segmentation/root.zig");
-const vertical_no_wrap = @import("../../paragraph/vertical_no_wrap.zig");
+const vertical_columns = @import("../../paragraph/vertical_columns.zig");
 const white_space = @import("../../paragraph/white_space.zig");
 const unicode = @import("../../../unicode.zig");
 
@@ -54,7 +54,7 @@ pub fn buildWithJstfShrinkage(
     recipe: anytype,
 ) !void {
     if (options.writing_mode.isVertical()) {
-        return vertical_no_wrap.build(
+        return vertical_columns.build(
             buffer,
             text,
             options,

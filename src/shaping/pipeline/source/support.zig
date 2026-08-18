@@ -64,7 +64,9 @@ pub fn presentationCodepoint(
     options: anytype,
 ) !u21 {
     if (options.writing_mode.isVertical()) {
-        const vertical_source = if (options.writing_mode == .vertical_lr)
+        // CSS writing mode selects column progression. HarfBuzz-style BTT is
+        // an independent inline-direction request carried by `direction`.
+        const vertical_source = if (options.direction == .rtl)
             unicode.mirroredCodepoint(codepoint)
         else
             codepoint;

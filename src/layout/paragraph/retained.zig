@@ -6,6 +6,7 @@ const font_fallback = @import("../../shaping/fallback/font/root.zig");
 const glyph_position = @import("../glyph_position.zig");
 const inline_object = @import("../inline_object/root.zig");
 const paragraph_options = @import("options.zig");
+const vertical_columns = @import("vertical_columns.zig");
 const content_widths = @import("content_widths.zig");
 const line_break_opportunity = @import("../line_break/opportunity.zig");
 const paragraph_types = @import("../types/paragraph.zig");
@@ -97,15 +98,7 @@ pub const ShapedParagraph = struct {
             return error.ParagraphShapingOptionsChanged;
         }
         if (options.writing_mode.isVertical()) {
-            // The current single-column contract has no soft wrapping, so
-            // min/max content are the same shaped inline-axis extent.
-            var inline_size: f32 = 0;
-            for (self.glyphs) |glyph| {
-                inline_size += glyph.y_advance +
-                    @import("../line_break/reflow/geometry.zig")
-                        .spacingForGlyph(glyph.codepoint, options);
-            }
-            return .{ .min = inline_size, .max = inline_size };
+            return vertical_columns.contentWidths(self.glyphs, options);
         }
         return content_widths.calculate(
             self.allocator,
@@ -173,8 +166,8 @@ pub const ShapedParagraph = struct {
         if (options.writing_mode.isVertical()) {
             // The resumable protocol is explicitly line/region/height based
             // and its checkpoints still describe horizontal greedy reflow.
-            // Direct and retained whole-layout calls cover the supported
-            // single vertical column; do not expose a fake one-line breaker.
+            // Direct and retained whole-layout calls cover hard-break vertical
+            // columns; do not expose a fake horizontal-region breaker.
             return error.UnsupportedVerticalParagraphBreaker;
         }
         if (options.line_break_strategy != .greedy) {

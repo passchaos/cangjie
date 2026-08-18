@@ -2208,10 +2208,12 @@ shaping-performance superiority.
   grayscale, color, and TrueType-hinted run renderers rotate those glyphs
   clockwise around the shaping origin without changing advances.
   Paragraph layout now exposes that same output through a bounded
-  `.vertical_rl`/`.no_wrap` single-column contract. Physical column bounds,
-  y-axis hit testing, horizontal caret/selection bars, owned TextGeometry,
-  debug overlays, retained reflow, and renderer draw-list y pens are covered
-  together. Horizontal-only wrapping, tabs, bidi/hard-break handling,
+  `.no_wrap` hard-break column contract. `vertical_rl` and `vertical_lr`
+  select right-to-left or left-to-right block progression independently from
+  TTB/BTT inline direction. Physical column bounds, y-axis hit testing,
+  horizontal caret/selection bars, owned TextGeometry, debug overlays,
+  retained reflow, and renderer draw-list y pens are covered together.
+  Horizontal-only wrapping, tabs, bidi handling,
   exclusions, objects, justification, truncation, and incremental breaking are
   rejected explicitly until they are migrated to the shared inline/block-axis
   model; this is not yet full vertical paragraph parity.

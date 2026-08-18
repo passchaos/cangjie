@@ -129,11 +129,12 @@ pub const Options = struct {
     direction: pipeline_types.TextDirection = .ltr,
     /// Physical writing mode shared by shaping and final paragraph geometry.
     ///
-    /// The initial vertical paragraph contract is deliberately one
-    /// top-to-bottom column. `max_width` remains the inline-size measure (and
-    /// is therefore a column-height measure in vertical modes). Unsupported
-    /// combinations are rejected rather than silently applying horizontal
-    /// wrapping or interaction geometry.
+    /// The initial vertical paragraph contract is deliberately hard-break-only:
+    /// every segment is one top-to-bottom column, while `vertical_rl` and
+    /// `vertical_lr` select physical column progression. `max_width` remains
+    /// the inline-size measure (column height) and `.no_wrap` may overflow it.
+    /// Unsupported combinations are rejected rather than silently applying
+    /// horizontal wrapping or interaction geometry.
     writing_mode: pipeline_types.WritingMode = .horizontal_tb,
     text_orientation: pipeline_types.TextOrientation = .mixed,
     max_lines: ?usize = null,
@@ -265,7 +266,13 @@ pub fn shapeOptions(options: Options) shaping_plan.ShapeOptions {
         // runs still shape in their OpenType-native direction.
         .reorder_bidi = false,
         .native_direction_shaping = true,
-        .writing_mode = options.writing_mode,
+        // RL/LR selects paragraph block progression, not OpenType shaping.
+        // Normalizing both vertical modes lets one retained shaped snapshot
+        // reflow into either physical column order.
+        .writing_mode = if (options.writing_mode.isVertical())
+            .vertical_rl
+        else
+            .horizontal_tb,
         .text_orientation = options.text_orientation,
         .script_tag = options.script_tag,
         .language_tag = options.language_tag,
@@ -281,8 +288,7 @@ pub fn shapeOptions(options: Options) shaping_plan.ShapeOptions {
 /// axis-conversion task instead of allowing a newly added paragraph option to
 /// become an accidental vertical no-op.
 fn validateVerticalForText(text: []const u8, options: Options) !void {
-    if (options.writing_mode != .vertical_rl or
-        options.direction != .ltr or
+    if (options.direction != .ltr or
         line_break_policy.anyWrappingEnabled(
             text.len,
             defaultLineBreakPolicy(options),
@@ -317,11 +323,7 @@ fn validateVerticalForText(text: []const u8, options: Options) !void {
 
     var iterator = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
     while (iterator.nextCodepoint()) |codepoint| {
-        if (codepoint == '\t' or
-            switch (unicode.lineBreakClassForCodepoint(codepoint)) {
-                .mandatory, .carriage_return, .line_feed, .next_line => true,
-                else => false,
-            } or switch (unicode.exactBidiClassForCodepoint(codepoint)) {
+        if (codepoint == '\t' or switch (unicode.exactBidiClassForCodepoint(codepoint)) {
             .r,
             .al,
             .rle,
@@ -453,7 +455,7 @@ test "JSTF extender limit is independent from generic Kashida" {
     );
 }
 
-test "vertical paragraph validation admits only the implemented column" {
+test "vertical paragraph validation admits only implemented columns" {
     try validateForText("AA", .{
         .max_width = 100,
         .wrap_mode = .no_wrap,
@@ -467,22 +469,16 @@ test "vertical paragraph validation admits only the implemented column" {
             .writing_mode = .vertical_rl,
         }),
     );
-    try std.testing.expectError(
-        error.UnsupportedVerticalParagraphOptions,
-        validateForText("AA", .{
-            .max_width = 100,
-            .wrap_mode = .no_wrap,
-            .writing_mode = .vertical_lr,
-        }),
-    );
-    try std.testing.expectError(
-        error.UnsupportedVerticalParagraphText,
-        validateForText("A\nA", .{
-            .max_width = 100,
-            .wrap_mode = .no_wrap,
-            .writing_mode = .vertical_rl,
-        }),
-    );
+    try validateForText("AA", .{
+        .max_width = 100,
+        .wrap_mode = .no_wrap,
+        .writing_mode = .vertical_lr,
+    });
+    try validateForText("A\nA", .{
+        .max_width = 100,
+        .wrap_mode = .no_wrap,
+        .writing_mode = .vertical_rl,
+    });
     try std.testing.expectError(
         error.UnsupportedVerticalParagraphText,
         validateForText("A\tA", .{

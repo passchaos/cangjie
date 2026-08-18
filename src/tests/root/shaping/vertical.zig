@@ -217,7 +217,7 @@ test "vertical presentation fallback survives bottom-to-top shaping" {
         &buffer,
         "\u{3008}",
         20,
-        .{ .direction = .rtl, .writing_mode = .vertical_lr, .text_orientation = .upright },
+        .{ .direction = .rtl, .writing_mode = .vertical_rl, .text_orientation = .upright },
     );
     try std.testing.expectEqual(@as(usize, 1), btt.glyphs.len);
     try std.testing.expectEqual(@as(GlyphId, 4), btt.glyphs[0].glyph_id);
@@ -269,4 +269,49 @@ test "vertical shaped cache and fallback runs preserve independent y pens" {
     try std.testing.expectEqual(WritingMode.horizontal_tb, cache.entries.items[0].key.plan.writing_mode);
     try std.testing.expectEqual(WritingMode.vertical_lr, cache.entries.items[1].key.plan.writing_mode);
     try std.testing.expectApproxEqAbs(@as(f32, 0), vertical.runs[0].y_offset, 0.001);
+}
+
+test "vertical column progression does not imply bottom-to-top mirroring" {
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildCodepointSetTtf(std.testing.allocator, &.{
+        0x3008,
+        0x3009,
+        0xfe3f,
+        0xfe40,
+    });
+    defer std.testing.allocator.free(bytes);
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(std.testing.allocator);
+    defer buffer.deinit();
+
+    const rl = try TextShaper.shapeUtf8WithOptions(
+        &font,
+        &buffer,
+        "\u{3008}",
+        20,
+        .{ .writing_mode = .vertical_rl, .text_orientation = .upright },
+    );
+    const rl_glyph = rl.glyphs[0].glyph_id;
+    const lr = try TextShaper.shapeUtf8WithOptions(
+        &font,
+        &buffer,
+        "\u{3008}",
+        20,
+        .{ .writing_mode = .vertical_lr, .text_orientation = .upright },
+    );
+    try std.testing.expectEqual(rl_glyph, lr.glyphs[0].glyph_id);
+
+    const btt = try TextShaper.shapeUtf8WithOptions(
+        &font,
+        &buffer,
+        "\u{3008}",
+        20,
+        .{
+            .direction = .rtl,
+            .writing_mode = .vertical_rl,
+            .text_orientation = .upright,
+        },
+    );
+    try std.testing.expect(rl_glyph != btt.glyphs[0].glyph_id);
 }

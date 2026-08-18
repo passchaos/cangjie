@@ -627,17 +627,24 @@ fn shapeParagraphContent(
                 });
             },
             .object => |object| {
-                const object_advance =
-                    if (object.kind == .in_flow) object.width else 0;
+                const in_flow = object.kind == .in_flow;
                 try buffer.glyphs.append(buffer.allocator, .{
                     .glyph_id = 0,
                     .codepoint = inline_object.object_replacement_character,
                     .cluster = object.byte_index,
                     .source_byte_len = inline_object.object_replacement_utf8.len,
-                    .x_advance = object_advance,
+                    .x_advance = if (in_flow) object.width else 0,
+                    .y_advance = if (in_flow and options.writing_mode.isVertical())
+                        object.height
+                    else
+                        0,
                     .flags = .{ .inline_object = true },
                 });
-                pen.x += object_advance;
+                if (options.writing_mode.isVertical()) {
+                    pen.y += if (in_flow) object.height else 0;
+                } else {
+                    pen.x += if (in_flow) object.width else 0;
+                }
             },
             .tab => |byte_index| {
                 try buffer.glyphs.append(
@@ -760,6 +767,12 @@ fn finishUniformParagraph(
         // spacing to y advances, so refresh the public two-dimensional run
         // pens before returning.
         bidi_reorder.recomputeRunOffsets(buffer);
+        try inline_object.position(
+            buffer,
+            options.inline_objects,
+            options.out_of_flow_placements,
+            options.writing_mode,
+        );
         return;
     }
     try reshapeUniformParagraph(
@@ -786,6 +799,7 @@ fn finishUniformParagraph(
         buffer,
         options.inline_objects,
         options.out_of_flow_placements,
+        options.writing_mode,
     );
 }
 

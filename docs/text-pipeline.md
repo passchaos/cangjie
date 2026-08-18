@@ -577,12 +577,23 @@ therefore mirrors with `vertical_rl` versus `vertical_lr`. Both values affect
 final layout/interaction geometry but not min/max-content intrinsic inline
 sizes.
 
+In-flow U+FFFC inline objects also use physical dimensions through the current
+flow axes. `Object.width` is horizontal inline advance but vertical column
+block extent; `Object.height` is horizontal line extent but vertical
+positive-down inline advance. Vertical objects are centered inside the final
+column width and positioned at the current y pen. They participate in safe
+wrapping, caret/selection and owned TextGeometry, retained geometry-only
+reflow, attributed metadata, and renderer object draw commands without
+acquiring font-run ownership. `.out_of_flow` and `.custom_out_of_flow` objects,
+absolute placements, and resolver-driven exclusions remain explicitly
+unsupported in vertical paragraphs.
+
 This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
 axes, vertical paragraph validation rejects bottom-to-top/RTL text, bidi
 controls, justification,
 ellipsis/line limits, negative glyph spacing, exclusions/line regions, inline
-objects, hyphenation,
+object out-of-flow placement, hyphenation,
 optical punctuation, and the resumable breaker. Retained whole-paragraph
 layout and intrinsic inline-size measurement are supported and restore the
 pristine vertical shaping snapshot between calls. Returning a concrete

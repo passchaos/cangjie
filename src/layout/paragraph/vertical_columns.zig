@@ -8,6 +8,7 @@
 //! without importing horizontal regions, tabs, justification, or rollback.
 
 const geometry = @import("../line_break/reflow/geometry.zig");
+const inline_object = @import("../inline_object/root.zig");
 const opportunities = @import("../line_break/reflow/opportunities.zig");
 const line_break_opportunity = @import("../line_break/opportunity.zig");
 const paragraph_options = @import("options.zig");
@@ -33,6 +34,21 @@ pub fn build(
             // height or request rendering through a line's glyph range.
             glyph.x_advance = 0;
             glyph.y_advance = 0;
+            continue;
+        }
+        if (glyph.isInlineObject()) {
+            const object = inline_object.find(
+                options.inline_objects,
+                glyph.cluster,
+            ) orelse return error.InvalidInlineObjects;
+            if (object.kind != .in_flow) {
+                return error.UnsupportedVerticalParagraphOptions;
+            }
+            // Retained reflow may change object geometry while preserving the
+            // source anchor. Refresh both physical dimensions from the current
+            // request rather than trusting the shaping snapshot.
+            glyph.x_advance = object.width;
+            glyph.y_advance = object.height;
             continue;
         }
         if (!glyph.isTab()) {
@@ -171,7 +187,9 @@ fn appendColumn(
     const line_info = geometry.resolvedLineInfo(
         buffer.runs.items,
         buffer.glyphs.items,
-        options.inline_objects,
+        // Horizontal object baseline extents do not describe a vertical
+        // column's block axis. Object width is folded into `block_size` below.
+        &.{},
         glyph_start,
         glyph_end,
         default_metrics,
@@ -179,10 +197,17 @@ fn appendColumn(
         null,
     );
     const metrics = line_info.metrics;
-    const block_size = metrics.lineHeight();
+    var block_size = metrics.lineHeight();
     var inline_size: f32 = 0;
     for (buffer.glyphs.items[glyph_start..glyph_end]) |glyph| {
         inline_size += glyph.y_advance;
+        if (glyph.isInlineObject()) {
+            const object = inline_object.find(
+                options.inline_objects,
+                glyph.cluster,
+            ) orelse return error.InvalidInlineObjects;
+            block_size = @max(block_size, object.width);
+        }
     }
     try buffer.lines.append(buffer.allocator, .{
         .glyph_start = glyph_start,

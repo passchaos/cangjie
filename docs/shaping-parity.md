@@ -2220,10 +2220,13 @@ shaping-performance superiority.
   `break-spaces` whitespace policy are covered together. Flow-axis first-line
   indentation and hard-segment paragraph spacing map to vertical y and x
   geometry respectively, including RL/LR mirroring. Explicit and repeating tab
-  rulers support start/center/end/decimal y-axis fields. Bidi handling,
-  exclusions, objects, justification, truncation, and incremental breaking are
-  rejected explicitly until they are migrated to the shared inline/block-axis
-  model; this is not yet full vertical paragraph parity.
+  rulers support start/center/end/decimal y-axis fields. In-flow U+FFFC objects
+  map physical height to vertical inline advance and width to centered column
+  block extent across wrapping, interaction, retained/styled layout, and draw
+  output. Bidi handling, exclusions, out-of-flow objects, justification,
+  truncation, and incremental breaking are rejected explicitly until they are
+  migrated to the shared inline/block-axis model; this is not yet full vertical
+  paragraph parity.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari

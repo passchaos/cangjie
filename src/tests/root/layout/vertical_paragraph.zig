@@ -13,4 +13,6 @@ test {
     _ = @import("vertical_paragraph/flow_spacing.zig");
     _ = @import("vertical_paragraph/tabs.zig");
     _ = @import("vertical_paragraph/tab_integration.zig");
+    _ = @import("vertical_paragraph/inline_objects.zig");
+    _ = @import("vertical_paragraph/inline_object_integration.zig");
 }

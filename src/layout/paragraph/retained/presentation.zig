@@ -29,6 +29,12 @@ pub fn apply(
         // refreshing because paragraph letter/word spacing changed y advances
         // after the retained shaping snapshot was restored.
         bidi_reorder.recomputeRunOffsets(buffer);
+        try inline_object.position(
+            buffer,
+            options.inline_objects,
+            options.out_of_flow_placements,
+            options.writing_mode,
+        );
         return;
     }
     try jstf_justification.apply(buffer, options, recipe);
@@ -50,5 +56,6 @@ pub fn apply(
         buffer,
         options.inline_objects,
         options.out_of_flow_placements,
+        options.writing_mode,
     );
 }

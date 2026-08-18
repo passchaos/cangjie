@@ -137,17 +137,25 @@ const Driver = struct {
                     );
                 },
                 .object => |object| {
-                    const object_advance =
-                        if (object.kind == .in_flow) object.width else 0;
+                    const in_flow = object.kind == .in_flow;
                     try self.buffer.glyphs.append(self.buffer.allocator, .{
                         .glyph_id = 0,
                         .codepoint = inline_object.object_replacement_character,
                         .cluster = object.byte_index,
                         .source_byte_len = inline_object.object_replacement_utf8.len,
-                        .x_advance = object_advance,
+                        .x_advance = if (in_flow) object.width else 0,
+                        .y_advance = if (in_flow and
+                            self.options.writing_mode.isVertical())
+                            object.height
+                        else
+                            0,
                         .flags = .{ .inline_object = true },
                     });
-                    self.pen.x += object_advance;
+                    if (self.options.writing_mode.isVertical()) {
+                        self.pen.y += if (in_flow) object.height else 0;
+                    } else {
+                        self.pen.x += if (in_flow) object.width else 0;
+                    }
                 },
                 .tab => |tab_index| {
                     try self.buffer.glyphs.append(
@@ -320,6 +328,12 @@ const Driver = struct {
             // presentation transform. The sidecar already matches the shaped
             // glyph stream and only run pens need the y-spacing refresh.
             bidi_reorder.recomputeRunOffsets(self.buffer);
+            try inline_object.position(
+                self.buffer,
+                self.options.inline_objects,
+                self.options.out_of_flow_placements,
+                resolved_options.writing_mode,
+            );
             return;
         }
         try styled_buffer.insertAutomaticHyphenMetadata(
@@ -427,6 +441,7 @@ const Driver = struct {
             self.buffer,
             self.options.inline_objects,
             self.options.out_of_flow_placements,
+            resolved_options.writing_mode,
         );
     }
 

@@ -308,7 +308,6 @@ fn validateVerticalForText(text: []const u8, options: Options) !void {
         options.word_spacing < 0 or
         options.exclusions.len != 0 or
         options.line_regions.len != 0 or
-        options.inline_objects.len != 0 or
         options.out_of_flow_placements.len != 0 or
         options.word_break_dictionary != null or
         options.hyphenation.dictionary != null or
@@ -318,6 +317,11 @@ fn validateVerticalForText(text: []const u8, options: Options) !void {
         options.punctuation.end_hanging_fraction != 0)
     {
         return error.UnsupportedVerticalParagraphOptions;
+    }
+    for (options.inline_objects) |object| {
+        if (object.kind != .in_flow) {
+            return error.UnsupportedVerticalParagraphOptions;
+        }
     }
 
     var iterator = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };

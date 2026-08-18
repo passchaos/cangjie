@@ -4,6 +4,7 @@ const std = @import("std");
 const candidates = @import("candidates.zig");
 const geometry = @import("../../line_break/reflow/geometry.zig");
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
+const inline_object = @import("../../inline_object/root.zig");
 const line_break_opportunity = @import("../../line_break/opportunity.zig");
 const inline_measure = @import("measure.zig");
 const paragraph_options = @import("../options.zig");
@@ -27,6 +28,18 @@ pub fn measure(
         if (isMandatory(glyph.codepoint)) {
             glyph.x_advance = 0;
             glyph.y_advance = 0;
+            continue;
+        }
+        if (glyph.isInlineObject()) {
+            const object = inline_object.find(
+                options.inline_objects,
+                glyph.cluster,
+            ) orelse return error.InvalidInlineObjects;
+            if (object.kind != .in_flow) {
+                return error.UnsupportedVerticalParagraphOptions;
+            }
+            glyph.x_advance = object.width;
+            glyph.y_advance = object.height;
             continue;
         }
         if (!glyph.isTab()) {

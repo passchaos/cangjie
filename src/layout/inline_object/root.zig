@@ -13,7 +13,9 @@ pub const object_replacement_character: u21 = 0xfffc;
 pub const object_replacement_utf8 = "\xef\xbf\xbc";
 
 pub const Kind = enum {
-    /// The object contributes its width and vertical extents to line layout.
+    /// The object contributes physical width/height through the active flow
+    /// axes: width is horizontal inline or vertical block extent, while height
+    /// is horizontal block or vertical inline extent.
     in_flow,
     /// The object is positioned at its source anchor without affecting line
     /// width or line height.
@@ -66,7 +68,11 @@ pub const Object = struct {
     id: u64,
     kind: Kind = .in_flow,
     byte_index: usize,
+    /// Physical object width. It contributes to horizontal inline advance and
+    /// to vertical column block extent.
     width: f32,
+    /// Physical object height. It contributes to horizontal line metrics and
+    /// to vertical positive-down inline advance.
     height: f32,
     /// Baseline measured from the object's top edge. Null uses the bottom edge.
     baseline: ?f32 = null,
@@ -240,11 +246,12 @@ pub fn verticalMetrics(object: Object) VerticalMetrics {
     };
 }
 
-/// Rebuild positioned object output after final line-level bidi ordering.
+/// Rebuild positioned object output after final line/column ordering.
 pub fn position(
     buffer: anytype,
     objects: []const Object,
     placements: []const Placement,
+    writing_mode: @import("../../shaping/pipeline/types.zig").WritingMode,
 ) !void {
     buffer.inline_objects.clearRetainingCapacity();
     if (objects.len == 0) {
@@ -261,15 +268,23 @@ pub fn position(
     );
     for (buffer.lines.items, 0..) |*line, line_index| {
         const output_start = buffer.inline_objects.items.len;
-        var pen_x: f32 = line.x;
+        var pen_inline: f32 = if (writing_mode.isVertical())
+            line.y
+        else
+            line.x;
         const glyph_end = line.glyph_start + line.glyph_len;
         for (buffer.glyphs.items[line.glyph_start..glyph_end]) |glyph| {
             if (glyph.isInlineObject()) {
                 const object = find(objects, glyph.cluster) orelse
                     return error.InvalidInlineObjects;
                 const baseline = object.resolvedBaseline();
-                const anchor_x = pen_x;
-                const anchor_y =
+                const anchor_x = if (writing_mode.isVertical())
+                    line.x + (line.width - object.width) / 2
+                else
+                    pen_inline;
+                const anchor_y = if (writing_mode.isVertical())
+                    pen_inline
+                else
                     line.y + line.baseline + glyph.y_offset - baseline;
                 const placement = if (object.kind == .custom_out_of_flow)
                     findPlacement(placements, object.byte_index)
@@ -299,7 +314,10 @@ pub fn position(
                     .anchor_y = anchor_y,
                 });
             }
-            pen_x += glyph.x_advance;
+            pen_inline += if (writing_mode.isVertical())
+                glyph.y_advance
+            else
+                glyph.x_advance;
         }
         line.inline_object_start = output_start;
         line.inline_object_len =

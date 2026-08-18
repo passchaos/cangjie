@@ -18,6 +18,7 @@ pub const Candidate = struct {
     width: f32 = 0,
     hyphen: ?discretionary_hyphen.Candidate = null,
     automatic_hyphen: ?AutomaticHyphen = null,
+    arbitrary: bool = false,
 
     pub fn reset(self: *Candidate) void {
         self.* = .{};
@@ -94,6 +95,7 @@ pub fn recordSoft(
     candidate: *Candidate,
     normalized_variation_coords: []const f32,
     automatic_hyphen: bool,
+    arbitrary: bool,
     hyphen_character: ?u21,
 ) !void {
     if (glyphs.len == 0) return;
@@ -110,6 +112,7 @@ pub fn recordSoft(
             candidate.* = .{
                 .glyph_index = index,
                 .width = line_width - current.x_advance,
+                .arbitrary = arbitrary,
             };
         }
         return;
@@ -136,6 +139,7 @@ pub fn recordSoft(
                 candidate.* = .{
                     .glyph_index = break_index,
                     .width = line_width + resolved.resolved.x_advance,
+                    .arbitrary = arbitrary,
                     .automatic_hyphen = .{
                         .byte_offset = byte_offset,
                         .run_index = resolved.run_index,
@@ -172,6 +176,7 @@ pub fn recordSoft(
                             resolved.x_advance
                         else
                             0,
+                    .arbitrary = arbitrary,
                     .hyphen = if (resolved_hyphen) |resolved| .{
                         .glyph_index = index,
                         .resolved = resolved,
@@ -200,6 +205,7 @@ pub fn recordSoft(
             candidate.* = .{
                 .glyph_index = break_index,
                 .width = width + resolved.resolved.x_advance,
+                .arbitrary = arbitrary,
                 .automatic_hyphen = .{
                     .byte_offset = byte_offset,
                     .run_index = resolved.run_index,
@@ -211,6 +217,7 @@ pub fn recordSoft(
             candidate.* = .{
                 .glyph_index = break_index,
                 .width = width,
+                .arbitrary = arbitrary,
             };
         }
     }
@@ -252,6 +259,7 @@ test "soft opportunity never splits a shaped source atom" {
         &candidate,
         &.{},
         false,
+        false,
         null,
     );
     try std.testing.expectEqual(@as(?usize, null), candidate.glyph_index);
@@ -265,6 +273,7 @@ test "soft opportunity never splits a shaped source atom" {
         15,
         &candidate,
         &.{},
+        false,
         false,
         null,
     );
@@ -301,6 +310,7 @@ test "soft opportunity rejects contextual unsafe boundary" {
         &candidate,
         &.{},
         false,
+        false,
         null,
     );
     try std.testing.expectEqual(@as(?usize, null), candidate.glyph_index);
@@ -317,6 +327,7 @@ test "soft opportunity rejects contextual unsafe boundary" {
         &candidate,
         &.{},
         true,
+        false,
         null,
     );
     try std.testing.expectEqual(@as(?usize, null), candidate.glyph_index);

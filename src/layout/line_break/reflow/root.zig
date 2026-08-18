@@ -167,6 +167,8 @@ fn buildBalanced(
             grapheme_clusters,
             dictionary,
             hyphenation_dictionary,
+            options.word_break,
+            options.overflow_wrap,
         );
         break :breaks owned_line_breaks.?;
     };
@@ -263,8 +265,28 @@ fn buildGreedyWithPlan(
     };
     var owned_line_breaks: ?[]@import("../opportunity.zig").Opportunity = null;
     defer if (owned_line_breaks) |breaks| buffer.allocator.free(breaks);
-    const effective_line_breaks = analyzed_line_breaks orelse breaks: {
-        if (dictionary == null and hyphenation_dictionary == null) {
+    const effective_line_breaks = breaks: {
+        if (analyzed_line_breaks) |base| {
+            if (options.word_break == .normal and
+                options.overflow_wrap != .anywhere)
+            {
+                break :breaks base;
+            }
+            owned_line_breaks = try analysis.tailorBreakPolicy(
+                buffer.allocator,
+                text,
+                grapheme_clusters,
+                base,
+                options.word_break,
+                options.overflow_wrap,
+            );
+            break :breaks owned_line_breaks.?;
+        }
+        if (dictionary == null and
+            hyphenation_dictionary == null and
+            options.word_break == .normal and
+            options.overflow_wrap != .anywhere)
+        {
             break :breaks null;
         }
         if (options.wrap_mode == .no_wrap) break :breaks null;
@@ -274,6 +296,8 @@ fn buildGreedyWithPlan(
             grapheme_clusters,
             dictionary,
             hyphenation_dictionary,
+            options.word_break,
+            options.overflow_wrap,
         );
         break :breaks owned_line_breaks.?;
     };
@@ -479,6 +503,7 @@ fn buildGreedyWithPlan(
                             &candidate,
                             options.normalized_variation_coords,
                             line_break.automatic_hyphen,
+                            line_break.arbitrary,
                             options.hyphenation.character,
                         );
                         if (candidate.glyph_index != null) {
@@ -488,6 +513,27 @@ fn buildGreedyWithPlan(
                     .hard => {},
                 }
             }
+        }
+        // Direct boundary synthesis is both the zero-allocation one-shot fast
+        // path and a fallback for retained streams whose policy-neutral base
+        // analysis contains no matching arbitrary record.
+        if (!naturally_overflows and
+            !atom_continues and
+            !geometry.isDiscardableBreak(glyph.codepoint) and
+            (options.word_break == .break_all or
+                options.overflow_wrap == .anywhere) and
+            index + 1 < buffer.glyphs.items.len and
+            shaped_boundary.outputBoundaryIsReusable(
+                buffer.glyphs.items,
+                grapheme_clusters,
+                index + 1,
+            ))
+        {
+            last_break = .{
+                .glyph_index = index + 1,
+                .width = line_width,
+                .arbitrary = true,
+            };
         }
         const forced_balance_break = !naturally_overflows and
             balanced.shouldBreakAtTarget(
@@ -648,6 +694,8 @@ fn buildGreedyWithPlan(
                 index,
                 line_start,
                 fitting_last_break,
+                options.overflow_wrap != .normal or
+                    options.word_break == .break_all,
             );
             if (overflow_break.defer_break) continue;
             const break_end = overflow_break.index;
@@ -1046,6 +1094,7 @@ fn rebuildLastBreak(
                 candidate,
                 options.normalized_variation_coords,
                 line_break.automatic_hyphen,
+                line_break.arbitrary,
                 options.hyphenation.character,
             ),
             .hard => {},

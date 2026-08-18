@@ -21,6 +21,8 @@ pub fn itemizeWithHyphenation(
     graphemes: []const unicode.GraphemeCluster,
     dictionary: ?*const segmentation.WordBreakDictionary,
     hyphenation_dictionary: ?*const hyphenation.Dictionary,
+    word_break: @import("../types/paragraph.zig").WordBreak,
+    overflow_wrap: @import("../types/paragraph.zig").OverflowWrap,
 ) ![]opportunity.Opportunity {
     const base = try unicode.itemizeLineBreaks(allocator, text);
     defer allocator.free(base);
@@ -37,7 +39,7 @@ pub fn itemizeWithHyphenation(
     defer allocator.free(segmented);
 
     var tailored = std.ArrayList(opportunity.Opportunity).empty;
-    errdefer tailored.deinit(allocator);
+    defer tailored.deinit(allocator);
     try tailored.ensureTotalCapacity(allocator, segmented.len);
     for (segmented) |value| {
         tailored.appendAssumeCapacity(opportunity.fromUnicode(value));
@@ -51,7 +53,144 @@ pub fn itemizeWithHyphenation(
             graphemes,
         );
     }
-    return try tailored.toOwnedSlice(allocator);
+    return try tailorBreakPolicy(
+        allocator,
+        text,
+        graphemes,
+        tailored.items,
+        word_break,
+        overflow_wrap,
+    );
+}
+
+/// Apply width-dependent wrapping policy to an existing base opportunity set.
+///
+/// Retained paragraphs store UAX/dictionary/hyphenation analysis once and use
+/// this operation when only `word_break` or `overflow_wrap` changes.
+pub fn tailorBreakPolicy(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    graphemes: []const unicode.GraphemeCluster,
+    base: []const opportunity.Opportunity,
+    word_break: @import("../types/paragraph.zig").WordBreak,
+    overflow_wrap: @import("../types/paragraph.zig").OverflowWrap,
+) ![]opportunity.Opportunity {
+    var tailored = std.ArrayList(opportunity.Opportunity).empty;
+    errdefer tailored.deinit(allocator);
+    try tailored.appendSlice(allocator, base);
+    if (word_break == .keep_all) {
+        suppressCjkWordBreaks(&tailored, text, graphemes);
+    }
+    if (word_break == .break_all) {
+        // `break-all` supplies a denser non-hyphenating opportunity set;
+        // automatic hyphenation would only add visible punctuation and is
+        // therefore suppressed, matching CSS Text.
+        suppressAutomaticHyphens(&tailored);
+    }
+    if (word_break == .break_all or overflow_wrap == .anywhere) {
+        try appendGraphemeBreaks(
+            allocator,
+            &tailored,
+            graphemes,
+            text.len,
+        );
+    }
+    return tailored.toOwnedSlice(allocator);
+}
+
+fn suppressAutomaticHyphens(
+    opportunities: *std.ArrayList(opportunity.Opportunity),
+) void {
+    var write: usize = 0;
+    for (opportunities.items) |item| {
+        if (item.kind == .soft and item.automatic_hyphen) continue;
+        opportunities.items[write] = item;
+        write += 1;
+    }
+    opportunities.shrinkRetainingCapacity(write);
+}
+
+fn appendGraphemeBreaks(
+    allocator: std.mem.Allocator,
+    opportunities: *std.ArrayList(opportunity.Opportunity),
+    graphemes: []const unicode.GraphemeCluster,
+    text_len: usize,
+) !void {
+    for (graphemes) |cluster| {
+        const byte_offset = cluster.byte_start;
+        if (byte_offset == 0 or byte_offset >= text_len) continue;
+        try mergeOpportunity(opportunities, allocator, .{
+            .byte_offset = byte_offset,
+            .kind = .soft,
+            .arbitrary = true,
+        });
+    }
+}
+
+fn suppressCjkWordBreaks(
+    opportunities: *std.ArrayList(opportunity.Opportunity),
+    text: []const u8,
+    graphemes: []const unicode.GraphemeCluster,
+) void {
+    var write: usize = 0;
+    for (opportunities.items) |item| {
+        const remove = item.kind == .soft and
+            !item.automatic_hyphen and
+            cjkWordBoundary(text, graphemes, item.byte_offset);
+        if (remove) continue;
+        opportunities.items[write] = item;
+        write += 1;
+    }
+    opportunities.shrinkRetainingCapacity(write);
+}
+
+fn cjkWordBoundary(
+    text: []const u8,
+    graphemes: []const unicode.GraphemeCluster,
+    byte_offset: usize,
+) bool {
+    if (byte_offset == 0 or byte_offset >= text.len) return false;
+    var previous: ?unicode.GraphemeCluster = null;
+    var next: ?unicode.GraphemeCluster = null;
+    for (graphemes) |cluster| {
+        const end = cluster.byte_start + cluster.byte_len;
+        if (end == byte_offset) previous = cluster;
+        if (cluster.byte_start == byte_offset) {
+            next = cluster;
+            break;
+        }
+        if (cluster.byte_start > byte_offset) break;
+    }
+    return clusterIsCjkWord(text, previous orelse return false) and
+        clusterIsCjkWord(text, next orelse return false);
+}
+
+fn clusterIsCjkWord(
+    text: []const u8,
+    cluster: unicode.GraphemeCluster,
+) bool {
+    const bytes = text[cluster.byte_start..][0..cluster.byte_len];
+    var iterator = std.unicode.Utf8Iterator{ .bytes = bytes, .i = 0 };
+    while (iterator.nextCodepoint()) |codepoint| {
+        if (isCjkWordCodepoint(codepoint)) return true;
+    }
+    return false;
+}
+
+fn isCjkWordCodepoint(codepoint: u21) bool {
+    return switch (unicode.lineBreakClassForCodepoint(codepoint)) {
+        .ideographic,
+        .emoji_base,
+        .emoji_modifier,
+        .conditional_japanese_starter,
+        .hangul_l_jamo,
+        .hangul_v_jamo,
+        .hangul_t_jamo,
+        .hangul_lv_syllable,
+        .hangul_lvt_syllable,
+        => true,
+        else => false,
+    };
 }
 
 fn appendHyphenation(
@@ -109,6 +248,8 @@ fn mergeOpportunity(
             opportunities.items[low].automatic_hyphen =
                 opportunities.items[low].automatic_hyphen or
                 value.automatic_hyphen;
+            opportunities.items[low].arbitrary =
+                opportunities.items[low].arbitrary and value.arbitrary;
         }
         return;
     }
@@ -165,12 +306,116 @@ test "automatic hyphenation never splits an extended grapheme cluster" {
         graphemes,
         null,
         &dictionary,
+        .normal,
+        .break_word,
     );
     defer std.testing.allocator.free(breaks);
     for (breaks) |line_break| {
         try std.testing.expect(
             line_break.byte_offset != 1 or
                 !line_break.automatic_hyphen,
+        );
+    }
+}
+
+test "break policy adds grapheme edges and keeps CJK words intact" {
+    const allocator = std.testing.allocator;
+    const latin_text = "AAAA";
+    const latin_graphemes = try unicode.itemizeGraphemeClusters(
+        allocator,
+        latin_text,
+    );
+    defer allocator.free(latin_graphemes);
+    const latin_base = try itemizeWithHyphenation(
+        allocator,
+        latin_text,
+        latin_graphemes,
+        null,
+        null,
+        .normal,
+        .break_word,
+    );
+    defer allocator.free(latin_base);
+    const break_all = try tailorBreakPolicy(
+        allocator,
+        latin_text,
+        latin_graphemes,
+        latin_base,
+        .break_all,
+        .normal,
+    );
+    defer allocator.free(break_all);
+    for ([_]usize{ 1, 2, 3 }) |byte_offset| {
+        const found = for (break_all) |item| {
+            if (item.byte_offset == byte_offset and item.arbitrary) break true;
+        } else false;
+        try std.testing.expect(found);
+    }
+
+    const cjk_text = "一丁丂";
+    const cjk_graphemes = try unicode.itemizeGraphemeClusters(
+        allocator,
+        cjk_text,
+    );
+    defer allocator.free(cjk_graphemes);
+    const cjk_base = try itemizeWithHyphenation(
+        allocator,
+        cjk_text,
+        cjk_graphemes,
+        null,
+        null,
+        .normal,
+        .break_word,
+    );
+    defer allocator.free(cjk_base);
+    var normal_soft_count: usize = 0;
+    for (cjk_base) |item| {
+        if (item.kind == .soft) normal_soft_count += 1;
+    }
+    const keep_all = try tailorBreakPolicy(
+        allocator,
+        cjk_text,
+        cjk_graphemes,
+        cjk_base,
+        .keep_all,
+        .normal,
+    );
+    defer allocator.free(keep_all);
+    var kept_soft_count: usize = 0;
+    for (keep_all) |item| {
+        if (item.kind == .soft) kept_soft_count += 1;
+    }
+    try std.testing.expect(normal_soft_count > kept_soft_count);
+    try std.testing.expectEqual(@as(usize, 0), kept_soft_count);
+
+    const ivs_text = "一\u{e0100}丁";
+    const ivs_graphemes = try unicode.itemizeGraphemeClusters(
+        allocator,
+        ivs_text,
+    );
+    defer allocator.free(ivs_graphemes);
+    const ivs_base = try itemizeWithHyphenation(
+        allocator,
+        ivs_text,
+        ivs_graphemes,
+        null,
+        null,
+        .normal,
+        .break_word,
+    );
+    defer allocator.free(ivs_base);
+    const ivs_keep_all = try tailorBreakPolicy(
+        allocator,
+        ivs_text,
+        ivs_graphemes,
+        ivs_base,
+        .keep_all,
+        .normal,
+    );
+    defer allocator.free(ivs_keep_all);
+    for (ivs_keep_all) |item| {
+        try std.testing.expect(
+            item.kind != .soft or item.byte_offset != "一\u{e0100}".len,
         );
     }
 }

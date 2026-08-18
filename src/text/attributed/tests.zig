@@ -124,6 +124,62 @@ test "attributed balanced wrapping keeps style metadata aligned" {
     try std.testing.expect(saw_second_style);
 }
 
+test "attributed overflow wrapping preserves style and decoration sidecars" {
+    const allocator = std.testing.allocator;
+    var owned = try OwnedFont.init(
+        allocator,
+        try test_font.buildLastResortCmapTtfWithKern(
+            allocator,
+            false,
+        ),
+    );
+    defer owned.deinit();
+    const fonts = [_]*const font_mod.Font{&owned.font};
+    const text = "AAAA";
+    const spans = [_]style.StyleSpan{
+        .{
+            .byte_range = .{ .start = 0, .len = 2 },
+            .style = .{
+                .font_size = 20,
+                .decoration = .{ .underline = true },
+            },
+        },
+        .{
+            .byte_range = .{ .start = 2, .len = 2 },
+            .style = .{
+                .font_size = 20,
+                .decoration = .{ .strikethrough = true },
+            },
+        },
+    };
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
+        allocator,
+        font_fallback.Cascade.init(&fonts),
+        .{
+            .text = text,
+            .spans = &spans,
+            .paragraph_style = .{
+                .word_break = .break_all,
+                .overflow_wrap = .normal,
+            },
+        },
+        17,
+    );
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 4), result.lines.len);
+    try std.testing.expectEqual(result.glyphs.len, 4);
+    var saw_underline = false;
+    var saw_strike = false;
+    for (result.decorations) |segment| {
+        try std.testing.expect(segment.line_index < result.lines.len);
+        saw_underline = saw_underline or segment.kind == .underline;
+        saw_strike = saw_strike or segment.kind == .strikethrough;
+    }
+    try std.testing.expect(saw_underline);
+    try std.testing.expect(saw_strike);
+}
+
 test "unified attributed paragraph applies feature spacing and measurement" {
     const allocator = std.testing.allocator;
     var owned = try OwnedFont.init(

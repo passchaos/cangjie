@@ -655,6 +655,30 @@ hyphens, max-lines/ellipsis, justification, bidi, styled metadata, retained
 reflow, decorations, and inline-object positioning retain one implementation.
 `.no_wrap` and unbounded layouts deliberately ignore the strategy.
 
+Line-breaking policy is split along CSS Text's independent axes rather than
+encoded as one ambiguous wrap enum:
+
+- `WordBreak.normal` consumes UAX #14 plus optional dictionary and
+  hyphenation boundaries. `.break_all` promotes every reusable grapheme edge
+  to an ordinary soft opportunity. `.keep_all` removes UAX opportunities
+  between adjacent ideographic, emoji, Japanese-starter, or Hangul word
+  classes while preserving whitespace, punctuation, explicit hard breaks,
+  dictionary boundaries, and explicit/automatic hyphenation.
+- `OverflowWrap.normal` allows an otherwise unbreakable shaped span to exceed
+  the measure. `.break_word` preserves Cangjie's historical behavior: a safe
+  grapheme edge is used only after ordinary opportunities fail. `.anywhere`
+  makes those safe edges ordinary opportunities, so balanced layout may
+  consider them globally as well as during overflow.
+- `WrapMode.no_wrap` still disables every width-induced soft break regardless
+  of the other policies; explicit Unicode hard breaks remain authoritative.
+
+All arbitrary boundaries pass the same grapheme and
+`unsafe-to-break-before` proof as emergency wrapping. They therefore never
+split a GSUB source atom, ligature, mark attachment, kern pair, or any other
+retained shaping relationship. Retained paragraphs keep policy-neutral
+UAX/dictionary/hyphenation analysis and tailor it per reflow, so callers can
+change these policies without reshaping.
+
 `ParagraphOptions.tab_stops` adds an explicit paragraph tab ruler. Each
 `TabStop.position` is a finite, positive, strictly increasing advance from the
 selected line fragment's logical inline start; this keeps the same ruler

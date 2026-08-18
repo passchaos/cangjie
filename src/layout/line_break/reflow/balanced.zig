@@ -259,6 +259,7 @@ fn enumerateBoundaries(
                 &candidate,
                 options.normalized_variation_coords,
                 line_break.automatic_hyphen,
+                line_break.arbitrary,
                 options.hyphenation.character,
             );
             const break_index = candidate.glyph_index orelse continue;
@@ -271,31 +272,41 @@ fn enumerateBoundaries(
                 .glyph_index = break_index,
                 .next_glyph_index = next_start,
                 .byte_offset = line_break.byte_offset,
-                .kind = .soft,
+                .kind = if (line_break.arbitrary and
+                    options.overflow_wrap == .break_word and
+                    options.word_break != .break_all)
+                    .emergency
+                else
+                    .soft,
                 .candidate = candidate,
             });
         }
     }
 
-    // Every safe grapheme boundary is an emergency edge. If a UAX #14 edge
-    // already exists there, retain its better semantics and lower penalty.
-    var glyph_index: usize = 1;
-    while (glyph_index < buffer.glyphs.items.len) : (glyph_index += 1) {
-        if (!shaped_boundary.outputBoundaryIsReusable(
-            buffer.glyphs.items,
-            graphemes,
-            glyph_index,
-        )) continue;
-        try appendUnique(output, buffer.allocator, .{
-            .glyph_index = glyph_index,
-            .next_glyph_index = glyph_index,
-            .byte_offset = shaped_boundary.byteEndForGlyphPrefix(
+    // Policies that permit arbitrary wrapping expose every reusable grapheme
+    // boundary. If a UAX #14 edge already exists there, retain its better
+    // semantics and lower penalty.
+    if (options.overflow_wrap != .normal or
+        options.word_break == .break_all)
+    {
+        var glyph_index: usize = 1;
+        while (glyph_index < buffer.glyphs.items.len) : (glyph_index += 1) {
+            if (!shaped_boundary.outputBoundaryIsReusable(
                 buffer.glyphs.items,
+                graphemes,
                 glyph_index,
-                0,
-            ),
-            .kind = .emergency,
-        });
+            )) continue;
+            try appendUnique(output, buffer.allocator, .{
+                .glyph_index = glyph_index,
+                .next_glyph_index = glyph_index,
+                .byte_offset = shaped_boundary.byteEndForGlyphPrefix(
+                    buffer.glyphs.items,
+                    glyph_index,
+                    0,
+                ),
+                .kind = .emergency,
+            });
+        }
     }
     try appendUnique(output, buffer.allocator, .{
         .glyph_index = buffer.glyphs.items.len,
@@ -394,6 +405,22 @@ fn solveSegment(
         if (state.lines >= segment.line_count) continue;
         const start = boundaries[state.boundary_index].next_glyph_index;
         const remaining_lines = segment.line_count - state.lines;
+        const fitting_regular_edge =
+            if (options.overflow_wrap == .break_word and
+            options.word_break != .break_all)
+                try hasFittingRegularEdge(
+                    buffer,
+                    options,
+                    default_metrics,
+                    boundaries,
+                    segment,
+                    recipe,
+                    state,
+                    start,
+                    remaining_lines,
+                )
+            else
+                false;
         const first_end = state.boundary_index + 1;
         var end_index = first_end;
         var evaluated_edges: usize = 0;
@@ -405,6 +432,9 @@ fn solveSegment(
                 continue;
             }
             if (remaining_lines > 1 and end_index == segment.boundary_end) {
+                continue;
+            }
+            if (fitting_regular_edge and end_boundary.kind == .emergency) {
                 continue;
             }
             evaluated_edges += 1;
@@ -490,6 +520,47 @@ fn solveSegment(
         .path = path,
         .next_y = states.items[final_index].y,
     };
+}
+
+fn hasFittingRegularEdge(
+    buffer: anytype,
+    options: paragraph_options.Options,
+    default_metrics: geometry.BaselineMetrics,
+    boundaries: []const Boundary,
+    segment: Segment,
+    recipe: anytype,
+    state: State,
+    start: usize,
+    remaining_lines: usize,
+) !bool {
+    var end_index = state.boundary_index + 1;
+    var evaluated_edges: usize = 0;
+    while (end_index <= segment.boundary_end) : (end_index += 1) {
+        const boundary = boundaries[end_index];
+        if (boundary.kind == .mandatory and
+            end_index != segment.boundary_end) break;
+        if (boundary.kind == .emergency) continue;
+        if (remaining_lines == 1 and end_index != segment.boundary_end) {
+            continue;
+        }
+        if (remaining_lines > 1 and end_index == segment.boundary_end) {
+            continue;
+        }
+        evaluated_edges += 1;
+        if (evaluated_edges > max_edges_per_state) break;
+        const evaluated = try evaluateLine(
+            buffer,
+            options,
+            default_metrics,
+            recipe,
+            start,
+            boundary,
+            segment.paragraph_line_base + state.lines,
+            state.y,
+        );
+        if (evaluated.fits) return true;
+    }
+    return false;
 }
 
 const EvaluatedLine = struct {

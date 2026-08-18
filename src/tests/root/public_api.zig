@@ -47,8 +47,22 @@ test "public facade uses domain names without legacy aliases" {
         @as(usize, 2),
         std.enums.values(cangjie.paragraph.LineBreakStrategy).len,
     );
+    try std.testing.expectEqual(
+        @as(usize, 3),
+        std.enums.values(cangjie.paragraph.WordBreak).len,
+    );
+    try std.testing.expectEqual(
+        @as(usize, 3),
+        std.enums.values(cangjie.paragraph.OverflowWrap).len,
+    );
     try std.testing.expect(
         @hasField(cangjie.paragraph.Options, "line_break_strategy"),
+    );
+    try std.testing.expect(
+        @hasField(cangjie.paragraph.Options, "word_break"),
+    );
+    try std.testing.expect(
+        @hasField(cangjie.paragraph.Options, "overflow_wrap"),
     );
     try std.testing.expect(
         @hasField(cangjie.text.style.Paragraph, "line_break_strategy"),

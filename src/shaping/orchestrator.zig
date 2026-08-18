@@ -225,6 +225,8 @@ pub const TextShaper = struct {
             grapheme_clusters,
             options.word_break_dictionary,
             options.hyphenation.dictionary,
+            .normal,
+            .break_word,
         );
         errdefer allocator.free(line_breaks);
         const inline_object_indexes = try allocator.alloc(

@@ -107,6 +107,9 @@ pub const Jstf = struct {
 pub const Options = struct {
     max_width: f32,
     wrap_mode: paragraph_types.WrapMode = .word,
+    word_break: paragraph_types.WordBreak = .normal,
+    /// Preserve Cangjie's historical emergency-wrap behavior by default.
+    overflow_wrap: paragraph_types.OverflowWrap = .break_word,
     line_break_strategy: paragraph_types.LineBreakStrategy = .greedy,
     alignment: paragraph_types.TextAlign = .start,
     line_height: ?f32 = null,

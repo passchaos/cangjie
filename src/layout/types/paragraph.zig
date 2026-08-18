@@ -38,6 +38,29 @@ pub const WrapMode = enum {
     word,
 };
 
+/// Tailoring of ordinary soft opportunities inside or between words.
+pub const WordBreak = enum {
+    /// Use Unicode UAX #14 plus optional dictionary and hyphenation boundaries.
+    normal,
+    /// Add a soft opportunity at every reusable grapheme boundary.
+    break_all,
+    /// Suppress opportunities between adjacent CJK/Hangul word characters.
+    keep_all,
+};
+
+/// Policy for otherwise unbreakable content that exceeds the line measure.
+pub const OverflowWrap = enum {
+    /// Permit overflow rather than manufacturing an emergency boundary.
+    normal,
+    /// Use a safe grapheme boundary only after ordinary opportunities fail.
+    break_word,
+    /// Treat safe grapheme boundaries as ordinary soft opportunities.
+    ///
+    /// This differs from `break_word` for balanced layout and min-content
+    /// measurement even when a greedy line happens to select the same edge.
+    anywhere,
+};
+
 /// Policy used to choose among otherwise valid soft line boundaries.
 ///
 /// This is intentionally separate from `WrapMode`: wrapping controls whether

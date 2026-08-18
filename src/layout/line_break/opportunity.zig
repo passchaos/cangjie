@@ -10,6 +10,9 @@ pub const Opportunity = struct {
     byte_offset: usize,
     kind: unicode.LineBreakKind,
     automatic_hyphen: bool = false,
+    /// A boundary introduced at a reusable grapheme edge by paragraph policy,
+    /// rather than Unicode/dictionary analysis.
+    arbitrary: bool = false,
 };
 
 pub fn fromUnicode(value: unicode.LineBreak) Opportunity {

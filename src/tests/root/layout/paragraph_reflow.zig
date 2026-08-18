@@ -165,6 +165,194 @@ test "balanced reflow composes with retained hard breaks and line limits" {
     );
 }
 
+test "overflow wrap distinguishes overflow emergency and anywhere" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const text = "AAAAAAAA";
+
+    const overflow = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{
+            .max_width = 33,
+            .overflow_wrap = .normal,
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 1), overflow.lines.len);
+    try std.testing.expectEqual(text.len, overflow.lines[0].glyph_len);
+    try std.testing.expect(overflow.lines[0].width > 33);
+
+    const break_word = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{
+            .max_width = 33,
+            .overflow_wrap = .break_word,
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 4), break_word.lines.len);
+    for (break_word.lines) |line| {
+        try std.testing.expectEqual(@as(usize, 2), line.glyph_len);
+    }
+
+    const anywhere = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{
+            .max_width = 33,
+            .overflow_wrap = .anywhere,
+        },
+    );
+    try std.testing.expectEqual(break_word.lines.len, anywhere.lines.len);
+    for (anywhere.lines) |line| {
+        try std.testing.expect(line.width <= 33.001);
+    }
+}
+
+test "balanced break word prefers regular edges while anywhere may rebalance" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const text = "AAAA AAAA";
+
+    const break_word = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{
+            .max_width = 70,
+            .line_break_strategy = .balanced,
+            .overflow_wrap = .break_word,
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 2), break_word.lines.len);
+    // The whitespace opportunity fits, so break-word cannot replace it with
+    // an arbitrary intra-word edge merely to improve raggedness.
+    try std.testing.expectEqual(@as(usize, 4), break_word.lines[0].glyph_len);
+    try std.testing.expectEqual(@as(usize, 4), break_word.lines[1].glyph_len);
+
+    const anywhere = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{
+            .max_width = 70,
+            .line_break_strategy = .balanced,
+            .overflow_wrap = .anywhere,
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 2), anywhere.lines.len);
+    for (anywhere.lines) |line| {
+        try std.testing.expect(line.width <= 70.001);
+    }
+}
+
+test "word break all and keep all tailor Unicode soft boundaries" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const ascii_bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(ascii_bytes);
+    var ascii = try Font.parse(allocator, ascii_bytes);
+    defer ascii.deinit();
+    const cjk_bytes = try test_font.buildNamedCjkTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(cjk_bytes);
+    var cjk = try Font.parse(allocator, cjk_bytes);
+    defer cjk.deinit();
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const break_all = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&.{&ascii}),
+        &buffer,
+        "AAAA",
+        20,
+        .{
+            .max_width = 17,
+            .word_break = .break_all,
+            .overflow_wrap = .normal,
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 4), break_all.lines.len);
+    for (break_all.lines) |line| {
+        try std.testing.expectEqual(@as(usize, 1), line.glyph_len);
+    }
+
+    const normal = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&.{&cjk}),
+        &buffer,
+        "一丁丂",
+        20,
+        .{
+            .max_width = 17,
+            .overflow_wrap = .normal,
+        },
+    );
+    try std.testing.expect(normal.lines.len > 1);
+
+    const keep_all = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&.{&cjk}),
+        &buffer,
+        "一丁丂",
+        20,
+        .{
+            .max_width = 17,
+            .word_break = .keep_all,
+            .overflow_wrap = .normal,
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 1), keep_all.lines.len);
+    try std.testing.expect(keep_all.lines[0].width > 17);
+
+    const spaced_keep_all = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&.{&cjk}),
+        &buffer,
+        "一丁 丂",
+        20,
+        .{
+            .max_width = 35,
+            .word_break = .keep_all,
+            .overflow_wrap = .normal,
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 2), spaced_keep_all.lines.len);
+}
+
 test "paragraph wrapping keeps combining grapheme clusters atomic" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

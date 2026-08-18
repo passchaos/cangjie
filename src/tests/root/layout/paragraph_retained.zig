@@ -139,6 +139,65 @@ test "shaped paragraphs restore advances between justified reflows" {
     try std.testing.expectEqualSlices(GlyphPosition, paragraph.glyphs, shape_buffer.glyphs.items);
 }
 
+test "retained reflow changes word and overflow policies without reshaping" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        "AAAA",
+        20,
+        .{ .max_width = 100 },
+    );
+    defer paragraph.deinit();
+    const pristine = try allocator.dupe(GlyphPosition, paragraph.glyphs);
+    defer allocator.free(pristine);
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+
+    const overflow = try paragraph.layout(&reflow, .{
+        .max_width = 17,
+        .overflow_wrap = .normal,
+    });
+    try std.testing.expectEqual(@as(usize, 1), overflow.lines.len);
+
+    const break_word = try paragraph.layout(&reflow, .{
+        .max_width = 17,
+        .overflow_wrap = .break_word,
+    });
+    try std.testing.expectEqual(@as(usize, 4), break_word.lines.len);
+
+    const break_all = try paragraph.layout(&reflow, .{
+        .max_width = 17,
+        .word_break = .break_all,
+        .overflow_wrap = .normal,
+    });
+    try std.testing.expectEqual(@as(usize, 4), break_all.lines.len);
+
+    const restored = try paragraph.layout(&reflow, .{
+        .max_width = 100,
+        .overflow_wrap = .normal,
+    });
+    try std.testing.expectEqual(@as(usize, 1), restored.lines.len);
+    try std.testing.expectEqualSlices(
+        GlyphPosition,
+        pristine,
+        paragraph.glyphs,
+    );
+}
+
 test "retained paragraphs own run variation coordinates" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

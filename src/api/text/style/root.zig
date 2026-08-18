@@ -23,4 +23,6 @@ pub const TextSpan = style.TextSpan;
 pub const Text = style.TextStyle;
 pub const VerticalAlign = style.VerticalAlign;
 pub const Wrap = style.WrapMode;
+pub const WordBreak = style.WordBreak;
+pub const OverflowWrap = style.OverflowWrap;
 pub const LineBreakStrategy = style.LineBreakStrategy;

@@ -231,6 +231,39 @@ test "ellipsis removes an automatic continuation hyphen" {
     try std.testing.expectEqual(@as(u21, '.'), first[first.len - 1].codepoint);
 }
 
+test "word break all suppresses automatic hyphen materialization" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCodepointSetTtf(
+        allocator,
+        &latin_codepoints,
+    );
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = font_fallback.Cascade.init(&.{&font});
+    var dictionary = try englishDictionary(allocator);
+    defer dictionary.deinit();
+
+    var buffer = context_output.Buffer.init(allocator);
+    defer buffer.deinit();
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        "hyphenation",
+        20,
+        .{
+            .max_width = 33,
+            .word_break = .break_all,
+            .overflow_wrap = .normal,
+            .hyphenation = .{ .dictionary = &dictionary },
+        },
+    );
+    try std.testing.expect(paragraph.lines.len > 1);
+    for (paragraph.glyphs) |glyph| {
+        try std.testing.expect(!glyph.isAutomaticHyphen());
+    }
+}
+
 test "retained automatic hyphenation is repeatable across widths" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildCodepointSetTtf(

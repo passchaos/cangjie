@@ -226,6 +226,8 @@ pub const VerticalAlign = enum {
 };
 
 pub const WrapMode = paragraph_types.WrapMode;
+pub const WordBreak = paragraph_types.WordBreak;
+pub const OverflowWrap = paragraph_types.OverflowWrap;
 pub const LineBreakStrategy = paragraph_types.LineBreakStrategy;
 
 pub const OverflowMode = enum {
@@ -242,6 +244,8 @@ pub const ParagraphStyle = struct {
     max_lines: ?usize = null,
     ellipsis: bool = false,
     wrap_mode: WrapMode = .word,
+    word_break: WordBreak = .normal,
+    overflow_wrap: OverflowWrap = .break_word,
     line_break_strategy: LineBreakStrategy = .greedy,
     overflow_mode: OverflowMode = .clip,
     tab_width: usize = 4,
@@ -268,6 +272,8 @@ pub const ParagraphStyle = struct {
         return .{
             .max_width = max_width,
             .wrap_mode = self.wrap_mode,
+            .word_break = self.word_break,
+            .overflow_wrap = self.overflow_wrap,
             .line_break_strategy = self.line_break_strategy,
             .alignment = self.text_align,
             .line_height = self.line_height,

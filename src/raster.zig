@@ -1,6 +1,7 @@
 const std = @import("std");
 const face_mod = @import("font/face/root.zig");
 const font_raster = @import("font.zig").raster_backend;
+const hinting_outline = @import("font/hinting/outline.zig");
 const imx = @import("imx");
 const font_mod = @import("font.zig");
 const glyph_mod = @import("glyph.zig");
@@ -810,6 +811,38 @@ pub const Rasterizer = struct {
         };
     }
 
+    /// Prepare a hinted outline whose coordinates are already pixels.
+    ///
+    /// The returned geometry bakes in only `x` and `baseline_y`; it never
+    /// applies font-size or units-per-em scaling, pixel alignment, or synthetic
+    /// small-glyph emboldening.
+    pub fn preparePixelOutline(
+        self: *Rasterizer,
+        outline: *const hinting_outline.PixelOutline,
+        x: f32,
+        baseline_y: f32,
+    ) !PreparedGlyph {
+        var flattened = try std.ArrayList(Line).initCapacity(
+            self.allocator,
+            outline_raster.lineCapacity(outline.commands.items),
+        );
+        defer flattened.deinit(self.allocator);
+        outline_raster.flattenPixelCommands(
+            &flattened,
+            outline.commands.items,
+            x,
+            baseline_y,
+        );
+        return .{
+            .prepared_fill = try prepared_scanline.prepare(
+                self.allocator,
+                flattened.items,
+            ),
+            // Hinted pixel geometry has already made its small-size decisions.
+            .hint_size = std.math.inf(f32),
+        };
+    }
+
     /// Scan immutable prepared geometry into `target`.
     ///
     /// The target and scan scratch are per call; a single prepared glyph may be
@@ -844,6 +877,35 @@ pub const Rasterizer = struct {
         if (self.embolden_small_glyphs and hint_size <= 20.0) {
             try self.emboldenSmallGlyph(target, flattened.items, hint_size);
         }
+    }
+
+    /// Draw an already grid-fitted pixel-space outline at caller placement.
+    pub fn renderPixelOutline(
+        self: *Rasterizer,
+        target: *RenderTarget,
+        outline: *const hinting_outline.PixelOutline,
+        x: f32,
+        baseline_y: f32,
+    ) !void {
+        const flattened_capacity =
+            outline_raster.lineCapacity(outline.commands.items);
+        var inline_flattened: [128]Line = undefined;
+        var flattened = if (flattened_capacity <= inline_flattened.len)
+            std.ArrayList(Line).initBuffer(inline_flattened[0..])
+        else
+            try std.ArrayList(Line).initCapacity(
+                self.allocator,
+                flattened_capacity,
+            );
+        defer if (flattened_capacity > inline_flattened.len)
+            flattened.deinit(self.allocator);
+        outline_raster.flattenPixelCommands(
+            &flattened,
+            outline.commands.items,
+            x,
+            baseline_y,
+        );
+        try self.fillLines(target, flattened.items, .non_zero);
     }
 
     fn emboldenPreparedGlyph(self: *Rasterizer, target: *RenderTarget, prepared: *const PreparedGlyph) !void {

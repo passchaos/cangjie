@@ -57,7 +57,33 @@ pub fn flatten(
     x: f32,
     baseline_y: f32,
 ) void {
-    flattenTransformed(lines, outline, .identity, scale, x, baseline_y);
+    flattenCommandsTransformed(
+        lines,
+        outline.commands.items,
+        .identity,
+        scale,
+        x,
+        baseline_y,
+    );
+}
+
+/// Flatten commands whose coordinates are already pixels.
+///
+/// Only caller placement is applied; no units-per-em scale participates.
+pub fn flattenPixelCommands(
+    lines: *std.ArrayList(Line),
+    commands: []const glyph_mod.PathCommand,
+    x: f32,
+    baseline_y: f32,
+) void {
+    flattenCommandsTransformed(
+        lines,
+        commands,
+        .identity,
+        1,
+        x,
+        baseline_y,
+    );
 }
 
 pub fn flattenTransformed(
@@ -68,9 +94,27 @@ pub fn flattenTransformed(
     x: f32,
     baseline_y: f32,
 ) void {
+    flattenCommandsTransformed(
+        lines,
+        outline.commands.items,
+        transform,
+        scale,
+        x,
+        baseline_y,
+    );
+}
+
+fn flattenCommandsTransformed(
+    lines: *std.ArrayList(Line),
+    commands: []const glyph_mod.PathCommand,
+    transform: ColorAffine,
+    scale: f32,
+    x: f32,
+    baseline_y: f32,
+) void {
     var start: ?Point = null;
     var current: ?Point = null;
-    for (outline.commands.items) |command| {
+    for (commands) |command| {
         switch (command) {
             .move_to => |point| {
                 const pixel = fontToPixel(

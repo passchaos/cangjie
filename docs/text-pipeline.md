@@ -906,10 +906,14 @@ and instance unchanged.
 
 `toPixelOutline` then reconstructs a distinct pixel-space path and applies the
 possibly modified left phantom (`pp1`) as the FreeType-compatible glyph
-origin. Compound and gvar-backed glyphs still return `UnsupportedHintGlyph`
-rather than silently losing component or variation semantics, and transactions
-reject an instance created from another face or PPEM/target. The direct
-rasterizer bridge and remaining less-common point opcodes are the next layer.
+origin. `Rasterizer.drawPixelOutline` and `preparePixelOutline` consume that
+path at scale one, applying only caller x/baseline placement; they deliberately
+skip the design-outline UPEM scale, small-glyph alignment, and synthetic
+emboldening because the bytecode has already made pixel-grid decisions.
+Compound and gvar-backed glyphs still return `UnsupportedHintGlyph` rather than
+silently losing component or variation semantics, and transactions reject an
+instance created from another face or PPEM/target. Automatic hinted run
+rendering and remaining less-common point opcodes are the next layer.
 
 The shaping integration suite is similarly rooted at
 `src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,

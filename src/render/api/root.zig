@@ -6,6 +6,7 @@
 const std = @import("std");
 
 const face_mod = @import("../../font/face/root.zig");
+const hinting_outline = @import("../../font/hinting/outline.zig");
 const glyph_mod = @import("../../glyph.zig");
 const run_types = @import("../../layout/types/runs.zig");
 const raster = @import("../../raster.zig");
@@ -59,6 +60,25 @@ pub const Rasterizer = struct {
         };
     }
 
+    /// Prepare already-hinted pixel geometry for repeated drawing.
+    ///
+    /// Only `x` and `baseline_y` placement is applied. The outline must not be
+    /// scaled by font size or units-per-em again.
+    pub fn preparePixelOutline(
+        self: *Rasterizer,
+        outline: *const hinting_outline.PixelOutline,
+        x: f32,
+        baseline_y: f32,
+    ) !Prepared {
+        return .{
+            .glyph = try self.implementation.preparePixelOutline(
+                outline,
+                x,
+                baseline_y,
+            ),
+        };
+    }
+
     pub fn drawPrepared(
         self: *Rasterizer,
         target: *raster.RenderTarget,
@@ -86,6 +106,22 @@ pub const Rasterizer = struct {
             baseline_y,
             font_size,
             units_per_em,
+        );
+    }
+
+    /// Draw already-hinted pixel geometry without a second font-unit scale.
+    pub fn drawPixelOutline(
+        self: *Rasterizer,
+        target: *raster.RenderTarget,
+        outline: *const hinting_outline.PixelOutline,
+        x: f32,
+        baseline_y: f32,
+    ) !void {
+        return self.implementation.renderPixelOutline(
+            target,
+            outline,
+            x,
+            baseline_y,
         );
     }
 

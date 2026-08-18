@@ -279,6 +279,99 @@ test "hint transaction execution rejects stale PPEM ownership" {
     );
 }
 
+test "hinted pixel outlines rasterize without units-per-em rescaling" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildTrueTypeHintingTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var instance = try face.hintingInstance(allocator, 16, .normal);
+    defer instance.deinit();
+    var transaction = try face.hintingPointTransaction(
+        allocator,
+        &instance,
+        1,
+    );
+    defer transaction.deinit();
+    try face.executeHintingTransaction(&instance, &transaction);
+    var pixel_outline = try transaction.toPixelOutline();
+    defer pixel_outline.deinit();
+
+    var direct = try cangjie.render.GrayTarget.init(allocator, 32, 32);
+    defer direct.deinit();
+    var prepared_target = try cangjie.render.GrayTarget.init(
+        allocator,
+        32,
+        32,
+    );
+    defer prepared_target.deinit();
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
+    defer rasterizer.deinit();
+    // The hinted path must not receive the design-outline small-glyph
+    // alignment or emboldening policy a second time.
+    rasterizer.setSmallGlyphEmboldening(true);
+    try rasterizer.drawPixelOutline(
+        &direct,
+        &pixel_outline,
+        3,
+        24,
+    );
+    var prepared = try rasterizer.preparePixelOutline(
+        &pixel_outline,
+        3,
+        24,
+    );
+    defer prepared.deinit();
+    try rasterizer.drawPrepared(&prepared_target, &prepared);
+
+    try std.testing.expectEqualSlices(
+        u8,
+        direct.pixels,
+        prepared_target.pixels,
+    );
+    const bounds = coverageBounds(&direct) orelse
+        return error.TestUnexpectedResult;
+    // Glyph 1 spans roughly 11 pixels at 16 PPEM. A mistaken UPEM scale would
+    // collapse that width to a subpixel or move it out of this placement.
+    try std.testing.expect(bounds.max_x - bounds.min_x >= 8);
+    try std.testing.expect(bounds.min_x >= 2);
+    try std.testing.expect(bounds.max_x <= 16);
+}
+
+const CoverageBounds = struct {
+    min_x: u32,
+    min_y: u32,
+    max_x: u32,
+    max_y: u32,
+};
+
+fn coverageBounds(
+    target: *const cangjie.render.GrayTarget,
+) ?CoverageBounds {
+    var result: ?CoverageBounds = null;
+    for (0..target.height) |y_value| {
+        const y: u32 = @intCast(y_value);
+        for (0..target.width) |x_value| {
+            const x: u32 = @intCast(x_value);
+            if (target.at(x, y) == 0) continue;
+            if (result) |*bounds| {
+                bounds.min_x = @min(bounds.min_x, x);
+                bounds.min_y = @min(bounds.min_y, y);
+                bounds.max_x = @max(bounds.max_x, x);
+                bounds.max_y = @max(bounds.max_y, y);
+            } else {
+                result = .{
+                    .min_x = x,
+                    .min_y = y,
+                    .max_x = x,
+                    .max_y = y,
+                };
+            }
+        }
+    }
+    return result;
+}
+
 fn expectScaledCommand(
     expected: glyph.PathCommand,
     actual: glyph.PathCommand,

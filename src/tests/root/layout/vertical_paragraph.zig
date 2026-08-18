@@ -11,6 +11,8 @@ test {
     _ = @import("vertical_paragraph/ranged_policy.zig");
     _ = @import("vertical_paragraph/whitespace.zig");
     _ = @import("vertical_paragraph/flow_spacing.zig");
+    _ = @import("vertical_paragraph/negative_spacing.zig");
+    _ = @import("vertical_paragraph/negative_spacing_integration.zig");
     _ = @import("vertical_paragraph/tabs.zig");
     _ = @import("vertical_paragraph/tab_integration.zig");
     _ = @import("vertical_paragraph/inline_objects.zig");

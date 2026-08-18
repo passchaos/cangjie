@@ -105,29 +105,19 @@ test "vertical no-wrap paragraph exposes physical column geometry" {
         0.001,
     );
 
-    for ([_]support.ParagraphOptions{
-        .{
-            .max_width = 100,
-            .wrap_mode = .no_wrap,
-            .writing_mode = .vertical_rl,
-            .direction = .rtl,
-        },
-        .{
-            .max_width = 100,
-            .wrap_mode = .no_wrap,
-            .writing_mode = .vertical_rl,
-            .letter_spacing = -1,
-        },
-    }) |unsupported| {
-        try std.testing.expectError(
-            error.UnsupportedVerticalParagraphOptions,
-            TextShaper.layoutParagraphUtf8(
-                FontCascade.init(&.{&font}),
-                &buffer,
-                "AA",
-                20,
-                unsupported,
-            ),
-        );
-    }
+    try std.testing.expectError(
+        error.UnsupportedVerticalParagraphOptions,
+        TextShaper.layoutParagraphUtf8(
+            FontCascade.init(&.{&font}),
+            &buffer,
+            "AA",
+            20,
+            .{
+                .max_width = 100,
+                .wrap_mode = .no_wrap,
+                .writing_mode = .vertical_rl,
+                .direction = .rtl,
+            },
+        ),
+    );
 }

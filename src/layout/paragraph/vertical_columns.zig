@@ -8,11 +8,11 @@
 //! without importing horizontal regions, tabs, justification, or rollback.
 
 const geometry = @import("../line_break/reflow/geometry.zig");
-const inline_object = @import("../inline_object/root.zig");
 const opportunities = @import("../line_break/reflow/opportunities.zig");
 const line_break_opportunity = @import("../line_break/opportunity.zig");
 const truncation = @import("../line_break/reflow/truncation.zig");
 const paragraph_options = @import("options.zig");
+const vertical_advances = @import("vertical_advances.zig");
 const vertical_block_metrics = @import("vertical_block_metrics.zig");
 const vertical_ellipsis = @import("vertical_ellipsis.zig");
 const vertical_inline_alignment = @import("vertical_inline_alignment.zig");
@@ -33,42 +33,16 @@ pub fn build(
 ) !void {
     buffer.lines.clearRetainingCapacity();
 
-    for (buffer.glyphs.items) |*glyph| {
-        if (opportunities.isMandatory(glyph.codepoint)) {
-            // Separators own source/caret topology but never consume column
-            // height or request rendering through a line's glyph range.
-            glyph.x_advance = 0;
-            glyph.y_advance = 0;
-            continue;
-        }
-        if (glyph.isInlineObject()) {
-            const object = inline_object.find(
-                options.inline_objects,
-                glyph.cluster,
-            ) orelse return error.InvalidInlineObjects;
-            // Retained reflow may change object geometry while preserving the
-            // source anchor. Refresh both physical dimensions from the current
-            // request rather than trusting the shaping snapshot.
-            // Ordinary and custom out-of-flow markers are anchor atoms only:
-            // custom absolute geometry is applied later by presentation and
-            // must never feed back into column selection or paragraph metrics.
-            const in_flow = object.kind == .in_flow;
-            glyph.x_advance = if (in_flow) object.width else 0;
-            glyph.y_advance = if (in_flow) object.height else 0;
-            continue;
-        }
-        if (!glyph.isTab()) {
-            glyph.y_advance += geometry.spacingForGlyph(
-                glyph.codepoint,
-                options,
-            );
-        }
-    }
+    // Retained reflow may change spacing/object geometry while preserving the
+    // source anchors. Rebuild every mutable vertical advance from the restored
+    // shaping snapshot before white-space and wrap policy consume it.
+    try vertical_advances.apply(buffer.glyphs.items, options);
     white_space.prepareVertical(
         buffer.glyphs.items,
         options.white_space_collapse,
         white_space.defaultVerticalSpaceAdvance(buffer.glyphs.items),
     );
+    try vertical_advances.validate(buffer.glyphs.items);
 
     var owned_graphemes: ?[]unicode.GraphemeCluster = null;
     defer if (owned_graphemes) |items| buffer.allocator.free(items);

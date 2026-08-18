@@ -630,8 +630,8 @@ not yet moved to the shared inline/block-axis model.
 This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
 axes, vertical paragraph validation rejects bottom-to-top/RTL text, bidi
-controls, justification, negative glyph spacing, exclusions/line regions
-(including resolver responses that introduce an exclusion), hyphenation,
+controls, justification, exclusions/line regions (including resolver responses
+that introduce an exclusion), hyphenation,
 optical punctuation, and the resumable breaker. Retained whole-paragraph
 layout and intrinsic inline-size measurement are supported and restore the
 pristine vertical shaping snapshot between calls. Returning a concrete
@@ -876,6 +876,17 @@ horizontal x advances and vertical positive-down y advances:
   a run as a source-visible collapsed blank rather than a ruler command.
 - `.break_spaces` preserves every advance and makes each authored blank a soft
   boundary, including consecutive and trailing spaces.
+
+Paragraph and attributed `letter_spacing` / `word_spacing` are signed
+post-shaping advance adjustments on both axes. Vertical layout accepts negative
+values while every resulting source atom retains a nonnegative positive-down
+advance; exact zero is valid. A request that would reverse even one glyph or
+space advance returns `InvalidParagraphOptions` rather than breaking the
+monotone prefix, caret, selection, tab-ruler, and TextGeometry contracts.
+Layout, intrinsic sizing, retained reflow, and styled metadata all use the same
+validated advance refresh. Validation happens after white-space normalization,
+so `.collapse` may safely erase an over-compressed authored blank that would
+remain invalid under `.preserve` or `.break_spaces`.
 
 Collapsed atoms stay in the glyph-parallel source/style sidecars with zero
 advance. Caret, selection, bidi, attributed paint, decorations, text geometry,

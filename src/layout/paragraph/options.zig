@@ -157,7 +157,15 @@ pub const Options = struct {
     tab_width: usize = 4,
     /// Absolute stops from each line/column fragment's logical inline start.
     tab_stops: []const tabs.Stop = &.{},
+    /// Signed post-shaping adjustment for non-space source glyph advances.
+    ///
+    /// In vertical paragraphs, every resulting positive-down source advance
+    /// must remain nonnegative so wrapping and caret topology stay monotone.
     letter_spacing: f32 = 0,
+    /// Signed post-shaping adjustment for U+0020 source glyph advances.
+    ///
+    /// Vertical layout rejects a request whose resulting space advance would
+    /// become negative; an exact zero advance remains valid.
     word_spacing: f32 = 0,
     /// Inline-axis inset reserved before each hard-break segment's first line.
     ///
@@ -311,8 +319,6 @@ fn validateVerticalForText(text: []const u8, options: Options) !void {
     if (options.direction != .ltr or
         options.line_break_strategy != .greedy or
         !verticalAlignmentSupported(options.alignment) or
-        options.letter_spacing < 0 or
-        options.word_spacing < 0 or
         options.exclusions.len != 0 or
         options.line_regions.len != 0 or
         options.word_break_dictionary != null or

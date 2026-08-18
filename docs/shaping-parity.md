@@ -2234,6 +2234,11 @@ shaping-performance superiority.
   run ownership, object-derived block width, styled metadata, and retained
   restoration; a trailing hard break's omitted empty column still triggers the
   tail, while a zero-column limit remains empty.
+  Signed paragraph and attributed letter/word spacing also maps to vertical y:
+  negative values are exact while every resulting source advance stays
+  nonnegative, and an over-compressed request fails explicitly instead of
+  producing reverse wrap/caret topology. Plain, intrinsic, retained, styled,
+  tab-ruler, interaction, TextGeometry, and renderer output share that proof.
   Ordinary out-of-flow source-anchor fallbacks remain zero-occupancy while
   retaining paint output. Custom out-of-flow markers now accept absolute
   presentation-only geometry directly and through placement-only concrete

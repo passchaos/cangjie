@@ -2208,13 +2208,14 @@ shaping-performance superiority.
   grayscale, color, and TrueType-hinted run renderers rotate those glyphs
   clockwise around the shaping origin without changing advances.
   Paragraph layout now exposes that same output through vertical greedy
-  wrapping. It selects safe UAX #14 boundaries before grapheme-safe emergency
-  breaks, while `.no_wrap` preserves hard-break-only columns. `vertical_rl`
-  and `vertical_lr` select right-to-left or left-to-right block progression
-  independently from TTB/BTT inline direction. Physical column bounds, y-axis
-  hit testing, horizontal caret/selection bars, owned TextGeometry, debug
-  overlays, retained reflow, and renderer draw-list y pens are covered
-  together. Tabs, bidi handling,
+  wrapping. Global `word-break` and `overflow-wrap` policy tailors safe UAX #14
+  boundaries before any requested grapheme-safe emergency breaks, while
+  `.no_wrap` preserves hard-break-only columns. `vertical_rl` and `vertical_lr`
+  select right-to-left or left-to-right block progression independently from
+  TTB/BTT inline direction. Physical column bounds, y-axis hit testing,
+  horizontal caret/selection bars, owned TextGeometry, debug overlays,
+  retained reflow, and renderer draw-list y pens are covered together.
+  Per-range wrapping overrides, tabs, bidi handling,
   exclusions, objects, justification, truncation, and incremental breaking are
   rejected explicitly until they are migrated to the shared inline/block-axis
   model; this is not yet full vertical paragraph parity.

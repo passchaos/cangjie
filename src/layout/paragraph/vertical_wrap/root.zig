@@ -9,6 +9,7 @@ const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const intrinsic = @import("intrinsic.zig");
 const line_break_opportunity = @import("../../line_break/opportunity.zig");
 const paragraph_options = @import("../options.zig");
+const policy = @import("policy.zig");
 const shared = @import("shared.zig");
 const unicode = @import("../../../unicode.zig");
 
@@ -25,6 +26,14 @@ pub fn build(
 ) ![]Range {
     var output = std.ArrayList(Range).empty;
     errdefer output.deinit(allocator);
+    var effective_breaks = try policy.resolve(
+        allocator,
+        text,
+        graphemes,
+        breaks,
+        options,
+    );
+    defer effective_breaks.deinit();
     const prefix = try allocator.alloc(f32, glyphs.len + 1);
     defer allocator.free(prefix);
     shared.fillPrefix(prefix, glyphs);
@@ -47,7 +56,7 @@ pub fn build(
             glyphs,
             prefix,
             graphemes,
-            breaks,
+            effective_breaks.items,
             options,
             segment_start,
             index,
@@ -65,7 +74,7 @@ pub fn build(
         glyphs,
         prefix,
         graphemes,
-        breaks,
+        effective_breaks.items,
         options,
         segment_start,
         glyphs.len,
@@ -151,16 +160,26 @@ fn appendSegment(
             glyph_start,
             overflow,
             limit,
-        ) orelse candidates.emergency(
-            glyphs,
-            prefix,
-            graphemes,
-            glyph_start,
-            segment_end,
-            segment_byte_end,
-            overflow,
-            limit,
-        );
+        ) orelse if (options.overflow_wrap == .normal)
+            candidates.firstUsable(
+                items.items,
+                glyph_start,
+            ) orelse shared.SoftCandidate{
+                .glyph_end = segment_end,
+                .next_glyph_start = segment_end,
+                .byte_end = segment_byte_end,
+            }
+        else
+            candidates.emergency(
+                glyphs,
+                prefix,
+                graphemes,
+                glyph_start,
+                segment_end,
+                segment_byte_end,
+                overflow,
+                limit,
+            );
         try output.append(allocator, .{
             .glyph_start = glyph_start,
             .glyph_end = selected.glyph_end,
@@ -229,4 +248,23 @@ test "vertical emergency break defers across unsafe output boundaries" {
     defer std.testing.allocator.free(ranges);
     try std.testing.expectEqual(@as(usize, 1), ranges.len);
     try std.testing.expectEqual(@as(usize, 2), ranges[0].glyph_end);
+
+    const break_all = try build(
+        std.testing.allocator,
+        "AA",
+        &glyphs,
+        &graphemes,
+        &.{},
+        .{
+            .max_width = 20.1,
+            .word_break = .break_all,
+            .overflow_wrap = .normal,
+            .writing_mode = .vertical_lr,
+        },
+    );
+    defer std.testing.allocator.free(break_all);
+    // Policy-generated grapheme candidates remain subordinate to shaping
+    // safety; `break-all` cannot split an unsafe positioning relationship.
+    try std.testing.expectEqual(@as(usize, 1), break_all.len);
+    try std.testing.expectEqual(@as(usize, 2), break_all[0].glyph_end);
 }

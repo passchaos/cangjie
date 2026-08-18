@@ -549,10 +549,12 @@ vertical origins out of band.
 
 Paragraph layout now admits vertical writing through
 `ParagraphOptions.writing_mode` and `text_orientation`. `max_width` is the
-inline-size/column-height measure. Greedy `.word` wrapping prefers reusable
-UAX #14 opportunities and falls back to extended-grapheme boundaries that also
-pass the shaper's `unsafe-to-break` contract; `.no_wrap` keeps only hard
-breaks. `vertical_rl` places source-order columns from right to left, while
+inline-size/column-height measure. Greedy `.word` wrapping applies global
+`word_break` (`normal`, `break_all`, or `keep_all`) and `overflow_wrap`
+(`normal`, `break_word`, or `anywhere`) policy to reusable UAX #14 boundaries.
+Emergency modes fall back to extended-grapheme boundaries that also pass the
+shaper's `unsafe-to-break` contract; `.no_wrap` keeps only hard breaks.
+`vertical_rl` places source-order columns from right to left, while
 `vertical_lr` places them left to right. This block progression is independent
 from HarfBuzz-style BTT, which remains an inline-direction request rather than
 a CSS writing mode. Paragraph hit testing, caret/selection rectangles, owned
@@ -564,7 +566,7 @@ coordinates.
 This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
 axes, vertical paragraph validation rejects bottom-to-top/RTL text, bidi
-controls, tabs, justification,
+controls, per-range/attributed wrapping overrides, tabs, justification,
 ellipsis/line limits, whitespace collapsing, negative spacing, indentation,
 paragraph spacing, exclusions/line regions, inline objects, hyphenation,
 optical punctuation, and the resumable breaker. Retained whole-paragraph

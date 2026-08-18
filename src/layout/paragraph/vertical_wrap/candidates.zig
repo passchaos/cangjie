@@ -58,6 +58,26 @@ pub fn lastFitting(
     return selected;
 }
 
+/// Return the first ordinary boundary after an overfull indivisible fragment.
+///
+/// `overflow-wrap: normal` must not manufacture a grapheme edge merely to
+/// satisfy the measure. It instead keeps consuming the current word/CJK
+/// fragment until the next policy-approved UAX boundary, even when that makes
+/// the column taller than its requested inline size.
+pub fn firstUsable(
+    items: []const shared.SoftCandidate,
+    glyph_start: usize,
+) ?shared.SoftCandidate {
+    for (items) |candidate| {
+        if (candidate.glyph_end > glyph_start and
+            candidate.next_glyph_start > glyph_start)
+        {
+            return candidate;
+        }
+    }
+    return null;
+}
+
 pub fn emergency(
     glyphs: []const GlyphPosition,
     prefix: []const f32,

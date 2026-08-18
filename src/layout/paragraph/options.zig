@@ -130,10 +130,11 @@ pub const Options = struct {
     /// Physical writing mode shared by shaping and final paragraph geometry.
     ///
     /// The vertical paragraph contract wraps top-to-bottom columns against
-    /// `max_width` as their inline-size/height measure. It prefers safe UAX #14
-    /// opportunities and uses grapheme-safe emergency boundaries when an
-    /// unbreakable fragment overflows; `.no_wrap` keeps only hard breaks.
-    /// `vertical_rl` and `vertical_lr` select physical column progression.
+    /// `max_width` as their inline-size/height measure. Global `word_break`
+    /// and `overflow_wrap` tailor safe UAX #14 opportunities; emergency modes
+    /// use grapheme boundaries that remain safe for shaped-output reuse.
+    /// `.no_wrap` keeps only hard breaks. `vertical_rl` and `vertical_lr`
+    /// select physical column progression.
     writing_mode: pipeline_types.WritingMode = .horizontal_tb,
     text_orientation: pipeline_types.TextOrientation = .mixed,
     max_lines: ?usize = null,
@@ -292,8 +293,6 @@ fn validateVerticalForText(text: []const u8, options: Options) !void {
         options.alignment != .start or
         options.max_lines != null or
         options.ellipsis or
-        options.word_break != .normal or
-        options.overflow_wrap != .break_word or
         options.line_break_policy_ranges.len != 0 or
         options.white_space_collapse != .preserve or
         options.letter_spacing < 0 or
@@ -454,20 +453,37 @@ test "vertical paragraph validation admits only implemented columns" {
         .max_width = 100,
         .writing_mode = .vertical_rl,
     });
+    try validateForText("AA", .{
+        .max_width = 100,
+        .word_break = .break_all,
+        .overflow_wrap = .anywhere,
+        .writing_mode = .vertical_rl,
+    });
+    try validateForText("AA", .{
+        .max_width = 100,
+        .word_break = .keep_all,
+        .overflow_wrap = .normal,
+        .writing_mode = .vertical_lr,
+    });
+    try validateForText("AA", .{
+        .max_width = 100,
+        .wrap_mode = .no_wrap,
+        .word_break = .break_all,
+        .overflow_wrap = .anywhere,
+        .writing_mode = .vertical_lr,
+    });
     try std.testing.expectError(
         error.UnsupportedVerticalParagraphOptions,
         validateForText("AA", .{
             .max_width = 100,
-            .wrap_mode = .no_wrap,
-            .word_break = .break_all,
-            .writing_mode = .vertical_rl,
+            .writing_mode = .vertical_lr,
+            .line_break_policy_ranges = &.{.{
+                .byte_start = 0,
+                .byte_len = 1,
+                .word_break = .break_all,
+            }},
         }),
     );
-    try validateForText("AA", .{
-        .max_width = 100,
-        .wrap_mode = .no_wrap,
-        .writing_mode = .vertical_lr,
-    });
     try validateForText("A\nA", .{
         .max_width = 100,
         .wrap_mode = .no_wrap,

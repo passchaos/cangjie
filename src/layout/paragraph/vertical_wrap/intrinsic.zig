@@ -7,6 +7,7 @@ const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const line_break_opportunity = @import("../../line_break/opportunity.zig");
 const paragraph_options = @import("../options.zig");
 const paragraph_types = @import("../../types/paragraph.zig");
+const policy = @import("policy.zig");
 const shared = @import("shared.zig");
 const unicode = @import("../../../unicode.zig");
 
@@ -18,6 +19,14 @@ pub fn measure(
     breaks: []const line_break_opportunity.Opportunity,
     options: paragraph_options.Options,
 ) !paragraph_types.ContentWidths {
+    var effective_breaks = try policy.resolve(
+        allocator,
+        text,
+        graphemes,
+        breaks,
+        options,
+    );
+    defer effective_breaks.deinit();
     const prefix = try allocator.alloc(f32, glyphs.len + 1);
     defer allocator.free(prefix);
     prefix[0] = 0;
@@ -44,7 +53,7 @@ pub fn measure(
             glyphs,
             prefix,
             graphemes,
-            breaks,
+            effective_breaks.items,
             options,
             segment_start,
             index,
@@ -67,7 +76,7 @@ pub fn measure(
         glyphs,
         prefix,
         graphemes,
-        breaks,
+        effective_breaks.items,
         options,
         segment_start,
         glyphs.len,

@@ -106,6 +106,22 @@ pub const Face = struct {
         );
     }
 
+    /// Execute TrueType size programs at a complete normalized fvar location.
+    pub fn hintingInstanceAt(
+        self: *const Face,
+        allocator: std.mem.Allocator,
+        ppem: u16,
+        target: font_mod.TrueTypeHintingTarget,
+        normalized_coords: []const f32,
+    ) (font_mod.FontError || @import("../hinting/root.zig").Error)!font_mod.TrueTypeHintingInstance {
+        return self.implementation.hintingInstanceAt(
+            allocator,
+            ppem,
+            target,
+            normalized_coords,
+        );
+    }
+
     /// Decode a default-instance simple glyf into raw 26.6 point state.
     ///
     /// Glyph bytecode has not run; use the returned owner as the atomic input

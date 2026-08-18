@@ -1538,7 +1538,37 @@ pub const Font = struct {
         ppem: u16,
         target: TrueTypeHintingTarget,
     ) (FontError || hinting.Error)!TrueTypeHintingInstance {
+        const axis_count = self.fvar_axis_count orelse 0;
+        var inline_default: [32]f32 = .{0} ** 32;
+        const default_location = if (axis_count <= inline_default.len)
+            inline_default[0..axis_count]
+        else
+            try allocator.alloc(f32, axis_count);
+        defer if (axis_count > inline_default.len)
+            allocator.free(default_location);
+        if (axis_count > inline_default.len) @memset(default_location, 0);
+        return self.hintingInstanceAt(
+            allocator,
+            ppem,
+            target,
+            default_location,
+        );
+    }
+
+    /// Execute fpgm/prep for one PPEM and a complete normalized fvar location.
+    pub fn hintingInstanceAt(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        ppem: u16,
+        target: TrueTypeHintingTarget,
+        normalized_coords: []const f32,
+    ) (FontError || hinting.Error)!TrueTypeHintingInstance {
         if (self.format != .truetype) return error.UnsupportedGlyph;
+        const axis_count = self.fvar_axis_count orelse 0;
+        if (normalized_coords.len != axis_count) {
+            return error.InvalidHintOperand;
+        }
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
         const head_info = try self.headInfo();
         const maxp_info = try self.maxpInfo();
         const cvt_data = if (self.cvt) |cvt| blk: {
@@ -1556,6 +1586,18 @@ pub const Font = struct {
             try validateTrueTypeProgramTable(self.data, prep);
             break :blk self.data[prep.offset .. prep.offset + prep.length];
         } else &.{};
+        const cvar_data = if (self.cvar) |cvar| blk: {
+            try sfnt.checksum.validate(self.data, cvar);
+            const cvt_value_count = cvt_data.len / 2;
+            try cvar_mod.validate(
+                self.data,
+                cvar.offset,
+                cvar.length,
+                axis_count,
+                cvt_value_count,
+            );
+            break :blk self.data[cvar.offset .. cvar.offset + cvar.length];
+        } else &.{};
         return hinting.Instance.init(
             allocator,
             .{
@@ -1564,6 +1606,8 @@ pub const Font = struct {
                 .font_program = font_program,
                 .control_value_program = control_value_program,
                 .control_value_data = cvt_data,
+                .normalized_coords = normalized_coords,
+                .control_value_variation_data = cvar_data,
                 .limits = .{
                     .max_storage = maxp_info.max_storage orelse
                         return error.BadSfnt,

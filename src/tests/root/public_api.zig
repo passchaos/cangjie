@@ -19,6 +19,7 @@ test "public facade uses domain names without legacy aliases" {
         @typeInfo(cangjie.font.HintingError) == .error_set,
     );
     try std.testing.expect(@hasDecl(cangjie.font.Face, "hintingInstance"));
+    try std.testing.expect(@hasDecl(cangjie.font.Face, "hintingInstanceAt"));
     try std.testing.expect(
         @typeInfo(cangjie.font.HintingPointTransaction) == .@"struct",
     );

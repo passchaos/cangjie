@@ -52,6 +52,10 @@ pub const Source = struct {
     glyph_program: []const u8 = &.{},
     /// Big-endian signed FUnit values borrowed directly from `cvt `.
     control_value_data: []const u8,
+    /// Complete fvar axis-order location, quantized to F2Dot14 values.
+    normalized_coords: []const f32 = &.{},
+    /// Borrowed validated cvar table payload, empty when absent.
+    control_value_variation_data: []const u8 = &.{},
     limits: Limits,
 };
 

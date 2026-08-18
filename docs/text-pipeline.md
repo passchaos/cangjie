@@ -887,9 +887,12 @@ instructions required by the TrueType point-zone model. Point-only opcodes in
 silent no-ops. The next hinting slice introduces an atomic raw glyf point
 transaction, applies gvar/phantom deltas before scaling, runs the glyph
 program, and only then reconstructs public paths and raster input.
-The current size instance is also the default variation location; cvar and
-GETVARIATION require the same normalized-coordinate ownership and are deferred
-to that raw-point slice rather than approximated independently.
+`Face.hintingInstanceAt` owns a complete, F2Dot14-quantized normalized fvar
+location. It rebuilds the base CVT, applies active cvar tuples in design units,
+scales the varied CVT to 26.6, and only then runs prep; GETVARIATION reads that
+same owned axis-order location. `hintingInstance` delegates with an all-zero
+location. The remaining variation gap is applying gvar to transaction points
+and phantom metrics before glyph scaling and bytecode.
 
 The raw-point boundary now exists for default-instance simple and compound
 `glyf` glyphs as `Face.hintingPointTransaction`. It owns unscaled,

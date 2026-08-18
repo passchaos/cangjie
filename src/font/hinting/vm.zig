@@ -271,9 +271,8 @@ pub const Vm = struct {
             0x8d => self.graphics.scan_type = (try self.stack.pop()) & 0xffff,
             0x8e => try self.instructionControl(),
 
-            // GETVARIATION/GETDATA need normalized coordinate ownership, which
-            // is added together with cvar and glyph point execution.
-            0x91, 0x92 => return error.UnsupportedHintInstruction,
+            0x91 => try self.getVariation(),
+            0x92 => try self.stack.push(17),
 
             // Every remaining standard opcode touches a point zone or relies
             // on projection vectors derived from point geometry.
@@ -579,6 +578,19 @@ pub const Vm = struct {
             }
         }
         try self.stack.push(result);
+    }
+
+    fn getVariation(self: *Vm) types.Error!void {
+        for (self.source.normalized_coords) |coordinate| {
+            if (!std.math.isFinite(coordinate) or
+                coordinate < -1 or coordinate > 1)
+            {
+                return error.InvalidHintOperand;
+            }
+            try self.stack.push(@intFromFloat(
+                @round(coordinate * 16384.0),
+            ));
+        }
     }
 
     fn loopLimit(self: Vm) usize {

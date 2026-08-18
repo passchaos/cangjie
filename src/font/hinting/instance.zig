@@ -5,6 +5,7 @@ const std = @import("std");
 const compound = @import("compound.zig");
 const glyph_executor = @import("glyph/executor.zig");
 const outline = @import("outline.zig");
+const cvar = @import("../../opentype/cvar.zig");
 const program = @import("program.zig");
 const types = @import("types.zig");
 const vm_mod = @import("vm.zig");
@@ -21,6 +22,7 @@ pub const Instance = struct {
     storage: []i32,
     stack: []i32,
     graphics: types.RetainedGraphicsState,
+    normalized_coords: []f32,
     twilight_points: []outline.Point,
     twilight_original: []outline.Point,
     twilight_unscaled: []outline.Point,
@@ -40,6 +42,17 @@ pub const Instance = struct {
         }
         if ((source.control_value_data.len & 1) != 0) {
             return error.BadSfnt;
+        }
+        const normalized_coords = try allocator.alloc(
+            f32,
+            source.normalized_coords.len,
+        );
+        errdefer allocator.free(normalized_coords);
+        for (source.normalized_coords, normalized_coords) |value, *owned| {
+            if (!std.math.isFinite(value) or value < -1 or value > 1) {
+                return error.InvalidHintOperand;
+            }
+            owned.* = @round(value * 16384.0) / 16384.0;
         }
         const scale_16_16 = try scaleForPpem(ppem, source.units_per_em);
         const functions = try allocator.alloc(
@@ -105,9 +118,11 @@ pub const Instance = struct {
         @memset(twilight_flags, .{});
         loadScaledCvt(cvt, source.control_value_data, scale_16_16);
 
+        var owned_source = source;
+        owned_source.normalized_coords = normalized_coords;
         var result = Instance{
             .allocator = allocator,
-            .source = source,
+            .source = owned_source,
             .ppem = ppem,
             .target = target,
             .scale_16_16 = scale_16_16,
@@ -117,6 +132,7 @@ pub const Instance = struct {
             .storage = storage,
             .stack = stack,
             .graphics = defaultGraphics(scale_16_16, ppem, target),
+            .normalized_coords = normalized_coords,
             .twilight_points = twilight_points,
             .twilight_original = twilight_original,
             .twilight_unscaled = twilight_unscaled,
@@ -129,7 +145,14 @@ pub const Instance = struct {
         // FreeType rebuilds the size CVT from font data, then resets graphics,
         // twilight, and storage before prep. Font-program writes therefore do
         // not leak into the retained size state.
-        loadScaledCvt(result.cvt, source.control_value_data, scale_16_16);
+        try loadVariedScaledCvt(
+            allocator,
+            result.cvt,
+            source.control_value_data,
+            source.control_value_variation_data,
+            normalized_coords,
+            scale_16_16,
+        );
         result.graphics = defaultGraphics(scale_16_16, ppem, target);
         @memset(result.storage, 0);
         interpreter = result.vm();
@@ -147,6 +170,7 @@ pub const Instance = struct {
         self.allocator.free(self.cvt);
         self.allocator.free(self.instructions);
         self.allocator.free(self.functions);
+        self.allocator.free(self.normalized_coords);
         self.* = undefined;
     }
 
@@ -166,6 +190,10 @@ pub const Instance = struct {
         self: *const Instance,
     ) types.RetainedGraphicsState {
         return self.graphics;
+    }
+
+    pub fn normalizedCoordinates(self: *const Instance) []const f32 {
+        return self.normalized_coords;
     }
 
     /// Execute the transaction's glyph program and atomically commit every
@@ -252,6 +280,46 @@ fn loadScaledCvt(
     }
 }
 
+fn loadVariedScaledCvt(
+    allocator: std.mem.Allocator,
+    output: []i32,
+    data: []const u8,
+    cvar_data: []const u8,
+    normalized_coords: []const f32,
+    scale_16_16: i32,
+) types.Error!void {
+    if (cvar_data.len == 0) {
+        loadScaledCvt(output, data, scale_16_16);
+        return;
+    }
+    const deltas = try allocator.alloc(i32, output.len);
+    defer allocator.free(deltas);
+    @memset(deltas, 0);
+    cvar.accumulateDeltas(
+        allocator,
+        cvar_data,
+        0,
+        cvar_data.len,
+        normalized_coords.len,
+        output.len,
+        normalized_coords,
+        deltas,
+    ) catch |err| return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => error.BadSfnt,
+    };
+    var offset: usize = 0;
+    for (output, deltas) |*value, delta| {
+        const base = std.mem.readInt(
+            i16,
+            data[offset..][0..2],
+            .big,
+        );
+        value.* = types.scaleFUnits(@as(i32, base) +| delta, scale_16_16);
+        offset += 2;
+    }
+}
+
 fn defaultGraphics(
     scale_16_16: i32,
     ppem: u16,
@@ -318,6 +386,40 @@ test "instance executes prep control flow and instruction control" {
     defer instance.deinit();
     try std.testing.expectEqual(@as(i32, 9), instance.storageValues()[0]);
     try std.testing.expect(!instance.isEnabled());
+}
+
+test "instance owns normalized coordinates and GETVARIATION exposes F2Dot14" {
+    var coordinates = [_]f32{0.5};
+    const source = types.Source{
+        .units_per_em = 1000,
+        .font_program = &.{},
+        // GETVARIATION pushes 8192; store it at storage[0].
+        .control_value_program = &.{ 0x91, 0xb0, 0, 0x23, 0x42 },
+        .control_value_data = &.{},
+        .normalized_coords = &coordinates,
+        .limits = .{
+            .max_storage = 1,
+            .max_function_defs = 0,
+            .max_instruction_defs = 0,
+            .max_stack_elements = 4,
+            .max_twilight_points = 0,
+        },
+    };
+    var instance = try Instance.init(
+        std.testing.allocator,
+        source,
+        16,
+        .normal,
+    );
+    defer instance.deinit();
+    coordinates[0] = -1;
+
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0.5},
+        instance.normalizedCoordinates(),
+    );
+    try std.testing.expectEqual(@as(i32, 8192), instance.storageValues()[0]);
 }
 
 test "font-program CVT writes reset before prep" {

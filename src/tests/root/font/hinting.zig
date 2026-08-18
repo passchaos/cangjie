@@ -66,6 +66,53 @@ test "TrueType hinting rejects invalid sizes and borrowed mutations" {
     );
 }
 
+test "variation hinting instances apply cvar before prep" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCvarTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+
+    var default_instance = try face.hintingInstance(
+        allocator,
+        20,
+        .normal,
+    );
+    defer default_instance.deinit();
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0},
+        default_instance.normalizedCoordinates(),
+    );
+    try std.testing.expectEqualSlices(
+        i32,
+        &.{ 13, 26, -6, 0 },
+        default_instance.controlValues(),
+    );
+
+    var varied = try face.hintingInstanceAt(
+        allocator,
+        20,
+        .normal,
+        &.{1},
+    );
+    defer varied.deinit();
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{1},
+        varied.normalizedCoordinates(),
+    );
+    try std.testing.expectEqualSlices(
+        i32,
+        &.{ 14, 28, -3, 5 },
+        varied.controlValues(),
+    );
+    try std.testing.expectError(
+        error.InvalidHintOperand,
+        face.hintingInstanceAt(allocator, 20, .normal, &.{}),
+    );
+}
+
 test "CFF faces do not expose TrueType hinting instances" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalOtf(allocator);
@@ -105,6 +152,41 @@ test "installed TrueType size programs execute for representative fonts" {
         found += 1;
     }
     if (found == 0) return error.SkipZigTest;
+}
+
+test "installed cvar font owns non-default hinting location" {
+    const allocator = std.testing.allocator;
+    const path =
+        "/usr/share/fonts/truetype/cascadia-code/CascadiaCode.ttf";
+    const bytes = std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        path,
+        allocator,
+        .limited(32 * 1024 * 1024),
+    ) catch |err| switch (err) {
+        error.FileNotFound => return error.SkipZigTest,
+        else => return err,
+    };
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    const axes = try face.variations().axes(allocator);
+    defer allocator.free(axes);
+    if (axes.len == 0) return error.SkipZigTest;
+    const location = try allocator.alloc(f32, axes.len);
+    defer allocator.free(location);
+    @memset(location, 0.5);
+    var instance = try face.hintingInstanceAt(
+        allocator,
+        16,
+        .normal,
+        location,
+    );
+    defer instance.deinit();
+    try std.testing.expectEqual(axes.len, instance.normalizedCoordinates().len);
+    for (instance.normalizedCoordinates()) |coordinate| {
+        try std.testing.expectEqual(@as(f32, 0.5), coordinate);
+    }
 }
 
 test "installed simple glyph programs execute transactionally" {

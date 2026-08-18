@@ -35,9 +35,10 @@ pub fn measure(
                 options.inline_objects,
                 glyph.cluster,
             ) orelse return error.InvalidInlineObjects;
-            if (object.kind == .custom_out_of_flow) {
-                return error.UnsupportedVerticalParagraphOptions;
-            }
+            // Absolute custom paint bounds are presentation-only. Measuring
+            // them here would make min/max content disagree with final vertical
+            // column construction, where every out-of-flow marker is an anchor
+            // with zero occupancy.
             const in_flow = object.kind == .in_flow;
             glyph.x_advance = if (in_flow) object.width else 0;
             glyph.y_advance = if (in_flow) object.height else 0;

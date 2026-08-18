@@ -316,7 +316,6 @@ fn validateVerticalForText(text: []const u8, options: Options) !void {
         options.word_spacing < 0 or
         options.exclusions.len != 0 or
         options.line_regions.len != 0 or
-        options.out_of_flow_placements.len != 0 or
         options.word_break_dictionary != null or
         options.hyphenation.dictionary != null or
         options.hyphenation.character != null or
@@ -326,12 +325,6 @@ fn validateVerticalForText(text: []const u8, options: Options) !void {
     {
         return error.UnsupportedVerticalParagraphOptions;
     }
-    for (options.inline_objects) |object| {
-        if (object.kind == .custom_out_of_flow) {
-            return error.UnsupportedVerticalParagraphOptions;
-        }
-    }
-
     var iterator = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
     while (iterator.nextCodepoint()) |codepoint| {
         if (switch (unicode.exactBidiClassForCodepoint(codepoint)) {

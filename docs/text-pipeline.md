@@ -606,15 +606,21 @@ reflow, attributed metadata, and renderer object draw commands without
 acquiring font-run ownership. Ordinary `.out_of_flow` objects also produce a
 source-anchor fallback at the current column y pen while their marker keeps
 zero inline/block occupancy; paint bounds may extend beyond paragraph metrics.
-`.custom_out_of_flow`, absolute placements, and resolver-driven exclusions
-remain explicitly unsupported in vertical paragraphs.
+`.custom_out_of_flow` uses the same zero-occupancy fallback anchor and accepts
+absolute `out_of_flow_placements` as presentation-only paint geometry.
+Retained reflow and styled layout may replace those bounds without changing
+column selection, paragraph metrics, or intrinsic inline sizes. The concrete
+`OutOfFlowResolver` therefore supports placement-only vertical replay, and
+objects removed by `max_lines` neither render nor request placement. Optional
+resolver exclusions remain unsupported because vertical exclusion regions have
+not yet moved to the shared inline/block-axis model.
 
 This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
 axes, vertical paragraph validation rejects bottom-to-top/RTL text, bidi
 controls, justification,
-ellipsis, negative glyph spacing, exclusions/line regions, custom inline-object
-placement/resolution, hyphenation,
+ellipsis, negative glyph spacing, exclusions/line regions (including resolver
+responses that introduce an exclusion), hyphenation,
 optical punctuation, and the resumable breaker. Retained whole-paragraph
 layout and intrinsic inline-size measurement are supported and restore the
 pristine vertical shaping snapshot between calls. Returning a concrete
@@ -1238,6 +1244,12 @@ output only and do not enlarge paragraph metrics; only the optional exclusion
 changes line selection. Static exclusions and pre-authored placements are
 preserved, and `resolvedOptions` exposes the final combined slices while the
 resolver owns them.
+
+For vertical paragraphs, the same protocol currently accepts direct placements
+and placement-only resolver responses. Custom markers retain zero inline/block
+occupancy, and their submitted geometry remains rendering-only. A response
+that also supplies an exclusion is rejected explicitly until vertical
+exclusion regions support the same replay contract.
 
 The protocol works with one-shot and styled layout, but retained
 `ShapedParagraph` plus `ReflowBuffer` is the intended repeated-placement path:

@@ -157,35 +157,3 @@ test "styled vertical objects preserve metadata geometry and render output" {
     );
     try std.testing.expectEqual(@as(usize, 2), draw_list.glyphs.len);
 }
-
-test "vertical layout rejects custom out-of-flow objects" {
-    const allocator = std.testing.allocator;
-    const bytes = try @import("../../../../test_font.zig")
-        .buildVerticalMetricsTtf(allocator);
-    defer allocator.free(bytes);
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-    var buffer = LayoutBuffer.init(allocator);
-    defer buffer.deinit();
-    try std.testing.expectError(
-        error.UnsupportedVerticalParagraphOptions,
-        TextShaper.layoutParagraphUtf8(
-            FontCascade.init(&.{&font}),
-            &buffer,
-            marker,
-            20,
-            .{
-                .max_width = 100,
-                .inline_objects = &.{.{
-                    .id = 1,
-                    .kind = .custom_out_of_flow,
-                    .byte_index = 0,
-                    .width = 10,
-                    .height = 10,
-                }},
-                .writing_mode = .vertical_rl,
-                .text_orientation = .upright,
-            },
-        ),
-    );
-}

@@ -152,7 +152,7 @@ test "styled vertical out-of-flow object reaches geometry and draw output" {
     try std.testing.expectEqual(@as(usize, 2), draw_list.glyphs.len);
 }
 
-test "vertical custom out-of-flow placements remain rejected" {
+test "vertical custom out-of-flow direct placement overrides its anchor" {
     const allocator = std.testing.allocator;
     const bytes = try @import("../../../../test_font.zig")
         .buildVerticalMetricsTtf(allocator);
@@ -162,28 +162,78 @@ test "vertical custom out-of-flow placements remain rejected" {
     var buffer = LayoutBuffer.init(allocator);
     defer buffer.deinit();
 
-    try std.testing.expectError(
-        error.UnsupportedVerticalParagraphOptions,
-        TextShaper.layoutParagraphUtf8(
-            FontCascade.init(&.{&font}),
-            &buffer,
-            marker,
-            20,
-            .{
-                .max_width = 100,
-                .inline_objects = &.{.{
-                    .id = 1,
-                    .kind = .custom_out_of_flow,
-                    .byte_index = 0,
-                    .width = 10,
-                    .height = 10,
-                }},
-                .writing_mode = .vertical_rl,
-                .text_orientation = .upright,
-            },
-        ),
+    const fallback = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&.{&font}),
+        &buffer,
+        marker,
+        20,
+        .{
+            .max_width = 100,
+            .inline_objects = &.{.{
+                .id = 1,
+                .kind = .custom_out_of_flow,
+                .byte_index = 0,
+                .width = 10,
+                .height = 10,
+            }},
+            .writing_mode = .vertical_rl,
+            .text_orientation = .upright,
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 1), fallback.inline_objects.len);
+    try std.testing.expectApproxEqAbs(
+        fallback.inline_objects[0].anchor_x,
+        fallback.inline_objects[0].x,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        fallback.inline_objects[0].anchor_y,
+        fallback.inline_objects[0].y,
+        0.001,
     );
 
+    const placed = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&.{&font}),
+        &buffer,
+        marker,
+        20,
+        .{
+            .max_width = 100,
+            .inline_objects = &.{.{
+                .id = 1,
+                .kind = .custom_out_of_flow,
+                .byte_index = 0,
+                .width = 10,
+                .height = 10,
+            }},
+            .out_of_flow_placements = &.{.{
+                .byte_index = 0,
+                .geometry = .{
+                    .x = 71,
+                    .y = 83,
+                    .width = 23,
+                    .height = 29,
+                    .baseline = 17,
+                },
+            }},
+            .writing_mode = .vertical_rl,
+            .text_orientation = .upright,
+        },
+    );
+    const positioned = placed.inline_objects[0];
+    try std.testing.expectApproxEqAbs(@as(f32, 71), positioned.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 83), positioned.y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 23), positioned.width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 29), positioned.height, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 17), positioned.baseline, 0.001);
+    try std.testing.expect(positioned.anchor_x != positioned.x);
+    try std.testing.expect(positioned.anchor_y != positioned.y);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), placed.height, 0.001);
+    try std.testing.expect(placed.width < positioned.width);
+
+    // Removing the vertical capability guard must not broaden the shared
+    // placement contract: authored placements still belong only to custom
+    // objects, not ordinary source-anchor fallbacks.
     try std.testing.expectError(
         error.InvalidOutOfFlowPlacements,
         TextShaper.layoutParagraphUtf8(
@@ -194,14 +244,12 @@ test "vertical custom out-of-flow placements remain rejected" {
             .{
                 .max_width = 100,
                 .inline_objects = &.{.{
-                    .id = 1,
+                    .id = 2,
                     .kind = .out_of_flow,
                     .byte_index = 0,
                     .width = 10,
                     .height = 10,
                 }},
-                // Placements are meaningful only to custom objects and remain
-                // outside the bounded vertical source-anchor fallback.
                 .out_of_flow_placements = &.{.{
                     .byte_index = 0,
                     .geometry = .{

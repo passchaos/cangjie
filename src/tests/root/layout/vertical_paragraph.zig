@@ -21,4 +21,5 @@ test {
     _ = @import("vertical_paragraph/out_of_flow_integration.zig");
     _ = @import("vertical_paragraph/max_lines.zig");
     _ = @import("vertical_paragraph/max_lines_integration.zig");
+    _ = @import("vertical_paragraph/custom_out_of_flow.zig");
 }

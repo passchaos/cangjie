@@ -42,12 +42,12 @@ pub fn build(
                 options.inline_objects,
                 glyph.cluster,
             ) orelse return error.InvalidInlineObjects;
-            if (object.kind == .custom_out_of_flow) {
-                return error.UnsupportedVerticalParagraphOptions;
-            }
             // Retained reflow may change object geometry while preserving the
             // source anchor. Refresh both physical dimensions from the current
             // request rather than trusting the shaping snapshot.
+            // Ordinary and custom out-of-flow markers are anchor atoms only:
+            // custom absolute geometry is applied later by presentation and
+            // must never feed back into column selection or paragraph metrics.
             const in_flow = object.kind == .in_flow;
             glyph.x_advance = if (in_flow) object.width else 0;
             glyph.y_advance = if (in_flow) object.height else 0;

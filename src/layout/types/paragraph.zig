@@ -61,6 +61,20 @@ pub const OverflowWrap = enum {
     anywhere,
 };
 
+/// Treatment of collapsible ASCII horizontal whitespace in paragraph layout.
+pub const WhiteSpaceCollapse = enum {
+    /// Consecutive U+0020/U+0009 atoms form one ordinary blank. Leading,
+    /// trailing, and soft-line-edge runs retain source carets but have zero
+    /// advance.
+    collapse,
+    /// Preserve authored advances; ordinary line-edge whitespace may still be
+    /// discarded when a soft wrap is selected.
+    preserve,
+    /// Preserve advances and make every authored blank a soft opportunity,
+    /// including consecutive and trailing spaces.
+    break_spaces,
+};
+
 /// Policy used to choose among otherwise valid soft line boundaries.
 ///
 /// This is intentionally separate from `WrapMode`: wrapping controls whether

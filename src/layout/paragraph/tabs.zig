@@ -146,7 +146,7 @@ pub fn recomputeRangeWithTerminal(
 ) f32 {
     var width: f32 = 0;
     for (glyphs, 0..) |*glyph, glyph_index| {
-        if (glyph.isTab()) {
+        if (glyph.isActiveTab()) {
             glyph.x_advance = resolvedAdvance(
                 glyphs,
                 glyph_index,
@@ -174,7 +174,7 @@ pub fn recomputePrefix(
     var width: f32 = 0;
     const end = @min(prefix_len, glyphs.len);
     for (glyphs[0..end], 0..) |*glyph, glyph_index| {
-        if (glyph.isTab()) {
+        if (glyph.isActiveTab()) {
             glyph.x_advance = resolvedAdvance(
                 glyphs,
                 glyph_index,
@@ -214,7 +214,7 @@ pub fn measureRangeWithTerminal(
 ) f32 {
     var width: f32 = 0;
     for (glyphs, 0..) |glyph, glyph_index| {
-        const glyph_advance = if (glyph.isTab())
+        const glyph_advance = if (glyph.isActiveTab())
             resolvedAdvance(
                 glyphs,
                 glyph_index,
@@ -257,7 +257,7 @@ fn resolvedAdvance(
 
 pub fn contains(glyphs: []const GlyphPosition) bool {
     for (glyphs) |glyph| {
-        if (glyph.isTab()) return true;
+        if (glyph.isActiveTab()) return true;
     }
     return false;
 }
@@ -283,7 +283,7 @@ pub fn measureField(
     var index = start;
     while (index < glyphs.len) : (index += 1) {
         const glyph = glyphs[index];
-        if (glyph.isTab() or isMandatoryBreak(glyph.codepoint)) break;
+        if (glyph.isActiveTab() or isMandatoryBreak(glyph.codepoint)) break;
         if (before_decimal == null and glyph.codepoint == decimal_point) {
             before_decimal = total;
         }

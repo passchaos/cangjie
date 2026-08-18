@@ -20,6 +20,7 @@ const punctuation_compression = @import("../../punctuation/compression.zig");
 const punctuation_hanging = @import("../../punctuation/hanging.zig");
 const regions = @import("regions.zig");
 const tabs = @import("../../paragraph/tabs.zig");
+const white_space = @import("../../paragraph/white_space.zig");
 const segmentation = @import("../../../text/segmentation/root.zig");
 const shaped_boundary = @import("../shaped_boundary.zig");
 const truncation = @import("truncation.zig");
@@ -148,6 +149,11 @@ fn buildBalanced(
     inheritShapeCaches(buffer, &planner);
     try copyLayoutInputs(buffer, &planner);
     try prepareAdvances(planner.glyphs.items, options);
+    white_space.prepare(
+        planner.glyphs.items,
+        options.white_space_collapse,
+        geometry.defaultSpaceAdvance(planner.glyphs.items),
+    );
 
     var owned_graphemes: ?[]unicode.GraphemeCluster = null;
     defer if (owned_graphemes) |clusters| buffer.allocator.free(clusters);
@@ -249,6 +255,11 @@ fn buildGreedyWithPlan(
     const fallback_tab_interval =
         @as(f32, @floatFromInt(@max(1, options.tab_width))) * space_advance;
     try prepareAdvances(buffer.glyphs.items, options);
+    white_space.prepare(
+        buffer.glyphs.items,
+        options.white_space_collapse,
+        space_advance,
+    );
 
     // Retained paragraphs carry width-independent grapheme and line-break
     // analysis. One-shot layout allocates only when emergency wrapping or a
@@ -396,7 +407,7 @@ fn buildGreedyWithPlan(
             continue :glyph_loop;
         }
 
-        if (glyph.isTab()) {
+        if (glyph.isActiveTab()) {
             // Tabs depend on the current line pen, not only font metrics.
             const explicit_stop = tabs.nextExplicitStop(
                 line_width,
@@ -512,6 +523,15 @@ fn buildGreedyWithPlan(
                     },
                     .hard => {},
                 }
+            }
+            if (options.white_space_collapse == .break_spaces) {
+                opportunities.recordBreakSpaces(
+                    buffer.glyphs.items,
+                    index,
+                    line_start,
+                    line_width,
+                    &last_break,
+                );
             }
         }
         // Direct boundary synthesis is both the zero-allocation one-shot fast
@@ -685,6 +705,19 @@ fn buildGreedyWithPlan(
                 last_break.width = candidate_width;
                 break :candidate candidate_index;
             };
+            if (options.white_space_collapse == .collapse) {
+                white_space.trimLineStart(
+                    buffer.glyphs.items,
+                    line_start,
+                );
+                if (fitting_last_break) |candidate_index| {
+                    white_space.trimLineEnd(
+                        buffer.glyphs.items,
+                        line_start,
+                        candidate_index,
+                    );
+                }
+            }
             if (forced_balance_break) {
                 fitting_last_break = index + 1;
             }
@@ -696,6 +729,7 @@ fn buildGreedyWithPlan(
                 fitting_last_break,
                 options.overflow_wrap != .normal or
                     options.word_break == .break_all,
+                options.white_space_collapse == .break_spaces,
             );
             if (overflow_break.defer_break) continue;
             const break_end = overflow_break.index;
@@ -722,11 +756,26 @@ fn buildGreedyWithPlan(
                     selected_visible_hyphen = true;
                 }
             }
+            if (options.white_space_collapse == .collapse) {
+                white_space.trimLineStart(
+                    buffer.glyphs.items,
+                    line_start,
+                );
+                white_space.trimLineEnd(
+                    buffer.glyphs.items,
+                    line_start,
+                    break_end,
+                );
+            }
             const visible_hyphen_advance = if (uses_last_break)
                 visibleHyphenAdvance(last_break)
             else
                 0;
-            const break_width = if (overflow_break.uses_current_discardable)
+            const break_width = if (options.white_space_collapse == .collapse)
+                geometry.lineWidth(
+                    buffer.glyphs.items[line_start..break_end],
+                ) + @max(0, visible_hyphen_advance)
+            else if (overflow_break.uses_current_discardable)
                 tabs.recomputeRange(
                     buffer.glyphs.items[line_start..break_end],
                     options.tab_stops,
@@ -742,10 +791,24 @@ fn buildGreedyWithPlan(
                     @max(0, visible_hyphen_advance),
                 );
             var next_line_start = break_end;
-            geometry.trimLeadingSoftBreaks(
-                buffer.glyphs.items,
-                &next_line_start,
-            );
+            if (white_space.shouldDiscardAfterSoftWrap(
+                options.white_space_collapse,
+            )) {
+                geometry.trimLeadingSoftBreaks(
+                    buffer.glyphs.items,
+                    &next_line_start,
+                );
+                if (options.white_space_collapse == .collapse) {
+                    // These source atoms are omitted from both adjacent visual
+                    // line ranges. Zero them before bidi moves the unmatched
+                    // suffix so caret/accessibility ownership cannot retain a
+                    // stale shaped or tab-ruler advance.
+                    white_space.trimLineStart(
+                        buffer.glyphs.items,
+                        break_end,
+                    );
+                }
+            }
             // Discarded boundary spaces remain in the preceding logical source
             // range, keeping line ranges contiguous for bidi and caret maps.
             const line_byte_end = shaped_boundary.byteEndForGlyphPrefix(
@@ -904,6 +967,20 @@ fn buildGreedyWithPlan(
     // fabricating an empty line unless the source actually ended in a hard
     // separator.
     if (!terminal_emergency_line_committed) {
+        if (options.white_space_collapse == .collapse) {
+            white_space.trimLineStart(
+                buffer.glyphs.items,
+                line_start,
+            );
+            white_space.trimLineEnd(
+                buffer.glyphs.items,
+                line_start,
+                buffer.glyphs.items.len,
+            );
+            line_width = geometry.lineWidth(
+                buffer.glyphs.items[line_start..],
+            );
+        }
         const line_info = geometry.resolvedLineInfo(
             buffer.runs.items,
             buffer.glyphs.items,

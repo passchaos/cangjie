@@ -102,6 +102,7 @@ test "paragraph style converts to paragraph options" {
         .wrap_mode = .no_wrap,
         .word_break = .keep_all,
         .overflow_wrap = .anywhere,
+        .white_space_collapse = .break_spaces,
         .line_break_strategy = .balanced,
         .overflow_mode = .ellipsis,
         .tab_width = 2,
@@ -138,6 +139,10 @@ test "paragraph style converts to paragraph options" {
     try std.testing.expectEqual(
         paragraph_types.OverflowWrap.anywhere,
         options.overflow_wrap,
+    );
+    try std.testing.expectEqual(
+        paragraph_types.WhiteSpaceCollapse.break_spaces,
+        options.white_space_collapse,
     );
     try std.testing.expectEqual(
         paragraph_types.LineBreakStrategy.balanced,

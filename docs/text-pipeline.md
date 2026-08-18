@@ -679,6 +679,24 @@ retained shaping relationship. Retained paragraphs keep policy-neutral
 UAX/dictionary/hyphenation analysis and tailor it per reflow, so callers can
 change these policies without reshaping.
 
+`ParagraphOptions.white_space_collapse` controls ASCII horizontal whitespace
+without rewriting the caller's UTF-8 source:
+
+- `.preserve` keeps authored U+0020 advances and tab-ruler behavior, retaining
+  Cangjie's previous default.
+- `.collapse` gives each interior U+0020/U+0009 run one ordinary blank,
+  suppresses leading/trailing and soft-line-edge runs, and treats a tab in such
+  a run as a source-visible collapsed blank rather than a ruler command.
+- `.break_spaces` preserves every advance and makes each authored blank a soft
+  boundary, including consecutive and trailing spaces.
+
+Collapsed atoms stay in the glyph-parallel source/style sidecars with zero
+advance. Caret, selection, bidi, attributed paint, decorations, text geometry,
+and accessibility therefore keep original UTF-8 byte coordinates; retained
+reflow can switch among all three policies without reshaping or losing source
+atoms. Only U+0020 and U+0009 are collapsible—NBSP and other Unicode space
+characters retain their UAX #14 semantics.
+
 `ParagraphOptions.tab_stops` adds an explicit paragraph tab ruler. Each
 `TabStop.position` is a finite, positive, strictly increasing advance from the
 selected line fragment's logical inline start; this keeps the same ruler

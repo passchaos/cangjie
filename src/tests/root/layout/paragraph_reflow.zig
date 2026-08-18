@@ -353,6 +353,132 @@ test "word break all and keep all tailor Unicode soft boundaries" {
     try std.testing.expectEqual(@as(usize, 2), spaced_keep_all.lines.len);
 }
 
+test "white space collapse preserves source carets with one visual blank" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const text = "  A \t  A  ";
+
+    const preserved = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{
+            .max_width = 300,
+            .white_space_collapse = .preserve,
+            .tab_stops = &.{.{ .position = 100 }},
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 1), preserved.lines.len);
+    const preserved_width = preserved.lines[0].width;
+    try std.testing.expect(preserved.glyphs[4].isActiveTab());
+
+    const collapsed = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{
+            .max_width = 300,
+            .white_space_collapse = .collapse,
+            .tab_stops = &.{.{ .position = 100 }},
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 1), collapsed.lines.len);
+    try std.testing.expectEqual(text.len, collapsed.lines[0].byte_len);
+    try std.testing.expectEqual(@as(usize, 10), collapsed.glyphs.len);
+    try std.testing.expect(collapsed.lines[0].width < preserved_width);
+    try std.testing.expectEqual(@as(f32, 0), collapsed.glyphs[0].x_advance);
+    try std.testing.expectEqual(@as(f32, 0), collapsed.glyphs[1].x_advance);
+    try std.testing.expect(collapsed.glyphs[3].x_advance > 0);
+    try std.testing.expect(collapsed.glyphs[4].isTab());
+    try std.testing.expect(!collapsed.glyphs[4].isActiveTab());
+    try std.testing.expectEqual(@as(f32, 0), collapsed.glyphs[4].x_advance);
+    try std.testing.expectEqual(@as(f32, 0), collapsed.glyphs[5].x_advance);
+    try std.testing.expectEqual(@as(f32, 0), collapsed.glyphs[9].x_advance);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0),
+        collapsed.selectionRectForBytes(0, 2).width,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0),
+        collapsed.selectionRectForBytes(9, text.len).width,
+        0.001,
+    );
+}
+
+test "collapse trims soft line edges while break spaces preserves them" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const text = "A   A";
+
+    const collapsed = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{
+            .max_width = 20,
+            .white_space_collapse = .collapse,
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 2), collapsed.lines.len);
+    try std.testing.expectApproxEqAbs(
+        collapsed.glyphs[0].x_advance,
+        collapsed.lines[0].width,
+        0.001,
+    );
+    try std.testing.expectEqual(@as(usize, 0), collapsed.lines[0].byte_start);
+    try std.testing.expectEqual(@as(usize, 4), collapsed.lines[0].byte_len);
+    try std.testing.expectEqual(@as(f32, 0), collapsed.glyphs[1].x_advance);
+    try std.testing.expectEqual(@as(f32, 0), collapsed.glyphs[2].x_advance);
+    try std.testing.expectEqual(@as(f32, 0), collapsed.glyphs[3].x_advance);
+
+    const break_spaces = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{
+            .max_width = 20,
+            .white_space_collapse = .break_spaces,
+        },
+    );
+    try std.testing.expect(break_spaces.lines.len > collapsed.lines.len);
+    var saw_space_ended_line = false;
+    for (break_spaces.lines) |line| {
+        if (line.glyph_len == 0) continue;
+        const last = break_spaces.glyphs[line.glyph_start + line.glyph_len - 1];
+        if (last.codepoint == ' ' and last.x_advance > 0) {
+            saw_space_ended_line = true;
+        }
+    }
+    try std.testing.expect(saw_space_ended_line);
+}
+
 test "paragraph wrapping keeps combining grapheme clusters atomic" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

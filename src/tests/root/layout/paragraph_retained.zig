@@ -198,6 +198,67 @@ test "retained reflow changes word and overflow policies without reshaping" {
     );
 }
 
+test "retained reflow switches whitespace collapse without source loss" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    const text = "  A   A  ";
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        text,
+        20,
+        .{ .max_width = 200 },
+    );
+    defer paragraph.deinit();
+    const pristine = try allocator.dupe(GlyphPosition, paragraph.glyphs);
+    defer allocator.free(pristine);
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+
+    const collapsed = try paragraph.layout(&reflow, .{
+        .max_width = 200,
+        .white_space_collapse = .collapse,
+    });
+    try std.testing.expectEqual(@as(usize, 1), collapsed.lines.len);
+    const collapsed_width = collapsed.lines[0].width;
+    try std.testing.expectEqual(@as(f32, 0), collapsed.glyphs[0].x_advance);
+    try std.testing.expectEqual(@as(f32, 0), collapsed.glyphs[1].x_advance);
+
+    const preserved = try paragraph.layout(&reflow, .{
+        .max_width = 200,
+        .white_space_collapse = .preserve,
+    });
+    try std.testing.expect(preserved.lines[0].width > collapsed_width);
+    try std.testing.expect(preserved.glyphs[0].x_advance > 0);
+    try std.testing.expectEqualSlices(
+        GlyphPosition,
+        pristine,
+        paragraph.glyphs,
+    );
+
+    const collapsed_again = try paragraph.layout(&reflow, .{
+        .max_width = 200,
+        .white_space_collapse = .collapse,
+    });
+    try std.testing.expectApproxEqAbs(
+        collapsed_width,
+        collapsed_again.lines[0].width,
+        0.001,
+    );
+}
+
 test "retained paragraphs own run variation coordinates" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

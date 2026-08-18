@@ -193,6 +193,67 @@ test "text geometry prefers authored GDEF ligature carets" {
     );
 }
 
+test "text geometry retains zero-width collapsed whitespace graphemes" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const text = " A  A ";
+    const layout = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&.{&font}),
+        &layout_buffer,
+        text,
+        20,
+        .{
+            .max_width = 200,
+            .white_space_collapse = .collapse,
+        },
+    );
+    var geometry = try paragraph.buildGeometry(
+        allocator,
+        text,
+        layout,
+        .{},
+    );
+    defer geometry.deinit();
+
+    try std.testing.expectEqual(@as(usize, 6), geometry.graphemes.len);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0),
+        geometry.graphemes[0].width,
+        0.001,
+    );
+    try std.testing.expect(geometry.graphemes[2].width > 0);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0),
+        geometry.graphemes[3].width,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0),
+        geometry.graphemes[5].width,
+        0.001,
+    );
+    const leading = try geometry.selectionFragments(
+        allocator,
+        .{ .byte_start = 0, .byte_end = 1 },
+    );
+    defer allocator.free(leading);
+    try std.testing.expectEqual(@as(usize, 1), leading.len);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0),
+        leading[0].rect.width,
+        0.001,
+    );
+}
+
 test "text geometry applies GDEF caret variation at the final run instance" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

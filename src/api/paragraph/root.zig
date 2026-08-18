@@ -30,6 +30,7 @@ pub const Align = paragraph_types.TextAlign;
 pub const WrapMode = paragraph_types.WrapMode;
 pub const WordBreak = paragraph_types.WordBreak;
 pub const OverflowWrap = paragraph_types.OverflowWrap;
+pub const WhiteSpaceCollapse = paragraph_types.WhiteSpaceCollapse;
 pub const LineBreakStrategy = paragraph_types.LineBreakStrategy;
 pub const BaselineMetrics = reflow.BaselineMetrics;
 pub const TextMetrics = paragraph_types.TextMetrics;

@@ -25,8 +25,10 @@ pub fn chooseOverflowBreak(
     line_start: usize,
     last_break: ?usize,
     emergency_enabled: bool,
+    preserve_discardable: bool,
 ) OverflowBreak {
-    if (isDiscardableBreak(glyphs[index].codepoint) and
+    if (!preserve_discardable and
+        isDiscardableBreak(glyphs[index].codepoint) and
         !outputBoundaryIsUnsafe(glyphs, index))
     {
         return .{ .index = index, .uses_current_discardable = true };
@@ -284,6 +286,7 @@ test "emergency breaks defer across unsafe positioning boundaries" {
         0,
         null,
         true,
+        false,
     );
     try std.testing.expect(after_first.defer_break);
 
@@ -294,6 +297,7 @@ test "emergency breaks defer across unsafe positioning boundaries" {
         0,
         null,
         true,
+        false,
     );
     try std.testing.expect(!after_second.defer_break);
     try std.testing.expectEqual(@as(usize, 2), after_second.index);
@@ -326,6 +330,7 @@ test "disabled emergency wrapping intentionally keeps overfull content" {
         0,
         0,
         null,
+        false,
         false,
     );
     try std.testing.expect(selected.defer_break);
@@ -377,6 +382,7 @@ test "deferred breaks never split multiple outputs of one source atom" {
         0,
         null,
         true,
+        false,
     );
     try std.testing.expect(after_first.defer_break);
     try std.testing.expectEqual(@as(usize, 3), after_first.index);

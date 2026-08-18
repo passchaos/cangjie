@@ -32,7 +32,11 @@ pub const Flags = packed struct(u8) {
     /// Its reflow-computed advance positions the next field, but the marker
     /// never participates in cmap, GSUB, GPOS, kerning, or glyph rendering.
     tab: bool = false,
-    _reserved: u1 = 0,
+    /// Horizontal whitespace normalized by paragraph collapse policy.
+    ///
+    /// The source atom remains addressable, but a tab with this bit behaves
+    /// as an ordinary collapsed blank rather than consulting the tab ruler.
+    collapsed_whitespace: bool = false,
 };
 
 /// One positioned glyph after cmap mapping, GSUB substitution, and GPOS/kern
@@ -90,6 +94,14 @@ pub const GlyphPosition = struct {
 
     pub fn isTab(self: GlyphPosition) bool {
         return self.flags.tab;
+    }
+
+    pub fn isActiveTab(self: GlyphPosition) bool {
+        return self.flags.tab and !self.flags.collapsed_whitespace;
+    }
+
+    pub fn isCollapsedWhitespace(self: GlyphPosition) bool {
+        return self.flags.collapsed_whitespace;
     }
 
     /// Logical source end represented by this output.

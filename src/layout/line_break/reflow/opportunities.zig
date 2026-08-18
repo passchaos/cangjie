@@ -230,6 +230,28 @@ pub fn isMandatory(codepoint: u21) bool {
     };
 }
 
+pub fn recordBreakSpaces(
+    glyphs: []const GlyphPosition,
+    index: usize,
+    line_start: usize,
+    line_width: f32,
+    candidate: *Candidate,
+) void {
+    if (index >= glyphs.len or index + 1 <= line_start) return;
+    const current = glyphs[index];
+    if (!geometry.isDiscardableBreak(current.codepoint)) return;
+    const break_index = index + 1;
+    if (break_index < glyphs.len and
+        glyphs[break_index].isUnsafeToBreakBefore())
+    {
+        return;
+    }
+    candidate.* = .{
+        .glyph_index = break_index,
+        .width = line_width,
+    };
+}
+
 test "soft opportunity never splits a shaped source atom" {
     const glyphs = [_]GlyphPosition{
         .{

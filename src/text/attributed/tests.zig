@@ -180,6 +180,69 @@ test "attributed overflow wrapping preserves style and decoration sidecars" {
     try std.testing.expect(saw_strike);
 }
 
+test "attributed whitespace collapse preserves paint and decoration ownership" {
+    const allocator = std.testing.allocator;
+    var owned = try OwnedFont.init(
+        allocator,
+        try test_font.buildLastResortCmapTtfWithKern(
+            allocator,
+            false,
+        ),
+    );
+    defer owned.deinit();
+    const fonts = [_]*const font_mod.Font{&owned.font};
+    const text = " A   A ";
+    const spans = [_]style.StyleSpan{
+        .{
+            .byte_range = .{ .start = 0, .len = 3 },
+            .style = .{
+                .font_size = 20,
+                .color = .{ .r = 180, .g = 20, .b = 10, .a = 255 },
+                .decoration = .{ .underline = true },
+            },
+        },
+        .{
+            .byte_range = .{ .start = 3, .len = text.len - 3 },
+            .style = .{
+                .font_size = 20,
+                .color = .{ .r = 10, .g = 40, .b = 200, .a = 255 },
+                .decoration = .{ .strikethrough = true },
+            },
+        },
+    };
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
+        allocator,
+        font_fallback.Cascade.init(&fonts),
+        .{
+            .text = text,
+            .spans = &spans,
+            .paragraph_style = .{
+                .white_space_collapse = .collapse,
+            },
+        },
+        200,
+    );
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), result.lines.len);
+    try std.testing.expectEqual(result.glyphs.len, 7);
+    try std.testing.expectEqual(@as(f32, 0), result.glyphs[0].x_advance);
+    try std.testing.expectEqual(@as(f32, 0), result.glyphs[6].x_advance);
+    try std.testing.expectEqual(
+        result.glyphs.len,
+        result.style_runs[0].glyph_len + result.style_runs[1].glyph_len,
+    );
+    var saw_underline = false;
+    var saw_strike = false;
+    for (result.decorations) |segment| {
+        saw_underline = saw_underline or segment.kind == .underline;
+        saw_strike = saw_strike or segment.kind == .strikethrough;
+        try std.testing.expect(segment.rect.width > 0);
+    }
+    try std.testing.expect(saw_underline);
+    try std.testing.expect(saw_strike);
+}
+
 test "unified attributed paragraph applies feature spacing and measurement" {
     const allocator = std.testing.allocator;
     var owned = try OwnedFont.init(

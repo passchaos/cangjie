@@ -18,6 +18,7 @@ const punctuation_hanging = @import("../../punctuation/hanging.zig");
 const regions = @import("regions.zig");
 const shaped_boundary = @import("../shaped_boundary.zig");
 const tabs = @import("../../paragraph/tabs.zig");
+const white_space = @import("../../paragraph/white_space.zig");
 const unicode = @import("../../../unicode.zig");
 
 const cost_epsilon: f64 = 0.000001;
@@ -264,10 +265,14 @@ fn enumerateBoundaries(
             );
             const break_index = candidate.glyph_index orelse continue;
             var next_start = break_index;
-            geometry.trimLeadingSoftBreaks(
-                buffer.glyphs.items,
-                &next_start,
-            );
+            if (white_space.shouldDiscardAfterSoftWrap(
+                options.white_space_collapse,
+            )) {
+                geometry.trimLeadingSoftBreaks(
+                    buffer.glyphs.items,
+                    &next_start,
+                );
+            }
             try appendUnique(output, buffer.allocator, .{
                 .glyph_index = break_index,
                 .next_glyph_index = next_start,
@@ -280,6 +285,27 @@ fn enumerateBoundaries(
                     .soft,
                 .candidate = candidate,
             });
+        }
+        if (options.white_space_collapse == .break_spaces and
+            geometry.isDiscardableBreak(glyph.codepoint))
+        {
+            var after_space = opportunities.Candidate{};
+            opportunities.recordBreakSpaces(
+                buffer.glyphs.items,
+                index,
+                hard_break_end orelse 0,
+                0,
+                &after_space,
+            );
+            if (after_space.glyph_index) |after_index| {
+                try appendUnique(output, buffer.allocator, .{
+                    .glyph_index = after_index,
+                    .next_glyph_index = after_index,
+                    .byte_offset = source_end,
+                    .kind = .soft,
+                    .candidate = after_space,
+                });
+            }
         }
     }
 
@@ -610,13 +636,23 @@ fn evaluateLine(
     const fallback_interval =
         @as(f32, @floatFromInt(@max(1, options.tab_width))) *
         space_advance;
-    const width = tabs.measureRangeWithTerminal(
+    const range_width = tabs.measureRangeWithTerminal(
         buffer.glyphs.items[start..boundary.glyph_index],
         options.tab_stops,
         fallback_interval,
         space_advance,
         hyphen_advance,
     );
+    const width = if (options.white_space_collapse == .collapse and
+        !tabs.contains(buffer.glyphs.items[start..boundary.glyph_index]))
+        white_space.measureRange(
+            buffer.glyphs.items,
+            start,
+            boundary.glyph_index,
+            options.white_space_collapse,
+        ) + hyphen_advance
+    else
+        range_width;
     const hanging_fraction: f32 =
         if (boundary.hasVisibleHyphen())
             0

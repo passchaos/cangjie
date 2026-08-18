@@ -110,6 +110,8 @@ pub const Options = struct {
     word_break: paragraph_types.WordBreak = .normal,
     /// Preserve Cangjie's historical emergency-wrap behavior by default.
     overflow_wrap: paragraph_types.OverflowWrap = .break_word,
+    /// Preserve the historical source-visible whitespace contract by default.
+    white_space_collapse: paragraph_types.WhiteSpaceCollapse = .preserve,
     line_break_strategy: paragraph_types.LineBreakStrategy = .greedy,
     alignment: paragraph_types.TextAlign = .start,
     line_height: ?f32 = null,

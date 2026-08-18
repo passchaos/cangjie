@@ -1,5 +1,7 @@
 const std = @import("std");
 const face_mod = @import("../font/face/root.zig");
+const line_break_policy = @import("paragraph/line_break_policy.zig");
+const paragraph_options = @import("paragraph/options.zig");
 const unicode = @import("../unicode.zig");
 
 /// One contiguous style item for unified paragraph shaping.
@@ -23,6 +25,13 @@ pub const Span = struct {
     word_spacing: f32 = 0,
     minimum_line_height: ?f32 = null,
     vertical_align: @import("types/paragraph.zig").VerticalAlign = .baseline,
+    /// Optional attributed overrides of paragraph wrapping policy.
+    ///
+    /// These affect line analysis only and therefore do not split otherwise
+    /// shaping-equivalent spans.
+    wrap_mode: ?@import("types/paragraph.zig").WrapMode = null,
+    word_break: ?@import("types/paragraph.zig").WordBreak = null,
+    overflow_wrap: ?@import("types/paragraph.zig").OverflowWrap = null,
 
     pub fn byteEnd(self: Span) usize {
         return self.byte_start + self.byte_len;
@@ -140,6 +149,79 @@ pub fn shapeEquivalent(a: Span, b: Span) bool {
     return true;
 }
 
+/// Resolve paragraph and attributed range policy into canonical intervals.
+///
+/// `spans` is an exact source partition. Paragraph-authored ranges may split a
+/// span, while each span overrides only its non-null fields. Adjacent equal
+/// intervals are merged and paragraph-default intervals are omitted.
+pub fn resolveLineBreakPolicyRanges(
+    allocator: std.mem.Allocator,
+    text_len: usize,
+    spans: []const Span,
+    options: paragraph_options.Options,
+) ![]line_break_policy.Range {
+    var boundaries = std.ArrayList(usize).empty;
+    defer boundaries.deinit(allocator);
+    try boundaries.ensureTotalCapacity(
+        allocator,
+        2 + spans.len * 2 + options.line_break_policy_ranges.len * 2,
+    );
+    boundaries.appendAssumeCapacity(0);
+    boundaries.appendAssumeCapacity(text_len);
+    for (spans) |span| {
+        boundaries.appendAssumeCapacity(span.byte_start);
+        boundaries.appendAssumeCapacity(span.byteEnd());
+    }
+    for (options.line_break_policy_ranges) |range| {
+        boundaries.appendAssumeCapacity(range.byte_start);
+        boundaries.appendAssumeCapacity(range.byteEnd());
+    }
+    std.mem.sort(usize, boundaries.items, {}, lessThanUsize);
+    boundaries.shrinkRetainingCapacity(uniqueSorted(boundaries.items));
+
+    const defaults = paragraph_options.defaultLineBreakPolicy(options);
+    var output = std.ArrayList(line_break_policy.Range).empty;
+    errdefer output.deinit(allocator);
+    for (boundaries.items[0 .. boundaries.items.len - 1], boundaries.items[1..]) |
+        start,
+        end,
+    | {
+        if (start >= end or start >= text_len) continue;
+        var policy = line_break_policy.atByte(
+            defaults,
+            options.line_break_policy_ranges,
+            start,
+        );
+        const span = spanForCluster(spans, start) orelse
+            return error.InvalidStyleSpans;
+        policy.wrap_mode = span.wrap_mode orelse policy.wrap_mode;
+        policy.word_break = span.word_break orelse policy.word_break;
+        policy.overflow_wrap =
+            span.overflow_wrap orelse policy.overflow_wrap;
+        if (policy.eql(defaults)) continue;
+
+        if (output.items.len != 0) {
+            const previous = &output.items[output.items.len - 1];
+            if (previous.byteEnd() == start and
+                previous.wrap_mode.? == policy.wrap_mode and
+                previous.word_break.? == policy.word_break and
+                previous.overflow_wrap.? == policy.overflow_wrap)
+            {
+                previous.byte_len += end - start;
+                continue;
+            }
+        }
+        try output.append(allocator, .{
+            .byte_start = start,
+            .byte_len = end - start,
+            .wrap_mode = policy.wrap_mode,
+            .word_break = policy.word_break,
+            .overflow_wrap = policy.overflow_wrap,
+        });
+    }
+    return output.toOwnedSlice(allocator);
+}
+
 fn optionalFontSlicesEqual(
     a: ?[]const *const face_mod.Face,
     b: ?[]const *const face_mod.Face,
@@ -176,6 +258,21 @@ fn isUtf8Boundary(text: []const u8, byte_offset: usize) bool {
     return (text[byte_offset] & 0xc0) != 0x80;
 }
 
+fn lessThanUsize(_: void, lhs: usize, rhs: usize) bool {
+    return lhs < rhs;
+}
+
+fn uniqueSorted(values: []usize) usize {
+    if (values.len == 0) return 0;
+    var write: usize = 1;
+    for (values[1..]) |value| {
+        if (value == values[write - 1]) continue;
+        values[write] = value;
+        write += 1;
+    }
+    return write;
+}
+
 test "styled spans distinguish shaping from paint geometry" {
     const a = Span{
         .byte_start = 0,
@@ -189,6 +286,9 @@ test "styled spans distinguish shaping from paint geometry" {
     b.style_index = 1;
     b.letter_spacing = 9;
     b.vertical_align = .top;
+    b.wrap_mode = .no_wrap;
+    b.word_break = .break_all;
+    b.overflow_wrap = .normal;
     try std.testing.expect(shapeEquivalent(a, b));
 
     b.font_size = 17;
@@ -203,4 +303,59 @@ test "styled span lookup handles visual cluster order" {
     try std.testing.expectEqual(@as(u32, 7), spanForCluster(&spans, 4).?.style_index);
     try std.testing.expectEqual(@as(u32, 4), spanForCluster(&spans, 0).?.style_index);
     try std.testing.expect(spanForCluster(&spans, 6) == null);
+}
+
+test "styled line policy overrides merge independently with paragraph ranges" {
+    const spans = [_]Span{
+        .{
+            .byte_start = 0,
+            .byte_len = 2,
+            .style_index = 0,
+            .font_size = 16,
+            .word_break = .break_all,
+        },
+        .{
+            .byte_start = 2,
+            .byte_len = 2,
+            .style_index = 1,
+            .font_size = 16,
+        },
+    };
+    const options = paragraph_options.Options{
+        .max_width = 20,
+        .line_break_policy_ranges = &.{.{
+            .byte_start = 0,
+            .byte_len = 4,
+            .wrap_mode = .no_wrap,
+        }},
+    };
+    const ranges = try resolveLineBreakPolicyRanges(
+        std.testing.allocator,
+        4,
+        &spans,
+        options,
+    );
+    defer std.testing.allocator.free(ranges);
+
+    try std.testing.expectEqual(@as(usize, 2), ranges.len);
+    try std.testing.expectEqual(@as(usize, 0), ranges[0].byte_start);
+    try std.testing.expectEqual(@as(usize, 2), ranges[0].byte_len);
+    try std.testing.expectEqual(
+        @import("types/paragraph.zig").WrapMode.no_wrap,
+        ranges[0].wrap_mode.?,
+    );
+    try std.testing.expectEqual(
+        @import("types/paragraph.zig").WordBreak.break_all,
+        ranges[0].word_break.?,
+    );
+    try std.testing.expectEqual(@as(usize, 2), ranges[1].byte_start);
+    try std.testing.expectEqual(@as(usize, 2), ranges[1].byte_len);
+    try std.testing.expectEqual(
+        @import("types/paragraph.zig").WrapMode.no_wrap,
+        ranges[1].wrap_mode.?,
+    );
+    try std.testing.expectEqual(
+        @import("types/paragraph.zig").WordBreak.normal,
+        ranges[1].word_break.?,
+    );
 }

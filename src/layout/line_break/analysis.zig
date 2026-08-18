@@ -8,6 +8,7 @@ const std = @import("std");
 const dictionary_breaks = @import("../../text/segmentation/dictionary_breaks.zig");
 const hyphenation = @import("../../text/hyphenation/root.zig");
 const opportunity = @import("opportunity.zig");
+const line_break_policy = @import("../paragraph/line_break_policy.zig");
 const segmentation = @import("../../text/segmentation/root.zig");
 const unicode = @import("../../unicode.zig");
 
@@ -21,8 +22,8 @@ pub fn itemizeWithHyphenation(
     graphemes: []const unicode.GraphemeCluster,
     dictionary: ?*const segmentation.WordBreakDictionary,
     hyphenation_dictionary: ?*const hyphenation.Dictionary,
-    word_break: @import("../types/paragraph.zig").WordBreak,
-    overflow_wrap: @import("../types/paragraph.zig").OverflowWrap,
+    defaults: line_break_policy.Policy,
+    policy_ranges: []const line_break_policy.Range,
 ) ![]opportunity.Opportunity {
     const base = try unicode.itemizeLineBreaks(allocator, text);
     defer allocator.free(base);
@@ -58,8 +59,8 @@ pub fn itemizeWithHyphenation(
         text,
         graphemes,
         tailored.items,
-        word_break,
-        overflow_wrap,
+        defaults,
+        policy_ranges,
     );
 }
 
@@ -72,76 +73,70 @@ pub fn tailorBreakPolicy(
     text: []const u8,
     graphemes: []const unicode.GraphemeCluster,
     base: []const opportunity.Opportunity,
-    word_break: @import("../types/paragraph.zig").WordBreak,
-    overflow_wrap: @import("../types/paragraph.zig").OverflowWrap,
+    defaults: line_break_policy.Policy,
+    policy_ranges: []const line_break_policy.Range,
 ) ![]opportunity.Opportunity {
     var tailored = std.ArrayList(opportunity.Opportunity).empty;
     errdefer tailored.deinit(allocator);
-    try tailored.appendSlice(allocator, base);
-    if (word_break == .keep_all) {
-        suppressCjkWordBreaks(&tailored, text, graphemes);
-    }
-    if (word_break == .break_all) {
-        // `break-all` supplies a denser non-hyphenating opportunity set;
-        // automatic hyphenation would only add visible punctuation and is
-        // therefore suppressed, matching CSS Text.
-        suppressAutomaticHyphens(&tailored);
-    }
-    if (word_break == .break_all or overflow_wrap == .anywhere) {
-        try appendGraphemeBreaks(
-            allocator,
-            &tailored,
-            graphemes,
-            text.len,
+    try tailored.ensureTotalCapacity(allocator, base.len);
+    for (base) |item| {
+        if (item.kind != .soft) {
+            tailored.appendAssumeCapacity(item);
+            continue;
+        }
+        const policy = line_break_policy.beforeBoundary(
+            defaults,
+            policy_ranges,
+            item.byte_offset,
         );
+        if (policy.wrap_mode == .no_wrap or
+            (item.automatic_hyphen and policy.word_break == .break_all) or
+            (!item.automatic_hyphen and policy.word_break == .keep_all and
+                cjkWordBoundary(text, graphemes, item.byte_offset)))
+        {
+            continue;
+        }
+        tailored.appendAssumeCapacity(item);
     }
+    try appendPolicyGraphemeBreaks(
+        allocator,
+        &tailored,
+        graphemes,
+        text.len,
+        defaults,
+        policy_ranges,
+    );
     return tailored.toOwnedSlice(allocator);
 }
 
-fn suppressAutomaticHyphens(
-    opportunities: *std.ArrayList(opportunity.Opportunity),
-) void {
-    var write: usize = 0;
-    for (opportunities.items) |item| {
-        if (item.kind == .soft and item.automatic_hyphen) continue;
-        opportunities.items[write] = item;
-        write += 1;
-    }
-    opportunities.shrinkRetainingCapacity(write);
-}
-
-fn appendGraphemeBreaks(
+fn appendPolicyGraphemeBreaks(
     allocator: std.mem.Allocator,
     opportunities: *std.ArrayList(opportunity.Opportunity),
     graphemes: []const unicode.GraphemeCluster,
     text_len: usize,
+    defaults: line_break_policy.Policy,
+    policy_ranges: []const line_break_policy.Range,
 ) !void {
     for (graphemes) |cluster| {
         const byte_offset = cluster.byte_start;
         if (byte_offset == 0 or byte_offset >= text_len) continue;
+        const policy = line_break_policy.beforeBoundary(
+            defaults,
+            policy_ranges,
+            byte_offset,
+        );
+        if (policy.wrap_mode == .no_wrap or
+            (policy.word_break != .break_all and
+                policy.overflow_wrap != .anywhere))
+        {
+            continue;
+        }
         try mergeOpportunity(opportunities, allocator, .{
             .byte_offset = byte_offset,
             .kind = .soft,
             .arbitrary = true,
         });
     }
-}
-
-fn suppressCjkWordBreaks(
-    opportunities: *std.ArrayList(opportunity.Opportunity),
-    text: []const u8,
-    graphemes: []const unicode.GraphemeCluster,
-) void {
-    var write: usize = 0;
-    for (opportunities.items) |item| {
-        const remove = item.kind == .soft and
-            !item.automatic_hyphen and
-            cjkWordBoundary(text, graphemes, item.byte_offset);
-        if (remove) continue;
-        opportunities.items[write] = item;
-        write += 1;
-    }
-    opportunities.shrinkRetainingCapacity(write);
 }
 
 fn cjkWordBoundary(
@@ -306,8 +301,12 @@ test "automatic hyphenation never splits an extended grapheme cluster" {
         graphemes,
         null,
         &dictionary,
-        .normal,
-        .break_word,
+        .{
+            .wrap_mode = .word,
+            .word_break = .normal,
+            .overflow_wrap = .break_word,
+        },
+        &.{},
     );
     defer std.testing.allocator.free(breaks);
     for (breaks) |line_break| {
@@ -332,8 +331,12 @@ test "break policy adds grapheme edges and keeps CJK words intact" {
         latin_graphemes,
         null,
         null,
-        .normal,
-        .break_word,
+        .{
+            .wrap_mode = .word,
+            .word_break = .normal,
+            .overflow_wrap = .break_word,
+        },
+        &.{},
     );
     defer allocator.free(latin_base);
     const break_all = try tailorBreakPolicy(
@@ -341,8 +344,12 @@ test "break policy adds grapheme edges and keeps CJK words intact" {
         latin_text,
         latin_graphemes,
         latin_base,
-        .break_all,
-        .normal,
+        .{
+            .wrap_mode = .word,
+            .word_break = .break_all,
+            .overflow_wrap = .normal,
+        },
+        &.{},
     );
     defer allocator.free(break_all);
     for ([_]usize{ 1, 2, 3 }) |byte_offset| {
@@ -364,8 +371,12 @@ test "break policy adds grapheme edges and keeps CJK words intact" {
         cjk_graphemes,
         null,
         null,
-        .normal,
-        .break_word,
+        .{
+            .wrap_mode = .word,
+            .word_break = .normal,
+            .overflow_wrap = .break_word,
+        },
+        &.{},
     );
     defer allocator.free(cjk_base);
     var normal_soft_count: usize = 0;
@@ -377,8 +388,12 @@ test "break policy adds grapheme edges and keeps CJK words intact" {
         cjk_text,
         cjk_graphemes,
         cjk_base,
-        .keep_all,
-        .normal,
+        .{
+            .wrap_mode = .word,
+            .word_break = .keep_all,
+            .overflow_wrap = .normal,
+        },
+        &.{},
     );
     defer allocator.free(keep_all);
     var kept_soft_count: usize = 0;
@@ -400,8 +415,12 @@ test "break policy adds grapheme edges and keeps CJK words intact" {
         ivs_graphemes,
         null,
         null,
-        .normal,
-        .break_word,
+        .{
+            .wrap_mode = .word,
+            .word_break = .normal,
+            .overflow_wrap = .break_word,
+        },
+        &.{},
     );
     defer allocator.free(ivs_base);
     const ivs_keep_all = try tailorBreakPolicy(
@@ -409,8 +428,12 @@ test "break policy adds grapheme edges and keeps CJK words intact" {
         ivs_text,
         ivs_graphemes,
         ivs_base,
-        .keep_all,
-        .normal,
+        .{
+            .wrap_mode = .word,
+            .word_break = .keep_all,
+            .overflow_wrap = .normal,
+        },
+        &.{},
     );
     defer allocator.free(ivs_keep_all);
     for (ivs_keep_all) |item| {

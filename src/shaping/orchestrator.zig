@@ -188,7 +188,7 @@ pub const TextShaper = struct {
         font_size: f32,
         options: ParagraphOptions,
     ) !ShapedParagraph {
-        try paragraph_options.validate(options);
+        try paragraph_options.validateForText(text, options);
         if (cascade.fonts.len == 0) return error.EmptyFontCascade;
         const shape_options = paragraph_options.shapeOptions(options);
         try shapeParagraphContent(
@@ -225,8 +225,12 @@ pub const TextShaper = struct {
             grapheme_clusters,
             options.word_break_dictionary,
             options.hyphenation.dictionary,
-            .normal,
-            .break_word,
+            .{
+                .wrap_mode = .word,
+                .word_break = .normal,
+                .overflow_wrap = .break_word,
+            },
+            &.{},
         );
         errdefer allocator.free(line_breaks);
         const inline_object_indexes = try allocator.alloc(
@@ -283,7 +287,7 @@ pub const TextShaper = struct {
     }
 
     pub fn layoutParagraphUtf8FullyCachedWithOptions(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
-        try paragraph_options.validate(options);
+        try paragraph_options.validateForText(text, options);
         // Paragraph layout is deliberately staged: shape first, then line-wrap
         // the finished glyph advances. That keeps OpenType substitution and
         // positioning independent from wrapping policy.
@@ -345,7 +349,7 @@ pub const TextShaper = struct {
     }
 
     pub fn layoutParagraphUtf8WithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
-        try paragraph_options.validate(options);
+        try paragraph_options.validateForText(text, options);
         try shapeParagraphContent(
             cascade,
             fallback_cache,

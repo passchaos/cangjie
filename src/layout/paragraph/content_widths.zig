@@ -10,6 +10,7 @@ const analysis = @import("../line_break/analysis.zig");
 const geometry = @import("../line_break/reflow/geometry.zig");
 const opportunity = @import("../line_break/opportunity.zig");
 const opportunities = @import("../line_break/reflow/opportunities.zig");
+const line_break_policy = @import("line_break_policy.zig");
 const paragraph_options = @import("options.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 const tabs = @import("tabs.zig");
@@ -45,9 +46,8 @@ pub fn calculate(
         text,
         graphemes,
         base_breaks,
-        options.word_break,
-        // `break-word` does not reduce min-content; `anywhere` does.
-        options.overflow_wrap,
+        paragraph_options.defaultLineBreakPolicy(options),
+        options.line_break_policy_ranges,
     );
     defer allocator.free(tailored);
     var break_cursor = opportunities.Cursor.init(text, tailored);
@@ -56,7 +56,6 @@ pub fn calculate(
         @as(f32, @floatFromInt(@max(1, options.tab_width))) *
         space_advance;
     var result = paragraph_types.ContentWidths{ .min = 0, .max = 0 };
-    const soft_wrap_enabled = options.wrap_mode != .no_wrap;
     var segment_start: usize = 0;
     var fragment_start: usize = 0;
     var index: usize = 0;
@@ -109,7 +108,7 @@ pub fn calculate(
         if (atom_continues) continue;
         const source_end = glyph.sourceByteEnd();
         while (break_cursor.nextThrough(source_end)) |line_break| {
-            if (!soft_wrap_enabled or line_break.kind != .soft) continue;
+            if (line_break.kind != .soft) continue;
             var candidate = opportunities.Candidate{};
             try opportunities.recordSoft(
                 working,
@@ -143,8 +142,12 @@ pub fn calculate(
                 geometry.trimLeadingSoftBreaks(working, &fragment_start);
             }
         }
-        if (soft_wrap_enabled and
-            options.white_space_collapse == .break_spaces and
+        if (options.white_space_collapse == .break_spaces and
+            line_break_policy.beforeBoundary(
+                paragraph_options.defaultLineBreakPolicy(options),
+                options.line_break_policy_ranges,
+                source_end,
+            ).wrap_mode != .no_wrap and
             geometry.isDiscardableBreak(glyph.codepoint))
         {
             const boundary = index + 1;

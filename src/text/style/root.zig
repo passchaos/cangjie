@@ -215,6 +215,10 @@ pub const TextStyle = struct {
     word_spacing: f32 = 0,
     line_height: ?f32 = null,
     vertical_align: paragraph_types.VerticalAlign = .baseline,
+    /// Optional span-local wrapping overrides. Null inherits paragraph policy.
+    wrap_mode: ?paragraph_types.WrapMode = null,
+    word_break: ?paragraph_types.WordBreak = null,
+    overflow_wrap: ?paragraph_types.OverflowWrap = null,
     locale: ?[]const u8 = null,
     script: ?unicode.Script = null,
 };
@@ -242,6 +246,7 @@ pub const ParagraphStyle = struct {
     wrap_mode: WrapMode = .word,
     word_break: WordBreak = .normal,
     overflow_wrap: OverflowWrap = .break_word,
+    line_break_policy_ranges: []const paragraph_options.LineBreakPolicyRange = &.{},
     white_space_collapse: WhiteSpaceCollapse = .preserve,
     line_break_strategy: LineBreakStrategy = .greedy,
     overflow_mode: OverflowMode = .clip,
@@ -272,6 +277,7 @@ pub const ParagraphStyle = struct {
             .wrap_mode = self.wrap_mode,
             .word_break = self.word_break,
             .overflow_wrap = self.overflow_wrap,
+            .line_break_policy_ranges = self.line_break_policy_ranges,
             .white_space_collapse = self.white_space_collapse,
             .line_break_strategy = self.line_break_strategy,
             .alignment = self.text_align,

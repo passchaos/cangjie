@@ -17,6 +17,7 @@ const jstf_shrinkage =
 const inline_object = @import("../../inline_object/root.zig");
 const line_break_opportunity = @import("../opportunity.zig");
 const opportunities = @import("opportunities.zig");
+const line_break_policy = @import("../../paragraph/line_break_policy.zig");
 const paragraph_options = @import("../../paragraph/options.zig");
 const punctuation_compression = @import("../../punctuation/compression.zig");
 const punctuation_hanging = @import("../../punctuation/hanging.zig");
@@ -106,7 +107,10 @@ pub fn begin(
         std.math.inf(f32);
     state.alignment = geometry.resolvedAlignment(options);
     state.uses_exclusions =
-        options.wrap_mode != .no_wrap and options.exclusions.len != 0;
+        line_break_policy.wrappingMayBeEnabled(
+            paragraph_options.defaultLineBreakPolicy(options),
+            options.line_break_policy_ranges,
+        ) and options.exclusions.len != 0;
     state.max_lines = options.max_lines orelse std.math.maxInt(usize);
     state.initialized = true;
     state.complete = state.max_lines == 0;
@@ -152,7 +156,11 @@ pub fn begin(
     // analysis. One-shot layout allocates only when emergency wrapping or a
     // dictionary tailoring requires those boundaries.
     state.grapheme_clusters = analyzed_graphemes orelse clusters: {
-        if (options.wrap_mode == .no_wrap) break :clusters &.{};
+        if (!line_break_policy.anyWrappingEnabled(
+            text.len,
+            paragraph_options.defaultLineBreakPolicy(options),
+            options.line_break_policy_ranges,
+        )) break :clusters &.{};
         state.owned_graphemes = try unicode.itemizeGraphemeClusters(
             buffer.allocator,
             text,
@@ -161,9 +169,11 @@ pub fn begin(
     };
     state.effective_line_breaks = breaks: {
         if (analyzed_line_breaks) |base| {
-            if (options.word_break == .normal and
-                options.overflow_wrap != .anywhere)
-            {
+            const defaults = paragraph_options.defaultLineBreakPolicy(options);
+            if (!line_break_policy.requiresOpportunityTailoring(
+                defaults,
+                options.line_break_policy_ranges,
+            )) {
                 break :breaks base;
             }
             state.owned_line_breaks = try analysis.tailorBreakPolicy(
@@ -171,27 +181,33 @@ pub fn begin(
                 text,
                 state.grapheme_clusters,
                 base,
-                options.word_break,
-                options.overflow_wrap,
+                defaults,
+                options.line_break_policy_ranges,
             );
             break :breaks state.owned_line_breaks.?;
         }
         if (dictionary == null and
             hyphenation_dictionary == null and
-            options.word_break == .normal and
-            options.overflow_wrap != .anywhere)
+            !line_break_policy.requiresOpportunityTailoring(
+                paragraph_options.defaultLineBreakPolicy(options),
+                options.line_break_policy_ranges,
+            ))
         {
             break :breaks null;
         }
-        if (options.wrap_mode == .no_wrap) break :breaks null;
+        if (!line_break_policy.anyWrappingEnabled(
+            text.len,
+            paragraph_options.defaultLineBreakPolicy(options),
+            options.line_break_policy_ranges,
+        )) break :breaks null;
         state.owned_line_breaks = try analysis.itemizeWithHyphenation(
             buffer.allocator,
             text,
             state.grapheme_clusters,
             dictionary,
             hyphenation_dictionary,
-            options.word_break,
-            options.overflow_wrap,
+            paragraph_options.defaultLineBreakPolicy(options),
+            options.line_break_policy_ranges,
         );
         break :breaks state.owned_line_breaks.?;
     };
@@ -449,7 +465,12 @@ fn advanceWithPlan(
             }
         }
         const current_region = active_region;
-        const current_line_limit = if (options.wrap_mode == .no_wrap)
+        const current_policy = line_break_policy.beforeBoundary(
+            paragraph_options.defaultLineBreakPolicy(options),
+            options.line_break_policy_ranges,
+            shaped_boundary.glyphSourceEnd(glyph.*),
+        );
+        const current_line_limit = if (current_policy.wrap_mode == .no_wrap)
             std.math.inf(f32)
         else
             current_region.width;
@@ -513,7 +534,9 @@ fn advanceWithPlan(
                     .hard => {},
                 }
             }
-            if (options.white_space_collapse == .break_spaces) {
+            if (options.white_space_collapse == .break_spaces and
+                current_policy.wrap_mode != .no_wrap)
+            {
                 opportunities.recordBreakSpaces(
                     buffer.glyphs.items,
                     index,
@@ -529,8 +552,9 @@ fn advanceWithPlan(
         if (!naturally_overflows and
             !atom_continues and
             !geometry.isDiscardableBreak(glyph.codepoint) and
-            (options.word_break == .break_all or
-                options.overflow_wrap == .anywhere) and
+            current_policy.wrap_mode != .no_wrap and
+            (current_policy.word_break == .break_all or
+                current_policy.overflow_wrap == .anywhere) and
             index + 1 < buffer.glyphs.items.len and
             shaped_boundary.outputBoundaryIsReusable(
                 buffer.glyphs.items,
@@ -712,16 +736,37 @@ fn advanceWithPlan(
             if (forced_balance_break) {
                 fitting_last_break = index + 1;
             }
-            const overflow_break = shaped_boundary.chooseOverflowBreak(
+            const overflow_policy = line_break_policy.beforeBoundary(
+                paragraph_options.defaultLineBreakPolicy(options),
+                options.line_break_policy_ranges,
+                shaped_boundary.glyphSourceEnd(glyph.*),
+            );
+            var overflow_break = shaped_boundary.chooseOverflowBreak(
                 buffer.glyphs.items,
                 grapheme_clusters,
                 index,
                 line_start,
                 fitting_last_break,
-                options.overflow_wrap != .normal or
-                    options.word_break == .break_all,
+                overflow_policy.wrap_mode != .no_wrap and
+                    (overflow_policy.overflow_wrap != .normal or
+                        overflow_policy.word_break == .break_all),
                 options.white_space_collapse == .break_spaces,
             );
+            if (options.line_break_policy_ranges.len != 0 and
+                fitting_last_break == null and
+                overflow_policy.wrap_mode != .no_wrap and
+                (overflow_policy.overflow_wrap != .normal or
+                    overflow_policy.word_break == .break_all))
+            {
+                overflow_break = rangeSafeEmergencyBreak(
+                    buffer.glyphs.items,
+                    grapheme_clusters,
+                    paragraph_options.defaultLineBreakPolicy(options),
+                    options.line_break_policy_ranges,
+                    overflow_break,
+                    index,
+                );
+            }
             if (overflow_break.defer_break) continue;
             const break_end = overflow_break.index;
             const uses_last_break = fitting_last_break != null and
@@ -969,6 +1014,21 @@ fn advanceWithPlan(
             terminal_emergency_line_committed =
                 break_end == buffer.glyphs.items.len;
             last_break.reset();
+            if (line_start <= index) {
+                // The overflowing glyph is already the measured prefix of the
+                // next line. Rebuild opportunities through that prefix before
+                // resuming; otherwise a policy transition immediately after
+                // it could lose the prefix's legal trailing boundary.
+                try rebuildLastBreak(
+                    &line_breaks,
+                    buffer,
+                    options,
+                    line_start,
+                    index,
+                    line_width,
+                    &last_break,
+                );
+            }
             // The glyph at `index` was already measured as the prefix of the
             // next line. Continue with its successor when the caller resumes.
             index += 1;
@@ -1079,6 +1139,58 @@ fn visibleHyphenAdvance(candidate: opportunities.Candidate) f32 {
         return item.resolved.x_advance;
     }
     return 0;
+}
+
+/// Prevent emergency fallback from jumping backward into a `.no_wrap` range.
+///
+/// The generic shaped-boundary chooser knows only grapheme and shaping safety.
+/// A ranged policy can make its first candidate illegal, so advance to the
+/// first reusable boundary whose preceding scalar permits emergency wrapping.
+/// If that boundary has not been consumed yet, defer the current attempt.
+fn rangeSafeEmergencyBreak(
+    glyphs: []const @import("../../glyph_position.zig").GlyphPosition,
+    grapheme_clusters: []const unicode.GraphemeCluster,
+    defaults: line_break_policy.Policy,
+    policy_ranges: []const line_break_policy.Range,
+    selected: shaped_boundary.OverflowBreak,
+    current_index: usize,
+) shaped_boundary.OverflowBreak {
+    var candidate = selected.index;
+    while (candidate <= glyphs.len) : (candidate += 1) {
+        if (candidate != glyphs.len and
+            !shaped_boundary.outputBoundaryIsReusable(
+                glyphs,
+                grapheme_clusters,
+                candidate,
+            ))
+        {
+            continue;
+        }
+        const byte_offset = if (candidate < glyphs.len)
+            shaped_boundary.glyphClusterStart(glyphs[candidate])
+        else if (glyphs.len != 0)
+            shaped_boundary.glyphSourceEnd(glyphs[glyphs.len - 1])
+        else
+            0;
+        const policy = line_break_policy.beforeBoundary(
+            defaults,
+            policy_ranges,
+            byte_offset,
+        );
+        if (policy.wrap_mode == .no_wrap or
+            (policy.overflow_wrap == .normal and
+                policy.word_break != .break_all))
+        {
+            continue;
+        }
+        return .{
+            .index = candidate,
+            .uses_current_discardable = selected.uses_current_discardable and
+                candidate == selected.index,
+            .defer_break = candidate > current_index + 1,
+        };
+    }
+    return .{ .index = glyphs.len, .defer_break = true };
 }
 
 pub fn prepareAdvances(glyphs: anytype, options: anytype) !void {

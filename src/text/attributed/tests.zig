@@ -323,6 +323,51 @@ test "attributed overflow wrapping preserves style and decoration sidecars" {
     try std.testing.expect(saw_strike);
 }
 
+test "attributed text spans override paragraph wrapping policy" {
+    const allocator = std.testing.allocator;
+    var owned = try OwnedFont.init(
+        allocator,
+        try test_font.buildLastResortCmapTtfWithKern(
+            allocator,
+            false,
+        ),
+    );
+    defer owned.deinit();
+    const fonts = [_]*const font_mod.Font{&owned.font};
+    const text = "AAAABBBB";
+    const spans = [_]style.StyleSpan{
+        .{
+            .byte_range = .{ .start = 0, .len = 4 },
+            .style = .{
+                .font_size = 20,
+                .wrap_mode = .no_wrap,
+                .decoration = .{ .underline = true },
+            },
+        },
+        .{
+            .byte_range = .{ .start = 4, .len = 4 },
+            .style = .{
+                .font_size = 20,
+                .decoration = .{ .strikethrough = true },
+            },
+        },
+    };
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
+        allocator,
+        font_fallback.Cascade.init(&fonts),
+        .{ .text = text, .spans = &spans },
+        17,
+    );
+    defer result.deinit();
+
+    try std.testing.expect(result.lines.len > 1);
+    try std.testing.expectEqual(@as(usize, 5), result.lines[0].byte_len);
+    try std.testing.expect(result.lines[0].width > 17);
+    try std.testing.expectEqual(@as(usize, 2), result.style_runs.len);
+    try std.testing.expectEqual(@as(usize, 4), result.style_runs[0].glyph_len);
+    try std.testing.expectEqual(@as(usize, 4), result.style_runs[1].glyph_len);
+}
+
 test "attributed whitespace collapse preserves paint and decoration ownership" {
     const allocator = std.testing.allocator;
     var owned = try OwnedFont.init(

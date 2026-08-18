@@ -12,6 +12,7 @@ const std = @import("std");
 const geometry = @import("geometry.zig");
 const opportunity = @import("../opportunity.zig");
 const opportunities = @import("opportunities.zig");
+const line_break_policy = @import("../../paragraph/line_break_policy.zig");
 const paragraph_options = @import("../../paragraph/options.zig");
 const punctuation_compression = @import("../../punctuation/compression.zig");
 const punctuation_hanging = @import("../../punctuation/hanging.zig");
@@ -103,7 +104,11 @@ pub fn build(
     recipe: anytype,
 ) !?Plan {
     if (options.line_break_strategy != .balanced or
-        options.wrap_mode == .no_wrap or
+        !line_break_policy.anyWrappingEnabled(
+            text.len,
+            paragraph_options.defaultLineBreakPolicy(options),
+            options.line_break_policy_ranges,
+        ) or
         !std.math.isFinite(effectiveMaxWidth(options.max_width)) or
         options.max_lines == 0 or
         buffer.glyphs.items.len == 0)
@@ -249,6 +254,11 @@ fn enumerateBoundaries(
         const source_end = shaped_boundary.glyphSourceEnd(glyph);
         while (cursor.nextThrough(source_end)) |line_break| {
             if (line_break.kind != .soft) continue;
+            const policy = line_break_policy.beforeBoundary(
+                paragraph_options.defaultLineBreakPolicy(options),
+                options.line_break_policy_ranges,
+                line_break.byte_offset,
+            );
             var candidate = opportunities.Candidate{};
             try opportunities.recordSoft(
                 buffer.glyphs.items,
@@ -278,8 +288,8 @@ fn enumerateBoundaries(
                 .next_glyph_index = next_start,
                 .byte_offset = line_break.byte_offset,
                 .kind = if (line_break.arbitrary and
-                    options.overflow_wrap == .break_word and
-                    options.word_break != .break_all)
+                    policy.overflow_wrap == .break_word and
+                    policy.word_break != .break_all)
                     .emergency
                 else
                     .soft,
@@ -287,6 +297,11 @@ fn enumerateBoundaries(
             });
         }
         if (options.white_space_collapse == .break_spaces and
+            line_break_policy.beforeBoundary(
+                paragraph_options.defaultLineBreakPolicy(options),
+                options.line_break_policy_ranges,
+                source_end,
+            ).wrap_mode != .no_wrap and
             geometry.isDiscardableBreak(glyph.codepoint))
         {
             var after_space = opportunities.Candidate{};
@@ -312,27 +327,39 @@ fn enumerateBoundaries(
     // Policies that permit arbitrary wrapping expose every reusable grapheme
     // boundary. If a UAX #14 edge already exists there, retain its better
     // semantics and lower penalty.
-    if (options.overflow_wrap != .normal or
-        options.word_break == .break_all)
-    {
-        var glyph_index: usize = 1;
-        while (glyph_index < buffer.glyphs.items.len) : (glyph_index += 1) {
-            if (!shaped_boundary.outputBoundaryIsReusable(
-                buffer.glyphs.items,
-                graphemes,
-                glyph_index,
-            )) continue;
-            try appendUnique(output, buffer.allocator, .{
-                .glyph_index = glyph_index,
-                .next_glyph_index = glyph_index,
-                .byte_offset = shaped_boundary.byteEndForGlyphPrefix(
-                    buffer.glyphs.items,
-                    glyph_index,
-                    0,
-                ),
-                .kind = .emergency,
-            });
+    var glyph_index: usize = 1;
+    while (glyph_index < buffer.glyphs.items.len) : (glyph_index += 1) {
+        if (!shaped_boundary.outputBoundaryIsReusable(
+            buffer.glyphs.items,
+            graphemes,
+            glyph_index,
+        )) continue;
+        const byte_offset = shaped_boundary.byteEndForGlyphPrefix(
+            buffer.glyphs.items,
+            glyph_index,
+            0,
+        );
+        const policy = line_break_policy.beforeBoundary(
+            paragraph_options.defaultLineBreakPolicy(options),
+            options.line_break_policy_ranges,
+            byte_offset,
+        );
+        if (policy.wrap_mode == .no_wrap or
+            (policy.overflow_wrap == .normal and
+                policy.word_break != .break_all))
+        {
+            continue;
         }
+        try appendUnique(output, buffer.allocator, .{
+            .glyph_index = glyph_index,
+            .next_glyph_index = glyph_index,
+            .byte_offset = byte_offset,
+            .kind = if (policy.overflow_wrap == .break_word and
+                policy.word_break != .break_all)
+                .emergency
+            else
+                .soft,
+        });
     }
     try appendUnique(output, buffer.allocator, .{
         .glyph_index = buffer.glyphs.items.len,
@@ -431,22 +458,17 @@ fn solveSegment(
         if (state.lines >= segment.line_count) continue;
         const start = boundaries[state.boundary_index].next_glyph_index;
         const remaining_lines = segment.line_count - state.lines;
-        const fitting_regular_edge =
-            if (options.overflow_wrap == .break_word and
-            options.word_break != .break_all)
-                try hasFittingRegularEdge(
-                    buffer,
-                    options,
-                    default_metrics,
-                    boundaries,
-                    segment,
-                    recipe,
-                    state,
-                    start,
-                    remaining_lines,
-                )
-            else
-                false;
+        const fitting_regular_edge = try hasFittingRegularEdge(
+            buffer,
+            options,
+            default_metrics,
+            boundaries,
+            segment,
+            recipe,
+            state,
+            start,
+            remaining_lines,
+        );
         const first_end = state.boundary_index + 1;
         var end_index = first_end;
         var evaluated_edges: usize = 0;

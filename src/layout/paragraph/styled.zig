@@ -44,7 +44,7 @@ pub const Input = struct {
 };
 
 pub fn layout(input: Input) !paragraph_types.ParagraphLayout {
-    try paragraph_options.validate(input.options);
+    try paragraph_options.validateForText(input.text, input.options);
     try plan_validation.utf8(input.text);
     try plan_validation.fontSize(input.default_font_size);
     if (input.cascade.fonts.len == 0) return error.EmptyFontCascade;
@@ -198,6 +198,17 @@ const Driver = struct {
         self: *@This(),
         spans: []const styled_paragraph.Span,
     ) !void {
+        const policy_ranges =
+            try styled_paragraph.resolveLineBreakPolicyRanges(
+                self.buffer.allocator,
+                self.text.len,
+                spans,
+                self.options,
+            );
+        defer self.buffer.allocator.free(policy_ranges);
+        var resolved_options = self.options;
+        resolved_options.line_break_policy_ranges = policy_ranges;
+
         try bidi_reorder.normalizeLogical(self.buffer);
         try styled_buffer.rebuild(
             &self.styled.metadata,
@@ -220,8 +231,12 @@ const Driver = struct {
             intrinsic_graphemes,
             self.options.word_break_dictionary,
             self.options.hyphenation.dictionary,
-            .normal,
-            .break_word,
+            .{
+                .wrap_mode = .word,
+                .word_break = .normal,
+                .overflow_wrap = .break_word,
+            },
+            &.{},
         );
         defer self.buffer.allocator.free(intrinsic_breaks);
         self.styled.content_widths = try content_widths.calculate(
@@ -231,10 +246,10 @@ const Driver = struct {
             self.buffer.runs.items,
             intrinsic_graphemes,
             intrinsic_breaks,
-            self.options,
+            resolved_options,
         );
 
-        var line_options = self.options;
+        var line_options = resolved_options;
         // Build the truncated prefix first. Synthetic dots are appended after
         // the sidecar has captured the terminal visible style.
         line_options.ellipsis = false;
@@ -256,7 +271,7 @@ const Driver = struct {
             .trial_metadata = &trial_metadata,
             .text = self.text,
             .spans = spans,
-            .options = self.options,
+            .options = resolved_options,
         };
         try paragraph_reflow.buildWithJstfShrinkage(
             self.buffer,
@@ -298,24 +313,24 @@ const Driver = struct {
         );
         try jstf_justification.apply(
             self.buffer,
-            self.options,
+            resolved_options,
             recipe,
         );
         try jstf_extender.apply(
             self.buffer,
             self.text,
-            self.options,
+            resolved_options,
             recipe,
         );
         try font_expansion.apply(
             self.buffer,
-            self.options,
+            resolved_options,
             recipe,
         );
         try kashida_justification.apply(
             self.buffer,
             self.text,
-            self.options,
+            resolved_options,
             recipe,
         );
         paragraph_reflow.applyPendingJustification(self.buffer);
@@ -340,15 +355,15 @@ const Driver = struct {
             self.buffer.glyphs.items.len,
             self.buffer.lines.items,
         );
-        try punctuation_compression.apply(self.buffer, self.options);
+        try punctuation_compression.apply(self.buffer, resolved_options);
         if (plan_bidi.paragraphNeedsReorder(
             self.text,
-            self.options.direction,
+            resolved_options.direction,
         )) {
             const visual_order = try styled_bidi.visualPermutation(
                 self.buffer.allocator,
                 self.text,
-                self.options.direction == .rtl,
+                resolved_options.direction == .rtl,
                 self.buffer.lines.items,
                 self.buffer.glyphs.items,
             );
@@ -356,7 +371,7 @@ const Driver = struct {
             try bidi_reorder.applyLines(
                 self.buffer,
                 self.text,
-                self.options.direction == .rtl,
+                resolved_options.direction == .rtl,
             );
             try styled_buffer.reorderByPermutation(
                 &self.styled.metadata,
@@ -371,7 +386,7 @@ const Driver = struct {
             self.options.inline_objects,
             self.styled.metadata.items,
         );
-        punctuation_hanging.apply(self.buffer, self.options);
+        punctuation_hanging.apply(self.buffer, resolved_options);
         bidi_reorder.recomputeRunOffsets(self.buffer);
         try inline_object.position(
             self.buffer,

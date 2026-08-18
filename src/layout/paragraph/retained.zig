@@ -80,7 +80,7 @@ pub const ShapedParagraph = struct {
         self: *const ShapedParagraph,
         options: paragraph_options.Options,
     ) !paragraph_types.ContentWidths {
-        try paragraph_options.validate(options);
+        try paragraph_options.validateForText(self.text, options);
         try inline_object.validate(self.text, options.inline_objects);
         if (options.word_break_dictionary != self.word_break_dictionary or
             options.hyphenation.dictionary != self.hyphenation_dictionary or
@@ -186,7 +186,7 @@ pub const ShapedParagraph = struct {
         self: *const ShapedParagraph,
         options: paragraph_options.Options,
     ) !void {
-        try paragraph_options.validate(options);
+        try paragraph_options.validateForText(self.text, options);
         try inline_object.validate(self.text, options.inline_objects);
         if (options.word_break_dictionary != self.word_break_dictionary or
             options.hyphenation.dictionary != self.hyphenation_dictionary or

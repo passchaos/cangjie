@@ -12,6 +12,7 @@ const balanced = @import("balanced.zig");
 const geometry = @import("geometry.zig");
 const greedy = @import("greedy.zig");
 const line_break_opportunity = @import("../opportunity.zig");
+const line_break_policy = @import("../../paragraph/line_break_policy.zig");
 const paragraph_options = @import("../../paragraph/options.zig");
 const segmentation = @import("../../../text/segmentation/root.zig");
 const white_space = @import("../../paragraph/white_space.zig");
@@ -52,7 +53,11 @@ pub fn buildWithJstfShrinkage(
     recipe: anytype,
 ) !void {
     if (options.line_break_strategy == .balanced and
-        options.wrap_mode != .no_wrap and
+        line_break_policy.anyWrappingEnabled(
+            text.len,
+            paragraph_options.defaultLineBreakPolicy(options),
+            options.line_break_policy_ranges,
+        ) and
         std.math.isFinite(if (options.max_width > 0)
             options.max_width
         else
@@ -152,8 +157,8 @@ fn buildBalanced(
             grapheme_clusters,
             dictionary,
             hyphenation_dictionary,
-            options.word_break,
-            options.overflow_wrap,
+            paragraph_options.defaultLineBreakPolicy(options),
+            options.line_break_policy_ranges,
         );
         break :breaks owned_line_breaks.?;
     };

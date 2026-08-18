@@ -96,6 +96,12 @@ test "paragraph style converts to paragraph options" {
         .y = 34,
         .width = 56,
     };
+    const line_break_policy_range =
+        paragraph_options.LineBreakPolicyRange{
+            .byte_start = 2,
+            .byte_len = 4,
+            .word_break = .break_all,
+        };
     const tab_stops = [_]paragraph_options.TabStop{
         .{ .position = 24 },
         .{ .position = 72 },
@@ -116,6 +122,7 @@ test "paragraph style converts to paragraph options" {
         .first_line_indent = 10,
         .paragraph_spacing = 4,
         .line_regions = &.{line_region},
+        .line_break_policy_ranges = &.{line_break_policy_range},
         .out_of_flow_placements = &.{placement},
         .word_break_dictionary = &dictionary,
         .hyphenation = .{
@@ -204,16 +211,37 @@ test "paragraph style converts to paragraph options" {
         options.out_of_flow_placements[0],
     );
     try std.testing.expectEqual(line_region, options.line_regions[0]);
+    try std.testing.expectEqual(
+        line_break_policy_range,
+        options.line_break_policy_ranges[0],
+    );
 
     const defaults = (ParagraphStyle{}).paragraphOptions(80);
     try std.testing.expectEqual(paragraph_types.TextAlign.start, defaults.alignment);
 }
 
 test "vertical alignment belongs to inline text style" {
-    const text_style = TextStyle{ .vertical_align = .middle };
+    const text_style = TextStyle{
+        .vertical_align = .middle,
+        .wrap_mode = .no_wrap,
+        .word_break = .keep_all,
+        .overflow_wrap = .anywhere,
+    };
     try std.testing.expectEqual(
         paragraph_types.VerticalAlign.middle,
         text_style.vertical_align,
+    );
+    try std.testing.expectEqual(
+        paragraph_types.WrapMode.no_wrap,
+        text_style.wrap_mode.?,
+    );
+    try std.testing.expectEqual(
+        paragraph_types.WordBreak.keep_all,
+        text_style.word_break.?,
+    );
+    try std.testing.expectEqual(
+        paragraph_types.OverflowWrap.anywhere,
+        text_style.overflow_wrap.?,
     );
     try std.testing.expect(!@hasField(ParagraphStyle, "vertical_align"));
 }

@@ -6,6 +6,7 @@ test {
     _ = @import("layout_interaction.zig");
     _ = @import("out_of_flow.zig");
     _ = @import("paragraph_breaker.zig");
+    _ = @import("paragraph_line_break_policy.zig");
     _ = @import("paragraph_reflow.zig");
     _ = @import("paragraph_exclusions.zig");
     _ = @import("paragraph_retained.zig");

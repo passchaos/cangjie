@@ -714,6 +714,23 @@ encoded as one ambiguous wrap enum:
 - `WrapMode.no_wrap` still disables every width-induced soft break regardless
   of the other policies; explicit Unicode hard breaks remain authoritative.
 
+`ParagraphOptions.line_break_policy_ranges` can override those three axes over
+ordered, non-overlapping UTF-8 ranges. Every field is optional and inherits
+the paragraph default independently. A candidate boundary is owned by the
+source scalar immediately before it: a no-wrap span therefore cannot be split
+at its trailing edge merely because the next span wraps, while the first safe
+boundary after consuming a wrapping scalar may be selected normally. Unicode
+mandatory boundaries are never removed by ranged policy.
+
+Attributed `TextStyle` exposes the same optional `wrap_mode`, `word_break`, and
+`overflow_wrap` overrides. Styled layout merges the exact style partition with
+any paragraph-authored ranges into canonical intervals before line analysis;
+style overrides replace only their non-null axes. These controls are
+layout-only and do not split otherwise shaping-equivalent runs. Greedy,
+balanced, retained and resumable reflow, min-content measurement, exclusions,
+decorations, bidi, and glyph-parallel metadata all consume the same resolved
+policy stream.
+
 All arbitrary boundaries pass the same grapheme and
 `unsafe-to-break-before` proof as emergency wrapping. They therefore never
 split a GSUB source atom, ligature, mark attachment, kern pair, or any other

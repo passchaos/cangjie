@@ -5,6 +5,7 @@ const std = @import("std");
 const paragraph_types = @import("../types/paragraph.zig");
 const exclusions = @import("exclusions.zig");
 const inline_object = @import("../inline_object/root.zig");
+const line_break_policy = @import("line_break_policy.zig");
 const line_regions = @import("line_regions.zig");
 const tabs = @import("tabs.zig");
 const hyphenation = @import("../../text/hyphenation/root.zig");
@@ -15,6 +16,8 @@ const segmentation = @import("../../text/segmentation/root.zig");
 const unicode = @import("../../unicode.zig");
 
 pub const Exclusion = exclusions.Exclusion;
+pub const LineBreakPolicy = line_break_policy.Policy;
+pub const LineBreakPolicyRange = line_break_policy.Range;
 pub const TabAlignment = tabs.Alignment;
 pub const TabStop = tabs.Stop;
 pub const LineRegion = line_regions.Region;
@@ -112,6 +115,12 @@ pub const Options = struct {
     word_break: paragraph_types.WordBreak = .normal,
     /// Preserve Cangjie's historical emergency-wrap behavior by default.
     overflow_wrap: paragraph_types.OverflowWrap = .break_word,
+    /// Optional UTF-8 ranges overriding paragraph wrapping policy.
+    ///
+    /// A soft boundary uses the policy of the preceding source scalar. Ranges
+    /// are ordered, non-overlapping, and may leave gaps that inherit the three
+    /// paragraph-level defaults above.
+    line_break_policy_ranges: []const line_break_policy.Range = &.{},
     /// Preserve the historical source-visible whitespace contract by default.
     white_space_collapse: paragraph_types.WhiteSpaceCollapse = .preserve,
     line_break_strategy: paragraph_types.LineBreakStrategy = .greedy,
@@ -192,6 +201,7 @@ pub fn validate(options: Options) !void {
     {
         return error.InvalidParagraphOptions;
     }
+    try line_break_policy.validate(options.line_break_policy_ranges);
     try exclusions.validate(options.exclusions);
     try line_regions.validate(options.line_regions);
     try tabs.validate(options.tab_stops);
@@ -218,6 +228,22 @@ pub fn validate(options: Options) !void {
     }
     try plan_validation.features(options.features);
     try plan_validation.variationCoords(options.normalized_variation_coords);
+}
+
+pub fn validateForText(text: []const u8, options: Options) !void {
+    try validate(options);
+    try line_break_policy.validateForText(
+        text,
+        options.line_break_policy_ranges,
+    );
+}
+
+pub fn defaultLineBreakPolicy(options: Options) line_break_policy.Policy {
+    return .{
+        .wrap_mode = options.wrap_mode,
+        .word_break = options.word_break,
+        .overflow_wrap = options.overflow_wrap,
+    };
 }
 
 pub fn shapeOptions(options: Options) shaping_plan.ShapeOptions {

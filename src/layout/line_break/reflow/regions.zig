@@ -7,6 +7,7 @@
 const std = @import("std");
 
 const exclusions = @import("../../paragraph/exclusions.zig");
+const line_break_policy = @import("../../paragraph/line_break_policy.zig");
 const paragraph_options = @import("../../paragraph/options.zig");
 const ParagraphLine = @import("../../types/paragraph.zig").ParagraphLine;
 
@@ -58,7 +59,10 @@ pub fn resolve(
         y.* = source.y;
         return fromExplicit(source);
     }
-    if (options.wrap_mode == .no_wrap or options.exclusions.len == 0) {
+    if (!line_break_policy.wrappingMayBeEnabled(
+        paragraph_options.defaultLineBreakPolicy(options),
+        options.line_break_policy_ranges,
+    ) or options.exclusions.len == 0) {
         return default(paragraph_line_index, max_width, options);
     }
     return resolveAtY(
@@ -88,7 +92,10 @@ pub fn preview(
     if (explicitSource(options, visual_line_index)) |source| {
         return fromExplicit(source);
     }
-    if (options.wrap_mode == .no_wrap or options.exclusions.len == 0) {
+    if (!line_break_policy.wrappingMayBeEnabled(
+        paragraph_options.defaultLineBreakPolicy(options),
+        options.line_break_policy_ranges,
+    ) or options.exclusions.len == 0) {
         return default(paragraph_line_index, max_width, options);
     }
     var preview_y = y;

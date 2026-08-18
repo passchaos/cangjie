@@ -42,9 +42,9 @@ pub fn apply(
 
 /// Keep a complete visual-line prefix and synchronize glyph/run ownership.
 ///
-/// This operation is writing-mode neutral. Vertical paragraph layout uses it
-/// without ellipsis after selecting source-order columns; horizontal
-/// truncation additionally materializes dots through `apply`.
+/// This operation is writing-mode neutral. Horizontal truncation optionally
+/// materializes x-axis dots through `apply`; vertical column layout uses the
+/// same prefix transaction before its separate positive-down materializer.
 pub fn keepPrefix(buffer: anytype, line_count: usize) void {
     if (line_count == 0) {
         buffer.lines.clearRetainingCapacity();

@@ -133,6 +133,10 @@ Paragraph request and ownership policy is organized under
 - `retained.zig` owns `ShapedParagraph` and `ReflowBuffer`, including immutable
   source/shaping snapshots and repeatable reflow without another GSUB/GPOS
   pass.
+- `vertical_columns.zig` owns physical RL/LR column progression;
+  `vertical_wrap/` owns positive-down source-range selection and tab fields;
+  focused block-metric, inline-alignment, and ellipsis modules keep those
+  axis-specific transactions out of horizontal greedy reflow.
 - `styled.zig` drives attributed shaping, fallback, metadata, reflow, and bidi
   over normalized style spans.
 - `text_geometry/` builds an owned, platform-neutral view of final paragraph
@@ -593,8 +597,16 @@ truncated together; `max_lines = 0` produces an empty visible paragraph.
 Physical RL/LR column placement is recomputed after truncation, so omitted
 columns reserve no block width. Retained reflow can restore the full paragraph,
 and min/max-content intrinsic widths remain independent from the visibility
-limit. Vertical ellipsis remains explicitly unsupported until synthetic dots
-are shaped, oriented, and fitted along the vertical inline axis.
+limit. When `ellipsis` is enabled and a nonempty visible prefix omits later
+columns, three synthetic periods are resolved through the terminal source
+style's cascade, size, and variation instance, then fitted along positive-down
+y. Upright dots use vertical metrics and origins; sideways dots use horizontal
+advance while retaining vertical-origin placement. Terminal tab fields,
+start/center/end alignment, run ownership, in-flow object block extent,
+attributed metadata, and retained restoration are recomputed after fitting. An
+omitted empty terminal column after a trailing hard break still counts as
+truncation. `max_lines = 0` remains empty rather than emitting a standalone
+ellipsis.
 
 In-flow U+FFFC inline objects also use physical dimensions through the current
 flow axes. `Object.width` is horizontal inline advance but vertical column
@@ -618,9 +630,8 @@ not yet moved to the shared inline/block-axis model.
 This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
 axes, vertical paragraph validation rejects bottom-to-top/RTL text, bidi
-controls, justification,
-ellipsis, negative glyph spacing, exclusions/line regions (including resolver
-responses that introduce an exclusion), hyphenation,
+controls, justification, negative glyph spacing, exclusions/line regions
+(including resolver responses that introduce an exclusion), hyphenation,
 optical punctuation, and the resumable breaker. Retained whole-paragraph
 layout and intrinsic inline-size measurement are supported and restore the
 pristine vertical shaping snapshot between calls. Returning a concrete

@@ -24,10 +24,11 @@ pub fn apply(
     needs_bidi_reorder: bool,
 ) !void {
     if (options.writing_mode.isVertical()) {
-        // The admitted vertical subset has no bidi permutation, optical
-        // punctuation, inline objects, or justification. Run pens still need
-        // refreshing because paragraph letter/word spacing changed y advances
-        // after the retained shaping snapshot was restored.
+        // Vertical column construction has already applied line limits,
+        // ellipsis, alignment, tabs, and object block metrics. The admitted
+        // subset has no bidi permutation, optical punctuation, or
+        // justification; only final two-dimensional run pens and positioned
+        // object output remain.
         bidi_reorder.recomputeRunOffsets(buffer);
         try inline_object.position(
             buffer,

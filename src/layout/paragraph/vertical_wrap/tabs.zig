@@ -13,6 +13,26 @@ pub fn recomputeRange(
     fallback_interval: f32,
     fallback_advance: f32,
 ) f32 {
+    return recomputeRangeWithTerminal(
+        glyphs,
+        stops,
+        fallback_interval,
+        fallback_advance,
+        0,
+    );
+}
+
+/// Recompute a selected column while measuring a synthetic terminal tail as
+/// part of the final tab field. Vertical ellipsis uses this before it appends
+/// its dots, so center/end/decimal stops fit the same geometry that will be
+/// rendered.
+pub fn recomputeRangeWithTerminal(
+    glyphs: []GlyphPosition,
+    stops: []const tab_ruler.Stop,
+    fallback_interval: f32,
+    fallback_advance: f32,
+    terminal_advance: f32,
+) f32 {
     var size: f32 = 0;
     for (glyphs, 0..) |*glyph, glyph_index| {
         if (glyph.isActiveTab()) {
@@ -23,11 +43,12 @@ pub fn recomputeRange(
                 stops,
                 fallback_interval,
                 fallback_advance,
+                terminal_advance,
             );
         }
         size += glyph.y_advance;
     }
-    return size;
+    return size + terminal_advance;
 }
 
 pub fn measureRange(
@@ -67,6 +88,7 @@ pub fn measurePrefix(
                 stops,
                 fallback_interval,
                 fallback_advance,
+                0,
             )
         else
             glyph.y_advance;
@@ -89,6 +111,7 @@ fn resolvedAdvance(
     stops: []const tab_ruler.Stop,
     fallback_interval: f32,
     fallback_advance: f32,
+    terminal_advance: f32,
 ) f32 {
     const stop = tab_ruler.nextExplicitStop(current_advance, stops);
     return tab_ruler.advance(
@@ -100,6 +123,7 @@ fn resolvedAdvance(
             glyphs,
             glyph_index + 1,
             if (stop) |item| item.decimal_point else '.',
+            terminal_advance,
         ),
     );
 }
@@ -108,6 +132,7 @@ fn measureField(
     glyphs: []const GlyphPosition,
     start: usize,
     decimal_point: u21,
+    terminal_advance: f32,
 ) tab_ruler.Field {
     var total: f32 = 0;
     var before_decimal: ?f32 = null;
@@ -120,6 +145,7 @@ fn measureField(
         }
         total += glyph.y_advance;
     }
+    if (index == glyphs.len) total += terminal_advance;
     return .{
         .total_width = total,
         .before_decimal_width = before_decimal,

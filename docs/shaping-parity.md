@@ -2227,15 +2227,22 @@ shaping-performance superiority.
   the post-indent inline region, while active tab-ruler columns remain pinned
   to start. Source-order `max-lines` truncation synchronizes column, glyph/run,
   object, and styled metadata prefixes before physical RL/LR placement.
+  Optional ellipsis resolves three periods through the terminal source style's
+  cascade, size, and variation instance, then lays them out along positive-down
+  y. It uses vertical metrics/origins for upright output and horizontal advance
+  for sideways output. Fitting repairs aligned tab fields, column alignment,
+  run ownership, object-derived block width, styled metadata, and retained
+  restoration; a trailing hard break's omitted empty column still triggers the
+  tail, while a zero-column limit remains empty.
   Ordinary out-of-flow source-anchor fallbacks remain zero-occupancy while
   retaining paint output. Custom out-of-flow markers now accept absolute
   presentation-only geometry directly and through placement-only concrete
   resolver replay; retained/styled layout, intrinsic sizing, draw output, and
   line-limit visibility keep those bounds outside flow metrics. Bidi handling,
   physical left/right alignment, exclusions (including resolver responses that
-  introduce one), justification, vertical ellipsis, and incremental breaking
-  are rejected explicitly until they are migrated to the shared
-  inline/block-axis model; this is not yet full vertical paragraph parity.
+  introduce one), justification, and incremental breaking are rejected
+  explicitly until they are migrated to the shared inline/block-axis model;
+  this is not yet full vertical paragraph parity.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari

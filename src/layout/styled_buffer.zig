@@ -164,6 +164,47 @@ fn replaceTailWithSynthetic(
     if (list.items.len != glyph_count) return error.InvalidStyleSpans;
 }
 
+/// Reserve metadata capacity before an axis-specific ellipsis mutates glyphs.
+///
+/// Keeping allocation before the glyph transaction prevents an OOM from
+/// leaving the sidecar shorter than already-materialized synthetic output.
+pub fn reserveEllipsisTail(
+    list: *std.ArrayList(Metadata),
+    allocator: std.mem.Allocator,
+    synthetic_glyph_count: usize,
+) !void {
+    try list.ensureTotalCapacity(
+        allocator,
+        list.items.len + synthetic_glyph_count,
+    );
+}
+
+/// Synchronize metadata after an axis-specific ellipsis implementation trims
+/// source glyphs and appends a synthetic tail. The dots inherit terminal paint
+/// and minimum-line-height state but never source letter/word spacing.
+pub fn replaceTailWithEllipsis(
+    list: *std.ArrayList(Metadata),
+    allocator: std.mem.Allocator,
+    glyph_count: usize,
+    synthetic_glyph_count: usize,
+) !void {
+    if (glyph_count < synthetic_glyph_count) {
+        return error.InvalidStyleSpans;
+    }
+    // Capture the terminal visible source style before fitting can remove the
+    // complete final column. In that case the retained glyph immediately
+    // before the dots belongs to an earlier column and is not the paint owner.
+    const style = terminalStyle(list.items, list.items.len);
+    if (list.capacity < glyph_count) return error.InvalidStyleSpans;
+    try replaceTailWithSynthetic(
+        list,
+        allocator,
+        glyph_count,
+        synthetic_glyph_count,
+        style,
+    );
+}
+
 pub fn appendEllipsis(
     list: *std.ArrayList(Metadata),
     allocator: std.mem.Allocator,

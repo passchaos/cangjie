@@ -19,6 +19,7 @@ const line_break_analysis = @import("../line_break/analysis.zig");
 const source_items = @import("source_items.zig");
 const tabs = @import("tabs.zig");
 const vertical_columns = @import("vertical_columns.zig");
+const vertical_ellipsis = @import("vertical_ellipsis.zig");
 const vertical_align = @import("vertical_align.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 const run_types = @import("../types/runs.zig");
@@ -324,14 +325,63 @@ const Driver = struct {
             recipe,
         );
         if (resolved_options.writing_mode.isVertical()) {
-            // Vertical option validation excludes every later horizontal-only
-            // presentation transform. The sidecar already matches the shaped
-            // glyph stream and only run pens need the y-spacing refresh.
-            bidi_reorder.recomputeRunOffsets(self.buffer);
+            const content_omitted =
+                vertical_columns.visiblePrefixOmitsSource(
+                    self.text,
+                    self.buffer.lines.items,
+                );
+            // Capture the terminal visible source style before ellipsis
+            // fitting can trim glyphs from the last column.
             try styled_buffer.synchronizeAfterTruncation(
                 &self.styled.metadata,
                 self.buffer.glyphs.items.len,
             );
+            const previous_terminal_width =
+                if (self.buffer.lines.items.len != 0)
+                    self.buffer.lines.items[
+                        self.buffer.lines.items.len - 1
+                    ].width
+                else
+                    0;
+            if (self.options.ellipsis and content_omitted) {
+                try styled_buffer.reserveEllipsisTail(
+                    &self.styled.metadata,
+                    self.styled.allocator,
+                    vertical_ellipsis.synthetic_count,
+                );
+            }
+            const ellipsis_count =
+                if (self.options.ellipsis and content_omitted)
+                    try vertical_ellipsis.materialize(
+                        self.buffer,
+                        resolved_options,
+                        paragraph_reflow.defaultBaselineMetrics(
+                            self.cascade.fonts[0],
+                            self.default_font_size,
+                        ),
+                        recipe,
+                    )
+                else
+                    0;
+            if (ellipsis_count != 0) {
+                vertical_columns.refreshAfterTerminalWidthChange(
+                    self.buffer.lines.items,
+                    resolved_options.writing_mode,
+                    previous_terminal_width,
+                );
+            }
+            // The vertical builder has already completed every admitted
+            // presentation transform. Synchronize its synthetic tail before
+            // refreshing two-dimensional run pens and positioned objects.
+            if (ellipsis_count != 0) {
+                try styled_buffer.replaceTailWithEllipsis(
+                    &self.styled.metadata,
+                    self.styled.allocator,
+                    self.buffer.glyphs.items.len,
+                    ellipsis_count,
+                );
+            }
+            bidi_reorder.recomputeRunOffsets(self.buffer);
             try inline_object.position(
                 self.buffer,
                 self.options.inline_objects,

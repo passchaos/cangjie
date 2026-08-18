@@ -77,6 +77,49 @@ pub const Recipe = struct {
         return result;
     }
 
+    /// Resolve synthetic ellipsis ownership from the style that contains the
+    /// terminal visible source boundary. This preserves style-local cascades,
+    /// font size, variation coordinates, and public paragraph font indexes.
+    pub fn ellipsisRun(
+        self: Recipe,
+        buffer: *context_output.Buffer,
+        source_boundary: usize,
+        source_run: ?run_types.CascadeRun,
+    ) !?run_types.CascadeRun {
+        const span = spanForBoundary(
+            self.spans,
+            source_boundary,
+        ) orelse return source_run;
+        const fonts = if (span.faces) |faces|
+            face_mod.backend.fonts(faces)
+        else
+            self.cascade.fonts;
+        const local_index = try font_fallback.Cascade.init(fonts).selectFont(
+            '.',
+        );
+        const font = fonts[local_index];
+        const font_index = for (self.cascade.fonts, 0..) |candidate, index| {
+            if (candidate == font) break index;
+        } else if (source_run) |run|
+            run.font_index
+        else
+            local_index;
+        const variation_range = try buffer.internVariationCoords(
+            span.normalized_variation_coords,
+        );
+        return .{
+            .font = face_mod.backend.face(font),
+            .font_index = font_index,
+            .font_size = span.font_size,
+            .glyph_start = buffer.glyphs.items.len,
+            .glyph_len = 0,
+            .x_offset = 0,
+            .y_offset = 0,
+            .variation_coord_start = variation_range.start,
+            .variation_coord_len = variation_range.len,
+        };
+    }
+
     pub fn acceptKashidaBoundary(
         self: Recipe,
         boundary: usize,
@@ -681,4 +724,17 @@ fn spanForOutput(
     }
     if (!glyph.isKashida() or glyph.cluster == 0) return null;
     return styled_paragraph.spanForCluster(spans, glyph.cluster - 1);
+}
+
+fn spanForBoundary(
+    spans: []const styled_paragraph.Span,
+    boundary: usize,
+) ?styled_paragraph.Span {
+    if (spans.len == 0) return null;
+    for (spans) |span| {
+        if (boundary > span.byte_start and boundary <= span.byteEnd()) {
+            return span;
+        }
+    }
+    return styled_paragraph.spanForCluster(spans, boundary);
 }

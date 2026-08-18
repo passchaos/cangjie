@@ -466,6 +466,17 @@ pub fn buildVerticalMetricsTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try verticalMetricsTtfTables(allocator));
 }
 
+pub fn buildVerticalFallbackTtf(
+    allocator: std.mem.Allocator,
+    codepoints: []const u32,
+) ![]u8 {
+    return buildSfnt(
+        allocator,
+        0x00010000,
+        try verticalFallbackTtfTables(allocator, codepoints),
+    );
+}
+
 pub fn buildVorgTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try vorgTtfTables(allocator));
 }
@@ -1845,6 +1856,50 @@ fn verticalMetricsTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[7] = .{ .tag = "vhea", .data = try vheaTableWithMetrics(allocator, 1) };
     tables[8] = .{ .tag = "vmtx", .data = try vmtxTable(allocator) };
+    tables[9] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn verticalFallbackTtfTables(
+    allocator: std.mem.Allocator,
+    codepoints: []const u32,
+) ![]Table {
+    const glyph_count = codepoints.len + 1;
+    const tables = try allocator.alloc(Table, 10);
+    errdefer allocator.free(tables);
+    tables[0] = .{
+        .tag = "cmap",
+        .data = try cmapFormat12SequentialTable(allocator, codepoints),
+    };
+    tables[1] = .{
+        .tag = "glyf",
+        .data = try emptyGlyfTable(allocator, glyph_count),
+    };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{
+        .tag = "hhea",
+        .data = try hheaTableWithMetrics(allocator, @intCast(glyph_count)),
+    };
+    tables[4] = .{
+        .tag = "hmtx",
+        .data = try hmtxTableWithGlyphCount(allocator, glyph_count),
+    };
+    tables[5] = .{
+        .tag = "loca",
+        .data = try emptyLocaTable(allocator, glyph_count),
+    };
+    tables[6] = .{
+        .tag = "maxp",
+        .data = try maxpTableWithGlyphs(allocator, @intCast(glyph_count)),
+    };
+    tables[7] = .{
+        .tag = "vhea",
+        .data = try vheaTableWithMetrics(allocator, @intCast(glyph_count)),
+    };
+    tables[8] = .{
+        .tag = "vmtx",
+        .data = try vmtxTableWithGlyphCount(allocator, glyph_count),
+    };
     tables[9] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
@@ -7284,6 +7339,18 @@ fn vmtxTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 0, 1000);
     writeI16(bytes, 2, 0);
     writeI16(bytes, 4, 0);
+    return bytes;
+}
+
+fn vmtxTableWithGlyphCount(
+    allocator: std.mem.Allocator,
+    glyph_count: usize,
+) ![]u8 {
+    const bytes = try allocator.alloc(u8, glyph_count * 4);
+    for (0..glyph_count) |glyph_index| {
+        writeU16(bytes, glyph_index * 4, 1000);
+        writeI16(bytes, glyph_index * 4 + 2, 0);
+    }
     return bytes;
 }
 

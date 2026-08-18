@@ -147,8 +147,8 @@ pub const Options = struct {
     max_lines: ?usize = null,
     /// Append "..." only when `max_lines` removes content.
     ///
-    /// Vertical ellipsis materialization is not yet supported; vertical
-    /// paragraphs may use `max_lines` only with this field false.
+    /// Horizontal lines fit the dots along x; vertical columns fit upright or
+    /// sideways dots along their positive-down y axis.
     ellipsis: bool = false,
     /// Width in ordinary space advances of the repeating fallback grid.
     ///
@@ -311,7 +311,6 @@ fn validateVerticalForText(text: []const u8, options: Options) !void {
     if (options.direction != .ltr or
         options.line_break_strategy != .greedy or
         !verticalAlignmentSupported(options.alignment) or
-        options.ellipsis or
         options.letter_spacing < 0 or
         options.word_spacing < 0 or
         options.exclusions.len != 0 or

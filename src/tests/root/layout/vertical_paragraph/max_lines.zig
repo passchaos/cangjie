@@ -1,4 +1,4 @@
-//! Vertical source-order column limits without ellipsis materialization.
+//! Vertical source-order column limits independent from optional ellipsis.
 
 const std = @import("std");
 const paragraph = @import("../../../../api/paragraph/root.zig");

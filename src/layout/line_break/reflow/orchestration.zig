@@ -61,6 +61,7 @@ pub fn buildWithJstfShrinkage(
             default_metrics,
             analyzed_graphemes,
             analyzed_line_breaks,
+            recipe,
         );
     }
     if (options.line_break_strategy == .balanced and
@@ -227,6 +228,14 @@ const NoShrinkageRecipe = struct {
     pub fn rollbackReflowTrial(_: @This()) void {}
     pub fn minimumLineHeight(_: @This(), _: usize, _: usize) ?f32 {
         return null;
+    }
+    pub fn ellipsisRun(
+        _: @This(),
+        _: anytype,
+        _: usize,
+        source_run: ?@import("../../types/runs.zig").CascadeRun,
+    ) !?@import("../../types/runs.zig").CascadeRun {
+        return source_run;
     }
     pub fn canShrinkSourceRange(_: @This(), _: usize, _: usize) bool {
         return false;

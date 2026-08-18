@@ -13,6 +13,9 @@ const opportunities = @import("../line_break/reflow/opportunities.zig");
 const line_break_opportunity = @import("../line_break/opportunity.zig");
 const truncation = @import("../line_break/reflow/truncation.zig");
 const paragraph_options = @import("options.zig");
+const vertical_block_metrics = @import("vertical_block_metrics.zig");
+const vertical_ellipsis = @import("vertical_ellipsis.zig");
+const vertical_inline_alignment = @import("vertical_inline_alignment.zig");
 const vertical_wrap = @import("vertical_wrap.zig");
 const vertical_tabs = @import("vertical_wrap/tabs.zig");
 const white_space = @import("white_space.zig");
@@ -26,6 +29,7 @@ pub fn build(
     default_metrics: geometry.BaselineMetrics,
     analyzed_graphemes: ?[]const unicode.GraphemeCluster,
     analyzed_line_breaks: ?[]const line_break_opportunity.Opportunity,
+    recipe: anytype,
 ) !void {
     buffer.lines.clearRetainingCapacity();
 
@@ -154,8 +158,17 @@ pub fn build(
         options.max_lines orelse ranges.len,
         ranges.len,
     );
+    const content_omitted = visible_count < ranges.len;
     if (visible_count < ranges.len) {
         truncation.keepPrefix(buffer, visible_count);
+    }
+    if (options.ellipsis and content_omitted and visible_count != 0) {
+        _ = try vertical_ellipsis.materialize(
+            buffer,
+            options,
+            default_metrics,
+            recipe,
+        );
     }
     placeColumns(
         buffer.lines.items,
@@ -183,6 +196,54 @@ pub fn contentWidths(
     );
 }
 
+/// Repair already-placed columns after styled ellipsis changes only the final
+/// source-order column's block width.
+///
+/// LR progression anchors earlier columns at the left, so no coordinates
+/// change. RL progression anchors the terminal source column at x=0; every
+/// earlier column shifts by the terminal width delta.
+pub fn refreshAfterTerminalWidthChange(
+    lines: []@import("../types/paragraph.zig").ParagraphLine,
+    writing_mode: @import("../../shaping/pipeline/types.zig").WritingMode,
+    previous_terminal_width: f32,
+) void {
+    if (writing_mode != .vertical_rl or lines.len < 2) return;
+    const delta = lines[lines.len - 1].width - previous_terminal_width;
+    if (delta == 0) return;
+    for (lines[0 .. lines.len - 1]) |*line| {
+        line.x += delta;
+        line.region_x += delta;
+    }
+}
+
+/// Whether a truncated visible prefix omits at least one source-order column.
+///
+/// A trailing mandatory separator owns the final bytes of its preceding
+/// column, while vertical wrapping also creates an empty terminal column at
+/// `text.len`. Byte-end comparison alone therefore misses exactly that
+/// omitted empty column.
+pub fn visiblePrefixOmitsSource(
+    text: []const u8,
+    lines: []const @import("../types/paragraph.zig").ParagraphLine,
+) bool {
+    if (lines.len == 0) return false;
+    const last = lines[lines.len - 1];
+    const byte_end = last.byteEnd();
+    if (byte_end < text.len) return true;
+    if (byte_end != text.len or last.byte_len == 0) return false;
+
+    var iterator = @import("std").unicode.Utf8Iterator{
+        .bytes = text[last.byte_start..byte_end],
+        .i = 0,
+    };
+    var terminal: ?u21 = null;
+    while (iterator.nextCodepoint()) |codepoint| terminal = codepoint;
+    return if (terminal) |codepoint|
+        opportunities.isMandatory(codepoint)
+    else
+        false;
+}
+
 fn appendColumn(
     buffer: anytype,
     options: paragraph_options.Options,
@@ -193,32 +254,20 @@ fn appendColumn(
     byte_end: usize,
     inline_indent: f32,
 ) !void {
-    const line_info = geometry.resolvedLineInfo(
+    const block_metrics = try vertical_block_metrics.resolve(
         buffer.runs.items,
         buffer.glyphs.items,
-        // Horizontal object baseline extents do not describe a vertical
-        // column's block axis. Object width is folded into `block_size` below.
-        &.{},
+        options,
+        default_metrics,
         glyph_start,
         glyph_end,
-        default_metrics,
-        options.line_height,
-        null,
     );
+    const line_info = block_metrics.line_info;
     const metrics = line_info.metrics;
-    var block_size = metrics.lineHeight();
+    const block_size = block_metrics.block_size;
     var inline_size: f32 = 0;
     for (buffer.glyphs.items[glyph_start..glyph_end]) |glyph| {
         inline_size += glyph.y_advance;
-        if (glyph.isInlineObject()) {
-            const object = inline_object.find(
-                options.inline_objects,
-                glyph.cluster,
-            ) orelse return error.InvalidInlineObjects;
-            if (object.kind == .in_flow) {
-                block_size = @max(block_size, object.width);
-            }
-        }
     }
     const resolved_alignment = if (vertical_tabs.contains(
         buffer.glyphs.items[glyph_start..glyph_end],
@@ -226,7 +275,7 @@ fn appendColumn(
         @import("../types/paragraph.zig").TextAlign.start
     else
         options.alignment;
-    const inline_origin = alignedInlineOrigin(
+    const inline_origin = vertical_inline_alignment.origin(
         options.max_width,
         inline_indent,
         inline_size,
@@ -254,25 +303,6 @@ fn appendColumn(
         .descent = metrics.descent,
         .leading = metrics.leading,
     });
-}
-
-fn alignedInlineOrigin(
-    max_inline_size: f32,
-    indent: f32,
-    inline_size: f32,
-    alignment: @import("../types/paragraph.zig").TextAlign,
-) f32 {
-    if (max_inline_size <= 0 or !@import("std").math.isFinite(max_inline_size)) {
-        return indent;
-    }
-    const available = @max(0, max_inline_size - indent);
-    const slack = @max(0, available - inline_size);
-    return indent + switch (alignment) {
-        .start => 0,
-        .center => slack / 2,
-        .end => slack,
-        .left, .right, .justify => unreachable,
-    };
 }
 
 fn placeColumns(

@@ -762,10 +762,10 @@ fn finishUniformParagraph(
     options: ParagraphOptions,
 ) !void {
     if (options.writing_mode.isVertical()) {
-        // Vertical option validation excludes every horizontal-only
-        // presentation stage below. The no-wrap builder may still add inline
-        // spacing to y advances, so refresh the public two-dimensional run
-        // pens before returning.
+        // Vertical column construction has already completed its admitted
+        // y-axis presentation stages, including ellipsis fitting. Refresh the
+        // public two-dimensional run pens and positioned objects without
+        // entering horizontal-only reshaping, bidi, or punctuation passes.
         bidi_reorder.recomputeRunOffsets(buffer);
         try inline_object.position(
             buffer,

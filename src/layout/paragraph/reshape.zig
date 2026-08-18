@@ -18,6 +18,7 @@ const bidi_reorder = @import("../bidi/reorder/root.zig");
 const geometry = @import("../line_break/reflow/geometry.zig");
 const kashida = @import("../justification/kashida.zig");
 const paragraph_options = @import("options.zig");
+const run_types = @import("../types/runs.zig");
 
 pub const Uniform = struct {
     cascade: font_fallback.Cascade,
@@ -34,6 +35,32 @@ pub const Uniform = struct {
 
     pub fn minimumLineHeight(_: Uniform, _: usize, _: usize) ?f32 {
         return null;
+    }
+
+    /// Resolve synthetic ellipsis ownership through the same uniform cascade
+    /// and variation instance as ordinary paragraph source.
+    pub fn ellipsisRun(
+        self: Uniform,
+        buffer: *context_output.Buffer,
+        _: usize,
+        _: ?run_types.CascadeRun,
+    ) !?run_types.CascadeRun {
+        const font_index = try self.cascade.selectFont('.');
+        const font = self.cascade.fonts[font_index];
+        const variation_range = try buffer.internVariationCoords(
+            self.options.normalized_variation_coords,
+        );
+        return .{
+            .font = face_mod.backend.face(font),
+            .font_index = font_index,
+            .font_size = self.font_size,
+            .glyph_start = buffer.glyphs.items.len,
+            .glyph_len = 0,
+            .x_offset = 0,
+            .y_offset = 0,
+            .variation_coord_start = variation_range.start,
+            .variation_coord_len = variation_range.len,
+        };
     }
 
     pub fn acceptKashidaBoundary(_: Uniform, _: usize) bool {

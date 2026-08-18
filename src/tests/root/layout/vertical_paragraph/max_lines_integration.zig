@@ -8,7 +8,6 @@ const Font = policy_support.Font;
 const FontCascade = policy_support.FontCascade;
 const LayoutBuffer = policy_support.LayoutBuffer;
 const TextShaper = policy_support.TextShaper;
-const layout = policy_support.layout;
 
 test "vertical max-lines omits suffix objects and geometry" {
     const allocator = std.testing.allocator;
@@ -155,27 +154,5 @@ test "styled vertical max-lines synchronizes glyph metadata" {
     try std.testing.expectEqual(
         result.glyphs.len,
         styled.glyphMetadata().len,
-    );
-}
-
-test "vertical max-lines still rejects ellipsis materialization" {
-    const allocator = std.testing.allocator;
-    const bytes = try @import("../../../../test_font.zig")
-        .buildVerticalMetricsTtf(allocator);
-    defer allocator.free(bytes);
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-    var buffer = LayoutBuffer.init(allocator);
-    defer buffer.deinit();
-
-    try std.testing.expectError(
-        error.UnsupportedVerticalParagraphOptions,
-        layout(&font, &buffer, "AAAA", .{
-            .max_width = 20.1,
-            .max_lines = 1,
-            .ellipsis = true,
-            .writing_mode = .vertical_rl,
-            .text_orientation = .upright,
-        }),
     );
 }

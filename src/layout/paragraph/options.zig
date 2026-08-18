@@ -143,8 +143,12 @@ pub const Options = struct {
     /// physical column progression.
     writing_mode: pipeline_types.WritingMode = .horizontal_tb,
     text_orientation: pipeline_types.TextOrientation = .mixed,
+    /// Maximum visible lines/columns in source order. Null is unlimited.
     max_lines: ?usize = null,
     /// Append "..." only when `max_lines` removes content.
+    ///
+    /// Vertical ellipsis materialization is not yet supported; vertical
+    /// paragraphs may use `max_lines` only with this field false.
     ellipsis: bool = false,
     /// Width in ordinary space advances of the repeating fallback grid.
     ///
@@ -307,7 +311,6 @@ fn validateVerticalForText(text: []const u8, options: Options) !void {
     if (options.direction != .ltr or
         options.line_break_strategy != .greedy or
         !verticalAlignmentSupported(options.alignment) or
-        options.max_lines != null or
         options.ellipsis or
         options.letter_spacing < 0 or
         options.word_spacing < 0 or

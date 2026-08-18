@@ -328,6 +328,10 @@ const Driver = struct {
             // presentation transform. The sidecar already matches the shaped
             // glyph stream and only run pens need the y-spacing refresh.
             bidi_reorder.recomputeRunOffsets(self.buffer);
+            try styled_buffer.synchronizeAfterTruncation(
+                &self.styled.metadata,
+                self.buffer.glyphs.items.len,
+            );
             try inline_object.position(
                 self.buffer,
                 self.options.inline_objects,

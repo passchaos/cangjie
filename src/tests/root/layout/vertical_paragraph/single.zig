@@ -116,12 +116,6 @@ test "vertical no-wrap paragraph exposes physical column geometry" {
             .max_width = 100,
             .wrap_mode = .no_wrap,
             .writing_mode = .vertical_rl,
-            .max_lines = 1,
-        },
-        .{
-            .max_width = 100,
-            .wrap_mode = .no_wrap,
-            .writing_mode = .vertical_rl,
             .letter_spacing = -1,
         },
     }) |unsupported| {

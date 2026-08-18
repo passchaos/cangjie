@@ -19,4 +19,6 @@ test {
     _ = @import("vertical_paragraph/alignment_integration.zig");
     _ = @import("vertical_paragraph/out_of_flow.zig");
     _ = @import("vertical_paragraph/out_of_flow_integration.zig");
+    _ = @import("vertical_paragraph/max_lines.zig");
+    _ = @import("vertical_paragraph/max_lines_integration.zig");
 }

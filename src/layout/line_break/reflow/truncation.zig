@@ -23,17 +23,12 @@ pub fn apply(
         return;
     }
     if (max_lines == 0) {
-        buffer.lines.clearRetainingCapacity();
-        buffer.runs.clearRetainingCapacity();
-        buffer.glyphs.clearRetainingCapacity();
+        keepPrefix(buffer, 0);
         return;
     }
 
-    buffer.lines.shrinkRetainingCapacity(max_lines);
-    const last_line = &buffer.lines.items[max_lines - 1];
-    const keep_glyphs = last_line.glyph_start + last_line.glyph_len;
-    buffer.glyphs.shrinkRetainingCapacity(keep_glyphs);
-    trimRunsToGlyphCount(buffer, keep_glyphs);
+    keepPrefix(buffer, max_lines);
+    const keep_glyphs = buffer.glyphs.items.len;
 
     if (ellipsis and content_omitted and keep_glyphs > 0) {
         try appendEllipsisToLastLine(
@@ -43,6 +38,28 @@ pub fn apply(
             options,
         );
     }
+}
+
+/// Keep a complete visual-line prefix and synchronize glyph/run ownership.
+///
+/// This operation is writing-mode neutral. Vertical paragraph layout uses it
+/// without ellipsis after selecting source-order columns; horizontal
+/// truncation additionally materializes dots through `apply`.
+pub fn keepPrefix(buffer: anytype, line_count: usize) void {
+    if (line_count == 0) {
+        buffer.lines.clearRetainingCapacity();
+        buffer.runs.clearRetainingCapacity();
+        buffer.glyphs.clearRetainingCapacity();
+        return;
+    }
+    if (buffer.lines.items.len < line_count) return;
+    if (buffer.lines.items.len > line_count) {
+        buffer.lines.shrinkRetainingCapacity(line_count);
+    }
+    const last_line = &buffer.lines.items[line_count - 1];
+    const keep_glyphs = last_line.glyph_start + last_line.glyph_len;
+    buffer.glyphs.shrinkRetainingCapacity(keep_glyphs);
+    trimRunsToGlyphCount(buffer, keep_glyphs);
 }
 
 fn trimRunsToGlyphCount(buffer: anytype, glyph_count: usize) void {

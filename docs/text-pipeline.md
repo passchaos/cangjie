@@ -587,6 +587,15 @@ behavior. Physical `.left` / `.right` and `.justify` remain explicitly
 unsupported for vertical paragraphs because they require separate block-axis
 or expansion semantics.
 
+`max_lines` limits vertical output to a source-order column prefix. Glyphs,
+font runs, line ranges, positioned objects, and attributed metadata are
+truncated together; `max_lines = 0` produces an empty visible paragraph.
+Physical RL/LR column placement is recomputed after truncation, so omitted
+columns reserve no block width. Retained reflow can restore the full paragraph,
+and min/max-content intrinsic widths remain independent from the visibility
+limit. Vertical ellipsis remains explicitly unsupported until synthetic dots
+are shaped, oriented, and fitted along the vertical inline axis.
+
 In-flow U+FFFC inline objects also use physical dimensions through the current
 flow axes. `Object.width` is horizontal inline advance but vertical column
 block extent; `Object.height` is horizontal line extent but vertical
@@ -604,8 +613,8 @@ This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
 axes, vertical paragraph validation rejects bottom-to-top/RTL text, bidi
 controls, justification,
-ellipsis/line limits, negative glyph spacing, exclusions/line regions, inline
-object custom placement/resolution, hyphenation,
+ellipsis, negative glyph spacing, exclusions/line regions, custom inline-object
+placement/resolution, hyphenation,
 optical punctuation, and the resumable breaker. Retained whole-paragraph
 layout and intrinsic inline-size measurement are supported and restore the
 pristine vertical shaping snapshot between calls. Returning a concrete

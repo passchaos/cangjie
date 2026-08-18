@@ -11,6 +11,7 @@ const geometry = @import("../line_break/reflow/geometry.zig");
 const inline_object = @import("../inline_object/root.zig");
 const opportunities = @import("../line_break/reflow/opportunities.zig");
 const line_break_opportunity = @import("../line_break/opportunity.zig");
+const truncation = @import("../line_break/reflow/truncation.zig");
 const paragraph_options = @import("options.zig");
 const vertical_wrap = @import("vertical_wrap.zig");
 const vertical_tabs = @import("vertical_wrap/tabs.zig");
@@ -149,9 +150,16 @@ pub fn build(
             range.inline_indent,
         );
     }
+    const visible_count = @min(
+        options.max_lines orelse ranges.len,
+        ranges.len,
+    );
+    if (visible_count < ranges.len) {
+        truncation.keepPrefix(buffer, visible_count);
+    }
     placeColumns(
         buffer.lines.items,
-        ranges,
+        ranges[0..visible_count],
         options.writing_mode,
         options.paragraph_spacing,
     );

@@ -23,6 +23,14 @@ pub fn apply(
     recipe: anytype,
     needs_bidi_reorder: bool,
 ) !void {
+    if (options.writing_mode.isVertical()) {
+        // The admitted vertical subset has no bidi permutation, optical
+        // punctuation, inline objects, or justification. Run pens still need
+        // refreshing because paragraph letter/word spacing changed y advances
+        // after the retained shaping snapshot was restored.
+        bidi_reorder.recomputeRunOffsets(buffer);
+        return;
+    }
     try jstf_justification.apply(buffer, options, recipe);
     try jstf_extender.apply(buffer, text, options, recipe);
     try font_expansion.apply(buffer, options, recipe);

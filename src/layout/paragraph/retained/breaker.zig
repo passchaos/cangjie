@@ -366,7 +366,7 @@ pub const Breaker = struct {
         try self.validateSession();
         if (self.finished) return error.ParagraphBreakerComplete;
         if (self.failed) return error.ParagraphBreakerFailed;
-        return self.buffer.paragraphLayout();
+        return self.buffer.paragraphLayout(self.options.writing_mode);
     }
 
     fn finish(self: *Breaker) !Step {
@@ -387,7 +387,11 @@ pub const Breaker = struct {
             return err;
         };
         self.finished = true;
-        return .{ .complete = self.buffer.paragraphLayout() };
+        return .{
+            .complete = self.buffer.paragraphLayout(
+                self.options.writing_mode,
+            ),
+        };
     }
 
     fn recipe(self: *const Breaker) reshape.Uniform {

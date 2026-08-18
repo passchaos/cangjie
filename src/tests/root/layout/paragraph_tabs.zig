@@ -485,7 +485,7 @@ test "owned text geometry exposes the same tab partition" {
     try std.testing.expectEqual(@as(usize, 3), geometry.graphemes.len);
     try std.testing.expectApproxEqAbs(
         @as(f32, 24),
-        geometry.graphemes[1].width,
+        geometry.graphemes[1].inline_size,
         0.001,
     );
     try std.testing.expectApproxEqAbs(

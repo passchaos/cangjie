@@ -61,7 +61,7 @@ pub fn layout(input: Input) !paragraph_types.ParagraphLayout {
         .options = input.options,
     };
     try styled_paragraph.layout(&driver, input.text, input.spans);
-    return input.buffer.paragraphLayout();
+    return input.buffer.paragraphLayout(input.options.writing_mode);
 }
 
 const Driver = struct {
@@ -77,7 +77,13 @@ const Driver = struct {
         return self.buffer.allocator;
     }
 
-    pub fn validateSpan(_: *@This(), span: styled_paragraph.Span) !void {
+    pub fn validateSpan(self: *@This(), span: styled_paragraph.Span) !void {
+        if (self.options.writing_mode.isVertical() and
+            (span.minimum_line_height != null or
+                span.vertical_align != .baseline))
+        {
+            return error.UnsupportedVerticalParagraphOptions;
+        }
         try plan_validation.fontSize(span.font_size);
         if (span.faces) |faces| {
             if (faces.len == 0) return error.EmptyFontCascade;
@@ -176,6 +182,8 @@ const Driver = struct {
                     .direction = self.options.direction,
                     .reorder_bidi = false,
                     .native_direction_shaping = true,
+                    .writing_mode = self.options.writing_mode,
+                    .text_orientation = self.options.text_orientation,
                     .features = span.features,
                     .normalized_variation_coords = span.normalized_variation_coords,
                     .context_before = self.text[0..byte_start],
@@ -208,6 +216,10 @@ const Driver = struct {
         defer self.buffer.allocator.free(policy_ranges);
         var resolved_options = self.options;
         resolved_options.line_break_policy_ranges = policy_ranges;
+        try paragraph_options.validateForText(
+            self.text,
+            resolved_options,
+        );
 
         try bidi_reorder.normalizeLogical(self.buffer);
         try styled_buffer.rebuild(
@@ -219,6 +231,7 @@ const Driver = struct {
         try styled_buffer.applySpacing(
             self.styled.metadata.items,
             self.buffer.glyphs.items,
+            self.options.writing_mode,
         );
         const intrinsic_graphemes = try unicode.itemizeGraphemeClusters(
             self.buffer.allocator,
@@ -239,15 +252,30 @@ const Driver = struct {
             &.{},
         );
         defer self.buffer.allocator.free(intrinsic_breaks);
-        self.styled.content_widths = try content_widths.calculate(
-            self.buffer.allocator,
-            self.text,
-            self.buffer.glyphs.items,
-            self.buffer.runs.items,
-            intrinsic_graphemes,
-            intrinsic_breaks,
-            resolved_options,
-        );
+        self.styled.content_widths =
+            if (resolved_options.writing_mode.isVertical()) widths: {
+                var inline_size: f32 = 0;
+                for (self.buffer.glyphs.items) |glyph| {
+                    inline_size += glyph.y_advance +
+                        @import("../line_break/reflow/geometry.zig")
+                            .spacingForGlyph(
+                            glyph.codepoint,
+                            resolved_options,
+                        );
+                }
+                break :widths .{
+                    .min = inline_size,
+                    .max = inline_size,
+                };
+            } else try content_widths.calculate(
+                self.buffer.allocator,
+                self.text,
+                self.buffer.glyphs.items,
+                self.buffer.runs.items,
+                intrinsic_graphemes,
+                intrinsic_breaks,
+                resolved_options,
+            );
 
         var line_options = resolved_options;
         // Build the truncated prefix first. Synthetic dots are appended after
@@ -287,6 +315,13 @@ const Driver = struct {
             self.options.hyphenation.dictionary,
             recipe,
         );
+        if (resolved_options.writing_mode.isVertical()) {
+            // Vertical option validation excludes every later horizontal-only
+            // presentation transform. The sidecar already matches the shaped
+            // glyph stream and only run pens need the y-spacing refresh.
+            bidi_reorder.recomputeRunOffsets(self.buffer);
+            return;
+        }
         try styled_buffer.insertAutomaticHyphenMetadata(
             &self.styled.metadata,
             self.styled.allocator,

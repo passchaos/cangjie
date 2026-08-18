@@ -14,4 +14,5 @@ test {
     _ = @import("paragraph_tabs.zig");
     _ = @import("text_geometry.zig");
     _ = @import("text_geometry_interaction.zig");
+    _ = @import("vertical_paragraph.zig");
 }

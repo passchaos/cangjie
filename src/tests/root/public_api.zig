@@ -108,6 +108,24 @@ test "public facade uses domain names without legacy aliases" {
         @hasField(cangjie.paragraph.Options, "line_break_strategy"),
     );
     try std.testing.expect(
+        @hasField(cangjie.paragraph.Options, "writing_mode"),
+    );
+    try std.testing.expect(
+        @hasField(cangjie.paragraph.Options, "text_orientation"),
+    );
+    try std.testing.expect(
+        @hasField(cangjie.paragraph.Layout, "writing_mode"),
+    );
+    try std.testing.expect(
+        @hasField(cangjie.paragraph.GraphemeGeometry, "inline_size"),
+    );
+    try std.testing.expect(
+        @hasField(
+            cangjie.paragraph.TextGeometryVisualCaretStop,
+            "inline_position",
+        ),
+    );
+    try std.testing.expect(
         @hasField(cangjie.paragraph.Options, "word_break"),
     );
     try std.testing.expect(
@@ -172,6 +190,9 @@ test "public facade uses domain names without legacy aliases" {
     );
     try std.testing.expect(
         @hasField(cangjie.text.style.Paragraph, "line_break_strategy"),
+    );
+    try std.testing.expect(
+        @hasField(cangjie.text.style.Paragraph, "writing_mode"),
     );
     try std.testing.expectEqual(
         @as(usize, 2),
@@ -803,7 +824,11 @@ test "shaping and paragraph domains expose reusable library workflows" {
         std.mem.indexOf(u8, debug_output, "shape.runs") != null,
     );
     try std.testing.expect(
-        std.mem.indexOf(u8, debug_output, "paragraph size=") != null,
+        std.mem.indexOf(
+            u8,
+            debug_output,
+            "paragraph mode=horizontal_tb size=",
+        ) != null,
     );
     try std.testing.expect(
         std.mem.indexOf(u8, debug_output, "font_fallback") != null,

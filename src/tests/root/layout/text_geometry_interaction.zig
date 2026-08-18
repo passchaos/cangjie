@@ -142,13 +142,13 @@ test "text geometry retains trailing hard-break and empty paragraph carets" {
     // The visible 'A' end and zero-width hard-break atom share x but are
     // separate topology steps with different logical ownership.
     try std.testing.expectApproxEqAbs(
-        first_line_stops[first_line_stops.len - 2].x,
-        first_line_stops[first_line_stops.len - 1].x,
+        first_line_stops[first_line_stops.len - 2].inline_position,
+        first_line_stops[first_line_stops.len - 1].inline_position,
         0.001,
     );
     try std.testing.expect(
-        first_line_stops[first_line_stops.len - 2].from_left.byte_offset !=
-            first_line_stops[first_line_stops.len - 1].from_left.byte_offset,
+        first_line_stops[first_line_stops.len - 2].from_start.byte_offset !=
+            first_line_stops[first_line_stops.len - 1].from_start.byte_offset,
     );
     const final_caret = trailing.caret(.{
         .byte_offset = text.len,
@@ -183,7 +183,7 @@ test "text geometry retains trailing hard-break and empty paragraph carets" {
     ).?;
     try std.testing.expectEqual(@as(usize, 0), back_to_hard_break.line_index);
     try std.testing.expectEqual(
-        first_line_stops[first_line_stops.len - 1].from_right,
+        first_line_stops[first_line_stops.len - 1].from_end,
         back_to_hard_break.position,
     );
 
@@ -335,7 +335,7 @@ test "vertical caret navigation clamps preferred x on unequal lines" {
         geometry.visual_caret_stops,
     );
     try std.testing.expectApproxEqAbs(
-        second_stops[second_stops.len - 1].x,
+        second_stops[second_stops.len - 1].inline_position,
         clamped.rect.x,
         0.001,
     );

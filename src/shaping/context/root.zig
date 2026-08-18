@@ -296,25 +296,7 @@ pub const Engine = struct {
         request: ParagraphRequest,
     ) !paragraph_types.TextMetrics {
         const paragraph = try self.layout(cascade, request);
-        if (paragraph.lines.len == 0) {
-            return .{
-                .width = 0,
-                .height = 0,
-                .baseline = 0,
-                .ascent = 0,
-                .descent = 0,
-                .leading = 0,
-            };
-        }
-        const first = paragraph.lines[0];
-        return .{
-            .width = paragraph.width,
-            .height = paragraph.height,
-            .baseline = first.y + first.baseline,
-            .ascent = first.ascent,
-            .descent = first.descent,
-            .leading = first.leading,
-        };
+        return paragraph_types.metrics(paragraph);
     }
 
     fn getState(self: *Engine) *state_mod.State {

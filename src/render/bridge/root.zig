@@ -8,6 +8,7 @@ const glyph_mod = @import("../../glyph.zig");
 const glyph_position = @import("../../layout/glyph_position.zig");
 const inline_object = @import("../../layout/inline_object/root.zig");
 const paragraph_types = @import("../../layout/types/paragraph.zig");
+const run_geometry = @import("../run_geometry.zig");
 const run_types = @import("../../layout/types/runs.zig");
 
 pub const GlyphRenderMode = enum {
@@ -124,6 +125,8 @@ pub const PositionedGlyph = struct {
     x_offset: f32,
     y_offset: f32,
     x_advance: f32,
+    y_advance: f32 = 0,
+    orientation: glyph_position.Orientation = .horizontal,
     render_mode: GlyphRenderMode = .atlas_mask,
     atlas_request_index: ?usize = null,
     path_request_index: ?usize = null,
@@ -360,11 +363,11 @@ const BridgeBuilder = struct {
                 .glyph_start = command_start,
                 .glyph_len = self.glyphs.items.len - command_start,
                 .x = self.glyphs.items[command_start].x,
-                // One style-aligned glyph can have a different baseline from
-                // its neighbor inside the same shaping run. The run command's
-                // baseline remains the line baseline; each glyph carries the
-                // final vertical offset explicitly.
-                .baseline_y = self.options.origin_y + line.y + line.baseline,
+                // One style-aligned glyph can have a different block origin
+                // from its neighbor inside the same shaping run. Use the first
+                // final pen here; every glyph still carries its own shaping
+                // offset and two-dimensional advance.
+                .baseline_y = self.glyphs.items[command_start].baseline_y,
                 .line_index = line_index,
                 .render_mode = self.options.render_mode,
             });
@@ -380,14 +383,28 @@ const BridgeBuilder = struct {
         );
         const run_variation_hash =
             normalizedVariationHash(run_variation_coords);
-        const line_glyph_end = line.glyph_start + line.glyph_len;
-        var pen_x = self.options.origin_x + line.x + advanceBefore(self.paragraph.glyphs[line.glyph_start..line_glyph_end], start - line.glyph_start);
+        // `ParagraphLine.baseline` is the line-local block-axis glyph origin.
+        // Horizontal lines add it to physical y; a vertical column adds it to
+        // physical x while its inline pen begins at the line's physical y.
+        var pen = if (self.paragraph.writing_mode.isVertical())
+            run_geometry.Pen.init(
+                self.options.origin_x + line.x + line.baseline,
+                self.options.origin_y + line.y,
+            )
+        else
+            run_geometry.Pen.init(
+                self.options.origin_x + line.x,
+                self.options.origin_y + line.y + line.baseline,
+            );
+        for (self.paragraph.glyphs[line.glyph_start..start]) |glyph| {
+            pen.advance(glyph);
+        }
         for (self.paragraph.glyphs[start..end]) |glyph| {
             if (glyph.isTab()) {
                 // Tabs are source/caret atoms whose advance positions the next
                 // field. They do not request a font glyph, even if the active
                 // cmap happens to map U+0009 to a visible outline.
-                pen_x += glyph.x_advance;
+                pen.advance(glyph);
                 continue;
             }
             const output_index = self.glyphs.items.len;
@@ -442,17 +459,19 @@ const BridgeBuilder = struct {
                 .glyph_id = glyph.glyph_id,
                 .codepoint = glyph.codepoint,
                 .cluster = glyph.cluster,
-                .x = pen_x,
-                .baseline_y = self.options.origin_y + line.y + line.baseline,
+                .x = pen.x,
+                .baseline_y = pen.baseline_y,
                 .x_offset = glyph.x_offset,
                 .y_offset = glyph.y_offset,
                 .x_advance = glyph.x_advance,
+                .y_advance = glyph.y_advance,
+                .orientation = glyph.orientation,
                 .render_mode = self.options.render_mode,
                 .atlas_request_index = atlas_index,
                 .path_request_index = path_index,
                 .color_glyph_index = color_index,
             });
-            pen_x += glyph.x_advance;
+            pen.advance(glyph);
         }
     }
 
@@ -811,14 +830,6 @@ fn colorGlyphPaint(
     if (svg_document) |document| return .{ .svg_document = document };
     if (embedded_png) |png| return .{ .embedded_png = png };
     return .none;
-}
-
-fn advanceBefore(glyphs: []const glyph_position.GlyphPosition, count: usize) f32 {
-    var width: f32 = 0;
-    for (glyphs[0..@min(count, glyphs.len)]) |glyph| {
-        width += glyph.x_advance;
-    }
-    return width;
 }
 
 test {

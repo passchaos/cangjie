@@ -113,9 +113,14 @@ pub fn dumpFontFallback(writer: *std.Io.Writer, cascade: font_fallback.Cascade, 
 }
 
 pub fn dumpShapeRuns(writer: *std.Io.Writer, shaped: run_types.ShapedText) !void {
-    try writer.print("shape.runs count={d} glyphs={d} width={d:.3}\n", .{ shaped.runs.len, shaped.glyphs.len, shaped.width() });
+    try writer.print("shape.runs count={d} glyphs={d} size=({d:.3},{d:.3})\n", .{
+        shaped.runs.len,
+        shaped.glyphs.len,
+        shaped.width(),
+        shaped.height(),
+    });
     for (shaped.runs, 0..) |run, index| {
-        try writer.print("  run[{d}] font_index={d} glyphs={d}..{d} font_size={d:.3} variation_coords={d} x_offset={d:.3}\n", .{
+        try writer.print("  run[{d}] font_index={d} glyphs={d}..{d} font_size={d:.3} variation_coords={d} offset=({d:.3},{d:.3})\n", .{
             index,
             run.font_index,
             run.glyph_start,
@@ -123,6 +128,7 @@ pub fn dumpShapeRuns(writer: *std.Io.Writer, shaped: run_types.ShapedText) !void
             run.font_size,
             run.variation_coord_len,
             run.x_offset,
+            run.y_offset,
         });
     }
 }
@@ -130,12 +136,13 @@ pub fn dumpShapeRuns(writer: *std.Io.Writer, shaped: run_types.ShapedText) !void
 pub fn dumpGlyphClusters(writer: *std.Io.Writer, glyphs: []const glyph_position.GlyphPosition) !void {
     try writer.print("glyph_clusters count={d}\n", .{glyphs.len});
     for (glyphs, 0..) |glyph, index| {
-        try writer.print("  glyph[{d}] id={d} cp=U+{X:0>4} cluster={d} advance={d:.3} offset=({d:.3},{d:.3})\n", .{
+        try writer.print("  glyph[{d}] id={d} cp=U+{X:0>4} cluster={d} advance=({d:.3},{d:.3}) offset=({d:.3},{d:.3})\n", .{
             index,
             glyph.glyph_id,
             glyph.codepoint,
             glyph.cluster,
             glyph.x_advance,
+            glyph.y_advance,
             glyph.x_offset,
             glyph.y_offset,
         });
@@ -143,7 +150,8 @@ pub fn dumpGlyphClusters(writer: *std.Io.Writer, glyphs: []const glyph_position.
 }
 
 pub fn dumpParagraphLayout(writer: *std.Io.Writer, paragraph: paragraph_types.ParagraphLayout) !void {
-    try writer.print("paragraph size=({d:.3},{d:.3}) lines={d} glyphs={d} runs={d}\n", .{
+    try writer.print("paragraph mode={s} size=({d:.3},{d:.3}) lines={d} glyphs={d} runs={d}\n", .{
+        @tagName(paragraph.writing_mode),
         paragraph.width,
         paragraph.height,
         paragraph.lines.len,

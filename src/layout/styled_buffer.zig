@@ -76,10 +76,15 @@ pub fn rebuild(
 pub fn applySpacing(
     metadata: []const Metadata,
     glyphs: anytype,
+    writing_mode: @import("../shaping/pipeline/types.zig").WritingMode,
 ) !void {
     if (metadata.len != glyphs.len) return error.InvalidStyleSpans;
     for (glyphs, metadata) |*glyph, item| {
-        glyph.x_advance += item.layout_spacing;
+        if (writing_mode.isVertical()) {
+            glyph.y_advance += item.layout_spacing;
+        } else {
+            glyph.x_advance += item.layout_spacing;
+        }
     }
 }
 

@@ -3,7 +3,9 @@
 const std = @import("std");
 
 const GlyphPosition = @import("../glyph_position.zig").GlyphPosition;
+const axes = @import("../paragraph/axes.zig");
 const inline_object = @import("../inline_object/root.zig");
+const pipeline_types = @import("../../shaping/pipeline/types.zig");
 const run_types = @import("runs.zig");
 const CascadeRun = run_types.CascadeRun;
 const unicode = @import("../../unicode.zig");
@@ -103,11 +105,38 @@ pub const LineBreakStrategy = enum {
 pub const TextMetrics = struct {
     width: f32,
     height: f32,
+    /// Physical block-axis glyph origin of the first line: y horizontally and
+    /// x vertically.
     baseline: f32,
     ascent: f32,
     descent: f32,
     leading: f32,
 };
+
+pub fn metrics(layout: ParagraphLayout) TextMetrics {
+    if (layout.lines.len == 0) {
+        return .{
+            .width = 0,
+            .height = 0,
+            .baseline = 0,
+            .ascent = 0,
+            .descent = 0,
+            .leading = 0,
+        };
+    }
+    const first = layout.lines[0];
+    return .{
+        .width = layout.width,
+        .height = layout.height,
+        .baseline = if (layout.writing_mode.isVertical())
+            first.x + first.baseline
+        else
+            first.y + first.baseline,
+        .ascent = first.ascent,
+        .descent = first.descent,
+        .leading = first.leading,
+    };
+}
 
 /// Intrinsic inline-size bounds independent from a chosen container width.
 pub const ContentWidths = struct {
@@ -132,6 +161,7 @@ pub const ParagraphLine = struct {
     /// therefore creates an empty final line at `text.len`.
     byte_start: usize,
     byte_len: usize,
+    /// Physical top-left corner of the line/column box.
     x: f32,
     y: f32,
     /// First-line or paragraph-segment indentation reserved before alignment.
@@ -153,6 +183,8 @@ pub const ParagraphLine = struct {
     hang_start: f32 = 0,
     /// Portion of edge glyph advance protruding after the physical line box.
     hang_end: f32 = 0,
+    /// Physical line-box width. In a vertical column this is the block size,
+    /// not the accumulated glyph advance.
     width: f32,
     /// Full-advance measure requested for a justified soft-wrapped line.
     ///
@@ -160,7 +192,11 @@ pub const ParagraphLine = struct {
     /// aligned lines. Keeping the target on the selected line lets later
     /// source-level Kashida reshaping run before generic spacing expansion.
     justification_target: ?f32 = null,
+    /// Physical line-box height. In a vertical column this is the inline
+    /// extent accumulated from glyph y advances.
     height: f32,
+    /// Line-local block-axis glyph origin: distance from top horizontally and
+    /// from left vertically.
     baseline: f32,
     ascent: f32,
     descent: f32,
@@ -194,12 +230,7 @@ pub const TextPosition = struct {
     trailing: bool = false,
 };
 
-pub const TextRect = struct {
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-};
+pub const TextRect = axes.PhysicalRect;
 
 pub const ParagraphLayout = struct {
     glyphs: []const GlyphPosition,
@@ -208,39 +239,50 @@ pub const ParagraphLayout = struct {
     normalized_variation_coords: []const f32 = &.{},
     lines: []const ParagraphLine,
     inline_objects: []const inline_object.Positioned = &.{},
+    /// Selects how public physical rectangles map to inline and block axes.
+    writing_mode: pipeline_types.WritingMode = .horizontal_tb,
     width: f32,
     height: f32,
 
     /// Return the closest glyph caret for a point in paragraph coordinates.
-    /// This is midpoint-based: clicks in the left half of a glyph choose its
-    /// leading edge, and clicks in the right half choose its trailing edge.
+    /// This is midpoint-based along the inline axis: left/right horizontally
+    /// and top/bottom vertically.
     pub fn hitTest(self: ParagraphLayout, x: f32, y: f32) TextPosition {
         if (self.lines.len == 0) return .{ .glyph_index = 0, .cluster = 0 };
         const line_index = self.lineIndexAtPoint(x, y);
         const line = self.lines[line_index];
         if (line.glyph_len == 0) return .{ .glyph_index = line.glyph_start, .cluster = 0 };
 
-        const local_x = x - line.x;
-        if (local_x <= 0) {
+        const line_bounds = physicalLineRect(line);
+        const local_inline =
+            axes.inlineCoordinate(self.writing_mode, x, y) -
+            axes.inlineStart(self.writing_mode, line_bounds);
+        if (local_inline <= 0) {
             const glyph = self.glyphs[line.glyph_start];
             return .{ .glyph_index = line.glyph_start, .cluster = glyph.cluster };
         }
 
-        var pen_x: f32 = 0;
+        var pen_inline: f32 = 0;
         const glyph_end = line.glyph_start + line.glyph_len;
         for (self.glyphs[line.glyph_start..glyph_end], line.glyph_start..) |glyph, glyph_index| {
             if (glyph.isInlineObject()) {
                 const object = self.inlineObjectAtByte(glyph.cluster) orelse
                     continue;
                 if (object.kind == .in_flow) {
-                    const midpoint = pen_x + object.width / 2;
-                    if (local_x < midpoint) {
+                    const object_inline_size =
+                        if (self.writing_mode.isVertical())
+                            object.height
+                        else
+                            object.width;
+                    const midpoint =
+                        pen_inline + object_inline_size / 2;
+                    if (local_inline < midpoint) {
                         return .{
                             .glyph_index = glyph_index,
                             .cluster = glyph.cluster,
                         };
                     }
-                    if (local_x < pen_x + object.width) {
+                    if (local_inline < pen_inline + object_inline_size) {
                         return .{
                             .glyph_index = glyph_index,
                             .cluster = glyph.cluster + glyph.source_byte_len,
@@ -249,14 +291,15 @@ pub const ParagraphLayout = struct {
                     }
                 }
             }
-            const midpoint = pen_x + glyph.x_advance / 2;
-            if (local_x < midpoint) {
+            const advance = axes.glyphAdvance(self.writing_mode, glyph);
+            const midpoint = pen_inline + advance / 2;
+            if (local_inline < midpoint) {
                 return .{ .glyph_index = glyph_index, .cluster = glyph.cluster };
             }
-            if (local_x < pen_x + glyph.x_advance) {
+            if (local_inline < pen_inline + advance) {
                 return textPositionAtGlyphTrailingEdge(self, glyph_index);
             }
-            pen_x += glyph.x_advance;
+            pen_inline += advance;
         }
 
         return textPositionAtGlyphTrailingEdge(self, glyph_end - 1);
@@ -272,19 +315,24 @@ pub const ParagraphLayout = struct {
         return null;
     }
 
-    /// Convert a logical TextPosition back to a zero-width caret rectangle.
-    /// The y/height are taken from the resolved line metrics, not from glyph
-    /// bounds, so selections remain visually stable across mixed glyph shapes.
+    /// Convert a logical TextPosition back to a zero-inline-size caret
+    /// rectangle. Its block extent comes from resolved line metrics, not glyph
+    /// bounds, so selections remain stable across mixed glyph shapes.
     pub fn caretRect(self: ParagraphLayout, position: TextPosition) TextRect {
         if (self.lines.len == 0) return .{ .x = 0, .y = 0, .width = 0, .height = 0 };
         const glyph_index = @min(position.glyph_index, self.glyphs.len);
         const line = self.lineForCaret(glyph_index);
-        return .{
-            .x = self.caretXInLine(line, glyph_index, position.trailing),
-            .y = line.y,
-            .width = 0,
-            .height = line.height,
-        };
+        const line_bounds = physicalLineRect(line);
+        return axes.caretRect(
+            self.writing_mode,
+            axes.blockStart(self.writing_mode, line_bounds),
+            axes.blockSize(self.writing_mode, line_bounds),
+            self.caretInlineInLine(
+                line,
+                glyph_index,
+                position.trailing,
+            ),
+        );
     }
 
     pub fn selectionRect(self: ParagraphLayout, start: usize, end: usize) TextRect {
@@ -518,17 +566,26 @@ pub const ParagraphLayout = struct {
         return self.lines[self.lines.len - 1];
     }
 
-    fn caretXInLine(self: ParagraphLayout, line: ParagraphLine, glyph_index: usize, trailing: bool) f32 {
-        var x = line.x;
+    fn caretInlineInLine(self: ParagraphLayout, line: ParagraphLine, glyph_index: usize, trailing: bool) f32 {
+        var inline_position = axes.inlineStart(
+            self.writing_mode,
+            physicalLineRect(line),
+        );
         const clamped_index = @min(glyph_index, line.glyph_start + line.glyph_len);
         var index = line.glyph_start;
         while (index < clamped_index) : (index += 1) {
-            x += self.glyphs[index].x_advance;
+            inline_position += axes.glyphAdvance(
+                self.writing_mode,
+                self.glyphs[index],
+            );
         }
         if (trailing and clamped_index < line.glyph_start + line.glyph_len) {
-            x += self.glyphs[clamped_index].x_advance;
+            inline_position += axes.glyphAdvance(
+                self.writing_mode,
+                self.glyphs[clamped_index],
+            );
         }
-        return x;
+        return inline_position;
     }
 };
 
@@ -581,12 +638,24 @@ fn selectionRectForLine(layout_value: ParagraphLayout, line: ParagraphLine, rang
     const overlap_end = @min(range_end, line_end);
     if (overlap_start >= overlap_end) return null;
 
-    const x0 = layout_value.caretXInLine(line, overlap_start, false);
-    const x1 = layout_value.caretXInLine(line, overlap_end, false);
-    return .{
-        .x = @min(x0, x1),
-        .y = line.y,
-        .width = @abs(x1 - x0),
-        .height = line.height,
-    };
+    const inline_start = layout_value.caretInlineInLine(
+        line,
+        overlap_start,
+        false,
+    );
+    const inline_end = layout_value.caretInlineInLine(
+        line,
+        overlap_end,
+        false,
+    );
+    return axes.selectionRect(
+        layout_value.writing_mode,
+        physicalLineRect(line),
+        inline_start,
+        inline_end,
+    );
+}
+
+fn physicalLineRect(line: ParagraphLine) TextRect {
+    return axes.rect(line.x, line.y, line.width, line.height);
 }

@@ -2207,6 +2207,14 @@ shaping-performance superiority.
   keeps U/Tu/Tr upright and marks only UAX #50 R glyphs sideways. CPU
   grayscale, color, and TrueType-hinted run renderers rotate those glyphs
   clockwise around the shaping origin without changing advances.
+  Paragraph layout now exposes that same output through a bounded
+  `.vertical_rl`/`.no_wrap` single-column contract. Physical column bounds,
+  y-axis hit testing, horizontal caret/selection bars, owned TextGeometry,
+  debug overlays, retained reflow, and renderer draw-list y pens are covered
+  together. Horizontal-only wrapping, tabs, bidi/hard-break handling,
+  exclusions, objects, justification, truncation, and incremental breaking are
+  rejected explicitly until they are migrated to the shared inline/block-axis
+  model; this is not yet full vertical paragraph parity.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari

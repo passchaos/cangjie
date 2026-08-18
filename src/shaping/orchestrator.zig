@@ -324,7 +324,7 @@ pub const TextShaper = struct {
             options.hyphenation.dictionary,
             recipe,
         );
-        try reshapeUniformParagraph(
+        try finishUniformParagraph(
             cascade,
             fallback_cache,
             metrics_cache,
@@ -334,18 +334,7 @@ pub const TextShaper = struct {
             font_size,
             options,
         );
-        try punctuation_compression.apply(buffer, options);
-        if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
-            try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
-        }
-        punctuation_hanging.apply(buffer, options);
-        bidi_reorder.recomputeRunOffsets(buffer);
-        try inline_object.position(
-            buffer,
-            options.inline_objects,
-            options.out_of_flow_placements,
-        );
-        return buffer.paragraphLayout();
+        return buffer.paragraphLayout(options.writing_mode);
     }
 
     pub fn layoutParagraphUtf8WithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
@@ -383,7 +372,7 @@ pub const TextShaper = struct {
             options.hyphenation.dictionary,
             recipe,
         );
-        try reshapeUniformParagraph(
+        try finishUniformParagraph(
             cascade,
             fallback_cache,
             metrics_cache,
@@ -393,18 +382,7 @@ pub const TextShaper = struct {
             font_size,
             options,
         );
-        try punctuation_compression.apply(buffer, options);
-        if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
-            try applyParagraphLineBidiVisualOrder(buffer, text, options.direction);
-        }
-        punctuation_hanging.apply(buffer, options);
-        bidi_reorder.recomputeRunOffsets(buffer);
-        try inline_object.position(
-            buffer,
-            options.inline_objects,
-            options.out_of_flow_placements,
-        );
-        return buffer.paragraphLayout();
+        return buffer.paragraphLayout(options.writing_mode);
     }
 
     /// Shape style items into one paragraph before line breaking.
@@ -450,18 +428,7 @@ pub const TextShaper = struct {
 };
 
 fn textMetricsFromParagraph(paragraph: ParagraphLayout) TextMetrics {
-    if (paragraph.lines.len == 0) {
-        return .{ .width = 0, .height = 0, .baseline = 0, .ascent = 0, .descent = 0, .leading = 0 };
-    }
-    const first = paragraph.lines[0];
-    return .{
-        .width = paragraph.width,
-        .height = paragraph.height,
-        .baseline = first.y + first.baseline,
-        .ascent = first.ascent,
-        .descent = first.descent,
-        .leading = first.leading,
-    };
+    return paragraph_types.metrics(paragraph);
 }
 
 fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !void {
@@ -775,6 +742,51 @@ fn reshapeUniformParagraph(
         recipe,
     );
     paragraph_reflow.applyPendingJustification(buffer);
+}
+
+fn finishUniformParagraph(
+    cascade: FontCascade,
+    fallback_cache: ?*FontFallbackCache,
+    metrics_cache: ?*GlyphMetricsCache,
+    glyph_index_cache: ?*GlyphIndexCache,
+    buffer: *LayoutBuffer,
+    text: []const u8,
+    font_size: f32,
+    options: ParagraphOptions,
+) !void {
+    if (options.writing_mode.isVertical()) {
+        // Vertical option validation excludes every horizontal-only
+        // presentation stage below. The no-wrap builder may still add inline
+        // spacing to y advances, so refresh the public two-dimensional run
+        // pens before returning.
+        bidi_reorder.recomputeRunOffsets(buffer);
+        return;
+    }
+    try reshapeUniformParagraph(
+        cascade,
+        fallback_cache,
+        metrics_cache,
+        glyph_index_cache,
+        buffer,
+        text,
+        font_size,
+        options,
+    );
+    try punctuation_compression.apply(buffer, options);
+    if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
+        try applyParagraphLineBidiVisualOrder(
+            buffer,
+            text,
+            options.direction,
+        );
+    }
+    punctuation_hanging.apply(buffer, options);
+    bidi_reorder.recomputeRunOffsets(buffer);
+    try inline_object.position(
+        buffer,
+        options.inline_objects,
+        options.out_of_flow_placements,
+    );
 }
 
 const defaultBaselineMetrics = paragraph_reflow.defaultBaselineMetrics;

@@ -85,6 +85,15 @@ pub fn layoutResolved(
     // line height is carried separately and affects only intersecting lines.
     options.line_height = attributed.paragraph_style.line_height;
     options.inline_objects = attributed.inline_objects;
+    if (options.writing_mode.isVertical()) {
+        for (runs) |run| {
+            if (run.style.decoration.underline or
+                run.style.decoration.strikethrough)
+            {
+                return error.UnsupportedVerticalParagraphOptions;
+            }
+        }
+    }
 
     var buffer = context_output.Buffer.init(allocator);
     defer buffer.deinit();
@@ -147,6 +156,7 @@ pub fn layoutResolved(
             .normalized_variation_coords = normalized_variation_coords,
             .lines = lines,
             .inline_objects = inline_objects,
+            .writing_mode = paragraph.writing_mode,
             .width = paragraph.width,
             .height = paragraph.height,
         },
@@ -276,23 +286,5 @@ fn buildStyleRuns(
 }
 
 fn metricsFromParagraph(paragraph: paragraph_types.ParagraphLayout) paragraph_types.TextMetrics {
-    if (paragraph.lines.len == 0) {
-        return .{
-            .width = 0,
-            .height = 0,
-            .baseline = 0,
-            .ascent = 0,
-            .descent = 0,
-            .leading = 0,
-        };
-    }
-    const first = paragraph.lines[0];
-    return .{
-        .width = paragraph.width,
-        .height = paragraph.height,
-        .baseline = first.y + first.baseline,
-        .ascent = first.ascent,
-        .descent = first.descent,
-        .leading = first.leading,
-    };
+    return paragraph_types.metrics(paragraph);
 }

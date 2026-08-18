@@ -91,7 +91,10 @@ pub const Buffer = struct {
         };
     }
 
-    pub fn paragraphLayout(self: *const Buffer) paragraph_types.ParagraphLayout {
+    pub fn paragraphLayout(
+        self: *const Buffer,
+        writing_mode: @import("../pipeline/types.zig").WritingMode,
+    ) paragraph_types.ParagraphLayout {
         var max_width: f32 = 0;
         var height: f32 = 0;
         for (self.lines.items) |line| {
@@ -110,6 +113,7 @@ pub const Buffer = struct {
             .normalized_variation_coords = self.variation_coords.items,
             .lines = self.lines.items,
             .inline_objects = self.inline_objects.items,
+            .writing_mode = writing_mode,
             .width = max_width,
             .height = height,
         };

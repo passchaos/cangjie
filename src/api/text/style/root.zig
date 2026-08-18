@@ -27,3 +27,7 @@ pub const WordBreak = style.WordBreak;
 pub const OverflowWrap = style.OverflowWrap;
 pub const WhiteSpaceCollapse = style.WhiteSpaceCollapse;
 pub const LineBreakStrategy = style.LineBreakStrategy;
+pub const WritingMode =
+    @import("../../../shaping/pipeline/types.zig").WritingMode;
+pub const TextOrientation =
+    @import("../../../shaping/pipeline/types.zig").TextOrientation;

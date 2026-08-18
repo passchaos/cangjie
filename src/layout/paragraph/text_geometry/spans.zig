@@ -31,16 +31,23 @@ pub fn appendLine(
             end += 1;
         }
 
-        var min_x = drafts[start].position;
-        var max_x = drafts[start].position + drafts[start].width;
+        var min_inline = drafts[start].inline_position;
+        var max_inline =
+            drafts[start].inline_position + drafts[start].inline_size;
         for (drafts[start..end]) |item| {
-            min_x = @min(
-                min_x,
-                @min(item.position, item.position + item.width),
+            min_inline = @min(
+                min_inline,
+                @min(
+                    item.inline_position,
+                    item.inline_position + item.inline_size,
+                ),
             );
-            max_x = @max(
-                max_x,
-                @max(item.position, item.position + item.width),
+            max_inline = @max(
+                max_inline,
+                @max(
+                    item.inline_position,
+                    item.inline_position + item.inline_size,
+                ),
             );
         }
 
@@ -50,8 +57,8 @@ pub fn appendLine(
             try graphemes.append(allocator, .{
                 .byte_start = item.byte_start,
                 .byte_len = item.byte_len,
-                .inline_position = item.position - min_x,
-                .width = item.width,
+                .inline_position = item.inline_position - min_inline,
+                .inline_size = item.inline_size,
                 .authored_ligature_caret = item.authored_ligature_caret,
             });
             if (containsSorted(word_start_bytes, item.byte_start)) {
@@ -71,7 +78,15 @@ pub fn appendLine(
                 .font_size = source.font_size,
             };
         } else null;
-        const block_bounds = if (run) |font_run| block: {
+        const inline_size = @max(0, max_inline - min_inline);
+        const block_bounds = if (layout.writing_mode.isVertical())
+            paragraph_types.TextRect{
+                .x = line.x,
+                .y = min_inline,
+                .width = line.width,
+                .height = inline_size,
+            }
+        else if (run) |font_run| block: {
             const source_run = layout.runs[font_run.run_index];
             const alignment = if (style_spans) |source_spans|
                 (styled_paragraph.spanForCluster(
@@ -89,15 +104,15 @@ pub fn appendLine(
                 line.y + line.baseline +
                 vertical_align.fontOffset(line, source_run, alignment);
             break :block paragraph_types.TextRect{
-                .x = min_x,
+                .x = min_inline,
                 .y = baseline - metrics.ascent,
-                .width = @max(0, max_x - min_x),
+                .width = inline_size,
                 .height = metrics.ascent + metrics.descent,
             };
         } else paragraph_types.TextRect{
-            .x = min_x,
+            .x = min_inline,
             .y = line.y,
-            .width = @max(0, max_x - min_x),
+            .width = inline_size,
             .height = line.height,
         };
         const span_index = spans.items.len;

@@ -57,18 +57,18 @@ test "text geometry divides a shaped ligature over source graphemes" {
     try std.testing.expectEqual(@as(usize, 0), span.font_run.?.run_index);
     try std.testing.expectEqual(@as(usize, 0), span.font_run.?.cascade_index);
     try std.testing.expectApproxEqAbs(
-        geometry.graphemes[0].width,
-        geometry.graphemes[1].width,
+        geometry.graphemes[0].inline_size,
+        geometry.graphemes[1].inline_size,
         0.001,
     );
     try std.testing.expectApproxEqAbs(
         layout.glyphs[0].x_advance,
-        geometry.graphemes[0].width + geometry.graphemes[1].width,
+        geometry.graphemes[0].inline_size + geometry.graphemes[1].inline_size,
         0.001,
     );
     try std.testing.expectApproxEqAbs(
         layout.glyphs[2].x_advance,
-        geometry.graphemes[3].width + geometry.graphemes[4].width,
+        geometry.graphemes[3].inline_size + geometry.graphemes[4].inline_size,
         0.001,
     );
     try std.testing.expectEqualSlices(
@@ -88,7 +88,7 @@ test "text geometry divides a shaped ligature over source graphemes" {
         0.001,
     );
     try std.testing.expectApproxEqAbs(
-        geometry.graphemes[1].width,
+        geometry.graphemes[1].inline_size,
         internal_selection[0].rect.width,
         0.001,
     );
@@ -137,12 +137,12 @@ test "text geometry prefers authored GDEF ligature carets" {
     // yielding 6 + 14 rather than the fallback 10 + 10 split.
     try std.testing.expectApproxEqAbs(
         @as(f32, 6),
-        geometry.graphemes[0].width,
+        geometry.graphemes[0].inline_size,
         0.001,
     );
     try std.testing.expectApproxEqAbs(
         @as(f32, 14),
-        geometry.graphemes[1].width,
+        geometry.graphemes[1].inline_size,
         0.001,
     );
     try std.testing.expect(geometry.graphemes[0].authored_ligature_caret);
@@ -170,9 +170,9 @@ test "text geometry prefers authored GDEF ligature carets" {
         geometry.visual_caret_stops,
     );
     try std.testing.expectEqual(@as(usize, 3), stops.len);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), stops[0].x, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 6), stops[1].x, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 20), stops[2].x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), stops[0].inline_position, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 6), stops[1].inline_position, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), stops[2].inline_position, 0.001);
     const next_internal = geometry.nextVisualCaret(.{
         .byte_offset = 0,
         .affinity = .downstream,
@@ -227,18 +227,18 @@ test "text geometry retains zero-width collapsed whitespace graphemes" {
     try std.testing.expectEqual(@as(usize, 6), geometry.graphemes.len);
     try std.testing.expectApproxEqAbs(
         @as(f32, 0),
-        geometry.graphemes[0].width,
+        geometry.graphemes[0].inline_size,
         0.001,
     );
-    try std.testing.expect(geometry.graphemes[2].width > 0);
+    try std.testing.expect(geometry.graphemes[2].inline_size > 0);
     try std.testing.expectApproxEqAbs(
         @as(f32, 0),
-        geometry.graphemes[3].width,
+        geometry.graphemes[3].inline_size,
         0.001,
     );
     try std.testing.expectApproxEqAbs(
         @as(f32, 0),
-        geometry.graphemes[5].width,
+        geometry.graphemes[5].inline_size,
         0.001,
     );
     const leading = try geometry.selectionFragments(
@@ -285,12 +285,12 @@ test "text geometry applies GDEF caret variation at the final run instance" {
 
     try std.testing.expectApproxEqAbs(
         @as(f32, 6.14),
-        geometry.graphemes[0].width,
+        geometry.graphemes[0].inline_size,
         0.001,
     );
     try std.testing.expectApproxEqAbs(
         layout.glyphs[0].x_advance - 6.14,
-        geometry.graphemes[1].width,
+        geometry.graphemes[1].inline_size,
         0.001,
     );
     try std.testing.expect(geometry.graphemes[0].authored_ligature_caret);
@@ -353,7 +353,7 @@ test "text geometry falls back when GDEF caret cardinality mismatches source" {
     for (geometry.graphemes) |grapheme| {
         try std.testing.expectApproxEqAbs(
             @as(f32, 10),
-            grapheme.width,
+            grapheme.inline_size,
             0.001,
         );
         try std.testing.expect(!grapheme.authored_ligature_caret);
@@ -417,7 +417,7 @@ test "text geometry falls back when authored GDEF caret exceeds final advance" {
     for (geometry.graphemes) |grapheme| {
         try std.testing.expectApproxEqAbs(
             @as(f32, 2),
-            grapheme.width,
+            grapheme.inline_size,
             0.001,
         );
         try std.testing.expect(!grapheme.authored_ligature_caret);
@@ -480,8 +480,16 @@ test "RTL ligature geometry reverses authored GDEF component assignment" {
     );
     defer geometry.deinit();
     const graphemes = geometry.spans[0].graphemes(geometry.graphemes);
-    try std.testing.expectApproxEqAbs(@as(f32, 14), graphemes[0].width, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 6), graphemes[1].width, 0.001);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 14),
+        graphemes[0].inline_size,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 6),
+        graphemes[1].inline_size,
+        0.001,
+    );
     try std.testing.expectApproxEqAbs(
         @as(f32, 6),
         graphemes[0].inline_position,
@@ -600,7 +608,9 @@ test "text geometry keeps bidi spans logical and positions RTL graphemes visuall
         current,
         previous,
     | {
-        try std.testing.expect(current.x >= previous.x);
+        try std.testing.expect(
+            current.inline_position >= previous.inline_position,
+        );
     }
 
     var forward = geometry.caret(.{

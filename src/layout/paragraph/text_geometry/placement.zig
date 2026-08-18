@@ -2,6 +2,7 @@
 
 const std = @import("std");
 
+const axes = @import("../axes.zig");
 const draft = @import("draft.zig");
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const paragraph_types = @import("../../types/paragraph.zig");
@@ -14,13 +15,20 @@ pub fn applyLine(
     line: paragraph_types.ParagraphLine,
     drafts: []draft.Grapheme,
 ) error{ OutOfMemory, InvalidParagraphLayout }!void {
-    var pen_x = line.x;
+    var pen_inline = axes.inlineStart(
+        layout.writing_mode,
+        axes.rect(line.x, line.y, line.width, line.height),
+    );
     const glyph_end = line.glyph_start + line.glyph_len;
     for (
         layout.glyphs[line.glyph_start..glyph_end],
         line.glyph_start..,
     ) |glyph, glyph_index| {
         const run_index = source.runIndexForGlyph(layout.runs, glyph_index);
+        const glyph_advance = axes.glyphAdvance(
+            layout.writing_mode,
+            glyph,
+        );
         const source_end = glyph.sourceByteEnd();
         if (source_end > glyph.cluster) {
             if (rangeOverlapping(
@@ -35,12 +43,12 @@ pub fn applyLine(
                     // must remain a selectable/caret-addressable partition.
                     addPortion(
                         &drafts[range.start],
-                        pen_x,
-                        glyph.x_advance,
+                        pen_inline,
+                        glyph_advance,
                         null,
                         true,
                     );
-                    pen_x += glyph.x_advance;
+                    pen_inline += glyph_advance;
                     continue;
                 }
                 if (count > 1 and run_index != null and
@@ -49,23 +57,24 @@ pub fn applyLine(
                         layout,
                         glyph,
                         run_index.?,
-                        pen_x,
+                        pen_inline,
+                        glyph_advance,
                         drafts,
                         range,
                     ))
                 {
-                    pen_x += glyph.x_advance;
+                    pen_inline += glyph_advance;
                     continue;
                 }
-                const share = glyph.x_advance /
+                const share = glyph_advance /
                     @as(f32, @floatFromInt(count));
                 const direction = drafts[range.start].direction;
                 for (range.start..range.end) |draft_index| {
                     const logical_index = draft_index - range.start;
                     const portion_x = switch (direction) {
-                        .ltr => pen_x + share *
+                        .ltr => pen_inline + share *
                             @as(f32, @floatFromInt(logical_index)),
-                        .rtl => pen_x + glyph.x_advance - share *
+                        .rtl => pen_inline + glyph_advance - share *
                             @as(f32, @floatFromInt(logical_index + 1)),
                     };
                     addPortion(
@@ -80,13 +89,13 @@ pub fn applyLine(
         } else if (forInsertion(drafts, glyph)) |draft_index| {
             addPortion(
                 &drafts[draft_index],
-                pen_x,
-                glyph.x_advance,
+                pen_inline,
+                glyph_advance,
                 run_index,
                 false,
             );
         }
-        pen_x += glyph.x_advance;
+        pen_inline += glyph_advance;
     }
 }
 
@@ -95,7 +104,8 @@ fn addAuthoredLigaturePortions(
     layout: paragraph_types.ParagraphLayout,
     glyph: GlyphPosition,
     run_index: usize,
-    pen_x: f32,
+    pen_inline: f32,
+    glyph_advance: f32,
     drafts: []draft.Grapheme,
     range: draft.IndexRange,
 ) error{ OutOfMemory, InvalidParagraphLayout }!bool {
@@ -123,7 +133,14 @@ fn addAuthoredLigaturePortions(
     defer allocator.free(carets);
 
     const component_count = range.end - range.start;
-    if (carets.len + 1 != component_count or glyph.x_advance <= 0) {
+    // OpenType LigCaretList positions are horizontal design coordinates.
+    // Vertical ligature caret metadata needs a distinct authored source, which
+    // OpenType does not define. Equal inline-axis partitioning remains the
+    // conservative vertical fallback.
+    if (layout.writing_mode.isVertical() or
+        carets.len + 1 != component_count or
+        glyph_advance <= 0)
+    {
         return false;
     }
     const properties = run.font.properties();
@@ -147,7 +164,7 @@ fn addAuthoredLigaturePortions(
         position.* = caret.position * scale;
         if (!std.math.isFinite(position.*) or
             position.* <= previous or
-            position.* >= glyph.x_advance)
+            position.* >= glyph_advance)
         {
             return false;
         }
@@ -165,12 +182,12 @@ fn addAuthoredLigaturePortions(
         else
             positions[physical_index - 1];
         const component_end = if (physical_index == positions.len)
-            glyph.x_advance
+            glyph_advance
         else
             positions[physical_index];
         addPortion(
             &drafts[draft_index],
-            pen_x + component_start,
+            pen_inline + component_start,
             component_end - component_start,
             run_index,
             false,
@@ -268,15 +285,15 @@ fn addPortion(
     fontless: bool,
 ) void {
     if (!item.positioned) {
-        item.position = @min(position, position + width);
+        item.inline_position = @min(position, position + width);
         item.positioned = true;
     } else {
-        item.position = @min(
-            item.position,
+        item.inline_position = @min(
+            item.inline_position,
             @min(position, position + width),
         );
     }
-    item.width += width;
+    item.inline_size += width;
     if (item.run_index == null and !fontless) {
         item.run_index = run_index;
     }
@@ -293,25 +310,25 @@ fn resolveDirectionGroup(
     } else null;
     const first = first_positioned orelse {
         for (drafts) |*item| {
-            item.position = line_x;
+            item.inline_position = line_x;
             item.positioned = true;
         }
         return;
     };
     const leading_anchor = switch (direction) {
-        .ltr => drafts[first].position,
-        .rtl => drafts[first].position + drafts[first].width,
+        .ltr => drafts[first].inline_position,
+        .rtl => drafts[first].inline_position + drafts[first].inline_size,
     };
     for (drafts[0..first]) |*item| {
-        item.position = leading_anchor;
+        item.inline_position = leading_anchor;
         item.positioned = true;
     }
     var previous = first;
     for (drafts[first + 1 ..], first + 1..) |*item, index| {
         if (!item.positioned) {
-            item.position = switch (direction) {
-                .ltr => drafts[previous].position + drafts[previous].width,
-                .rtl => drafts[previous].position,
+            item.inline_position = switch (direction) {
+                .ltr => drafts[previous].inline_position + drafts[previous].inline_size,
+                .rtl => drafts[previous].inline_position,
             };
             item.positioned = true;
         }

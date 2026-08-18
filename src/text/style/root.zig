@@ -239,6 +239,8 @@ pub const OverflowMode = enum {
 
 pub const ParagraphStyle = struct {
     direction: pipeline_types.TextDirection = .ltr,
+    writing_mode: pipeline_types.WritingMode = .horizontal_tb,
+    text_orientation: pipeline_types.TextOrientation = .mixed,
     text_align: paragraph_types.TextAlign = .start,
     line_height: ?f32 = null,
     max_lines: ?usize = null,
@@ -283,6 +285,8 @@ pub const ParagraphStyle = struct {
             .alignment = self.text_align,
             .line_height = self.line_height,
             .direction = self.direction,
+            .writing_mode = self.writing_mode,
+            .text_orientation = self.text_orientation,
             .max_lines = self.max_lines,
             .ellipsis = self.ellipsis or self.overflow_mode == .ellipsis,
             .tab_width = self.tab_width,

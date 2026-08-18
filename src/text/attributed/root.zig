@@ -283,18 +283,7 @@ pub fn layoutAttributedGlyphRunsUtf8(allocator: std.mem.Allocator, cascade: font
 }
 
 fn textMetricsFromParagraph(paragraph: paragraph_types.ParagraphLayout) TextMetrics {
-    if (paragraph.lines.len == 0) {
-        return .{ .width = 0, .height = 0, .baseline = 0, .ascent = 0, .descent = 0, .leading = 0 };
-    }
-    const first = paragraph.lines[0];
-    return .{
-        .width = paragraph.width,
-        .height = paragraph.height,
-        .baseline = first.y + first.baseline,
-        .ascent = first.ascent,
-        .descent = first.descent,
-        .leading = first.leading,
-    };
+    return paragraph_types.metrics(paragraph);
 }
 
 fn isUtf8Boundary(text: []const u8, byte_offset: usize) bool {

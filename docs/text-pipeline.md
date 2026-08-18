@@ -547,6 +547,30 @@ origins. Grayscale, color, and hinted renderers therefore consume the same
 public offset contract, and parity tools no longer reconstruct ordinary
 vertical origins out of band.
 
+Paragraph layout now admits an explicit first vertical writing contract through
+`ParagraphOptions.writing_mode` and `text_orientation`. A
+`.vertical_rl` + `.no_wrap` request shapes one top-to-bottom column, treats
+`max_width` as the inline-size/column-height measure, and reports physical
+column bounds (`width` is block size, `height` is inline extent). Paragraph
+hit testing, caret/selection rectangles, owned `TextGeometry`, debug overlays,
+and renderer draw lists all consume the same y-axis pen. Public draw-list glyphs
+therefore retain `y_advance` and orientation rather than flattening paragraph
+output back to horizontal coordinates.
+
+This is intentionally not described as full vertical reflow. Until the
+remaining line-breaking subsystems are converted to explicit inline/block
+axes, vertical paragraph validation rejects soft wrapping, `vertical_lr`,
+bottom-to-top/RTL text, bidi controls, hard breaks, tabs, justification,
+ellipsis/line limits, whitespace collapsing, negative spacing, indentation,
+paragraph spacing, exclusions/line regions, inline objects, hyphenation,
+optical punctuation, and the resumable breaker. Retained whole-paragraph
+layout and intrinsic inline-size measurement are supported and restore the
+pristine vertical shaping snapshot between calls. Returning a concrete
+`UnsupportedVerticalParagraphOptions`, `UnsupportedVerticalParagraphText`, or
+`UnsupportedVerticalParagraphBreaker` error is part of this boundary: an
+unsupported request must never fall through the horizontal x-axis machinery
+and produce plausible but false geometry.
+
 Before discrete Kashida or spacing expansion, a justified non-terminal line
 may also reshape through one variable-font expansion axis. Cangjie prefers an
 fvar `jstf` axis (the convention used by HarfBuzz's experimental API), then the
@@ -705,6 +729,10 @@ whole-paragraph retained layout. Styled one-shot layout likewise remains on
 its existing complete pipeline until it has a width-independent attributed
 owner whose glyph-parallel metadata can participate in checkpoints; neither
 case silently falls back to replay while claiming to be incremental.
+The current single-column vertical paragraph path also rejects
+`breakLines`: its region and `max_height` protocol still names horizontal
+line-box geometry, while whole-layout retained vertical reflow is already
+available through `ShapedParagraph.layout`.
 
 `ParagraphOptions.line_break_strategy` independently selects greedy or
 balanced soft-boundary policy. `.balanced` first obtains the current greedy
@@ -1026,16 +1054,19 @@ platform tree model. The owned result enumerates logical-order spans split by
 line, final font run, resolved bidi direction, and optional style identity.
 Each span carries paragraph-space bounds, UTF-8 source range, same-line
 previous/next links, UAX #29 word-start indexes, and a flat range of source
-graphemes with UTF-8 lengths, span-relative inline positions, and widths.
+graphemes with UTF-8 lengths, span-relative `inline_position`, and
+`inline_size`. Those values map to x/width horizontally and y/height
+vertically; consumers never have to reinterpret a field named `width` as a
+vertical advance.
 When one shaped glyph covers multiple source graphemes (for example a GSUB
 ligature), Cangjie first reads the glyph's GDEF LigCaretList. CaretValue
 formats 1, 2, and 3 are supported, including TrueType contour-point resolution
 and GDEF 1.3 ItemVariationStore deltas at each final run's variation instance.
 Complete, strictly increasing authored carets divide the glyph advance exactly;
 missing, incomplete, unavailable, or out-of-range data falls back to equal
-division rather than exposing invalid widths. `GraphemeGeometry` records which
+division rather than exposing invalid inline sizes. `GraphemeGeometry` records which
 case applied through `authored_ligature_caret`, so consumers never have to infer
-precision from unequal widths. An RTL span reverses component assignment while
+precision from unequal sizes. An RTL span reverses component assignment while
 retaining logical grapheme order and decreasing visual positions. The builder
 resolves bidi from source once rather than guessing from visual glyph order,
 and its arrays remain valid after the shaping output buffer is reused. Platform
@@ -1045,7 +1076,7 @@ native application semantics.
 The geometry owner also retains every final line independently from its spans,
 including empty trailing-hard-break and empty-paragraph lines.
 `TextGeometry.caret` maps an exact UTF-8 boundary plus upstream/downstream
-affinity to a zero-width paragraph-space rectangle; the affinity distinguishes
+affinity to a zero-inline-size paragraph-space rectangle; the affinity distinguishes
 the two visual positions that a soft wrap or bidi transition can assign to one
 logical boundary. `TextGeometry.hitTest` performs the inverse using final
 grapheme partitions, including authored GDEF ligature carets, rather than the
@@ -1062,18 +1093,19 @@ lets platform adapters paint accurate selections inside GDEF-authored
 ligatures and across wraps without reconstructing bidi geometry themselves.
 
 Every geometry owner also materializes `visual_caret_stops` in line then
-physical-left-to-right order. A stop records the logical position selected when
-arriving from either physical side, preserving bidi transitions where one x
-coordinate has two logical meanings and zero-width controls where consecutive
-topology steps share x. `nextVisualCaret`/`previousVisualCaret` traverse this
+physical inline-start-to-end order. A stop exposes `inline_position` plus
+`from_start`/`from_end`, preserving bidi transitions where one physical
+coordinate has two logical meanings and zero-size controls where consecutive
+topology steps coincide. `nextVisualCaret`/`previousVisualCaret` traverse this
 topology across soft wraps and GDEF-authored ligature boundaries without
 storing mutable cursor state.
 
-`nextLineCaret` and `previousLineCaret` extend the same topology vertically.
-They accept a caller-retained preferred x and choose the nearest stop on the
+`nextLineCaret` and `previousLineCaret` extend the same topology along the block
+axis. They accept a caller-retained preferred inline coordinate (physical x for
+horizontal text, y for vertical text) and choose the nearest stop on the
 adjacent line, naturally clamping to short or empty lines while resolving bidi
-dual positions from the physical approach side. Keeping preferred x outside
-the owner preserves repeatable vertical movement without introducing document
+dual positions from the physical approach side. Keeping that coordinate
+outside the owner preserves repeatable movement without introducing document
 or cursor state into Cangjie.
 
 GDEF's previously validation-only `AttachList` is also available through

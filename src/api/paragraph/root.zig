@@ -34,6 +34,10 @@ pub const OverflowWrap = paragraph_types.OverflowWrap;
 pub const LineBreakPolicyRange = paragraph_options.LineBreakPolicyRange;
 pub const WhiteSpaceCollapse = paragraph_types.WhiteSpaceCollapse;
 pub const LineBreakStrategy = paragraph_types.LineBreakStrategy;
+pub const WritingMode =
+    @import("../../shaping/pipeline/types.zig").WritingMode;
+pub const TextOrientation =
+    @import("../../shaping/pipeline/types.zig").TextOrientation;
 pub const BaselineMetrics = reflow.BaselineMetrics;
 pub const TextMetrics = paragraph_types.TextMetrics;
 pub const ContentWidths = paragraph_types.ContentWidths;

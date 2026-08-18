@@ -2,6 +2,7 @@
 
 const std = @import("std");
 
+const axes = @import("../axes.zig");
 const records = @import("records.zig");
 
 const CaretGeometry = records.CaretGeometry;
@@ -86,43 +87,47 @@ pub fn hitTest(geometry: View, x: f32, y: f32) ?CaretGeometry {
     var best: ?struct {
         span_index: usize,
         grapheme: Grapheme,
-        left: f32,
+        inline_start: f32,
         distance: f32,
     } = null;
+    const point_inline =
+        axes.inlineCoordinate(geometry.writing_mode, x, y);
 
     for (
         geometry.spans[line.span_start .. line.span_start + line.span_len],
         line.span_start..,
     ) |span, span_index| {
         for (span.graphemes(geometry.graphemes)) |grapheme| {
-            if (!std.math.isFinite(grapheme.width) or grapheme.width < 0) {
+            if (!std.math.isFinite(grapheme.inline_size) or grapheme.inline_size < 0) {
                 continue;
             }
-            const left = span.bounds.x + grapheme.inline_position;
-            const right = left + grapheme.width;
-            const distance = if (x < left)
-                left - x
-            else if (x > right)
-                x - right
+            const inline_start =
+                axes.inlineStart(geometry.writing_mode, span.bounds) +
+                grapheme.inline_position;
+            const inline_end = inline_start + grapheme.inline_size;
+            const distance = if (point_inline < inline_start)
+                inline_start - point_inline
+            else if (point_inline > inline_end)
+                point_inline - inline_end
             else
                 0;
-            // At an exact shared boundary prefer the positive-width grapheme
-            // on the point's right. This makes an LTR internal ligature caret
-            // round-trip as downstream while zero-width controls remain
+            // At an exact shared boundary prefer the positive-inline-size
+            // grapheme after the point. This makes an LTR internal ligature
+            // caret round-trip as downstream while zero-size controls remain
             // hittable only when no visible neighbor is closer.
             const prefer_boundary_successor =
                 best != null and
                 distance == best.?.distance and
-                x == left and
-                best.?.grapheme.width > 0 and
-                grapheme.width > 0;
+                point_inline == inline_start and
+                best.?.grapheme.inline_size > 0 and
+                grapheme.inline_size > 0;
             if (best == null or distance < best.?.distance or
                 prefer_boundary_successor)
             {
                 best = .{
                     .span_index = span_index,
                     .grapheme = grapheme,
-                    .left = left,
+                    .inline_start = inline_start,
                     .distance = distance,
                 };
             }
@@ -138,7 +143,8 @@ pub fn hitTest(geometry: View, x: f32, y: f32) ?CaretGeometry {
         },
     );
     const trailing_physical =
-        x > found.left + found.grapheme.width / 2;
+        point_inline >
+        found.inline_start + found.grapheme.inline_size / 2;
     const span = geometry.spans[found.span_index];
     const logical_end = switch (span.direction) {
         .ltr => trailing_physical,
@@ -198,10 +204,18 @@ fn caretForGrapheme(
     logical_end: bool,
 ) CaretGeometry {
     const span = geometry.spans[span_index];
-    const left = span.bounds.x + grapheme.inline_position;
-    const x = switch (span.direction) {
-        .ltr => if (logical_end) left + grapheme.width else left,
-        .rtl => if (logical_end) left else left + grapheme.width,
+    const inline_start =
+        axes.inlineStart(geometry.writing_mode, span.bounds) +
+        grapheme.inline_position;
+    const inline_position = switch (span.direction) {
+        .ltr => if (logical_end)
+            inline_start + grapheme.inline_size
+        else
+            inline_start,
+        .rtl => if (logical_end)
+            inline_start
+        else
+            inline_start + grapheme.inline_size,
     };
     return .{
         .position = .{
@@ -212,12 +226,12 @@ fn caretForGrapheme(
             .affinity = if (logical_end) .upstream else .downstream,
         },
         .line_index = span.line_index,
-        .rect = .{
-            .x = x,
-            .y = span.bounds.y,
-            .width = 0,
-            .height = span.bounds.height,
-        },
+        .rect = axes.caretRect(
+            geometry.writing_mode,
+            axes.blockStart(geometry.writing_mode, span.bounds),
+            axes.blockSize(geometry.writing_mode, span.bounds),
+            inline_position,
+        ),
     };
 }
 
@@ -239,12 +253,12 @@ fn emptyLineCaret(
     return .{
         .position = position,
         .line_index = line_index,
-        .rect = .{
-            .x = line.bounds.x,
-            .y = line.bounds.y,
-            .width = 0,
-            .height = line.bounds.height,
-        },
+        .rect = axes.caretRect(
+            geometry.writing_mode,
+            axes.blockStart(geometry.writing_mode, line.bounds),
+            axes.blockSize(geometry.writing_mode, line.bounds),
+            axes.inlineStart(geometry.writing_mode, line.bounds),
+        ),
     };
 }
 

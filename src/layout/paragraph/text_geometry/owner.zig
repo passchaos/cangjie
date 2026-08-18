@@ -6,10 +6,13 @@ const interaction = @import("interaction.zig");
 const records = @import("records.zig");
 const selection = @import("selection.zig");
 const visual_carets = @import("visual_carets.zig");
+const WritingMode =
+    @import("../../../shaping/pipeline/types.zig").WritingMode;
 
 pub const TextGeometry = struct {
     allocator: std.mem.Allocator,
     source_byte_len: usize,
+    writing_mode: WritingMode = .horizontal_tb,
     lines: []records.Line,
     spans: []records.Span,
     graphemes: []records.Grapheme,
@@ -39,10 +42,10 @@ pub const TextGeometry = struct {
 
     /// Return the closest grapheme caret for a paragraph-space point.
     ///
-    /// The selected line is y-nearest. Within it, the physical half of the
-    /// closest positive-width grapheme determines the logical boundary and
-    /// affinity; RTL reverses left/right source ownership. Empty lines resolve
-    /// to their sole source boundary.
+    /// The selected line is block-axis-nearest. Within it, the physical half
+    /// of the closest positive-inline-size grapheme determines the logical
+    /// boundary and affinity; RTL reverses inline source ownership. Empty lines
+    /// resolve to their sole source boundary.
     pub fn hitTest(
         self: TextGeometry,
         x: f32,
@@ -77,17 +80,18 @@ pub const TextGeometry = struct {
 
     /// Move to the nearest stop on the following visual line.
     ///
-    /// `preferred_x` is caller-owned state and should remain unchanged across a
-    /// sequence of vertical moves.
+    /// `preferred_inline` is caller-owned state and should remain unchanged
+    /// across a sequence of block-axis moves. It is physical x for horizontal
+    /// text and physical y for vertical text.
     pub fn nextLineCaret(
         self: TextGeometry,
         current: records.CaretPosition,
-        preferred_x: f32,
+        preferred_inline: f32,
     ) ?records.CaretGeometry {
         return visual_carets.nextLine(
             self.geometryView(),
             current,
-            preferred_x,
+            preferred_inline,
         );
     }
 
@@ -95,12 +99,12 @@ pub const TextGeometry = struct {
     pub fn previousLineCaret(
         self: TextGeometry,
         current: records.CaretPosition,
-        preferred_x: f32,
+        preferred_inline: f32,
     ) ?records.CaretGeometry {
         return visual_carets.previousLine(
             self.geometryView(),
             current,
-            preferred_x,
+            preferred_inline,
         );
     }
 
@@ -111,6 +115,7 @@ pub const TextGeometry = struct {
     fn geometryView(self: TextGeometry) records.GeometryView {
         return .{
             .source_byte_len = self.source_byte_len,
+            .writing_mode = self.writing_mode,
             .lines = self.lines,
             .spans = self.spans,
             .graphemes = self.graphemes,

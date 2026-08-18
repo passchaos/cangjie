@@ -36,6 +36,12 @@ pub fn clusterCaretConsistency(
         paragraph_options.Options{
             .max_width = std.math.inf(f32),
             .direction = options.direction,
+            .wrap_mode = if (options.writing_mode.isVertical())
+                .no_wrap
+            else
+                .word,
+            .writing_mode = options.writing_mode,
+            .text_orientation = options.text_orientation,
         },
         paragraph_reflow.defaultBaselineMetrics(
             cascade.fonts[0],
@@ -50,7 +56,7 @@ pub fn clusterCaretConsistency(
     return try caret.analyze(
         allocator,
         text,
-        buffer.paragraphLayout(),
+        buffer.paragraphLayout(options.writing_mode),
     );
 }
 

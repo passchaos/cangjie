@@ -2,6 +2,7 @@
 
 const std = @import("std");
 
+const axes = @import("../axes.zig");
 const draft = @import("draft.zig");
 const paragraph_types = @import("../../types/paragraph.zig");
 const placement = @import("placement.zig");
@@ -139,7 +140,13 @@ fn buildInternal(
         }
 
         try placement.applyLine(allocator, layout, line, drafts.items);
-        placement.resolveMissingPositions(line.x, drafts.items);
+        placement.resolveMissingPositions(
+            axes.inlineStart(
+                layout.writing_mode,
+                axes.rect(line.x, line.y, line.width, line.height),
+            ),
+            drafts.items,
+        );
         placement.resolveMissingOwners(drafts.items);
         try spans_impl.appendLine(
             allocator,
@@ -169,6 +176,7 @@ fn buildInternal(
         };
         try visual_carets.appendLine(
             allocator,
+            layout.writing_mode,
             output_spans.items,
             output_graphemes.items,
             output_line,
@@ -194,6 +202,7 @@ fn buildInternal(
     return .{
         .allocator = allocator,
         .source_byte_len = text.len,
+        .writing_mode = layout.writing_mode,
         .lines = owned_lines,
         .spans = owned_spans,
         .graphemes = owned_graphemes,

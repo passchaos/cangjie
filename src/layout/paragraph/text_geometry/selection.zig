@@ -2,6 +2,7 @@
 
 const std = @import("std");
 
+const axes = @import("../axes.zig");
 const records = @import("records.zig");
 
 pub const Error = error{
@@ -11,8 +12,8 @@ pub const Error = error{
 
 const Interval = struct {
     line_index: usize,
-    left: f32,
-    right: f32,
+    inline_start: f32,
+    inline_end: f32,
 };
 
 pub fn build(
@@ -39,17 +40,19 @@ pub fn build(
             {
                 continue;
             }
-            const left = span.bounds.x + grapheme.inline_position;
-            if (!std.math.isFinite(left) or
-                !std.math.isFinite(grapheme.width) or
-                grapheme.width < 0)
+            const inline_start =
+                axes.inlineStart(geometry.writing_mode, span.bounds) +
+                grapheme.inline_position;
+            if (!std.math.isFinite(inline_start) or
+                !std.math.isFinite(grapheme.inline_size) or
+                grapheme.inline_size < 0)
             {
                 return error.InvalidTextRange;
             }
             try intervals.append(allocator, .{
                 .line_index = span.line_index,
-                .left = left,
-                .right = left + grapheme.width,
+                .inline_start = inline_start,
+                .inline_end = inline_start + grapheme.inline_size,
             });
         }
     }
@@ -63,25 +66,25 @@ pub fn build(
         if (first.line_index >= geometry.lines.len) {
             return error.InvalidTextRange;
         }
-        const left = first.left;
-        var right = first.right;
+        const inline_start = first.inline_start;
+        var inline_end = first.inline_end;
         index += 1;
         while (index < intervals.items.len and
             intervals.items[index].line_index == first.line_index and
-            intervals.items[index].left <= right)
+            intervals.items[index].inline_start <= inline_end)
         {
-            right = @max(right, intervals.items[index].right);
+            inline_end = @max(inline_end, intervals.items[index].inline_end);
             index += 1;
         }
         const line = geometry.lines[first.line_index];
         try fragments.append(allocator, .{
             .line_index = first.line_index,
-            .rect = .{
-                .x = left,
-                .y = line.bounds.y,
-                .width = @max(0, right - left),
-                .height = line.bounds.height,
-            },
+            .rect = axes.selectionRect(
+                geometry.writing_mode,
+                line.bounds,
+                inline_start,
+                inline_end,
+            ),
         });
     }
     return fragments.toOwnedSlice(allocator);
@@ -138,6 +141,6 @@ fn intervalLessThan(_: void, lhs: Interval, rhs: Interval) bool {
     if (lhs.line_index != rhs.line_index) {
         return lhs.line_index < rhs.line_index;
     }
-    if (lhs.left != rhs.left) return lhs.left < rhs.left;
-    return lhs.right < rhs.right;
+    if (lhs.inline_start != rhs.inline_start) return lhs.inline_start < rhs.inline_start;
+    return lhs.inline_end < rhs.inline_end;
 }

@@ -15,6 +15,7 @@ const line_break_opportunity = @import("../opportunity.zig");
 const line_break_policy = @import("../../paragraph/line_break_policy.zig");
 const paragraph_options = @import("../../paragraph/options.zig");
 const segmentation = @import("../../../text/segmentation/root.zig");
+const vertical_no_wrap = @import("../../paragraph/vertical_no_wrap.zig");
 const white_space = @import("../../paragraph/white_space.zig");
 const unicode = @import("../../../unicode.zig");
 
@@ -52,6 +53,14 @@ pub fn buildWithJstfShrinkage(
     hyphenation_dictionary: ?*const @import("../../../text/hyphenation/root.zig").Dictionary,
     recipe: anytype,
 ) !void {
+    if (options.writing_mode.isVertical()) {
+        return vertical_no_wrap.build(
+            buffer,
+            text,
+            options,
+            default_metrics,
+        );
+    }
     if (options.line_break_strategy == .balanced and
         line_break_policy.anyWrappingEnabled(
             text.len,

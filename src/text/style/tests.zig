@@ -245,3 +245,19 @@ test "vertical alignment belongs to inline text style" {
     );
     try std.testing.expect(!@hasField(ParagraphStyle, "vertical_align"));
 }
+
+test "paragraph style projects vertical shaping controls" {
+    const options = (ParagraphStyle{
+        .writing_mode = .vertical_rl,
+        .text_orientation = .upright,
+        .wrap_mode = .no_wrap,
+    }).paragraphOptions(80);
+    try std.testing.expectEqual(
+        pipeline_types.WritingMode.vertical_rl,
+        options.writing_mode,
+    );
+    try std.testing.expectEqual(
+        pipeline_types.TextOrientation.upright,
+        options.text_orientation,
+    );
+}

@@ -2,6 +2,7 @@
 
 const Face = @import("../../../font/face/root.zig").Face;
 const paragraph_types = @import("../../types/paragraph.zig");
+const pipeline_types = @import("../../../shaping/pipeline/types.zig");
 
 pub const Direction = enum {
     ltr,
@@ -45,22 +46,23 @@ pub const SelectionFragment = struct {
     rect: paragraph_types.TextRect,
 };
 
-/// One boundary in left-to-right visual traversal order.
+/// One boundary in physical inline-axis traversal order.
 ///
-/// Bidi transitions can assign distinct logical positions to the same physical
-/// x coordinate. `from_left` is selected when traversal arrives from a smaller
-/// x (or the preceding line); `from_right` is selected in the reverse
-/// direction.
+/// Bidi transitions can assign distinct logical positions to one physical
+/// coordinate. `inline_position` is x horizontally and y vertically.
+/// `from_start` is selected when traversal arrives from a smaller physical
+/// inline coordinate; `from_end` is selected in the reverse direction.
 pub const VisualCaretStop = struct {
     line_index: usize,
-    x: f32,
-    from_left: CaretPosition,
-    from_right: CaretPosition,
+    inline_position: f32,
+    from_start: CaretPosition,
+    from_end: CaretPosition,
 };
 
 /// Borrowed concrete view shared by interaction algorithms.
 pub const GeometryView = struct {
     source_byte_len: usize,
+    writing_mode: pipeline_types.WritingMode = .horizontal_tb,
     lines: []const Line,
     spans: []const Span,
     graphemes: []const Grapheme,
@@ -83,7 +85,8 @@ pub const FontRun = struct {
 
 /// Geometry for one extended grapheme cluster.
 ///
-/// Positions are relative to the owning span's `bounds.x`, matching the
+/// Positions are relative to the owning span's physical inline origin:
+/// `bounds.x` horizontally and `bounds.y` vertically. This matches the
 /// character-position convention used by platform text-run accessibility
 /// APIs. Logical-order graphemes in an RTL span therefore normally have
 /// decreasing positions.
@@ -91,9 +94,10 @@ pub const Grapheme = struct {
     byte_start: usize,
     byte_len: usize,
     inline_position: f32,
-    width: f32,
-    /// True when this grapheme's width partition came from an authored GDEF
-    /// LigCaretList rather than equal division of a shaped glyph advance.
+    inline_size: f32,
+    /// True when this grapheme's inline-size partition came from an authored
+    /// horizontal GDEF LigCaretList rather than equal division of a shaped
+    /// glyph advance.
     authored_ligature_caret: bool = false,
 
     pub fn byteEnd(self: Grapheme) usize {

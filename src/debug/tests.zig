@@ -107,7 +107,10 @@ test "debug dumps unicode bidi paragraph hit selection and cache stats" {
     try std.testing.expect(std.mem.indexOf(u8, output, "font_fallback") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "shape.runs") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "glyph_clusters") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "paragraph size=") != null);
+    try std.testing.expect(
+        std.mem.indexOf(u8, output, "paragraph mode=horizontal_tb size=") !=
+            null,
+    );
     try std.testing.expect(std.mem.indexOf(u8, output, "hit_test") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "selection_rects") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "debug_overlays") != null);

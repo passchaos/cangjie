@@ -96,6 +96,17 @@ pub const ShapedParagraph = struct {
         {
             return error.ParagraphShapingOptionsChanged;
         }
+        if (options.writing_mode.isVertical()) {
+            // The current single-column contract has no soft wrapping, so
+            // min/max content are the same shaped inline-axis extent.
+            var inline_size: f32 = 0;
+            for (self.glyphs) |glyph| {
+                inline_size += glyph.y_advance +
+                    @import("../line_break/reflow/geometry.zig")
+                        .spacingForGlyph(glyph.codepoint, options);
+            }
+            return .{ .min = inline_size, .max = inline_size };
+        }
         return content_widths.calculate(
             self.allocator,
             self.text,
@@ -146,7 +157,7 @@ pub const ShapedParagraph = struct {
             recipe,
             self.needs_bidi_reorder,
         );
-        return reflow.buffer.paragraphLayout();
+        return reflow.buffer.paragraphLayout(options.writing_mode);
     }
 
     /// Start caller-driven, resumable greedy line breaking.
@@ -159,6 +170,13 @@ pub const ShapedParagraph = struct {
         options: paragraph_options.Options,
     ) !breaker.Breaker {
         try self.validateLayoutOptions(options);
+        if (options.writing_mode.isVertical()) {
+            // The resumable protocol is explicitly line/region/height based
+            // and its checkpoints still describe horizontal greedy reflow.
+            // Direct and retained whole-layout calls cover the supported
+            // single vertical column; do not expose a fake one-line breaker.
+            return error.UnsupportedVerticalParagraphBreaker;
+        }
         if (options.line_break_strategy != .greedy) {
             return error.ResumableBreakerRequiresGreedyStrategy;
         }

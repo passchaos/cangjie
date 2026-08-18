@@ -1,8 +1,11 @@
-//! Left-to-right visual caret topology over final grapheme geometry.
+//! Physical inline-start-to-end caret topology over final grapheme geometry.
 
 const std = @import("std");
 
+const axes = @import("../axes.zig");
 const records = @import("records.zig");
+const WritingMode =
+    @import("../../../shaping/pipeline/types.zig").WritingMode;
 
 pub const Error = error{
     InvalidParagraphLayout,
@@ -10,15 +13,16 @@ pub const Error = error{
 };
 
 const Atom = struct {
-    left: f32,
-    right: f32,
-    left_position: records.CaretPosition,
-    right_position: records.CaretPosition,
+    inline_start: f32,
+    inline_end: f32,
+    start_position: records.CaretPosition,
+    end_position: records.CaretPosition,
     stable_index: usize,
 };
 
 pub fn appendLine(
     allocator: std.mem.Allocator,
+    writing_mode: WritingMode,
     spans: []const records.Span,
     graphemes: []const records.Grapheme,
     line: records.Line,
@@ -30,12 +34,14 @@ pub fn appendLine(
     for (line.spans(spans)) |span| {
         for (span.graphemes(graphemes)) |grapheme| {
             if (!std.math.isFinite(grapheme.inline_position) or
-                !std.math.isFinite(grapheme.width) or
-                grapheme.width < 0)
+                !std.math.isFinite(grapheme.inline_size) or
+                grapheme.inline_size < 0)
             {
                 return error.InvalidParagraphLayout;
             }
-            const left = span.bounds.x + grapheme.inline_position;
+            const inline_start =
+                axes.inlineStart(writing_mode, span.bounds) +
+                grapheme.inline_position;
             const start = records.CaretPosition{
                 .byte_offset = grapheme.byte_start,
                 .affinity = .downstream,
@@ -45,10 +51,10 @@ pub fn appendLine(
                 .affinity = .upstream,
             };
             try atoms.append(allocator, .{
-                .left = left,
-                .right = left + grapheme.width,
-                .left_position = if (span.direction == .ltr) start else end,
-                .right_position = if (span.direction == .ltr) end else start,
+                .inline_start = inline_start,
+                .inline_end = inline_start + grapheme.inline_size,
+                .start_position = if (span.direction == .ltr) start else end,
+                .end_position = if (span.direction == .ltr) end else start,
                 .stable_index = atoms.items.len,
             });
         }
@@ -61,9 +67,9 @@ pub fn appendLine(
         };
         try out.append(allocator, .{
             .line_index = line_index,
-            .x = line.bounds.x,
-            .from_left = position,
-            .from_right = position,
+            .inline_position = axes.inlineStart(writing_mode, line.bounds),
+            .from_start = position,
+            .from_end = position,
         });
         return;
     }
@@ -72,40 +78,40 @@ pub fn appendLine(
     const first = atoms.items[0];
     try out.append(allocator, .{
         .line_index = line_index,
-        .x = first.left,
-        .from_left = first.left_position,
-        .from_right = first.left_position,
+        .inline_position = first.inline_start,
+        .from_start = first.start_position,
+        .from_end = first.start_position,
     });
     var previous_atom = first;
     for (atoms.items[1..]) |atom| {
-        if (previous_atom.right == atom.left) {
+        if (previous_atom.inline_end == atom.inline_start) {
             try out.append(allocator, .{
                 .line_index = line_index,
-                .x = atom.left,
-                .from_left = previous_atom.right_position,
-                .from_right = atom.left_position,
+                .inline_position = atom.inline_start,
+                .from_start = previous_atom.end_position,
+                .from_end = atom.start_position,
             });
         } else {
             try out.append(allocator, .{
                 .line_index = line_index,
-                .x = previous_atom.right,
-                .from_left = previous_atom.right_position,
-                .from_right = previous_atom.right_position,
+                .inline_position = previous_atom.inline_end,
+                .from_start = previous_atom.end_position,
+                .from_end = previous_atom.end_position,
             });
             try out.append(allocator, .{
                 .line_index = line_index,
-                .x = atom.left,
-                .from_left = atom.left_position,
-                .from_right = atom.left_position,
+                .inline_position = atom.inline_start,
+                .from_start = atom.start_position,
+                .from_end = atom.start_position,
             });
         }
         previous_atom = atom;
     }
     try out.append(allocator, .{
         .line_index = line_index,
-        .x = previous_atom.right,
-        .from_left = previous_atom.right_position,
-        .from_right = previous_atom.right_position,
+        .inline_position = previous_atom.inline_end,
+        .from_start = previous_atom.end_position,
+        .from_end = previous_atom.end_position,
     });
 }
 
@@ -126,17 +132,17 @@ pub fn previous(
 pub fn nextLine(
     geometry: records.GeometryView,
     current: records.CaretPosition,
-    preferred_x: f32,
+    preferred_inline: f32,
 ) ?records.CaretGeometry {
-    return adjacentLine(geometry, current, preferred_x, true);
+    return adjacentLine(geometry, current, preferred_inline, true);
 }
 
 pub fn previousLine(
     geometry: records.GeometryView,
     current: records.CaretPosition,
-    preferred_x: f32,
+    preferred_inline: f32,
 ) ?records.CaretGeometry {
-    return adjacentLine(geometry, current, preferred_x, false);
+    return adjacentLine(geometry, current, preferred_inline, false);
 }
 
 fn adjacent(
@@ -164,24 +170,24 @@ fn adjacent(
     if (target.line_index >= geometry.lines.len) return null;
     const line = geometry.lines[target.line_index];
     return .{
-        .position = if (forward) target.from_left else target.from_right,
+        .position = if (forward) target.from_start else target.from_end,
         .line_index = target.line_index,
-        .rect = .{
-            .x = target.x,
-            .y = line.bounds.y,
-            .width = 0,
-            .height = line.bounds.height,
-        },
+        .rect = axes.caretRect(
+            geometry.writing_mode,
+            axes.blockStart(geometry.writing_mode, line.bounds),
+            axes.blockSize(geometry.writing_mode, line.bounds),
+            target.inline_position,
+        ),
     };
 }
 
 fn adjacentLine(
     geometry: records.GeometryView,
     current: records.CaretPosition,
-    preferred_x: f32,
+    preferred_inline: f32,
     forward: bool,
 ) ?records.CaretGeometry {
-    if (!std.math.isFinite(preferred_x)) return null;
+    if (!std.math.isFinite(preferred_inline)) return null;
     const normalized = @import("interaction.zig").caret(
         geometry,
         current,
@@ -198,11 +204,15 @@ fn adjacentLine(
     if (stops.len == 0) return null;
 
     var best_index: usize = 0;
-    var best_distance = @abs(preferred_x - stops[0].x);
+    var best_distance =
+        @abs(preferred_inline - stops[0].inline_position);
     for (stops[1..], 1..) |stop, index| {
-        const distance = @abs(preferred_x - stop.x);
+        const distance =
+            @abs(preferred_inline - stop.inline_position);
         if (distance < best_distance or
-            (distance == best_distance and stop.x >= stops[best_index].x))
+            (distance == best_distance and
+                stop.inline_position >=
+                    stops[best_index].inline_position))
         {
             best_index = index;
             best_distance = distance;
@@ -210,17 +220,17 @@ fn adjacentLine(
     }
     const stop = stops[best_index];
     return .{
-        .position = if (preferred_x < stop.x)
-            stop.from_left
+        .position = if (preferred_inline < stop.inline_position)
+            stop.from_start
         else
-            stop.from_right,
+            stop.from_end,
         .line_index = target_line_index,
-        .rect = .{
-            .x = stop.x,
-            .y = line.bounds.y,
-            .width = 0,
-            .height = line.bounds.height,
-        },
+        .rect = axes.caretRect(
+            geometry.writing_mode,
+            axes.blockStart(geometry.writing_mode, line.bounds),
+            axes.blockSize(geometry.writing_mode, line.bounds),
+            stop.inline_position,
+        ),
     };
 }
 
@@ -231,8 +241,8 @@ fn stopIndex(
 ) ?usize {
     for (stops, 0..) |stop, index| {
         if (stop.line_index != line_index) continue;
-        if (positionsEqual(stop.from_left, position) or
-            positionsEqual(stop.from_right, position))
+        if (positionsEqual(stop.from_start, position) or
+            positionsEqual(stop.from_end, position))
         {
             return index;
         }
@@ -248,7 +258,7 @@ fn positionsEqual(
 }
 
 fn atomLessThan(_: void, lhs: Atom, rhs: Atom) bool {
-    if (lhs.left != rhs.left) return lhs.left < rhs.left;
-    if (lhs.right != rhs.right) return lhs.right < rhs.right;
+    if (lhs.inline_start != rhs.inline_start) return lhs.inline_start < rhs.inline_start;
+    if (lhs.inline_end != rhs.inline_end) return lhs.inline_end < rhs.inline_end;
     return lhs.stable_index < rhs.stable_index;
 }

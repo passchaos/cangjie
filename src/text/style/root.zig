@@ -250,6 +250,7 @@ pub const ParagraphStyle = struct {
     first_line_indent: f32 = 0,
     paragraph_spacing: f32 = 0,
     exclusions: []const paragraph_options.Exclusion = &.{},
+    line_regions: []const paragraph_options.LineRegion = &.{},
     out_of_flow_placements: []const inline_object.Placement = &.{},
     /// Optional segmentation for Thai, Lao, Khmer, or Myanmar text.
     ///
@@ -285,6 +286,7 @@ pub const ParagraphStyle = struct {
             .first_line_indent = self.first_line_indent,
             .paragraph_spacing = self.paragraph_spacing,
             .exclusions = self.exclusions,
+            .line_regions = self.line_regions,
             .out_of_flow_placements = self.out_of_flow_placements,
             .word_break_dictionary = self.word_break_dictionary,
             .hyphenation = self.hyphenation,

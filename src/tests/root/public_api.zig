@@ -100,6 +100,15 @@ test "public facade uses domain names without legacy aliases" {
         @hasField(cangjie.paragraph.StyledResult, "content_widths"),
     );
     try std.testing.expect(
+        @typeInfo(cangjie.paragraph.LineRegion) == .@"struct",
+    );
+    try std.testing.expect(
+        @typeInfo(cangjie.paragraph.LineRegionResolver) == .@"struct",
+    );
+    try std.testing.expect(
+        @hasField(cangjie.paragraph.Options, "line_regions"),
+    );
+    try std.testing.expect(
         @hasField(cangjie.text.style.Paragraph, "line_break_strategy"),
     );
     try std.testing.expectEqual(

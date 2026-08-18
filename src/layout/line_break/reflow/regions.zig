@@ -48,18 +48,23 @@ pub fn widthLimitForIndent(max_width: f32, indent: f32) f32 {
 pub fn resolve(
     allocator: std.mem.Allocator,
     options: paragraph_options.Options,
-    line_index: usize,
+    paragraph_line_index: usize,
+    visual_line_index: usize,
     y: *f32,
     line_height: f32,
     max_width: f32,
 ) !LineRegion {
+    if (explicitSource(options, visual_line_index)) |source| {
+        y.* = source.y;
+        return fromExplicit(source);
+    }
     if (options.wrap_mode == .no_wrap or options.exclusions.len == 0) {
-        return default(line_index, max_width, options);
+        return default(paragraph_line_index, max_width, options);
     }
     return resolveAtY(
         allocator,
         options,
-        line_index,
+        paragraph_line_index,
         y,
         line_height,
         max_width,
@@ -74,23 +79,43 @@ pub fn resolve(
 pub fn preview(
     allocator: std.mem.Allocator,
     options: paragraph_options.Options,
-    line_index: usize,
+    paragraph_line_index: usize,
+    visual_line_index: usize,
     y: f32,
     line_height: f32,
     max_width: f32,
 ) !LineRegion {
+    if (explicitSource(options, visual_line_index)) |source| {
+        return fromExplicit(source);
+    }
     if (options.wrap_mode == .no_wrap or options.exclusions.len == 0) {
-        return default(line_index, max_width, options);
+        return default(paragraph_line_index, max_width, options);
     }
     var preview_y = y;
     return resolveAtY(
         allocator,
         options,
-        line_index,
+        paragraph_line_index,
         &preview_y,
         line_height,
         max_width,
     );
+}
+
+fn explicitSource(
+    options: paragraph_options.Options,
+    visual_line_index: usize,
+) ?paragraph_options.LineRegion {
+    if (visual_line_index >= options.line_regions.len) return null;
+    return options.line_regions[visual_line_index];
+}
+
+fn fromExplicit(region: paragraph_options.LineRegion) LineRegion {
+    return .{
+        .x = region.x,
+        .width = region.width,
+        .indent = 0,
+    };
 }
 
 /// Recover the final measure persisted on a line.

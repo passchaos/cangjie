@@ -2,6 +2,7 @@
 
 test {
     _ = @import("inline_objects.zig");
+    _ = @import("line_regions.zig");
     _ = @import("layout_interaction.zig");
     _ = @import("out_of_flow.zig");
     _ = @import("paragraph_reflow.zig");

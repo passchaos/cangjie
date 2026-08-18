@@ -81,7 +81,7 @@ pub fn caret(geometry: View, requested: CaretPosition) ?CaretGeometry {
 
 pub fn hitTest(geometry: View, x: f32, y: f32) ?CaretGeometry {
     if (geometry.lines.len == 0) return null;
-    const line_index = lineIndexAtY(geometry, y);
+    const line_index = lineIndexAtPoint(geometry, x, y);
     const line = geometry.lines[line_index];
     var best: ?struct {
         span_index: usize,
@@ -248,10 +248,35 @@ fn emptyLineCaret(
     };
 }
 
-fn lineIndexAtY(geometry: View, y: f32) usize {
-    if (y <= geometry.lines[0].bounds.y) return 0;
+fn lineIndexAtPoint(geometry: View, x: f32, y: f32) usize {
+    var best_index: usize = 0;
+    var best_distance = std.math.inf(f32);
     for (geometry.lines, 0..) |line, line_index| {
-        if (y < line.bounds.y + line.bounds.height) return line_index;
+        const left = line.bounds.x;
+        const right = left + line.bounds.width;
+        const bottom = line.bounds.y + line.bounds.height;
+        const dx = if (x < left)
+            left - x
+        else if (x > right)
+            x - right
+        else
+            0;
+        const dy = if (y < line.bounds.y)
+            line.bounds.y - y
+        else if (y > bottom)
+            y - bottom
+        else
+            0;
+        const distance = dx * dx + dy * dy;
+        if (line.span_len == 0 and dy == 0) {
+            return line_index;
+        }
+        if (distance < best_distance or
+            (distance == best_distance and line_index > best_index))
+        {
+            best_distance = distance;
+            best_index = line_index;
+        }
     }
-    return geometry.lines.len - 1;
+    return best_index;
 }

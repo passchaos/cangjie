@@ -5,6 +5,7 @@ const std = @import("std");
 const paragraph_types = @import("../types/paragraph.zig");
 const exclusions = @import("exclusions.zig");
 const inline_object = @import("../inline_object/root.zig");
+const line_regions = @import("line_regions.zig");
 const tabs = @import("tabs.zig");
 const hyphenation = @import("../../text/hyphenation/root.zig");
 const pipeline_types = @import("../../shaping/pipeline/types.zig");
@@ -16,6 +17,7 @@ const unicode = @import("../../unicode.zig");
 pub const Exclusion = exclusions.Exclusion;
 pub const TabAlignment = tabs.Alignment;
 pub const TabStop = tabs.Stop;
+pub const LineRegion = line_regions.Region;
 
 /// Optional language-aware discretionary line-breaking policy.
 ///
@@ -134,6 +136,11 @@ pub const Options = struct {
     /// Lines choose the widest remaining contiguous horizontal fragment.
     /// Exclusions are ignored by `.no_wrap`.
     exclusions: []const exclusions.Exclusion = &.{},
+    /// Caller-selected paragraph-space geometry for a visual-line prefix.
+    ///
+    /// Entry `i` overrides the natural region for final visual line `i`.
+    /// Explicit regions bypass indentation and exclusions for that line.
+    line_regions: []const line_regions.Region = &.{},
     /// Inline objects anchored by U+FFFC markers in the paragraph text.
     ///
     /// This slice may change between retained reflows as long as object count
@@ -186,6 +193,7 @@ pub fn validate(options: Options) !void {
         return error.InvalidParagraphOptions;
     }
     try exclusions.validate(options.exclusions);
+    try line_regions.validate(options.line_regions);
     try tabs.validate(options.tab_stops);
     try inline_object.validatePlacements(
         options.inline_objects,

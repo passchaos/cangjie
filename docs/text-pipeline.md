@@ -990,6 +990,28 @@ public concrete protocol.
 This follows Parley's per-line ordering model while keeping standalone shaping
 APIs in their existing HarfBuzz-compatible visual buffer order.
 
+`ParagraphOptions.line_regions` provides an explicit paragraph-space
+`x/y/width` for a prefix of final visual lines. Entry `i` owns visual line `i`
+across hard-break segments; it overrides that line's natural max-width,
+first-line indent, and rectangular exclusions while preserving ordinary UAX
+breaking, tabs, justification, bidi, objects, and output ownership. Because y
+coordinates are explicit, lines may jump to another page or return to the top
+of a new column instead of remaining block-axis monotone. Paragraph and owned
+text-geometry hit testing consequently select the nearest two-dimensional line
+region rather than assuming source-order y values always increase.
+
+`cangjie.paragraph.LineRegionResolver` is the concrete replay protocol for
+pagination, columns, and other caller-owned containers. `begin` snapshots base
+options, `pass` exposes the currently known line-region prefix, and `next`
+checks a final ordinary layout. If another visual line needs placement it
+yields a tokenized request containing its natural region, height, and source
+range; `submit` adds one finite positive-width region and advances the
+generation. Stale passes and requests are rejected. When `next` returns
+`.complete`, `resolvedOptions` contains the final resolver-owned region slice.
+The protocol embeds no callback or opaque state and works with retained and
+styled layout; each replay restores immutable shaping before rebuilding final
+presentation.
+
 Font fallback is selected per extended grapheme/shaping cluster rather than per
 scalar. The first cascade font covering every visible scalar owns the complete
 cluster; variation-selector mappings are preferred explicitly, while join

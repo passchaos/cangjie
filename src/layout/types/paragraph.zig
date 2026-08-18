@@ -216,7 +216,7 @@ pub const ParagraphLayout = struct {
     /// leading edge, and clicks in the right half choose its trailing edge.
     pub fn hitTest(self: ParagraphLayout, x: f32, y: f32) TextPosition {
         if (self.lines.len == 0) return .{ .glyph_index = 0, .cluster = 0 };
-        const line_index = self.lineIndexAtY(y);
+        const line_index = self.lineIndexAtPoint(x, y);
         const line = self.lines[line_index];
         if (line.glyph_len == 0) return .{ .glyph_index = line.glyph_start, .cluster = 0 };
 
@@ -442,12 +442,43 @@ pub const ParagraphLayout = struct {
         return self.textPositionForCluster(previous);
     }
 
-    fn lineIndexAtY(self: ParagraphLayout, y: f32) usize {
-        if (y <= self.lines[0].y) return 0;
+    fn lineIndexAtPoint(self: ParagraphLayout, x: f32, y: f32) usize {
+        var best_index: usize = 0;
+        var best_distance = std.math.inf(f32);
         for (self.lines, 0..) |line, index| {
-            if (y < line.y + line.height) return index;
+            const left = if (line.region_width > 0 or
+                std.math.isInf(line.region_width))
+                line.region_x
+            else
+                line.x;
+            const width = if (line.region_width > 0 or
+                std.math.isInf(line.region_width))
+                line.region_width
+            else
+                line.width;
+            const right = left + width;
+            const bottom = line.y + line.height;
+            const dx = if (x < left)
+                left - x
+            else if (x > right)
+                x - right
+            else
+                0;
+            const dy = if (y < line.y)
+                line.y - y
+            else if (y > bottom)
+                y - bottom
+            else
+                0;
+            const distance = dx * dx + dy * dy;
+            if (distance < best_distance or
+                (distance == best_distance and index > best_index))
+            {
+                best_distance = distance;
+                best_index = index;
+            }
         }
-        return self.lines.len - 1;
+        return best_index;
     }
 
     fn textPositionForCluster(self: ParagraphLayout, cluster: usize) TextPosition {

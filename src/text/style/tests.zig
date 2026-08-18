@@ -91,6 +91,11 @@ test "paragraph style converts to paragraph options" {
             .height = 4,
         },
     };
+    const line_region = paragraph_options.LineRegion{
+        .x = 12,
+        .y = 34,
+        .width = 56,
+    };
     const tab_stops = [_]paragraph_options.TabStop{
         .{ .position = 24 },
         .{ .position = 72 },
@@ -110,6 +115,7 @@ test "paragraph style converts to paragraph options" {
         .tab_stops = &tab_stops,
         .first_line_indent = 10,
         .paragraph_spacing = 4,
+        .line_regions = &.{line_region},
         .out_of_flow_placements = &.{placement},
         .word_break_dictionary = &dictionary,
         .hyphenation = .{
@@ -197,6 +203,7 @@ test "paragraph style converts to paragraph options" {
         placement,
         options.out_of_flow_placements[0],
     );
+    try std.testing.expectEqual(line_region, options.line_regions[0]);
 
     const defaults = (ParagraphStyle{}).paragraphOptions(80);
     try std.testing.expectEqual(paragraph_types.TextAlign.start, defaults.alignment);

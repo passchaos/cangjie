@@ -2,6 +2,7 @@
 
 const paragraph_options = @import("../../layout/paragraph/options.zig");
 const out_of_flow = @import("../../layout/paragraph/out_of_flow.zig");
+const line_regions = @import("../../layout/paragraph/line_regions.zig");
 const text_geometry = @import(
     "../../layout/paragraph/text_geometry/root.zig",
 );
@@ -46,6 +47,11 @@ pub const OutOfFlowPass = out_of_flow.Pass;
 pub const OutOfFlowStep = out_of_flow.Step;
 pub const OutOfFlowPlacementRequest = out_of_flow.PlacementRequest;
 pub const Exclusion = paragraph_options.Exclusion;
+pub const LineRegion = line_regions.Region;
+pub const LineRegionResolver = line_regions.Resolver;
+pub const LineRegionPass = line_regions.Pass;
+pub const LineRegionStep = line_regions.Step;
+pub const LineRegionRequest = line_regions.Request;
 pub const object_replacement_character =
     inline_object.object_replacement_character;
 pub const object_replacement_utf8 = inline_object.object_replacement_utf8;

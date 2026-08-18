@@ -473,6 +473,7 @@ fn solveSegment(
                 start,
                 end_boundary,
                 segment.paragraph_line_base + state.lines,
+                segment.line_index_base + state.lines,
                 state.y,
             );
             if (!evaluated.fits) {
@@ -582,6 +583,7 @@ fn hasFittingRegularEdge(
             start,
             boundary,
             segment.paragraph_line_base + state.lines,
+            segment.line_index_base + state.lines,
             state.y,
         );
         if (evaluated.fits) return true;
@@ -603,7 +605,8 @@ fn evaluateLine(
     recipe: anytype,
     start: usize,
     boundary: Boundary,
-    line_index: usize,
+    paragraph_line_index: usize,
+    visual_line_index: usize,
     y: f32,
 ) !EvaluatedLine {
     if (start >= boundary.glyph_index) return .{
@@ -626,7 +629,8 @@ fn evaluateLine(
     const region = try regions.resolve(
         buffer.allocator,
         options,
-        line_index,
+        paragraph_line_index,
+        visual_line_index,
         &committed_y,
         metrics.lineHeight(),
         effectiveMaxWidth(options.max_width),

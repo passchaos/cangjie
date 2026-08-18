@@ -209,6 +209,18 @@ fn appendColumn(
             block_size = @max(block_size, object.width);
         }
     }
+    const resolved_alignment = if (vertical_tabs.contains(
+        buffer.glyphs.items[glyph_start..glyph_end],
+    ))
+        @import("../types/paragraph.zig").TextAlign.start
+    else
+        options.alignment;
+    const inline_origin = alignedInlineOrigin(
+        options.max_width,
+        inline_indent,
+        inline_size,
+        resolved_alignment,
+    );
     try buffer.lines.append(buffer.allocator, .{
         .glyph_start = glyph_start,
         .glyph_len = glyph_end - glyph_start,
@@ -217,11 +229,11 @@ fn appendColumn(
         .byte_start = byte_start,
         .byte_len = byte_end - byte_start,
         .x = 0,
-        .y = inline_indent,
+        .y = inline_origin,
         .indent = inline_indent,
         .region_x = 0,
         .region_width = block_size,
-        .resolved_alignment = .start,
+        .resolved_alignment = resolved_alignment,
         .width = block_size,
         .height = inline_size,
         // A vertical glyph's HarfBuzz x offset is relative to the column
@@ -231,6 +243,25 @@ fn appendColumn(
         .descent = metrics.descent,
         .leading = metrics.leading,
     });
+}
+
+fn alignedInlineOrigin(
+    max_inline_size: f32,
+    indent: f32,
+    inline_size: f32,
+    alignment: @import("../types/paragraph.zig").TextAlign,
+) f32 {
+    if (max_inline_size <= 0 or !@import("std").math.isFinite(max_inline_size)) {
+        return indent;
+    }
+    const available = @max(0, max_inline_size - indent);
+    const slack = @max(0, available - inline_size);
+    return indent + switch (alignment) {
+        .start => 0,
+        .center => slack / 2,
+        .end => slack,
+        .left, .right, .justify => unreachable,
+    };
 }
 
 fn placeColumns(

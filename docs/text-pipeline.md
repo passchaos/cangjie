@@ -577,6 +577,16 @@ therefore mirrors with `vertical_rl` versus `vertical_lr`. Both values affect
 final layout/interaction geometry but not min/max-content intrinsic inline
 sizes.
 
+Paragraph alignment is also inline-axis aware. Vertical `.start`, `.center`,
+and `.end` place each column at top, center, or bottom of its post-indent
+`max_width` region. Every soft column resolves independently; hard-break
+segments reset indentation before alignment. Overfull and unbounded columns
+remain at logical start rather than moving backward. Columns containing active
+absolute tab rulers are pinned to `.start`, matching horizontal tab-ruler
+behavior. Physical `.left` / `.right` and `.justify` remain explicitly
+unsupported for vertical paragraphs because they require separate block-axis
+or expansion semantics.
+
 In-flow U+FFFC inline objects also use physical dimensions through the current
 flow axes. `Object.width` is horizontal inline advance but vertical column
 block extent; `Object.height` is horizontal line extent but vertical

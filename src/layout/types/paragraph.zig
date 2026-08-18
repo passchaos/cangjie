@@ -13,6 +13,7 @@ const unicode = @import("../../unicode.zig");
 pub const TextAlign = enum {
     /// Physical left edge, independent of paragraph direction.
     left,
+    /// Center along the current writing mode's inline axis.
     center,
     /// Physical right edge, independent of paragraph direction.
     right,
@@ -25,9 +26,11 @@ pub const TextAlign = enum {
     /// unbounded layouts, and lines without safe opportunities retain their
     /// natural width.
     justify,
-    /// Align to the logical inline start: left in LTR, right in RTL.
+    /// Align to logical inline start: left/right horizontally and top in the
+    /// currently supported top-to-bottom vertical paragraph flow.
     start,
-    /// Align to the logical inline end: right in LTR, left in RTL.
+    /// Align to logical inline end: right/left horizontally and bottom in the
+    /// currently supported top-to-bottom vertical paragraph flow.
     end,
 };
 
@@ -170,11 +173,13 @@ pub const ParagraphLine = struct {
     /// Physical x and measure of the selected contiguous line fragment.
     region_x: f32 = 0,
     region_width: f32 = 0,
-    /// Final physical alignment selected for this line.
+    /// Final alignment selected for this line's inline axis.
     ///
-    /// Reflow resolves paragraph `.start`/`.end` and pins tab-ruler lines to
-    /// logical start. Null is the compatibility sentinel for manually
-    /// constructed lines whose post-processing should use paragraph options.
+    /// Horizontal reflow resolves paragraph `.start`/`.end` to left/right and
+    /// pins tab-ruler lines to logical start. Vertical columns retain
+    /// `.start`/`.center`/`.end` because their physical targets are top/center/
+    /// bottom. Null is the compatibility sentinel for manually constructed
+    /// lines whose post-processing should use paragraph options.
     resolved_alignment: ?TextAlign = null,
     /// Portion of edge glyph advance protruding before the physical line box.
     ///

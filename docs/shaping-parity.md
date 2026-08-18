@@ -2223,10 +2223,12 @@ shaping-performance superiority.
   rulers support start/center/end/decimal y-axis fields. In-flow U+FFFC objects
   map physical height to vertical inline advance and width to centered column
   block extent across wrapping, interaction, retained/styled layout, and draw
-  output. Bidi handling, exclusions, out-of-flow objects, justification,
-  truncation, and incremental breaking are rejected explicitly until they are
-  migrated to the shared inline/block-axis model; this is not yet full vertical
-  paragraph parity.
+  output. Vertical start/center/end alignment maps to top/center/bottom inside
+  the post-indent inline region, while active tab-ruler columns remain pinned
+  to start. Bidi handling, physical left/right alignment, exclusions,
+  out-of-flow objects, justification, truncation, and incremental breaking are
+  rejected explicitly until they are migrated to the shared inline/block-axis
+  model; this is not yet full vertical paragraph parity.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari

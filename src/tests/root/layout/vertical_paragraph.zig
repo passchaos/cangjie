@@ -15,4 +15,6 @@ test {
     _ = @import("vertical_paragraph/tab_integration.zig");
     _ = @import("vertical_paragraph/inline_objects.zig");
     _ = @import("vertical_paragraph/inline_object_integration.zig");
+    _ = @import("vertical_paragraph/alignment.zig");
+    _ = @import("vertical_paragraph/alignment_integration.zig");
 }

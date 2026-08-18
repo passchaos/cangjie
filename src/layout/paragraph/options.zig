@@ -124,6 +124,11 @@ pub const Options = struct {
     /// Preserve the historical source-visible whitespace contract by default.
     white_space_collapse: paragraph_types.WhiteSpaceCollapse = .preserve,
     line_break_strategy: paragraph_types.LineBreakStrategy = .greedy,
+    /// Inline-axis alignment.
+    ///
+    /// Vertical paragraphs currently support `.start`, `.center`, and `.end`
+    /// as top/center/bottom. Physical `.left`/`.right` and `.justify` remain
+    /// horizontal-only.
     alignment: paragraph_types.TextAlign = .start,
     line_height: ?f32 = null,
     direction: pipeline_types.TextDirection = .ltr,
@@ -301,7 +306,7 @@ pub fn shapeOptions(options: Options) shaping_plan.ShapeOptions {
 fn validateVerticalForText(text: []const u8, options: Options) !void {
     if (options.direction != .ltr or
         options.line_break_strategy != .greedy or
-        options.alignment != .start or
+        !verticalAlignmentSupported(options.alignment) or
         options.max_lines != null or
         options.ellipsis or
         options.letter_spacing < 0 or
@@ -344,6 +349,13 @@ fn validateVerticalForText(text: []const u8, options: Options) !void {
             return error.UnsupportedVerticalParagraphText;
         }
     }
+}
+
+fn verticalAlignmentSupported(alignment: paragraph_types.TextAlign) bool {
+    return switch (alignment) {
+        .start, .center, .end => true,
+        .left, .right, .justify => false,
+    };
 }
 
 pub fn matchesShapeKey(

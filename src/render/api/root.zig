@@ -6,6 +6,7 @@
 const std = @import("std");
 
 const face_mod = @import("../../font/face/root.zig");
+const font_mod = @import("../../font.zig");
 const hinting_outline = @import("../../font/hinting/outline.zig");
 const glyph_mod = @import("../../glyph.zig");
 const run_types = @import("../../layout/types/runs.zig");
@@ -125,6 +126,73 @@ pub const Rasterizer = struct {
         );
     }
 
+    /// Decode, execute, and draw one TrueType glyph with a caller-owned PPEM
+    /// instance.
+    ///
+    /// The instance supplies size, target, variation location, and persistent
+    /// VM state. Coordinates reconstructed from the transaction are already
+    /// pixels, so this path applies only x/baseline placement.
+    pub fn drawHintedGlyph(
+        self: *Rasterizer,
+        target: *raster.RenderTarget,
+        face: *const face_mod.Face,
+        instance: *font_mod.TrueTypeHintingInstance,
+        glyph_id: glyph_mod.GlyphId,
+        x: f32,
+        baseline_y: f32,
+    ) !void {
+        var transaction = try face.hintingPointTransaction(
+            self.implementation.allocator,
+            instance,
+            glyph_id,
+        );
+        defer transaction.deinit();
+        try face.executeHintingTransaction(instance, &transaction);
+        var outline = try transaction.toPixelOutline();
+        defer outline.deinit();
+        return self.drawPixelOutline(target, &outline, x, baseline_y);
+    }
+
+    /// Draw a shaped run using one caller-owned hinting instance.
+    ///
+    /// Shaping retains ownership of advances and offsets; only outline
+    /// geometry is grid-fitted. The run and instance must describe the same
+    /// normalized variation location. A run may omit trailing zero axes.
+    pub fn drawHintedRun(
+        self: *Rasterizer,
+        target: *raster.RenderTarget,
+        run: run_types.GlyphRun,
+        instance: *font_mod.TrueTypeHintingInstance,
+        x: f32,
+        baseline_y: f32,
+    ) !void {
+        if (!std.math.isFinite(run.font_size) or
+            run.font_size != @as(f32, @floatFromInt(instance.ppem)))
+        {
+            return error.StaleHintingInstance;
+        }
+        if (!locationsEquivalent(
+            run.normalized_variation_coords,
+            instance.normalizedCoordinates(),
+        )) {
+            return error.StaleHintingInstance;
+        }
+        var pen_x = x;
+        for (run.glyphs) |position| {
+            if (!position.isInlineObject()) {
+                try self.drawHintedGlyph(
+                    target,
+                    run.font,
+                    instance,
+                    position.glyph_id,
+                    pen_x + position.x_offset,
+                    baseline_y + position.y_offset,
+                );
+            }
+            pen_x += position.x_advance;
+        }
+    }
+
     pub fn drawRun(
         self: *Rasterizer,
         target: *raster.RenderTarget,
@@ -228,6 +296,20 @@ pub const Rasterizer = struct {
         );
     }
 };
+
+fn locationsEquivalent(first: []const f32, second: []const f32) bool {
+    const common = @min(first.len, second.len);
+    for (first[0..common], second[0..common]) |a, b| {
+        if (@as(u32, @bitCast(a)) != @as(u32, @bitCast(b))) return false;
+    }
+    for (first[common..]) |value| {
+        if (value != 0) return false;
+    }
+    for (second[common..]) |value| {
+        if (value != 0) return false;
+    }
+    return true;
+}
 
 pub const Prepared = struct {
     /// Prepared geometry owns its scanline storage and can outlive the

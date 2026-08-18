@@ -241,6 +241,8 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(@typeInfo(Rasterizer) == .@"struct");
     try std.testing.expect(@typeInfo(cangjie.render.Prepared) == .@"struct");
     try std.testing.expect(@hasDecl(Rasterizer, "drawRun"));
+    try std.testing.expect(@hasDecl(Rasterizer, "drawHintedGlyph"));
+    try std.testing.expect(@hasDecl(Rasterizer, "drawHintedRun"));
     try std.testing.expect(@hasDecl(Rasterizer, "drawPixelOutline"));
     try std.testing.expect(@hasDecl(Rasterizer, "preparePixelOutline"));
     try std.testing.expect(@hasDecl(Rasterizer, "drawColorGlyph"));

@@ -931,6 +931,11 @@ origin. `Rasterizer.drawPixelOutline` and `preparePixelOutline` consume that
 path at scale one, applying only caller x/baseline placement; they deliberately
 skip the design-outline UPEM scale, small-glyph alignment, and synthetic
 emboldening because the bytecode has already made pixel-grid decisions.
+`Rasterizer.drawHintedGlyph` performs transaction creation, atomic VM
+execution, pixel-path reconstruction, and scale-one coverage drawing with a
+caller-owned PPEM instance. `drawHintedRun` applies that path to a shaped run
+while preserving shaping advances/offsets and rejecting a mismatched variation
+location; it does not hide PPEM-instance lifetime or cache policy.
 Compound glyphs, including gvar component placement and metric phantoms, can be
 decoded, executed, and reconstructed. Transactions reject an instance created
 from another face, PPEM, target, or normalized location. Automatic hinted run

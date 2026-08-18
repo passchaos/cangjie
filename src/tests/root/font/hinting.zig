@@ -846,6 +846,157 @@ test "hinted pixel outlines rasterize without units-per-em rescaling" {
     try std.testing.expect(bounds.max_x <= 16);
 }
 
+test "hinted glyph and run rendering share the public pipeline" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildTrueTypeHintingTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var instance = try face.hintingInstance(allocator, 16, .normal);
+    defer instance.deinit();
+    var glyph_target = try cangjie.render.GrayTarget.init(
+        allocator,
+        48,
+        32,
+    );
+    defer glyph_target.deinit();
+    var run_target = try cangjie.render.GrayTarget.init(
+        allocator,
+        48,
+        32,
+    );
+    defer run_target.deinit();
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
+    defer rasterizer.deinit();
+    try rasterizer.drawHintedGlyph(
+        &glyph_target,
+        &face,
+        &instance,
+        1,
+        3,
+        24,
+    );
+    const glyphs = [_]cangjie.shaping.Glyph{.{
+        .glyph_id = 1,
+        .codepoint = 'A',
+        .cluster = 0,
+        .source_byte_len = 1,
+        .x_advance = 16,
+    }};
+    const run = cangjie.shaping.Run{
+        .font = &face,
+        .font_size = 16,
+        .glyphs = &glyphs,
+    };
+    try rasterizer.drawHintedRun(
+        &run_target,
+        run,
+        &instance,
+        3,
+        24,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        glyph_target.pixels,
+        run_target.pixels,
+    );
+
+    const wrong_size = cangjie.shaping.Run{
+        .font = &face,
+        .font_size = 17,
+        .glyphs = &glyphs,
+    };
+    try std.testing.expectError(
+        error.StaleHintingInstance,
+        rasterizer.drawHintedRun(
+            &run_target,
+            wrong_size,
+            &instance,
+            3,
+            24,
+        ),
+    );
+}
+
+test "hinted run rendering rejects a different variation location" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildGvarDeltaTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var instance = try face.hintingInstanceAt(
+        allocator,
+        20,
+        .normal,
+        &.{0.5},
+    );
+    defer instance.deinit();
+    var target = try cangjie.render.GrayTarget.init(allocator, 32, 32);
+    defer target.deinit();
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
+    defer rasterizer.deinit();
+    const glyphs = [_]cangjie.shaping.Glyph{.{
+        .glyph_id = 1,
+        .codepoint = 'A',
+        .cluster = 0,
+        .source_byte_len = 1,
+        .x_advance = 20,
+    }};
+    const mismatched = cangjie.shaping.Run{
+        .font = &face,
+        .font_size = 20,
+        .glyphs = &glyphs,
+        .normalized_variation_coords = &.{0},
+    };
+    try std.testing.expectError(
+        error.StaleHintingInstance,
+        rasterizer.drawHintedRun(
+            &target,
+            mismatched,
+            &instance,
+            2,
+            24,
+        ),
+    );
+    const matching = cangjie.shaping.Run{
+        .font = &face,
+        .font_size = 20,
+        .glyphs = &glyphs,
+        .normalized_variation_coords = &.{0.5},
+    };
+    try rasterizer.drawHintedRun(
+        &target,
+        matching,
+        &instance,
+        2,
+        24,
+    );
+    try std.testing.expect(coverageBounds(&target) != null);
+}
+
+test "hinted public glyph rendering supports compound bytecode" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildTrueTypeCompoundHintingTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var instance = try face.hintingInstance(allocator, 20, .normal);
+    defer instance.deinit();
+    var target = try cangjie.render.GrayTarget.init(allocator, 40, 40);
+    defer target.deinit();
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
+    defer rasterizer.deinit();
+    try rasterizer.drawHintedGlyph(
+        &target,
+        &face,
+        &instance,
+        2,
+        4,
+        30,
+    );
+    try std.testing.expect(coverageBounds(&target) != null);
+}
+
 const CoverageBounds = struct {
     min_x: u32,
     min_y: u32,

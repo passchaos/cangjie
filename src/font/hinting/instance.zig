@@ -2,6 +2,8 @@
 
 const std = @import("std");
 
+const glyph_executor = @import("glyph/executor.zig");
+const outline = @import("outline.zig");
 const program = @import("program.zig");
 const types = @import("types.zig");
 const vm_mod = @import("vm.zig");
@@ -18,7 +20,10 @@ pub const Instance = struct {
     storage: []i32,
     stack: []i32,
     graphics: types.RetainedGraphicsState,
-    twilight_point_count: usize,
+    twilight_points: []outline.Point,
+    twilight_original: []outline.Point,
+    twilight_unscaled: []outline.Point,
+    twilight_flags: []outline.PointFlag,
 
     /// Construct and execute `fpgm`, then reset size graphics/storage and run
     /// `prep`, following the FreeType size lifecycle.
@@ -61,10 +66,42 @@ pub const Instance = struct {
             try compatibleStackSize(source.limits.max_stack_elements),
         );
         errdefer allocator.free(stack);
+        // FreeType reserves four extra phantom-compatible entries in the
+        // twilight zone.  Real glyph programs in the field rely on that
+        // historical allowance despite maxTwilightPoints describing fewer.
+        const twilight_point_count = std.math.add(
+            usize,
+            source.limits.max_twilight_points,
+            4,
+        ) catch return error.InvalidHintScale;
+        const twilight_points = try allocator.alloc(
+            outline.Point,
+            twilight_point_count,
+        );
+        errdefer allocator.free(twilight_points);
+        const twilight_original = try allocator.alloc(
+            outline.Point,
+            twilight_point_count,
+        );
+        errdefer allocator.free(twilight_original);
+        const twilight_unscaled = try allocator.alloc(
+            outline.Point,
+            twilight_point_count,
+        );
+        errdefer allocator.free(twilight_unscaled);
+        const twilight_flags = try allocator.alloc(
+            outline.PointFlag,
+            twilight_point_count,
+        );
+        errdefer allocator.free(twilight_flags);
 
         @memset(functions, .{});
         @memset(instructions, .{});
         @memset(storage, 0);
+        @memset(twilight_points, .{ .x = 0, .y = 0 });
+        @memset(twilight_original, .{ .x = 0, .y = 0 });
+        @memset(twilight_unscaled, .{ .x = 0, .y = 0 });
+        @memset(twilight_flags, .{});
         loadScaledCvt(cvt, source.control_value_data, scale_16_16);
 
         var result = Instance{
@@ -79,7 +116,10 @@ pub const Instance = struct {
             .storage = storage,
             .stack = stack,
             .graphics = defaultGraphics(scale_16_16, ppem, target),
-            .twilight_point_count = source.limits.max_twilight_points,
+            .twilight_points = twilight_points,
+            .twilight_original = twilight_original,
+            .twilight_unscaled = twilight_unscaled,
+            .twilight_flags = twilight_flags,
         };
         var interpreter = result.vm();
         interpreter.definitions.clear();
@@ -97,6 +137,10 @@ pub const Instance = struct {
     }
 
     pub fn deinit(self: *Instance) void {
+        self.allocator.free(self.twilight_flags);
+        self.allocator.free(self.twilight_unscaled);
+        self.allocator.free(self.twilight_original);
+        self.allocator.free(self.twilight_points);
         self.allocator.free(self.stack);
         self.allocator.free(self.storage);
         self.allocator.free(self.cvt);
@@ -121,6 +165,36 @@ pub const Instance = struct {
         self: *const Instance,
     ) types.RetainedGraphicsState {
         return self.graphics;
+    }
+
+    /// Execute the transaction's glyph program and atomically commit every
+    /// mutable VM surface.  On any error, points, flags, CVT, storage, retained
+    /// graphics state, and the persistent twilight zone remain unchanged.
+    pub fn executeGlyph(
+        self: *Instance,
+        transaction: *outline.Transaction,
+    ) types.Error!void {
+        return glyph_executor.execute(
+            self.allocator,
+            .{
+                .source = self.source,
+                .definitions = .{
+                    .functions = self.functions,
+                    .instructions = self.instructions,
+                },
+                .stack = self.stack,
+                .cvt = self.cvt,
+                .storage = self.storage,
+                .graphics = self.graphics,
+                .twilight = .{
+                    .points = self.twilight_points,
+                    .original = self.twilight_original,
+                    .unscaled = self.twilight_unscaled,
+                    .flags = self.twilight_flags,
+                },
+            },
+            transaction,
+        );
     }
 
     fn vm(self: *Instance) vm_mod.Vm {
@@ -317,4 +391,153 @@ test "instance reports point-only and bounded VM failures" {
             .normal,
         ),
     );
+}
+
+test "glyph execution moves points and commits VM working state" {
+    const source = glyphTestSource(0x1234);
+    var instance = try Instance.init(
+        std.testing.allocator,
+        source,
+        16,
+        .normal,
+    );
+    defer instance.deinit();
+    const instructions = &.{
+        0xb0, 0, 0x2f, // MDAP[round] point 0: 35 -> 64.
+        0xb1, 1, 0, 0x3f, // MIAP[round] point 1 to CVT[0]: 96 -> 64.
+        0xb0, 2, 0xc4, // MDRP[round] point 2 relative to point 1: -> 128.
+        0xb1, 64, 2, 0x38, // SHPIX point 2 by +1px: -> 192.
+        0xb0, 2, 0x46, // GC[current] point 2.
+        0xb0, 0, 0x23, 0x42, // storage[0] = projected coordinate.
+    };
+    var transaction = try glyphTestTransaction(
+        std.testing.allocator,
+        source.face_identity,
+        instructions,
+    );
+    defer transaction.deinit();
+
+    try instance.executeGlyph(&transaction);
+    try std.testing.expectEqual(@as(i32, 64), transaction.points[0].x);
+    try std.testing.expectEqual(@as(i32, 64), transaction.points[1].x);
+    try std.testing.expectEqual(@as(i32, 192), transaction.points[2].x);
+    try std.testing.expect(transaction.flags[0].touched_x);
+    try std.testing.expect(transaction.flags[1].touched_x);
+    try std.testing.expect(transaction.flags[2].touched_x);
+    try std.testing.expectEqual(
+        @as(i32, 192),
+        instance.storageValues()[0],
+    );
+}
+
+test "failed glyph execution rolls back points CVT and storage" {
+    const source = glyphTestSource(0x5678);
+    var instance = try Instance.init(
+        std.testing.allocator,
+        source,
+        16,
+        .normal,
+    );
+    defer instance.deinit();
+    const instructions = &.{
+        0xb1, 0, 77, 0x44, // Tentative CVT write.
+        0xb1, 0, 9, 0x42, // Tentative storage write.
+        0xb0, 99, 0x45, // Invalid CVT read forces rollback.
+    };
+    var transaction = try glyphTestTransaction(
+        std.testing.allocator,
+        source.face_identity,
+        instructions,
+    );
+    defer transaction.deinit();
+    const before_points = try std.testing.allocator.dupe(
+        outline.Point,
+        transaction.points,
+    );
+    defer std.testing.allocator.free(before_points);
+    const before_flags = try std.testing.allocator.dupe(
+        outline.PointFlag,
+        transaction.flags,
+    );
+    defer std.testing.allocator.free(before_flags);
+    const before_cvt = instance.controlValues()[0];
+    const before_storage = instance.storageValues()[0];
+
+    try std.testing.expectError(
+        error.InvalidHintCvt,
+        instance.executeGlyph(&transaction),
+    );
+    try std.testing.expectEqualSlices(
+        outline.Point,
+        before_points,
+        transaction.points,
+    );
+    try std.testing.expectEqualSlices(
+        outline.PointFlag,
+        before_flags,
+        transaction.flags,
+    );
+    try std.testing.expectEqual(before_cvt, instance.controlValues()[0]);
+    try std.testing.expectEqual(
+        before_storage,
+        instance.storageValues()[0],
+    );
+}
+
+fn glyphTestSource(face_identity: usize) types.Source {
+    return .{
+        .face_identity = face_identity,
+        .units_per_em = 1024,
+        .font_program = &.{},
+        .control_value_program = &.{},
+        .control_value_data = &.{ 0, 64 },
+        .limits = .{
+            .max_storage = 1,
+            .max_function_defs = 0,
+            .max_instruction_defs = 0,
+            .max_stack_elements = 16,
+            .max_twilight_points = 2,
+        },
+    };
+}
+
+fn glyphTestTransaction(
+    allocator: std.mem.Allocator,
+    face_identity: usize,
+    instructions: []const u8,
+) !outline.Transaction {
+    const source_points = [_]outline.Point{
+        .{ .x = 35, .y = 0 },
+        .{ .x = 96, .y = 0 },
+        .{ .x = 150, .y = 0 },
+        .{ .x = 0, .y = 0 },
+        .{ .x = 640, .y = 0 },
+        .{ .x = 0, .y = 640 },
+        .{ .x = 0, .y = -640 },
+    };
+    const points = try allocator.dupe(outline.Point, &source_points);
+    errdefer allocator.free(points);
+    const original = try allocator.dupe(outline.Point, &source_points);
+    errdefer allocator.free(original);
+    const unscaled = try allocator.dupe(outline.Point, &source_points);
+    errdefer allocator.free(unscaled);
+    const flags = try allocator.alloc(outline.PointFlag, source_points.len);
+    errdefer allocator.free(flags);
+    @memset(flags, .{ .on_curve = true });
+    const contours = try allocator.dupe(u16, &.{2});
+    errdefer allocator.free(contours);
+    return .{
+        .allocator = allocator,
+        .face_identity = face_identity,
+        .target = .normal,
+        .glyph_id = 1,
+        .real_point_count = 3,
+        .points = points,
+        .original = original,
+        .unscaled = unscaled,
+        .flags = flags,
+        .contours = contours,
+        .instructions = instructions,
+        .scale_16_16 = 0x10000,
+    };
 }

@@ -1,14 +1,14 @@
-//! Bounded TrueType size-program interpreter.
+//! Bounded TrueType font, size, and glyph-program interpreter.
 //!
-//! This engine intentionally covers only operations valid without a glyph
-//! point zone. It executes `fpgm` and `prep` to construct reusable PPEM state.
-//! Point movement/measurement opcodes return `UnsupportedHintInstruction`
-//! rather than silently degrading to no-ops; the raw glyph transaction will
-//! extend the same dispatcher in a subsequent slice.
+//! Font and size programs construct reusable PPEM state.  Glyph programs can
+//! additionally attach private twilight/glyph working zones; point movement
+//! then remains isolated until the caller commits a successful run.
 
 const std = @import("std");
 
 const decode = @import("decode.zig");
+const glyph_opcodes = @import("glyph/opcodes.zig");
+const zones = @import("glyph/zones.zig");
 const program_mod = @import("program.zig");
 const stack_mod = @import("stack.zig");
 const types = @import("types.zig");
@@ -23,20 +23,12 @@ pub const Vm = struct {
     cvt: []i32,
     storage: []i32,
     graphics: *types.RetainedGraphicsState,
+    twilight: ?zones.Zone = null,
+    glyph: ?zones.Zone = null,
     executed: usize = 0,
     backward_jumps: usize = 0,
     loop_calls: usize = 0,
-    projection_vector: Vector = .{},
-    freedom_vector: Vector = .{},
-    round_mode: types.RoundMode = .grid,
-    super_round_period: i32 = 64,
-    super_round_phase: i32 = 0,
-    super_round_threshold: i32 = 32,
-
-    const Vector = struct {
-        x: i32 = 0x4000,
-        y: i32 = 0,
-    };
+    transient: zones.GraphicsState = .{},
 
     pub fn init(
         source: types.Source,
@@ -63,12 +55,7 @@ pub const Vm = struct {
         self.executed = 0;
         self.backward_jumps = 0;
         self.loop_calls = 0;
-        self.projection_vector = .{};
-        self.freedom_vector = .{};
-        self.round_mode = .grid;
-        self.super_round_period = 64;
-        self.super_round_phase = 0;
-        self.super_round_threshold = 32;
+        self.transient = .{};
         while (true) {
             const bytecode = self.cursor.bytes();
             if (self.cursor.pc >= bytecode.len) {
@@ -87,6 +74,17 @@ pub const Vm = struct {
         }
     }
 
+    pub fn attachZones(
+        self: *Vm,
+        twilight: zones.Zone,
+        glyph: zones.Zone,
+    ) types.Error!void {
+        try twilight.validate();
+        try glyph.validate();
+        self.twilight = twilight;
+        self.glyph = glyph;
+    }
+
     fn dispatch(
         self: *Vm,
         instruction: decode.Instruction,
@@ -101,40 +99,18 @@ pub const Vm = struct {
             }
             return;
         }
+        var point_runtime = glyph_opcodes.Runtime{
+            .stack = &self.stack,
+            .cvt = self.cvt,
+            .retained = self.graphics,
+            .transient = &self.transient,
+            .twilight = self.twilight,
+            .glyph = self.glyph,
+        };
+        if (try point_runtime.handle(opcode)) return;
         switch (opcode) {
-            // Projection/freedom vectors reset per program but can participate
-            // in prep control flow before that program ends.
-            0x00, 0x01 => {
-                const vector = axisVector(opcode);
-                self.projection_vector = vector;
-                self.freedom_vector = vector;
-            },
-            0x02, 0x03 => self.projection_vector = axisVector(opcode),
-            0x04, 0x05 => self.freedom_vector = axisVector(opcode),
-            0x0a => self.projection_vector = try self.popVector(),
-            0x0b => self.freedom_vector = try self.popVector(),
-            0x0c => {
-                try self.stack.push(self.projection_vector.x);
-                try self.stack.push(self.projection_vector.y);
-            },
-            0x0d => {
-                try self.stack.push(self.freedom_vector.x);
-                try self.stack.push(self.freedom_vector.y);
-            },
-            0x0e => self.freedom_vector = self.projection_vector,
-
-            // Reference points, zones, and loop values do not persist from
-            // prep to glyph execution. Validate/pop them without claiming a
-            // usable point zone yet.
-            0x10...0x12, 0x17 => _ = try self.stack.pop(),
-            0x13...0x16 => {
-                const zone = try self.stack.pop();
-                if (zone != 0 and zone != 1) {
-                    return error.InvalidHintOperand;
-                }
-            },
-            0x18 => self.round_mode = .grid,
-            0x19 => self.round_mode = .half_grid,
+            0x18 => self.transient.round_mode = .grid,
+            0x19 => self.transient.round_mode = .half_grid,
             0x1a => self.graphics.min_distance = try self.stack.pop(),
             0x1b => try self.skipToEif(),
             0x1c => try self.jump(true),
@@ -156,7 +132,7 @@ pub const Vm = struct {
             0x2b => try self.call(1),
             0x2c => try self.define(false),
             0x2d => try self.cursor.leave(),
-            0x3d => self.round_mode = .double_grid,
+            0x3d => self.transient.round_mode = .double_grid,
 
             0x42 => try self.writeStorage(),
             0x43 => try self.readStorage(),
@@ -270,9 +246,9 @@ pub const Vm = struct {
             0x77 => try self.setSuperRound(true),
             0x78 => try self.jump(try self.stack.pop() != 0),
             0x79 => try self.jump(try self.stack.pop() == 0),
-            0x7a => self.round_mode = .off,
-            0x7c => self.round_mode = .up_to_grid,
-            0x7d => self.round_mode = .down_to_grid,
+            0x7a => self.transient.round_mode = .off,
+            0x7c => self.transient.round_mode = .up_to_grid,
+            0x7d => self.transient.round_mode = .down_to_grid,
             0x7e => _ = try self.stack.pop(),
             0x7f => {}, // AA is obsolete and ignored by FreeType.
             0x85 => try self.scanControl(),
@@ -487,24 +463,7 @@ pub const Vm = struct {
     }
 
     fn round26Dot6(self: Vm, value: i32) i32 {
-        return switch (self.round_mode) {
-            .off => value,
-            .grid => (value +| 32) & ~@as(i32, 63),
-            .half_grid => (value & ~@as(i32, 63)) +% 32,
-            .double_grid => (value +| 16) & ~@as(i32, 31),
-            .down_to_grid => types.floor26Dot6(value),
-            .up_to_grid => types.ceil26Dot6(value),
-            .super, .super_45 => blk: {
-                const period = self.super_round_period;
-                if (period <= 0) break :blk value;
-                const phase = self.super_round_phase;
-                const threshold = self.super_round_threshold;
-                break :blk @divFloor(
-                    value - phase + threshold,
-                    period,
-                ) * period + phase;
-            },
-        };
+        return self.transient.round(value);
     }
 
     fn oddEven(self: *Vm, odd: bool) types.Error!void {
@@ -559,10 +518,10 @@ pub const Vm = struct {
             raw_period - 1
         else
             @divTrunc(((selector & 0x0f) - 4) * raw_period, 8);
-        self.super_round_period = raw_period >> 8;
-        self.super_round_phase = raw_phase >> 8;
-        self.super_round_threshold = raw_threshold >> 8;
-        self.round_mode = if (diagonal) .super_45 else .super;
+        self.transient.super_round_period = raw_period >> 8;
+        self.transient.super_round_phase = raw_phase >> 8;
+        self.transient.super_round_threshold = raw_threshold >> 8;
+        self.transient.round_mode = if (diagonal) .super_45 else .super;
     }
 
     fn instructionControl(self: *Vm) types.Error!void {
@@ -623,12 +582,6 @@ pub const Vm = struct {
         return 300 + 22 * self.cvt.len;
     }
 
-    fn popVector(self: *Vm) types.Error!Vector {
-        const y: i16 = @truncate(try self.stack.pop());
-        const x: i16 = @truncate(try self.stack.pop());
-        return .{ .x = x, .y = y };
-    }
-
     fn accountSkippedInstruction(self: *Vm) types.Error!void {
         self.executed += 1;
         if (self.executed > max_executed_instructions) {
@@ -636,13 +589,6 @@ pub const Vm = struct {
         }
     }
 };
-
-fn axisVector(opcode: u8) Vm.Vector {
-    return if ((opcode & 1) == 0)
-        .{ .x = 0, .y = 0x4000 }
-    else
-        .{};
-}
 
 fn isCustomizableOpcode(opcode: u8) bool {
     return switch (opcode) {

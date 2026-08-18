@@ -107,6 +107,60 @@ test "installed TrueType size programs execute for representative fonts" {
     if (found == 0) return error.SkipZigTest;
 }
 
+test "installed simple glyph programs execute transactionally" {
+    const allocator = std.testing.allocator;
+    const fixtures = [_]struct {
+        path: []const u8,
+        codepoint: u21,
+    }{
+        .{
+            .path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            .codepoint = 'A',
+        },
+        .{
+            .path = "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+            .codepoint = 0x0915,
+        },
+        .{
+            .path = "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+            .codepoint = 0x0627,
+        },
+    };
+    var found: usize = 0;
+    for (fixtures) |fixture| {
+        const bytes = std.Io.Dir.cwd().readFileAlloc(
+            std.testing.io,
+            fixture.path,
+            allocator,
+            .limited(16 * 1024 * 1024),
+        ) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
+        defer allocator.free(bytes);
+        var face = try cangjie.font.Face.parse(allocator, bytes);
+        defer face.deinit();
+        var instance = try face.hintingInstance(allocator, 16, .normal);
+        defer instance.deinit();
+        const glyph_id = try face.glyphs().index(fixture.codepoint);
+        var transaction = face.hintingPointTransaction(
+            allocator,
+            &instance,
+            glyph_id,
+        ) catch |err| switch (err) {
+            error.UnsupportedHintGlyph => continue,
+            else => return err,
+        };
+        defer transaction.deinit();
+        try face.executeHintingTransaction(&instance, &transaction);
+        var pixel = try transaction.toPixelOutline();
+        defer pixel.deinit();
+        try std.testing.expect(pixel.commands.items.len != 0);
+        found += 1;
+    }
+    if (found == 0) return error.SkipZigTest;
+}
+
 test "simple glyf transaction retains raw point and phantom ownership" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildTrueTypeHintingTtf(allocator);
@@ -135,6 +189,12 @@ test "simple glyf transaction retains raw point and phantom ownership" {
         phantom[1].x - phantom[0].x,
     );
 
+    try face.executeHintingTransaction(&instance, &transaction);
+    try std.testing.expectEqual(
+        @as(i32, 832),
+        transaction.phantomPoints()[1].x -
+            transaction.phantomPoints()[0].x,
+    );
     var pixel = try transaction.toPixelOutline();
     defer pixel.deinit();
     var design = try face.glyphs().outline(allocator, 1);
@@ -193,6 +253,29 @@ test "point transactions reject foreign compound and variable ownership" {
             &variable_instance,
             1,
         ),
+    );
+}
+
+test "hint transaction execution rejects stale PPEM ownership" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildTrueTypeHintingTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var source = try face.hintingInstance(allocator, 16, .normal);
+    defer source.deinit();
+    var other_size = try face.hintingInstance(allocator, 17, .normal);
+    defer other_size.deinit();
+    var transaction = try face.hintingPointTransaction(
+        allocator,
+        &source,
+        1,
+    );
+    defer transaction.deinit();
+
+    try std.testing.expectError(
+        error.StaleHintingInstance,
+        face.executeHintingTransaction(&other_size, &transaction),
     );
 }
 

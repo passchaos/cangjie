@@ -1642,6 +1642,8 @@ pub const Font = struct {
             };
         return hinting.outline.decodeSimple(
             allocator,
+            @intFromPtr(self),
+            instance.target,
             glyph_id,
             data,
             @intCast(contour_count),

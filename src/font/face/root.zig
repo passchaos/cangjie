@@ -122,6 +122,21 @@ pub const Face = struct {
             glyph_id,
         );
     }
+
+    /// Execute the transaction's glyph bytecode against this PPEM instance.
+    ///
+    /// The transaction and all mutable instance VM state commit together only
+    /// after a successful run.
+    pub fn executeHintingTransaction(
+        self: *const Face,
+        instance: *font_mod.TrueTypeHintingInstance,
+        transaction: *font_mod.TrueTypePointTransaction,
+    ) @import("../hinting/root.zig").Error!void {
+        if (transaction.face_identity != @intFromPtr(&self.implementation)) {
+            return error.StaleHintingInstance;
+        }
+        return instance.executeGlyph(transaction);
+    }
 };
 
 /// An ordered fallback list. The slice and every face are borrowed.

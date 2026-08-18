@@ -895,13 +895,21 @@ The raw-point boundary now exists for default-instance simple `glyf` glyphs as
 `Face.hintingPointTransaction`. It owns unscaled, original-scaled, and mutable
 26.6 point arrays; on-curve/touched/overlap flags; contour ends; the borrowed
 glyph instruction slice; and all four horizontal/vertical phantom points.
-`toPixelOutline` reconstructs a distinct pixel-space path and applies the
+`Face.executeHintingTransaction` now runs core point-zone bytecode over private
+working copies of the glyph and persistent PPEM twilight zones. Projection and
+freedom vectors, reference points, zone pointers, loop and rounding state are
+reset per glyph; MDAP/MIAP, MDRP/MIRP, IUP, SHPIX, ALIGNRP, GC/SCFS/MD,
+on-curve edits, CVT, storage, functions, and instruction definitions share the
+same bounded interpreter. Points, flags, twilight state, CVT, and storage
+commit together only after a successful run; any error leaves the transaction
+and instance unchanged.
+
+`toPixelOutline` then reconstructs a distinct pixel-space path and applies the
 possibly modified left phantom (`pp1`) as the FreeType-compatible glyph
-origin. Compound and gvar-backed glyphs return `UnsupportedHintGlyph` rather
-than silently losing component or variation semantics, and transactions reject
-an instance created from another face. The point-zone VM and raster bridge are
-the next layer over this owner; merely decoding the transaction does not claim
-that glyph bytecode has run.
+origin. Compound and gvar-backed glyphs still return `UnsupportedHintGlyph`
+rather than silently losing component or variation semantics, and transactions
+reject an instance created from another face or PPEM/target. The direct
+rasterizer bridge and remaining less-common point opcodes are the next layer.
 
 The shaping integration suite is similarly rooted at
 `src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,

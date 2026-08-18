@@ -40,6 +40,9 @@ pub const PixelOutline = struct {
 
 pub const Transaction = struct {
     allocator: std.mem.Allocator,
+    /// Stable identity of the face whose validated `glyf` bytes are borrowed.
+    face_identity: usize,
+    target: types.Target,
     glyph_id: glyph.GlyphId,
     real_point_count: usize,
     points: []Point,
@@ -122,6 +125,8 @@ pub const Metrics = struct {
 
 pub fn decodeSimple(
     allocator: std.mem.Allocator,
+    face_identity: usize,
+    target: types.Target,
     glyph_id: glyph.GlyphId,
     data: []const u8,
     contour_count: u16,
@@ -255,6 +260,8 @@ pub fn decodeSimple(
     }
     return .{
         .allocator = allocator,
+        .face_identity = face_identity,
+        .target = target,
         .glyph_id = glyph_id,
         .real_point_count = real_point_count,
         .points = points,

@@ -217,6 +217,7 @@ fn layoutSpansForRuns(
             .letter_spacing = run.style.letter_spacing,
             .word_spacing = run.style.word_spacing,
             .minimum_line_height = run.style.line_height,
+            .vertical_align = run.style.vertical_align,
         };
     }
     return spans;

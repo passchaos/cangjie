@@ -22,6 +22,7 @@ pub const Span = struct {
     letter_spacing: f32 = 0,
     word_spacing: f32 = 0,
     minimum_line_height: ?f32 = null,
+    vertical_align: @import("types/paragraph.zig").VerticalAlign = .baseline,
 
     pub fn byteEnd(self: Span) usize {
         return self.byte_start + self.byte_len;
@@ -33,6 +34,7 @@ pub const GlyphMetadata = struct {
     style_index: u32,
     layout_spacing: f32,
     minimum_line_height: ?f32,
+    vertical_align: @import("types/paragraph.zig").VerticalAlign = .baseline,
 };
 
 /// Drive script/style itemization through a layout-owned context.
@@ -186,6 +188,7 @@ test "styled spans distinguish shaping from paint geometry" {
     b.byte_start = 1;
     b.style_index = 1;
     b.letter_spacing = 9;
+    b.vertical_align = .top;
     try std.testing.expect(shapeEquivalent(a, b));
 
     b.font_size = 17;

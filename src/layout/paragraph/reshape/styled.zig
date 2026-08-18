@@ -515,6 +515,7 @@ pub const Recipe = struct {
                 .style_index = span.style_index,
                 .layout_spacing = spacing,
                 .minimum_line_height = span.minimum_line_height,
+                .vertical_align = span.vertical_align,
             });
         }
     }

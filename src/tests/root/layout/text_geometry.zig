@@ -760,6 +760,70 @@ test "styled text geometry splits style identities and links only within a line"
     );
 }
 
+test "styled text geometry exposes vertically aligned font bounds" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const text = "AA";
+    const styles = [_]paragraph.StyledSpan{
+        .{
+            .byte_start = 0,
+            .byte_len = 1,
+            .style_index = 1,
+            .font_size = 20,
+            .minimum_line_height = 40,
+            .vertical_align = .top,
+        },
+        .{
+            .byte_start = 1,
+            .byte_len = 1,
+            .style_index = 2,
+            .font_size = 20,
+            .minimum_line_height = 40,
+            .vertical_align = .bottom,
+        },
+    };
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    var styled_buffer = StyledParagraphBuffer.init(allocator);
+    defer styled_buffer.deinit();
+    const layout = try TextShaper.layoutStyledParagraphUtf8(
+        FontCascade.init(&.{&font}),
+        &layout_buffer,
+        &styled_buffer,
+        text,
+        20,
+        &styles,
+        .{ .max_width = 100 },
+    );
+    var geometry = try paragraph.buildStyledGeometry(
+        allocator,
+        text,
+        layout,
+        &styles,
+        .{},
+    );
+    defer geometry.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), geometry.spans.len);
+    try std.testing.expectApproxEqAbs(
+        layout.lines[0].y,
+        geometry.spans[0].bounds.y,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        layout.lines[0].y + layout.lines[0].height,
+        geometry.spans[1].bounds.y + geometry.spans[1].bounds.height,
+        0.001,
+    );
+    try std.testing.expect(
+        geometry.spans[0].bounds.y < geometry.spans[1].bounds.y,
+    );
+}
+
 test "text geometry preserves fallback ownership and fontless inline objects" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

@@ -342,13 +342,12 @@ const BridgeBuilder = struct {
 
     fn appendLine(self: *BridgeBuilder, line: paragraph_types.ParagraphLine, line_index: usize) !void {
         const line_glyph_end = line.glyph_start + line.glyph_len;
-        const baseline_y = self.options.origin_y + line.y + line.baseline;
         for (line.runs(self.paragraph)) |run| {
             const start = @max(line.glyph_start, run.glyph_start);
             const end = @min(line_glyph_end, run.glyph_start + run.glyph_len);
             if (start >= end) continue;
             const command_start = self.glyphs.items.len;
-            try self.appendGlyphsInRange(run, start, end, line, baseline_y);
+            try self.appendGlyphsInRange(run, start, end, line);
             if (self.glyphs.items.len == command_start) continue;
             try self.runs.append(self.allocator, .{
                 .font = run.font,
@@ -361,14 +360,18 @@ const BridgeBuilder = struct {
                 .glyph_start = command_start,
                 .glyph_len = self.glyphs.items.len - command_start,
                 .x = self.glyphs.items[command_start].x,
-                .baseline_y = baseline_y,
+                // One style-aligned glyph can have a different baseline from
+                // its neighbor inside the same shaping run. The run command's
+                // baseline remains the line baseline; each glyph carries the
+                // final vertical offset explicitly.
+                .baseline_y = self.options.origin_y + line.y + line.baseline,
                 .line_index = line_index,
                 .render_mode = self.options.render_mode,
             });
         }
     }
 
-    fn appendGlyphsInRange(self: *BridgeBuilder, run: run_types.CascadeRun, start: usize, end: usize, line: paragraph_types.ParagraphLine, baseline_y: f32) !void {
+    fn appendGlyphsInRange(self: *BridgeBuilder, run: run_types.CascadeRun, start: usize, end: usize, line: paragraph_types.ParagraphLine) !void {
         const font = face_mod.backend.font(run.font);
         const run_variation_coords = runVariationCoords(
             self.paragraph,
@@ -440,7 +443,7 @@ const BridgeBuilder = struct {
                 .codepoint = glyph.codepoint,
                 .cluster = glyph.cluster,
                 .x = pen_x,
-                .baseline_y = baseline_y,
+                .baseline_y = self.options.origin_y + line.y + line.baseline,
                 .x_offset = glyph.x_offset,
                 .y_offset = glyph.y_offset,
                 .x_advance = glyph.x_advance,

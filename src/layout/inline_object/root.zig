@@ -269,7 +269,8 @@ pub fn position(
                     return error.InvalidInlineObjects;
                 const baseline = object.resolvedBaseline();
                 const anchor_x = pen_x;
-                const anchor_y = line.y + line.baseline - baseline;
+                const anchor_y =
+                    line.y + line.baseline + glyph.y_offset - baseline;
                 const placement = if (object.kind == .custom_out_of_flow)
                     findPlacement(placements, object.byte_index)
                 else

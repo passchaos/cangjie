@@ -622,6 +622,19 @@ shaping buffers do not pay for paint metadata. The bridge validates all
 borrowed segment indexes and finite, nonnegative rectangles before ownership
 transfer.
 
+`TextStyle.vertical_align` places each attributed inline box within its final
+line box using `.baseline`, `.top`, `.middle`, or `.bottom`. It is deliberately
+an inline style rather than a paragraph-container alignment: paragraph layout
+has no external block-size against which an entire paragraph could be centered
+or bottom-aligned. Final placement adds a line-box offset to each glyph's
+existing GPOS/kerx/fallback `y_offset`; shaping and run itemization therefore
+remain unchanged even when adjacent paint spans align differently. In-flow
+inline objects use the same aligned baseline, and decoration centerlines are
+translated with their owning style. Renderer glyph commands retain the line
+baseline plus the per-glyph final offset, so atlas, path, color, object, and
+decoration output agree. The former paragraph-level `vertical_align` no-op has
+been removed rather than retained as a misleading control.
+
 `cangjie.font.database.Database.layoutAttributed` is the
 integrated entry point for callers that do want that resolution. It maps each
 normalized style run's family, weight, stretch, and normal/italic/oblique

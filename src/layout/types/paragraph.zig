@@ -29,6 +29,18 @@ pub const TextAlign = enum {
     end,
 };
 
+/// Block-axis placement of one inline style inside its final line box.
+pub const VerticalAlign = enum {
+    /// Keep the font or object baseline on the line baseline.
+    baseline,
+    /// Align the inline box's top edge with the line's top edge.
+    top,
+    /// Center the inline box inside the line box.
+    middle,
+    /// Align the inline box's bottom edge with the line's bottom edge.
+    bottom,
+};
+
 pub const WrapMode = enum {
     /// Preserve explicit Unicode hard breaks but do not introduce lines to
     /// satisfy `max_width`.

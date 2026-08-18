@@ -63,6 +63,101 @@ test "unified attributed paragraph wraps sizes and preserves paint runs" {
     try std.testing.expectEqual(@as(u8, 255), result.style_runs[1].style.color.b);
 }
 
+test "attributed vertical align places runs decorations and objects in line box" {
+    const allocator = std.testing.allocator;
+    var owned = try OwnedFont.init(
+        allocator,
+        try test_font.buildMinimalTtf(allocator),
+    );
+    defer owned.deinit();
+    const fonts = [_]*const font_mod.Font{&owned.font};
+    const marker = @import("../../layout/inline_object/root.zig");
+    const text = "A" ++ marker.object_replacement_utf8 ++ "A";
+    const spans = [_]style.StyleSpan{
+        .{
+            .byte_range = .{ .start = 0, .len = 1 },
+            .style = .{
+                .font_size = 20,
+                .vertical_align = .top,
+                .decoration = .{ .underline = true },
+            },
+        },
+        .{
+            .byte_range = .{
+                .start = 1,
+                .len = marker.object_replacement_utf8.len,
+            },
+            .style = .{
+                .font_size = 20,
+                .vertical_align = .middle,
+            },
+        },
+        .{
+            .byte_range = .{
+                .start = 1 + marker.object_replacement_utf8.len,
+                .len = 1,
+            },
+            .style = .{
+                .font_size = 20,
+                .vertical_align = .bottom,
+                .decoration = .{ .strikethrough = true },
+            },
+        },
+    };
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
+        allocator,
+        font_fallback.Cascade.init(&fonts),
+        .{
+            .text = text,
+            .spans = &spans,
+            .inline_objects = &.{.{
+                .id = 42,
+                .byte_index = 1,
+                .width = 10,
+                .height = 40,
+                .baseline = 20,
+            }},
+        },
+        200,
+    );
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), result.lines.len);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 40),
+        result.lines[0].height,
+        0.001,
+    );
+    try std.testing.expect(result.glyphs[0].y_offset < 0);
+    try std.testing.expect(result.glyphs[2].y_offset > 0);
+    try std.testing.expectEqual(@as(usize, 1), result.inline_objects.len);
+    try std.testing.expectApproxEqAbs(
+        result.lines[0].y,
+        result.inline_objects[0].y,
+        0.001,
+    );
+    try std.testing.expectEqual(@as(usize, 2), result.decorations.len);
+    try std.testing.expect(
+        result.decorations[0].rect.y != result.decorations[1].rect.y,
+    );
+
+    var draw_list = try render_bridge.buildGlyphDrawList(
+        allocator,
+        result.paragraph,
+        .{ .decorations = result.decorations },
+    );
+    defer draw_list.deinit();
+    try std.testing.expectEqual(@as(usize, 2), draw_list.glyphs.len);
+    try std.testing.expect(draw_list.glyphs[0].y_offset < 0);
+    try std.testing.expect(draw_list.glyphs[1].y_offset > 0);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0),
+        draw_list.runs[0].baseline_y -
+            (result.lines[0].y + result.lines[0].baseline),
+        0.001,
+    );
+}
+
 test "attributed layout exposes final styled intrinsic widths" {
     const allocator = std.testing.allocator;
     var owned = try OwnedFont.init(

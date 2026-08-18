@@ -214,16 +214,12 @@ pub const TextStyle = struct {
     letter_spacing: f32 = 0,
     word_spacing: f32 = 0,
     line_height: ?f32 = null,
+    vertical_align: paragraph_types.VerticalAlign = .baseline,
     locale: ?[]const u8 = null,
     script: ?unicode.Script = null,
 };
 
-pub const VerticalAlign = enum {
-    baseline,
-    top,
-    middle,
-    bottom,
-};
+pub const VerticalAlign = paragraph_types.VerticalAlign;
 
 pub const WrapMode = paragraph_types.WrapMode;
 pub const WordBreak = paragraph_types.WordBreak;
@@ -240,7 +236,6 @@ pub const OverflowMode = enum {
 pub const ParagraphStyle = struct {
     direction: pipeline_types.TextDirection = .ltr,
     text_align: paragraph_types.TextAlign = .start,
-    vertical_align: VerticalAlign = .baseline,
     line_height: ?f32 = null,
     max_lines: ?usize = null,
     ellipsis: bool = false,

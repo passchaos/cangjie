@@ -14,6 +14,7 @@ const Language = style_model.Language;
 const Locale = style_model.Locale;
 const GlyphCluster = style_model.GlyphCluster;
 const ParagraphStyle = style_model.ParagraphStyle;
+const TextStyle = style_model.TextStyle;
 
 test "core identifiers locale and glyph cluster helpers" {
     const font_id = FontId{ .index = 3 };
@@ -199,4 +200,13 @@ test "paragraph style converts to paragraph options" {
 
     const defaults = (ParagraphStyle{}).paragraphOptions(80);
     try std.testing.expectEqual(paragraph_types.TextAlign.start, defaults.alignment);
+}
+
+test "vertical alignment belongs to inline text style" {
+    const text_style = TextStyle{ .vertical_align = .middle };
+    try std.testing.expectEqual(
+        paragraph_types.VerticalAlign.middle,
+        text_style.vertical_align,
+    );
+    try std.testing.expect(!@hasField(ParagraphStyle, "vertical_align"));
 }

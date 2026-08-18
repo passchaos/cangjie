@@ -11,6 +11,7 @@ const glyph_position = @import("../../layout/glyph_position.zig");
 const paragraph_types = @import("../../layout/types/paragraph.zig");
 const raster = @import("../../raster.zig");
 const run_types = @import("../../layout/types/runs.zig");
+const vertical_align = @import("../../layout/paragraph/vertical_align.zig");
 
 pub const Kind = enum {
     underline,
@@ -158,6 +159,12 @@ fn appendFragment(
     const font_run = paragraph.runs[font_run_index];
     const font = run_types.fontForBackend(font_run);
     const metrics = try font.scaledDecorationMetrics(font_run.font_size);
+    const aligned_baseline =
+        line.y + line.baseline + vertical_align.fontOffset(
+            line,
+            font_run,
+            style_run.style.vertical_align,
+        );
     if (style_run.style.decoration.underline) {
         try output.append(allocator, .{
             .kind = .underline,
@@ -168,7 +175,7 @@ fn appendFragment(
                 .x = x,
                 // OpenType/FreeType decoration positions describe the stroke
                 // centerline; the public record is a fill rectangle.
-                .y = line.y + line.baseline -
+                .y = aligned_baseline -
                     metrics.underline_position -
                     metrics.underline_thickness / 2,
                 .width = width,
@@ -185,7 +192,7 @@ fn appendFragment(
             .line_index = line_index,
             .rect = .{
                 .x = x,
-                .y = line.y + line.baseline -
+                .y = aligned_baseline -
                     metrics.strikeout_position -
                     metrics.strikeout_thickness / 2,
                 .width = width,

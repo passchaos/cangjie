@@ -147,6 +147,7 @@ fn buildInternal(
             line,
             line_index,
             drafts.items,
+            style_spans,
             word_start_bytes,
             &output_spans,
             &output_graphemes,

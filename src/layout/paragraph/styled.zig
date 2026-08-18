@@ -18,6 +18,7 @@ const content_widths = @import("content_widths.zig");
 const line_break_analysis = @import("../line_break/analysis.zig");
 const source_items = @import("source_items.zig");
 const tabs = @import("tabs.zig");
+const vertical_align = @import("vertical_align.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 const run_types = @import("../types/runs.zig");
 const styled_bidi = @import("../styled_bidi.zig");
@@ -363,6 +364,13 @@ const Driver = struct {
                 visual_order,
             );
         }
+        try vertical_align.apply(
+            self.buffer.glyphs.items,
+            self.buffer.runs.items,
+            self.buffer.lines.items,
+            self.options.inline_objects,
+            self.styled.metadata.items,
+        );
         punctuation_hanging.apply(self.buffer, self.options);
         bidi_reorder.recomputeRunOffsets(self.buffer);
         try inline_object.position(

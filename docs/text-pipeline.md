@@ -552,8 +552,13 @@ Paragraph layout now admits vertical writing through
 inline-size/column-height measure. Greedy `.word` wrapping applies global
 `word_break` (`normal`, `break_all`, or `keep_all`) and `overflow_wrap`
 (`normal`, `break_word`, or `anywhere`) policy to reusable UAX #14 boundaries.
-Emergency modes fall back to extended-grapheme boundaries that also pass the
-shaper's `unsafe-to-break` contract; `.no_wrap` keeps only hard breaks.
+UTF-8 `line_break_policy_ranges` and attributed-span overrides may tailor those
+three properties locally; a candidate belongs to the preceding source scalar,
+matching horizontal reflow. Emergency modes fall back to extended-grapheme
+boundaries that also pass the shaper's `unsafe-to-break` contract, and a local
+`.no_wrap` or `.normal` span defers emergency wrapping until a later range
+permits it. A global `.no_wrap` keeps only hard breaks unless a range explicitly
+re-enables wrapping.
 `vertical_rl` places source-order columns from right to left, while
 `vertical_lr` places them left to right. This block progression is independent
 from HarfBuzz-style BTT, which remains an inline-direction request rather than
@@ -566,7 +571,7 @@ coordinates.
 This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
 axes, vertical paragraph validation rejects bottom-to-top/RTL text, bidi
-controls, per-range/attributed wrapping overrides, tabs, justification,
+controls, tabs, justification,
 ellipsis/line limits, whitespace collapsing, negative spacing, indentation,
 paragraph spacing, exclusions/line regions, inline objects, hyphenation,
 optical punctuation, and the resumable breaker. Retained whole-paragraph

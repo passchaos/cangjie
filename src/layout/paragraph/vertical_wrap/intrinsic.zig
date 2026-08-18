@@ -27,6 +27,7 @@ pub fn measure(
         options,
     );
     defer effective_breaks.deinit();
+    const wrapping_enabled = policy.anyWrappingEnabled(text.len, options);
     const prefix = try allocator.alloc(f32, glyphs.len + 1);
     defer allocator.free(prefix);
     prefix[0] = 0;
@@ -54,7 +55,7 @@ pub fn measure(
             prefix,
             graphemes,
             effective_breaks.items,
-            options,
+            wrapping_enabled,
             segment_start,
             index,
             segment_byte_start,
@@ -77,7 +78,7 @@ pub fn measure(
         prefix,
         graphemes,
         effective_breaks.items,
-        options,
+        wrapping_enabled,
         segment_start,
         glyphs.len,
         segment_byte_start,
@@ -94,7 +95,7 @@ fn segment(
     prefix: []const f32,
     graphemes: []const unicode.GraphemeCluster,
     breaks: []const line_break_opportunity.Opportunity,
-    options: paragraph_options.Options,
+    wrapping_enabled: bool,
     segment_start: usize,
     segment_end: usize,
     segment_byte_start: usize,
@@ -104,7 +105,7 @@ fn segment(
         result.max,
         shared.advance(prefix, segment_start, segment_end),
     );
-    if (options.wrap_mode == .no_wrap or segment_start >= segment_end) {
+    if (!wrapping_enabled or segment_start >= segment_end) {
         result.min = @max(
             result.min,
             shared.advance(prefix, segment_start, segment_end),

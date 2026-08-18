@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const candidates = @import("candidates.zig");
+const emergency = @import("emergency.zig");
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const intrinsic = @import("intrinsic.zig");
 const line_break_opportunity = @import("../../line_break/opportunity.zig");
@@ -34,6 +35,7 @@ pub fn build(
         options,
     );
     defer effective_breaks.deinit();
+    const wrapping_enabled = policy.anyWrappingEnabled(text.len, options);
     const prefix = try allocator.alloc(f32, glyphs.len + 1);
     defer allocator.free(prefix);
     shared.fillPrefix(prefix, glyphs);
@@ -58,6 +60,7 @@ pub fn build(
             graphemes,
             effective_breaks.items,
             options,
+            wrapping_enabled,
             segment_start,
             index,
             segment_byte_start,
@@ -76,6 +79,7 @@ pub fn build(
         graphemes,
         effective_breaks.items,
         options,
+        wrapping_enabled,
         segment_start,
         glyphs.len,
         segment_byte_start,
@@ -92,6 +96,7 @@ fn appendSegment(
     graphemes: []const unicode.GraphemeCluster,
     breaks: []const line_break_opportunity.Opportunity,
     options: paragraph_options.Options,
+    wrapping_enabled: bool,
     segment_start: usize,
     segment_end: usize,
     segment_byte_start: usize,
@@ -107,7 +112,7 @@ fn appendSegment(
         return;
     }
 
-    const limit = if (options.wrap_mode == .word and
+    const limit = if (wrapping_enabled and
         options.max_width > 0 and
         std.math.isFinite(options.max_width))
         options.max_width
@@ -160,17 +165,11 @@ fn appendSegment(
             glyph_start,
             overflow,
             limit,
-        ) orelse if (options.overflow_wrap == .normal)
-            candidates.firstUsable(
-                items.items,
-                glyph_start,
-            ) orelse shared.SoftCandidate{
-                .glyph_end = segment_end,
-                .next_glyph_start = segment_end,
-                .byte_end = segment_byte_end,
-            }
-        else
-            candidates.emergency(
+        ) orelse if (policy.emergencyAllowedBefore(
+            options,
+            glyphs[overflow - 1].sourceByteEnd(),
+        ))
+            emergency.fittingOrNext(
                 glyphs,
                 prefix,
                 graphemes,
@@ -179,6 +178,17 @@ fn appendSegment(
                 segment_byte_end,
                 overflow,
                 limit,
+                options,
+            )
+        else
+            emergency.afterDisabled(
+                candidates.firstUsable(items.items, glyph_start),
+                glyphs,
+                graphemes,
+                segment_end,
+                segment_byte_end,
+                overflow,
+                options,
             );
         try output.append(allocator, .{
             .glyph_start = glyph_start,

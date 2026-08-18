@@ -78,52 +78,6 @@ pub fn firstUsable(
     return null;
 }
 
-pub fn emergency(
-    glyphs: []const GlyphPosition,
-    prefix: []const f32,
-    graphemes: []const unicode.GraphemeCluster,
-    glyph_start: usize,
-    segment_end: usize,
-    segment_byte_end: usize,
-    overflow: usize,
-    limit: f32,
-) shared.SoftCandidate {
-    var last_fitting: ?usize = null;
-    var candidate = glyph_start + 1;
-    while (candidate <= @min(overflow, segment_end)) : (candidate += 1) {
-        if (shared.advance(prefix, glyph_start, candidate) <= limit and
-            shaped_boundary.outputBoundaryIsReusable(
-                glyphs,
-                graphemes,
-                candidate,
-            ))
-        {
-            last_fitting = candidate;
-        }
-    }
-    const break_index = last_fitting orelse firstSafe: {
-        var next = glyph_start + 1;
-        while (next < segment_end and
-            !shaped_boundary.outputBoundaryIsReusable(
-                glyphs,
-                graphemes,
-                next,
-            ))
-        {
-            next += 1;
-        }
-        break :firstSafe next;
-    };
-    return .{
-        .glyph_end = break_index,
-        .next_glyph_start = break_index,
-        .byte_end = if (break_index < segment_end)
-            glyphs[break_index].cluster
-        else
-            segment_byte_end,
-    };
-}
-
 fn forSourceBoundary(
     glyphs: []const GlyphPosition,
     graphemes: []const unicode.GraphemeCluster,

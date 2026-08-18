@@ -1,26 +1,13 @@
-//! Global `word-break` and `overflow-wrap` policy for vertical columns.
+//! Global wrapping policy for vertical columns.
 
 const std = @import("std");
+const policy_support = @import("policy_support.zig");
 const support = @import("../../support.zig");
-const Font = support.Font;
-const FontCascade = support.FontCascade;
-const LayoutBuffer = support.LayoutBuffer;
-const TextShaper = support.TextShaper;
-
-fn layout(
-    font: *const Font,
-    buffer: *LayoutBuffer,
-    text: []const u8,
-    options: support.ParagraphOptions,
-) !support.ParagraphLayout {
-    return TextShaper.layoutParagraphUtf8(
-        FontCascade.init(&.{font}),
-        buffer,
-        text,
-        20,
-        options,
-    );
-}
+const Font = policy_support.Font;
+const FontCascade = policy_support.FontCascade;
+const LayoutBuffer = policy_support.LayoutBuffer;
+const TextShaper = policy_support.TextShaper;
+const layout = policy_support.layout;
 
 test "vertical overflow wrap normal preserves an overfull word" {
     const allocator = std.testing.allocator;
@@ -193,64 +180,4 @@ test "retained vertical widths and reflow follow global policy" {
         .text_orientation = .upright,
     });
     try std.testing.expectEqual(@as(usize, 2), break_all.lines.len);
-}
-
-test "styled vertical paragraphs accept only global wrapping policy" {
-    const allocator = std.testing.allocator;
-    const bytes = try @import("../../../../test_font.zig")
-        .buildLastResortCmapTtfWithKern(allocator, false);
-    defer allocator.free(bytes);
-    var font = try Font.parse(allocator, bytes);
-    defer font.deinit();
-    var buffer = LayoutBuffer.init(allocator);
-    defer buffer.deinit();
-    var styled = support.StyledParagraphBuffer.init(allocator);
-    defer styled.deinit();
-    const spans = [_]support.StyledParagraphSpan{.{
-        .byte_start = 0,
-        .byte_len = 4,
-        .style_index = 1,
-        .font_size = 20,
-    }};
-
-    const natural = try layout(&font, &buffer, "AAAA", .{
-        .max_width = 200,
-        .writing_mode = .vertical_lr,
-        .text_orientation = .upright,
-    });
-    const wrapped = try TextShaper.layoutStyledParagraphUtf8(
-        FontCascade.init(&.{&font}),
-        &buffer,
-        &styled,
-        "AAAA",
-        20,
-        &spans,
-        .{
-            .max_width = natural.glyphs[0].y_advance * 2 + 0.1,
-            .word_break = .break_all,
-            .overflow_wrap = .normal,
-            .writing_mode = .vertical_lr,
-            .text_orientation = .upright,
-        },
-    );
-    try std.testing.expectEqual(@as(usize, 2), wrapped.lines.len);
-
-    var overridden = spans;
-    overridden[0].word_break = .break_all;
-    try std.testing.expectError(
-        error.UnsupportedVerticalParagraphOptions,
-        TextShaper.layoutStyledParagraphUtf8(
-            FontCascade.init(&.{&font}),
-            &buffer,
-            &styled,
-            "AAAA",
-            20,
-            &overridden,
-            .{
-                .max_width = natural.glyphs[0].y_advance * 2 + 0.1,
-                .writing_mode = .vertical_lr,
-                .text_orientation = .upright,
-            },
-        ),
-    );
 }

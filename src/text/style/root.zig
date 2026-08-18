@@ -226,6 +226,7 @@ pub const VerticalAlign = enum {
 };
 
 pub const WrapMode = paragraph_types.WrapMode;
+pub const LineBreakStrategy = paragraph_types.LineBreakStrategy;
 
 pub const OverflowMode = enum {
     clip,
@@ -241,6 +242,7 @@ pub const ParagraphStyle = struct {
     max_lines: ?usize = null,
     ellipsis: bool = false,
     wrap_mode: WrapMode = .word,
+    line_break_strategy: LineBreakStrategy = .greedy,
     overflow_mode: OverflowMode = .clip,
     tab_width: usize = 4,
     tab_stops: []const paragraph_options.TabStop = &.{},
@@ -266,6 +268,7 @@ pub const ParagraphStyle = struct {
         return .{
             .max_width = max_width,
             .wrap_mode = self.wrap_mode,
+            .line_break_strategy = self.line_break_strategy,
             .alignment = self.text_align,
             .line_height = self.line_height,
             .direction = self.direction,

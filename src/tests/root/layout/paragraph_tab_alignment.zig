@@ -273,6 +273,39 @@ test "aligned tab recomputes after a soft wrap truncates its field" {
     );
 }
 
+test "balanced wrapping measures aligned tab fields per candidate" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const layout = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&.{&font}),
+        &buffer,
+        "A\tAA AA AA A",
+        20,
+        .{
+            .max_width = 90,
+            .line_break_strategy = .balanced,
+            .tab_stops = &.{.{
+                .position = 80,
+                .alignment = .end,
+            }},
+        },
+    );
+
+    try std.testing.expect(layout.lines.len >= 2);
+    for (layout.lines) |line| {
+        try std.testing.expect(line.width <= line.region_width + 0.001);
+    }
+    try std.testing.expect(layout.glyphs[1].isTab());
+    // Reflow recomputes the selected prefix rather than retaining the complete
+    // prospective field used while scanning the source.
+    try std.testing.expect(layout.glyphs[1].x_advance >= 0);
+}
+
 test "aligned tab recomputes when ellipsis truncates its field" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalTtf(allocator);

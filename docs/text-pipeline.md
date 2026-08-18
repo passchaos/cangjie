@@ -641,6 +641,20 @@ without another GSUB/GPOS pass and without accumulating mutations. Reflow
 rejects direction, script, language, feature, or variation changes because
 those options require reshaping.
 
+`ParagraphOptions.line_break_strategy` independently selects greedy or
+balanced soft-boundary policy. `.balanced` first obtains the current greedy
+line-count contract, then performs bounded dynamic programming over every
+reusable UAX #14, dictionary/hyphenation, and emergency grapheme boundary in
+each hard-break segment. It minimizes total squared unused measure without
+increasing line count, while adding explicit penalties for emergency breaks,
+hyphenation, and consecutive hyphenated lines. Every candidate is measured
+against final tab-field advances, optical punctuation capacity, font/inline
+object line metrics, first-line indentation, and exclusion regions. The chosen
+boundaries are then committed by the ordinary reflow transaction, so visible
+hyphens, max-lines/ellipsis, justification, bidi, styled metadata, retained
+reflow, decorations, and inline-object positioning retain one implementation.
+`.no_wrap` and unbounded layouts deliberately ignore the strategy.
+
 `ParagraphOptions.tab_stops` adds an explicit paragraph tab ruler. Each
 `TabStop.position` is a finite, positive, strictly increasing advance from the
 selected line fragment's logical inline start; this keeps the same ruler

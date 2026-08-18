@@ -31,6 +31,31 @@ pub const Recipe = struct {
     text: []const u8,
     spans: []const styled_paragraph.Span,
     options: paragraph_options.Options,
+    /// Original metadata for a speculative whole-reflow pass.
+    trial_metadata: *std.ArrayList(styled_buffer.Metadata),
+
+    /// Save glyph-parallel metadata before a balanced line-count probe.
+    ///
+    /// The probe may accept JSTF shrinkage and therefore exercise the ordinary
+    /// commit callback. The final balanced pass must start from the exact
+    /// pristine sidecar that corresponds to the caller's untouched glyphs.
+    pub fn beginReflowTrial(self: Recipe) !void {
+        self.trial_metadata.clearRetainingCapacity();
+        try self.trial_metadata.appendSlice(
+            self.allocator,
+            self.metadata.items,
+        );
+    }
+
+    pub fn rollbackReflowTrial(self: Recipe) void {
+        std.debug.assert(self.trial_metadata.items.len != 0 or
+            self.metadata.items.len == 0);
+        self.metadata.clearRetainingCapacity();
+        self.metadata.appendSliceAssumeCapacity(
+            self.trial_metadata.items,
+        );
+        self.trial_metadata.clearRetainingCapacity();
+    }
 
     pub fn minimumLineHeight(
         self: Recipe,

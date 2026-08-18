@@ -196,7 +196,12 @@ fn nextSafeOutputBoundary(
     return break_index;
 }
 
-fn outputBoundaryIsReusable(
+/// Whether an output boundary can be reused as an emergency paragraph break.
+///
+/// High-quality breakers enumerate the complete candidate graph instead of
+/// discovering only the first overflowing boundary. They must use exactly the
+/// same grapheme and shaping-safety predicate as greedy emergency wrapping.
+pub fn outputBoundaryIsReusable(
     glyphs: []const GlyphPosition,
     grapheme_clusters: []const unicode.GraphemeCluster,
     break_index: usize,

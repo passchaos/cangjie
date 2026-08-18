@@ -100,6 +100,7 @@ test "paragraph style converts to paragraph options" {
         .line_height = 24,
         .max_lines = 2,
         .wrap_mode = .no_wrap,
+        .line_break_strategy = .balanced,
         .overflow_mode = .ellipsis,
         .tab_width = 2,
         .tab_stops = &tab_stops,
@@ -128,6 +129,10 @@ test "paragraph style converts to paragraph options" {
     try std.testing.expectEqual(pipeline_types.TextDirection.rtl, options.direction);
     try std.testing.expectEqual(paragraph_types.TextAlign.center, options.alignment);
     try std.testing.expectEqual(paragraph_types.WrapMode.no_wrap, options.wrap_mode);
+    try std.testing.expectEqual(
+        paragraph_types.LineBreakStrategy.balanced,
+        options.line_break_strategy,
+    );
     try std.testing.expectApproxEqAbs(@as(f32, 24), options.line_height.?, 0.001);
     try std.testing.expectEqual(@as(usize, 2), options.max_lines.?);
     try std.testing.expect(options.ellipsis);

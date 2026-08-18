@@ -63,6 +63,67 @@ test "unified attributed paragraph wraps sizes and preserves paint runs" {
     try std.testing.expectEqual(@as(u8, 255), result.style_runs[1].style.color.b);
 }
 
+test "attributed balanced wrapping keeps style metadata aligned" {
+    const allocator = std.testing.allocator;
+    var owned = try OwnedFont.init(
+        allocator,
+        try test_font.buildMinimalTtf(allocator),
+    );
+    defer owned.deinit();
+    const fonts = [_]*const font_mod.Font{&owned.font};
+    const text = "AAA AA AA A";
+    const spans = [_]style.StyleSpan{
+        .{
+            .byte_range = .{ .start = 0, .len = 4 },
+            .style = .{
+                .font_size = 20,
+                .color = .{ .r = 240, .g = 20, .b = 10, .a = 255 },
+                .decoration = .{ .underline = true },
+            },
+        },
+        .{
+            .byte_range = .{ .start = 4, .len = text.len - 4 },
+            .style = .{
+                .font_size = 20,
+                .color = .{ .r = 10, .g = 40, .b = 220, .a = 255 },
+                .decoration = .{ .strikethrough = true },
+            },
+        },
+    };
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
+        allocator,
+        font_fallback.Cascade.init(&fonts),
+        .{
+            .text = text,
+            .spans = &spans,
+            .paragraph_style = .{
+                .line_break_strategy = .balanced,
+            },
+        },
+        80,
+    );
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), result.lines.len);
+    try std.testing.expectEqual(@as(usize, 3), result.lines[0].glyph_len);
+    try std.testing.expectEqual(@as(usize, 2), result.lines[1].glyph_len);
+    try std.testing.expectEqual(result.glyphs.len, result.style_runs[0].glyph_len +
+        result.style_runs[1].glyph_len);
+    var saw_first_style = false;
+    var saw_second_style = false;
+    for (result.decorations) |segment| {
+        try std.testing.expect(segment.line_index < result.lines.len);
+        if (segment.style_index == 0 and segment.kind == .underline) {
+            saw_first_style = true;
+        }
+        if (segment.style_index == 1 and segment.kind == .strikethrough) {
+            saw_second_style = true;
+        }
+    }
+    try std.testing.expect(saw_first_style);
+    try std.testing.expect(saw_second_style);
+}
+
 test "unified attributed paragraph applies feature spacing and measurement" {
     const allocator = std.testing.allocator;
     var owned = try OwnedFont.init(

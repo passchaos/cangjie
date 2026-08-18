@@ -217,12 +217,16 @@ const Driver = struct {
         var commit_metadata =
             std.ArrayList(styled_buffer.Metadata).empty;
         defer commit_metadata.deinit(self.buffer.allocator);
+        var trial_metadata =
+            std.ArrayList(styled_buffer.Metadata).empty;
+        defer trial_metadata.deinit(self.buffer.allocator);
         const recipe = styled_reshape.Recipe{
             .cascade = self.cascade,
             .allocator = self.buffer.allocator,
             .metadata = &self.styled.metadata,
             .candidate_metadata = &candidate_metadata,
             .commit_metadata = &commit_metadata,
+            .trial_metadata = &trial_metadata,
             .text = self.text,
             .spans = spans,
             .options = self.options,

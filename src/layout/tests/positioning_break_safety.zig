@@ -74,6 +74,33 @@ test "emergency wrapping does not split an active legacy kern pair" {
     try std.testing.expectEqual(@as(usize, 1), unkerned.lines[1].glyph_len);
 }
 
+test "balanced emergency graph preserves unsafe positioning boundaries" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildLastResortCmapTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = font_fallback.Cascade.init(&.{&font});
+    var buffer = context_output.Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        "AAAA",
+        20,
+        .{
+            .max_width = 20,
+            .line_break_strategy = .balanced,
+        },
+    );
+    // Every active kern relationship crosses an unsafe boundary. The global
+    // candidate graph must not make those pairs splittable merely because a
+    // grapheme boundary exists at the same UTF-8 offset.
+    try std.testing.expectEqual(@as(usize, 1), paragraph.lines.len);
+    try std.testing.expectEqual(@as(usize, 4), paragraph.lines[0].glyph_len);
+}
+
 test "fallback mark positioning marks its source relationship unsafe" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildFallbackMarkTtf(allocator);

@@ -38,6 +38,19 @@ pub const WrapMode = enum {
     word,
 };
 
+/// Policy used to choose among otherwise valid soft line boundaries.
+///
+/// This is intentionally separate from `WrapMode`: wrapping controls whether
+/// width may introduce a line at all, while this policy controls how the
+/// complete set of safe boundaries is searched.
+pub const LineBreakStrategy = enum {
+    /// Commit the latest fitting opportunity while scanning source order.
+    greedy,
+    /// Keep greedy's line count, then minimize whole-segment raggedness over
+    /// safe UAX #14, hyphenation, and emergency grapheme boundaries.
+    balanced,
+};
+
 pub const TextMetrics = struct {
     width: f32,
     height: f32,

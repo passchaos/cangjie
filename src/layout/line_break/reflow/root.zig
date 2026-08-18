@@ -7,6 +7,7 @@ const std = @import("std");
 
 const analysis = @import("../analysis.zig");
 const automatic_hyphens = @import("automatic_hyphens.zig");
+const balanced = @import("balanced.zig");
 const discretionary_hyphen = @import("../../discretionary_hyphen.zig");
 const geometry = @import("geometry.zig");
 const horizontal_justification =
@@ -65,6 +66,147 @@ pub fn buildWithJstfShrinkage(
     dictionary: ?*const segmentation.WordBreakDictionary,
     hyphenation_dictionary: ?*const @import("../../../text/hyphenation/root.zig").Dictionary,
     recipe: anytype,
+) !void {
+    if (options.line_break_strategy == .balanced and
+        options.wrap_mode != .no_wrap and
+        std.math.isFinite(if (options.max_width > 0)
+            options.max_width
+        else
+            std.math.inf(f32)) and
+        options.max_lines != 0 and
+        buffer.glyphs.items.len != 0)
+    {
+        return buildBalanced(
+            buffer,
+            text,
+            options,
+            default_metrics,
+            analyzed_graphemes,
+            analyzed_line_breaks,
+            dictionary,
+            hyphenation_dictionary,
+            recipe,
+        );
+    }
+    return buildGreedyWithPlan(
+        buffer,
+        text,
+        options,
+        default_metrics,
+        analyzed_graphemes,
+        analyzed_line_breaks,
+        dictionary,
+        hyphenation_dictionary,
+        recipe,
+        null,
+    );
+}
+
+fn buildBalanced(
+    buffer: anytype,
+    text: []const u8,
+    options: anytype,
+    default_metrics: BaselineMetrics,
+    analyzed_graphemes: ?[]const unicode.GraphemeCluster,
+    analyzed_line_breaks: ?[]const @import("../opportunity.zig").Opportunity,
+    dictionary: ?*const segmentation.WordBreakDictionary,
+    hyphenation_dictionary: ?*const @import("../../../text/hyphenation/root.zig").Dictionary,
+    recipe: anytype,
+) !void {
+    // The optimizer needs an immutable glyph snapshot and the exact number of
+    // lines selected by current paragraph semantics. Run ordinary greedy
+    // reflow in a temporary buffer, then solve against the untouched source.
+    var probe = @TypeOf(buffer.*).init(buffer.allocator);
+    defer probe.deinit();
+    inheritShapeCaches(buffer, &probe);
+    try copyLayoutInputs(buffer, &probe);
+    var greedy_options = options;
+    greedy_options.line_break_strategy = .greedy;
+    // Styled JSTF shrinkage changes a glyph-parallel metadata sidecar when a
+    // candidate commits. The recipe owns the matching checkpoint so this
+    // line-count probe can use the real shaping policy without leaking trial
+    // state into the final pass.
+    {
+        try recipe.beginReflowTrial();
+        defer recipe.rollbackReflowTrial();
+        try buildGreedyWithPlan(
+            &probe,
+            text,
+            greedy_options,
+            default_metrics,
+            analyzed_graphemes,
+            analyzed_line_breaks,
+            dictionary,
+            hyphenation_dictionary,
+            recipe,
+            null,
+        );
+    }
+
+    var planner = @TypeOf(buffer.*).init(buffer.allocator);
+    defer planner.deinit();
+    inheritShapeCaches(buffer, &planner);
+    try copyLayoutInputs(buffer, &planner);
+    try prepareAdvances(planner.glyphs.items, options);
+
+    var owned_graphemes: ?[]unicode.GraphemeCluster = null;
+    defer if (owned_graphemes) |clusters| buffer.allocator.free(clusters);
+    const grapheme_clusters = analyzed_graphemes orelse clusters: {
+        owned_graphemes = try unicode.itemizeGraphemeClusters(
+            buffer.allocator,
+            text,
+        );
+        break :clusters owned_graphemes.?;
+    };
+    var owned_line_breaks: ?[]@import("../opportunity.zig").Opportunity = null;
+    defer if (owned_line_breaks) |breaks| buffer.allocator.free(breaks);
+    const effective_line_breaks = analyzed_line_breaks orelse breaks: {
+        owned_line_breaks = try analysis.itemizeWithHyphenation(
+            buffer.allocator,
+            text,
+            grapheme_clusters,
+            dictionary,
+            hyphenation_dictionary,
+        );
+        break :breaks owned_line_breaks.?;
+    };
+    var plan = try balanced.build(
+        &planner,
+        text,
+        options,
+        default_metrics,
+        grapheme_clusters,
+        effective_line_breaks,
+        probe.lines.items,
+        recipe,
+    );
+    defer if (plan) |*selected| selected.deinit();
+
+    try buildGreedyWithPlan(
+        buffer,
+        text,
+        options,
+        default_metrics,
+        grapheme_clusters,
+        effective_line_breaks,
+        dictionary,
+        hyphenation_dictionary,
+        recipe,
+        if (plan) |*selected| selected else null,
+    );
+}
+
+fn buildGreedyWithPlan(
+    buffer: anytype,
+    text: []const u8,
+    options: anytype,
+    default_metrics: BaselineMetrics,
+    analyzed_graphemes: ?[]const unicode.GraphemeCluster,
+    analyzed_line_breaks: ?[]const @import("../opportunity.zig").Opportunity,
+    dictionary: ?*const segmentation.WordBreakDictionary,
+    hyphenation_dictionary: ?*const @import("../../../text/hyphenation/root.zig").Dictionary,
+    recipe: anytype,
+    balance_plan: ?*const balanced.Plan,
 ) !void {
     buffer.lines.clearRetainingCapacity();
     const max_width = if (options.max_width > 0)
@@ -287,6 +429,11 @@ pub fn buildWithJstfShrinkage(
             std.math.inf(f32)
         else
             current_region.width;
+        const atom_continues =
+            index + 1 < buffer.glyphs.items.len and
+            shaped_boundary.glyphClusterStart(
+                buffer.glyphs.items[index + 1],
+            ) == shaped_boundary.glyphClusterStart(glyph.*);
         // A hanging punctuation glyph may cross the inline-end measure while
         // remaining on this line. Delay overflow until the occupied portion,
         // rather than the complete glyph advance, exceeds the limit. The
@@ -311,16 +458,57 @@ pub fn buildWithJstfShrinkage(
             current_compression_capacity,
             current_hanging_amount,
         );
-        if (line_width > current_line_limit + overflow_allowance and
+        const naturally_overflows =
+            line_width > current_line_limit + overflow_allowance;
+        // Preserve greedy's look-behind semantics: an opportunity becomes the
+        // preferred candidate after its source atom is complete, but only the
+        // balanced pass can force an immediate commit at that edge.
+        if (!naturally_overflows and !atom_continues) {
+            const glyph_source_end = shaped_boundary.glyphSourceEnd(glyph.*);
+            while (line_breaks.nextThrough(glyph_source_end)) |line_break| {
+                switch (line_break.kind) {
+                    .soft => {
+                        var candidate = opportunities.Candidate{};
+                        try opportunities.recordSoft(
+                            buffer.glyphs.items,
+                            buffer.runs.items,
+                            line_break.byte_offset,
+                            index,
+                            line_start,
+                            line_width,
+                            &candidate,
+                            options.normalized_variation_coords,
+                            line_break.automatic_hyphen,
+                            options.hyphenation.character,
+                        );
+                        if (candidate.glyph_index != null) {
+                            last_break = candidate;
+                        }
+                    },
+                    .hard => {},
+                }
+            }
+        }
+        const forced_balance_break = !naturally_overflows and
+            balanced.shouldBreakAtTarget(
+                balance_plan,
+                buffer.lines.items.len,
+                index + 1,
+            );
+        if ((naturally_overflows or
+            forced_balance_break) and
             index + 1 > line_start)
         {
-            const shrinkage = try jstf_shrinkage.tryFit(
-                buffer,
-                recipe,
-                line_start,
-                index + 1,
-                current_line_limit + overflow_allowance,
-            );
+            const shrinkage = if (forced_balance_break)
+                jstf_shrinkage.Result{}
+            else
+                try jstf_shrinkage.tryFit(
+                    buffer,
+                    recipe,
+                    line_start,
+                    index + 1,
+                    current_line_limit + overflow_allowance,
+                );
             if (shrinkage.applied) {
                 const old_range_end = index + 1;
                 const glyph_delta: isize =
@@ -384,7 +572,7 @@ pub fn buildWithJstfShrinkage(
             const candidate_is_limited_hyphen =
                 last_break.hasVisibleHyphen() and
                 automatic_limit_reached;
-            const fitting_last_break = candidate: {
+            var fitting_last_break = candidate: {
                 const candidate_index =
                     last_break.glyph_index orelse break :candidate null;
                 if (candidate_is_limited_hyphen) break :candidate null;
@@ -451,6 +639,9 @@ pub fn buildWithJstfShrinkage(
                 last_break.width = candidate_width;
                 break :candidate candidate_index;
             };
+            if (forced_balance_break) {
+                fitting_last_break = index + 1;
+            }
             const overflow_break = shaped_boundary.chooseOverflowBreak(
                 buffer.glyphs.items,
                 grapheme_clusters,
@@ -461,7 +652,9 @@ pub fn buildWithJstfShrinkage(
             if (overflow_break.defer_break) continue;
             const break_end = overflow_break.index;
             const uses_last_break = fitting_last_break != null and
-                break_end == fitting_last_break.?;
+                last_break.glyph_index != null and
+                break_end == fitting_last_break.? and
+                break_end == last_break.glyph_index.?;
             var selected_visible_hyphen = false;
             if (uses_last_break) {
                 if (last_break.hyphen) |candidate| {
@@ -657,31 +850,6 @@ pub fn buildWithJstfShrinkage(
                 break_end == buffer.glyphs.items.len;
             last_break.reset();
         }
-        const atom_continues =
-            index + 1 < buffer.glyphs.items.len and
-            shaped_boundary.glyphClusterStart(
-                buffer.glyphs.items[index + 1],
-            ) == shaped_boundary.glyphClusterStart(glyph.*);
-        if (!atom_continues) {
-            const glyph_source_end = shaped_boundary.glyphSourceEnd(glyph.*);
-            while (line_breaks.nextThrough(glyph_source_end)) |line_break| {
-                switch (line_break.kind) {
-                    .soft => try opportunities.recordSoft(
-                        buffer.glyphs.items,
-                        buffer.runs.items,
-                        line_break.byte_offset,
-                        index,
-                        line_start,
-                        line_width,
-                        &last_break,
-                        options.normalized_variation_coords,
-                        line_break.automatic_hyphen,
-                        options.hyphenation.character,
-                    ),
-                    .hard => {},
-                }
-            }
-        }
     }
 
     // A final emergency break may consume the entire last shaped atom. Avoid
@@ -758,6 +926,29 @@ fn visibleHyphenAdvance(candidate: opportunities.Candidate) f32 {
     return 0;
 }
 
+fn copyLayoutInputs(source: anytype, destination: anytype) !void {
+    try destination.variation_coords.appendSlice(
+        destination.allocator,
+        source.variation_coords.items,
+    );
+    errdefer destination.clear();
+    try destination.glyphs.appendSlice(
+        destination.allocator,
+        source.glyphs.items,
+    );
+    try destination.runs.appendSlice(
+        destination.allocator,
+        source.runs.items,
+    );
+}
+
+fn inheritShapeCaches(source: anytype, destination: anytype) void {
+    destination.gdef_metadata_cache = source.gdef_metadata_cache;
+    destination.gsub_table_proof_cache = source.gsub_table_proof_cache;
+    destination.gpos_table_proof_cache = source.gpos_table_proof_cache;
+    destination.lookup_selection_cache = source.lookup_selection_cache;
+}
+
 fn prepareAdvances(glyphs: anytype, options: anytype) !void {
     for (glyphs) |*glyph| {
         if (glyph.isInlineObject()) {
@@ -781,6 +972,10 @@ fn prepareAdvances(glyphs: anytype, options: anytype) !void {
 }
 
 const NoShrinkageRecipe = struct {
+    pub fn beginReflowTrial(_: @This()) !void {}
+
+    pub fn rollbackReflowTrial(_: @This()) void {}
+
     pub fn minimumLineHeight(_: @This(), _: usize, _: usize) ?f32 {
         return null;
     }

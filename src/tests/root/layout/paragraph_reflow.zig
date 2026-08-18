@@ -44,6 +44,127 @@ test "wraps CJK text at character boundaries without spaces" {
     try std.testing.expectEqual(@as(usize, 6), paragraph.glyphs[2].cluster);
 }
 
+test "balanced line breaking minimizes whole-paragraph raggedness" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+
+    const text = "AAA AA AA A";
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const greedy = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{ .max_width = 80 },
+    );
+    try std.testing.expectEqual(@as(usize, 3), greedy.lines.len);
+    try std.testing.expectEqual(@as(usize, 3), greedy.lines[0].glyph_len);
+    try std.testing.expectEqual(@as(usize, 5), greedy.lines[1].glyph_len);
+    try std.testing.expectEqual(@as(usize, 1), greedy.lines[2].glyph_len);
+
+    const balanced_layout = try TextShaper.layoutParagraphUtf8(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{
+            .max_width = 80,
+            .line_break_strategy = .balanced,
+        },
+    );
+    try std.testing.expectEqual(greedy.lines.len, balanced_layout.lines.len);
+    try std.testing.expectEqual(@as(usize, 3), balanced_layout.lines[0].glyph_len);
+    try std.testing.expectEqual(@as(usize, 2), balanced_layout.lines[1].glyph_len);
+    try std.testing.expectEqual(@as(usize, 4), balanced_layout.lines[2].glyph_len);
+    try std.testing.expectEqual(@as(usize, 0), balanced_layout.lines[0].byte_start);
+    try std.testing.expectEqual(@as(usize, 4), balanced_layout.lines[0].byte_len);
+    try std.testing.expectEqual(@as(usize, 4), balanced_layout.lines[1].byte_start);
+    try std.testing.expectEqual(@as(usize, 3), balanced_layout.lines[1].byte_len);
+    try std.testing.expectEqual(@as(usize, 7), balanced_layout.lines[2].byte_start);
+    try std.testing.expectEqual(text.len - 7, balanced_layout.lines[2].byte_len);
+}
+
+test "balanced reflow composes with retained hard breaks and line limits" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    const text = "AAA AA AA A\nAAA AA AA A";
+
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        text,
+        20,
+        .{ .max_width = 1000 },
+    );
+    defer paragraph.deinit();
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+
+    const balanced_layout = try paragraph.layout(&reflow, .{
+        .max_width = 80,
+        .line_break_strategy = .balanced,
+    });
+    try std.testing.expectEqual(@as(usize, 6), balanced_layout.lines.len);
+    try std.testing.expectEqual(@as(usize, 3), balanced_layout.lines[0].glyph_len);
+    try std.testing.expectEqual(@as(usize, 2), balanced_layout.lines[1].glyph_len);
+    try std.testing.expectEqual(@as(usize, 4), balanced_layout.lines[2].glyph_len);
+    try std.testing.expectEqual(
+        @as(usize, "AAA AA AA A\n".len),
+        balanced_layout.lines[3].byte_start,
+    );
+    try std.testing.expectEqual(@as(usize, 3), balanced_layout.lines[3].glyph_len);
+
+    const ellipsized = try paragraph.layout(&reflow, .{
+        .max_width = 80,
+        .line_break_strategy = .balanced,
+        .max_lines = 2,
+        .ellipsis = true,
+    });
+    try std.testing.expectEqual(@as(usize, 2), ellipsized.lines.len);
+    const terminal = ellipsized.lines[1].glyphs(ellipsized);
+    try std.testing.expect(terminal.len >= 3);
+    try std.testing.expectEqual(@as(u21, '.'), terminal[terminal.len - 1].codepoint);
+    try std.testing.expectEqual(@as(u21, '.'), terminal[terminal.len - 2].codepoint);
+    try std.testing.expectEqual(@as(u21, '.'), terminal[terminal.len - 3].codepoint);
+
+    const unbounded = try paragraph.layout(&reflow, .{
+        .max_width = std.math.inf(f32),
+        .line_break_strategy = .balanced,
+    });
+    try std.testing.expectEqual(@as(usize, 2), unbounded.lines.len);
+    try std.testing.expectEqual(
+        @as(usize, "AAA AA AA A".len),
+        unbounded.lines[0].glyph_len,
+    );
+
+    const no_wrap = try paragraph.layout(&reflow, .{
+        .max_width = 1,
+        .wrap_mode = .no_wrap,
+        .line_break_strategy = .balanced,
+    });
+    try std.testing.expectEqual(@as(usize, 2), no_wrap.lines.len);
+    try std.testing.expectEqual(
+        @as(usize, "AAA AA AA A".len),
+        no_wrap.lines[0].glyph_len,
+    );
+}
+
 test "paragraph wrapping keeps combining grapheme clusters atomic" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");
@@ -996,6 +1117,53 @@ test "JSTF shrinkage preserves styled glyph metadata alignment" {
         paragraph.lines[0].width,
         0.001,
     );
+}
+
+test "balanced styled probe rolls back JSTF shrinkage metadata" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildJstfShrinkageTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    var styled = support.StyledParagraphBuffer.init(allocator);
+    defer styled.deinit();
+    const text = "AAA AAA AAA";
+    const spans = [_]support.StyledParagraphSpan{.{
+        .byte_start = 0,
+        .byte_len = text.len,
+        .style_index = 23,
+        .font_size = 20,
+        .letter_spacing = 1,
+    }};
+
+    const paragraph = try TextShaper.layoutStyledParagraphUtf8(
+        cascade,
+        &buffer,
+        &styled,
+        text,
+        20,
+        &spans,
+        .{
+            .max_width = 44,
+            .alignment = .justify,
+            .line_break_strategy = .balanced,
+            .font_expansion = .{ .enabled = false },
+            .kashida = .{ .enabled = false },
+        },
+    );
+    try std.testing.expect(paragraph.lines.len >= 2);
+    try std.testing.expectEqual(
+        paragraph.glyphs.len,
+        styled.glyphMetadata().len,
+    );
+    for (styled.glyphMetadata()) |metadata| {
+        try std.testing.expectEqual(@as(u32, 23), metadata.style_index);
+    }
 }
 
 test "JSTF shrinkage updates later line and run indexes after ligature collapse" {

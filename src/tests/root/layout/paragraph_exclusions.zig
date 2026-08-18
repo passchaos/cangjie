@@ -291,6 +291,51 @@ test "retained reflow changes exclusions without reshaping" {
     try std.testing.expectApproxEqAbs(@as(f32, 50), repeated.lines[0].region_x, 0.001);
 }
 
+test "balanced reflow measures final exclusion fragments" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const exclusion = paragraph.Exclusion{
+        .x = 0,
+        .y = 0,
+        .width = 36,
+        .height = 21,
+    };
+    const layout = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&.{&font}),
+        &buffer,
+        "AAA AA AA A",
+        20,
+        .{
+            .max_width = 80,
+            .line_break_strategy = .balanced,
+            .exclusions = &.{exclusion},
+        },
+    );
+
+    try std.testing.expect(layout.lines.len >= 3);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 36),
+        layout.lines[0].region_x,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 44),
+        layout.lines[0].region_width,
+        0.001,
+    );
+    for (layout.lines) |line| {
+        try std.testing.expect(
+            line.width <= line.region_width + 0.001,
+        );
+    }
+}
+
 test "styled minimum line height participates in exclusion overlap" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

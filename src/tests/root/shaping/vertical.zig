@@ -43,7 +43,7 @@ test "vertical shaping uses vmtx and keeps horizontal behavior isolated" {
         );
         try std.testing.expectApproxEqAbs(@as(f32, 0), glyph.x_advance, 0.001);
         try std.testing.expectApproxEqAbs(@as(f32, 20), glyph.y_advance, 0.001);
-        try std.testing.expectApproxEqAbs(@as(f32, 8), glyph.x_offset, 0.001);
+        try std.testing.expectApproxEqAbs(@as(f32, -8), glyph.x_offset, 0.001);
     }
 }
 
@@ -75,7 +75,7 @@ test "vertical shaping centers glyph extents when vmtx is absent" {
     );
     try std.testing.expectEqual(@as(usize, 1), vertical.glyphs.len);
     try std.testing.expectApproxEqAbs(
-        @as(f32, @floatFromInt(expected_origin)),
+        -@as(f32, @floatFromInt(expected_origin)),
         vertical.glyphs[0].y_offset,
         0.001,
     );

@@ -2198,6 +2198,10 @@ shaping-performance superiority.
   origin `(-512,578)` and advance `-1024` instead of using half the line height
   as the y origin. The Font-level origin API is shared by layout output and the
   parity runner so renderers receive the same complete vertical translation.
+  Public positioned glyphs now store the actual HarfBuzz-style negative
+  origin offsets, including HVAR/VVAR/gvar variation and odd horizontal
+  advances; the parity runner reads those fields directly and retains only its
+  explicit synthetic bold/slant adjustment.
   Positioned output now also retains the resolved per-glyph orientation:
   explicit upright/sideways policy applies uniformly, while CSS mixed mode
   keeps U/Tu/Tr upright and marks only UAX #50 R glyphs sideways. CPU

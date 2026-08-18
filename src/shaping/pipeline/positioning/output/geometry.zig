@@ -149,8 +149,11 @@ pub fn resolve(
     else
         input.font_size +
             @as(f32, @floatFromInt(kerx_adjustment.y_advance)) * input.scale;
-    const vertical_x_offset = if (vertical_metrics) |_|
-        (@as(f32, @floatFromInt(metrics.advance_width)) * 0.5) * input.scale
+    const vertical_x_offset = if (input.options.writing_mode.isVertical())
+        -@as(
+            f32,
+            @floatFromInt(@divTrunc(@as(i32, metrics.advance_width), 2)),
+        ) * input.scale
     else
         0.0;
     const vertical_y_offset =
@@ -160,7 +163,7 @@ pub fn resolve(
                 glyph_id,
                 input.options.normalized_variation_coords,
             );
-            break :origin @as(f32, @floatFromInt(origin_y)) * input.scale;
+            break :origin -@as(f32, @floatFromInt(origin_y)) * input.scale;
         } else 0.0;
     const zeroed_mark_x_offset =
         if (mark_zeroing.adjust_offsets and
@@ -204,7 +207,7 @@ pub fn resolve(
                 kerx_state_x_offset
             else if (kerx_adjustment.attachment_type == .cursive and
                 kerx_adjustment.attachment_parent_index != null)
-                -vertical_x_offset + kerx_state_x_offset
+                vertical_x_offset + kerx_state_x_offset
             else
                 vertical_x_offset +
                     gpos_x_offset +

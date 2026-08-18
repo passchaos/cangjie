@@ -541,6 +541,11 @@ upright and rotating UAX #50 R glyphs 90 degrees clockwise. The renderer
 rotates each sideways outline, color layer, or post-hinting pixel outline
 around its shaping origin before advancing the unchanged two-dimensional pen,
 so Latin and CJK can share one vertical run without rotating the whole column.
+Vertical `x_offset`/`y_offset` also now carry HarfBuzz's actual
+`-v_origin_x/-v_origin_y` values rather than renderer-specific positive
+origins. Grayscale, color, and hinted renderers therefore consume the same
+public offset contract, and parity tools no longer reconstruct ordinary
+vertical origins out of band.
 
 Before discrete Kashida or spacing expansion, a justified non-terminal line
 may also reshape through one variable-font expansion axis. Cangjie prefers an

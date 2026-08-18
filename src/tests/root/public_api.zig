@@ -37,6 +37,16 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(
         @typeInfo(cangjie.render.InlineObjectDrawCommand) == .@"struct",
     );
+    try std.testing.expect(
+        @typeInfo(cangjie.render.TextDecorationDrawCommand) == .@"struct",
+    );
+    try std.testing.expect(
+        @typeInfo(cangjie.text.attributed.DecorationSegment) == .@"struct",
+    );
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        std.enums.values(cangjie.text.attributed.DecorationKind).len,
+    );
     try std.testing.expect(@hasDecl(cangjie.text, "segmentation"));
     try std.testing.expect(@hasDecl(cangjie.text, "hyphenation"));
     try std.testing.expect(@hasDecl(cangjie.font.metadata, "variations"));

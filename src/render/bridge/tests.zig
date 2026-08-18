@@ -107,6 +107,69 @@ test "render bridge carries slug analytic render mode metadata" {
     try std.testing.expectEqual(GlyphRenderMode.slug_analytic, key.render_mode);
 }
 
+test "render bridge validates decoration geometry" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const font_mod.Font{&font};
+    var buffer = context_output.Buffer.init(allocator);
+    defer buffer.deinit();
+    const paragraph =
+        try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
+            font_fallback.Cascade.init(&fonts),
+            &buffer,
+            "A",
+            20,
+            .{ .max_width = 100 },
+        );
+    const valid = bridge.TextDecorationDrawCommand{
+        .kind = .underline,
+        .style_index = 0,
+        .font_run_index = 0,
+        .line_index = 0,
+        .rect = .{ .x = 0, .y = 18, .width = 16, .height = 1 },
+        .color = .{ .r = 1, .g = 2, .b = 3, .a = 255 },
+    };
+    var draw_list = try buildGlyphDrawList(
+        allocator,
+        paragraph,
+        .{ .decorations = &.{valid} },
+    );
+    defer draw_list.deinit();
+    try std.testing.expectEqual(@as(usize, 1), draw_list.decorations.len);
+
+    var invalid = valid;
+    invalid.line_index = 1;
+    try std.testing.expectError(
+        error.InvalidDecorationGeometry,
+        buildGlyphDrawList(
+            allocator,
+            paragraph,
+            .{ .decorations = &.{invalid} },
+        ),
+    );
+    invalid = valid;
+    invalid.rect.width = std.math.nan(f32);
+    try std.testing.expectError(
+        error.InvalidDecorationGeometry,
+        buildGlyphDrawList(
+            allocator,
+            paragraph,
+            .{ .decorations = &.{invalid} },
+        ),
+    );
+    try std.testing.expectError(
+        error.InvalidRenderOrigin,
+        buildGlyphDrawList(
+            allocator,
+            paragraph,
+            .{ .origin_x = std.math.inf(f32) },
+        ),
+    );
+}
+
 test "render bridge emits color glyph layer metadata" {
     const allocator = std.testing.allocator;
 

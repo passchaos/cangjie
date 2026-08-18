@@ -600,6 +600,28 @@ name resolution remains a separate `cangjie.font.database.Database`
 responsibility: the unified entry consumes an already selected `font.Cascade`
 and does not guess how a family name maps to loaded font bytes.
 
+Attributed paragraph output also materializes text decorations instead of
+leaving renderers to reconstruct them from logical style ranges.
+`AttributedParagraphLayout.decorations` contains paragraph-space underline and
+strikethrough rectangles split at every final visual line, style run, and font
+run. Each segment retains line/style/font identities and the style color.
+Positions and thicknesses come from the final font instance's scaled
+`post`/`OS/2` decoration metrics (with existing validated fallbacks); OpenType
+positions are treated as stroke centerlines when converted to fill rectangles.
+Mixed bidi order, fallback fonts, font sizes, kerning, letter/word spacing,
+wrapping, justification, tabs, and ellipsis are therefore already reflected in
+the segment geometry. Fontless tabs borrow the nearest same-style font metrics
+and remain covered, while inline objects deliberately break decoration
+continuity.
+
+The renderer bridge accepts these segments through
+`BridgeOptions.decorations`, copies them into `GlyphDrawList.decorations`, and
+applies the same origin as glyphs, cursors, selections, and inline objects.
+Decoration geometry is optional and attributed-only; ordinary paragraph
+shaping buffers do not pay for paint metadata. The bridge validates all
+borrowed segment indexes and finite, nonnegative rectangles before ownership
+transfer.
+
 `cangjie.font.database.Database.layoutAttributed` is the
 integrated entry point for callers that do want that resolution. It maps each
 normalized style run's family, weight, stretch, and normal/italic/oblique

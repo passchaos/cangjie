@@ -1,4 +1,5 @@
 const std = @import("std");
+const decorations = @import("decorations.zig");
 const face_mod = @import("../../font/face/root.zig");
 const Font = @import("../../font.zig").Font;
 const glyph_position = @import("../../layout/glyph_position.zig");
@@ -30,12 +31,14 @@ pub fn Result(comptime TextStyle: type) type {
         lines: []paragraph_types.ParagraphLine,
         inline_objects: []inline_object.Positioned,
         style_runs: []StyleRun(TextStyle),
+        decorations: []decorations.Segment,
         paragraph: paragraph_types.ParagraphLayout,
 
         /// `TextStyle` can contain borrowed strings and feature/variation
         /// slices. Callers keep those payloads alive until this result is no
         /// longer used; the geometry and run arrays themselves are owned here.
         pub fn deinit(self: *@This()) void {
+            self.allocator.free(self.decorations);
             self.allocator.free(self.style_runs);
             self.allocator.free(self.inline_objects);
             self.allocator.free(self.lines);
@@ -119,6 +122,12 @@ pub fn layoutResolved(
         runs,
     );
     errdefer allocator.free(style_runs);
+    const decoration_segments = try decorations.build(
+        allocator,
+        paragraph,
+        style_runs,
+    );
+    errdefer allocator.free(decoration_segments);
 
     return .{
         .allocator = allocator,
@@ -128,6 +137,7 @@ pub fn layoutResolved(
         .lines = lines,
         .inline_objects = inline_objects,
         .style_runs = style_runs,
+        .decorations = decoration_segments,
         .paragraph = .{
             .glyphs = glyphs,
             .runs = font_runs,

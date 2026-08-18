@@ -27,5 +27,6 @@ pub const PositionedGlyph = bridge.PositionedGlyph;
 pub const CursorGeometry = bridge.TextCursorGeometry;
 pub const SelectionGeometry = bridge.TextSelectionGeometry;
 pub const InlineObjectDrawCommand = bridge.InlineObjectDrawCommand;
+pub const TextDecorationDrawCommand = bridge.TextDecorationDrawCommand;
 
 pub const buildGlyphDrawList = bridge.buildGlyphDrawList;

@@ -173,6 +173,8 @@ pub const AttributedGlyphRunLayout = struct {
 };
 
 pub const AttributedStyleRun = attributed_paragraph.StyleRun(TextStyle);
+pub const TextDecorationKind = @import("decorations.zig").Kind;
+pub const TextDecorationSegment = @import("decorations.zig").Segment;
 pub const AttributedParagraphLayout = attributed_paragraph.Result(TextStyle);
 
 pub fn layoutAttributedParagraphUtf8(

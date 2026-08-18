@@ -5,6 +5,7 @@ const database = @import("../../font/database/root.zig");
 const font_mod = @import("../../font.zig");
 const glyph_mod = @import("../../glyph.zig");
 const styled_buffer = @import("../../layout/styled_buffer.zig");
+const render_bridge = @import("../../render/bridge/root.zig");
 const context_output = @import("../../shaping/context/output.zig");
 const font_fallback = @import("../../shaping/fallback/font/root.zig");
 const shaping_orchestrator = @import("../../shaping/orchestrator.zig");
@@ -171,6 +172,253 @@ test "styled bidi order carries paint fragments" {
         saw_underlined = saw_underlined or run.style.decoration.underline;
     }
     try std.testing.expect(saw_underlined);
+    try std.testing.expectEqual(@as(usize, 1), result.decorations.len);
+    const segment = result.decorations[0];
+    try std.testing.expectEqual(
+        attributed_model.TextDecorationKind.underline,
+        segment.kind,
+    );
+    try std.testing.expectEqual(@as(usize, 0), segment.line_index);
+    try std.testing.expectEqual(@as(u32, 1), segment.style_index);
+    try std.testing.expect(segment.rect.width > 0);
+    // Logical Hebrew is reordered to the physical right of the Latin prefix;
+    // decoration geometry must use that final visual location.
+    try std.testing.expect(segment.rect.x >= result.glyphs[0].x_advance);
+}
+
+test "attributed decorations split at wraps styles and font runs" {
+    const allocator = std.testing.allocator;
+    const primary_bytes = try test_font.buildSingleCodepointTtfWithLineMetrics(
+        allocator,
+        'A',
+        800,
+        -200,
+        0,
+    );
+    defer allocator.free(primary_bytes);
+    const fallback_bytes = try test_font.buildSingleCodepointTtfWithLineMetrics(
+        allocator,
+        'B',
+        1100,
+        -350,
+        100,
+    );
+    defer allocator.free(fallback_bytes);
+    var primary = try font_mod.Font.parse(allocator, primary_bytes);
+    defer primary.deinit();
+    var fallback = try font_mod.Font.parse(allocator, fallback_bytes);
+    defer fallback.deinit();
+    const fonts = [_]*const font_mod.Font{ &primary, &fallback };
+    const text = "AB AB";
+    const spans = [_]style.StyleSpan{
+        .{
+            .byte_range = .{ .start = 0, .len = 2 },
+            .style = .{
+                .font_size = 20,
+                .color = .{ .r = 200, .g = 10, .b = 20, .a = 255 },
+                .decoration = .{ .underline = true },
+            },
+        },
+        .{
+            .byte_range = .{ .start = 2, .len = text.len - 2 },
+            .style = .{
+                .font_size = 30,
+                .color = .{ .r = 20, .g = 30, .b = 220, .a = 255 },
+                .decoration = .{
+                    .underline = true,
+                    .strikethrough = true,
+                },
+            },
+        },
+    };
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
+        allocator,
+        font_fallback.Cascade.init(&fonts),
+        .{ .text = text, .spans = &spans },
+        45,
+    );
+    defer result.deinit();
+
+    try std.testing.expect(result.lines.len >= 2);
+    try std.testing.expect(result.decorations.len >= 4);
+    var saw_primary_underline = false;
+    var saw_fallback_underline = false;
+    var saw_second_line_strike = false;
+    for (result.decorations) |segment| {
+        try std.testing.expect(segment.rect.width > 0);
+        try std.testing.expect(segment.rect.height >= 0.5);
+        if (segment.kind == .underline and segment.font_run_index == 0) {
+            saw_primary_underline = true;
+        }
+        if (segment.kind == .underline and segment.font_run_index != 0) {
+            saw_fallback_underline = true;
+        }
+        if (segment.kind == .strikethrough and segment.line_index != 0) {
+            saw_second_line_strike = true;
+        }
+    }
+    try std.testing.expect(saw_primary_underline);
+    try std.testing.expect(saw_fallback_underline);
+    try std.testing.expect(saw_second_line_strike);
+}
+
+test "decorations bridge through render origin with style color" {
+    const allocator = std.testing.allocator;
+    var owned = try OwnedFont.init(
+        allocator,
+        try test_font.buildMinimalTtf(allocator),
+    );
+    defer owned.deinit();
+    const fonts = [_]*const font_mod.Font{&owned.font};
+    const spans = [_]style.StyleSpan{.{
+        .byte_range = .{ .start = 0, .len = 2 },
+        .style = .{
+            .font_size = 20,
+            .color = .{ .r = 9, .g = 80, .b = 170, .a = 230 },
+            .decoration = .{
+                .underline = true,
+                .strikethrough = true,
+            },
+        },
+    }};
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
+        allocator,
+        font_fallback.Cascade.init(&fonts),
+        .{ .text = "AA", .spans = &spans },
+        100,
+    );
+    defer result.deinit();
+    try std.testing.expectEqual(@as(usize, 2), result.decorations.len);
+
+    var draw_list = try render_bridge.buildGlyphDrawList(
+        allocator,
+        result.paragraph,
+        .{
+            .origin_x = 5,
+            .origin_y = 7,
+            .decorations = result.decorations,
+        },
+    );
+    defer draw_list.deinit();
+    try std.testing.expectEqual(result.decorations.len, draw_list.decorations.len);
+    for (result.decorations, draw_list.decorations) |source, drawn| {
+        try std.testing.expectEqual(source.kind, drawn.kind);
+        try std.testing.expectEqual(source.color, drawn.color);
+        try std.testing.expectApproxEqAbs(
+            source.rect.x + 5,
+            drawn.rect.x,
+            0.001,
+        );
+        try std.testing.expectApproxEqAbs(
+            source.rect.y + 7,
+            drawn.rect.y,
+            0.001,
+        );
+    }
+}
+
+test "underline rectangle uses font centerline metrics" {
+    const allocator = std.testing.allocator;
+    var post: [32]u8 = .{0} ** 32;
+    const sfnt_fixture = @import("../../font/tests/fixtures/sfnt.zig");
+    sfnt_fixture.writeU32(&post, 0, 0x00030000);
+    sfnt_fixture.writeI16(&post, 8, -125);
+    sfnt_fixture.writeI16(&post, 10, 45);
+    var owned = try OwnedFont.init(
+        allocator,
+        try test_font.buildMinimalTtfWithPost(allocator, &post),
+    );
+    defer owned.deinit();
+    const fonts = [_]*const font_mod.Font{&owned.font};
+    const spans = [_]style.StyleSpan{.{
+        .byte_range = .{ .start = 0, .len = 1 },
+        .style = .{
+            .font_size = 20,
+            .decoration = .{ .underline = true },
+        },
+    }};
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
+        allocator,
+        font_fallback.Cascade.init(&fonts),
+        .{ .text = "A", .spans = &spans },
+        100,
+    );
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), result.decorations.len);
+    const segment = result.decorations[0];
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0.9),
+        segment.rect.height,
+        0.001,
+    );
+    const baseline_y =
+        result.lines[0].y + result.lines[0].baseline;
+    try std.testing.expectApproxEqAbs(
+        baseline_y + 2.5 - 0.45,
+        segment.rect.y,
+        0.001,
+    );
+}
+
+test "underline continues through tab but stops at inline object" {
+    const allocator = std.testing.allocator;
+    var owned = try OwnedFont.init(
+        allocator,
+        try test_font.buildMinimalTtf(allocator),
+    );
+    defer owned.deinit();
+    const fonts = [_]*const font_mod.Font{&owned.font};
+    const marker = @import("../../layout/inline_object/root.zig");
+    const text =
+        "A\tA" ++ marker.object_replacement_utf8 ++ "A";
+    const spans = [_]style.StyleSpan{.{
+        .byte_range = .{ .start = 0, .len = text.len },
+        .style = .{
+            .font_size = 20,
+            .decoration = .{ .underline = true },
+        },
+    }};
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
+        allocator,
+        font_fallback.Cascade.init(&fonts),
+        .{
+            .text = text,
+            .spans = &spans,
+            .inline_objects = &.{.{
+                .id = 91,
+                .byte_index = 3,
+                .width = 14,
+                .height = 18,
+            }},
+        },
+        120,
+    );
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), result.decorations.len);
+    try std.testing.expectApproxEqAbs(
+        result.paragraph.glyphs[0].x_advance +
+            result.paragraph.glyphs[1].x_advance +
+            result.paragraph.glyphs[2].x_advance,
+        result.decorations[0].rect.width +
+            result.decorations[1].rect.width,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        result.decorations[0].rect.x +
+            result.decorations[0].rect.width,
+        result.decorations[1].rect.x,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        result.paragraph.glyphs[0].x_advance +
+            result.paragraph.glyphs[1].x_advance +
+            result.paragraph.glyphs[2].x_advance +
+            result.paragraph.glyphs[3].x_advance,
+        result.decorations[2].rect.x,
+        0.001,
+    );
 }
 
 test "attributed paragraph retains inline object geometry and style metadata" {
@@ -317,6 +565,7 @@ test "styled ellipsis inherits terminal paint and buffer reuse clears metadata" 
         .{ .byte_range = .{ .start = 0, .len = 2 }, .style = .{} },
         .{ .byte_range = .{ .start = 2, .len = 5 }, .style = .{
             .color = .{ .r = 0, .g = 180, .b = 0, .a = 255 },
+            .decoration = .{ .underline = true },
         } },
     };
     var result = try attributed_model.layoutAttributedParagraphUtf8(
@@ -332,6 +581,26 @@ test "styled ellipsis inherits terminal paint and buffer reuse clears metadata" 
     defer result.deinit();
     try std.testing.expectEqual(@as(u8, 180), result.style_runs[result.style_runs.len - 1].style.color.g);
     try std.testing.expectEqual(@as(u21, '.'), result.glyphs[result.glyphs.len - 1].codepoint);
+    const terminal_style_index =
+        result.style_runs[result.style_runs.len - 1].style_index;
+    var terminal_decoration_end: ?f32 = null;
+    for (result.decorations) |segment| {
+        if (segment.style_index != terminal_style_index) continue;
+        terminal_decoration_end = segment.rect.x + segment.rect.width;
+    }
+    try std.testing.expect(terminal_decoration_end != null);
+    var line_advance: f32 = 0;
+    const line = result.lines[result.lines.len - 1];
+    for (result.glyphs[line.glyph_start .. line.glyph_start + line.glyph_len]) |glyph| {
+        line_advance += glyph.x_advance;
+    }
+    // Synthetic ellipsis dots inherit terminal paint and must be included in
+    // the final decoration rectangle rather than ending at source text.
+    try std.testing.expectApproxEqAbs(
+        line.x + line_advance,
+        terminal_decoration_end.?,
+        0.001,
+    );
 
     var buffer = context_output.Buffer.init(allocator);
     defer buffer.deinit();

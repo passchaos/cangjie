@@ -38,6 +38,8 @@ pub const BridgeOptions = struct {
     cursor_position: ?paragraph_types.TextPosition = null,
     selection_start_glyph: ?usize = null,
     selection_end_glyph: ?usize = null,
+    /// Optional attributed decoration geometry in paragraph coordinates.
+    decorations: []const TextDecorationDrawCommand = &.{},
 };
 
 pub const GlyphAtlasCacheKey = struct {
@@ -186,6 +188,8 @@ pub const TextSelectionGeometry = struct {
 };
 
 pub const InlineObjectDrawCommand = inline_object.Positioned;
+pub const TextDecorationDrawCommand =
+    @import("../../text/attributed/decorations.zig").Segment;
 
 pub const GlyphDrawList = struct {
     allocator: std.mem.Allocator,
@@ -200,8 +204,10 @@ pub const GlyphDrawList = struct {
     cursor: ?TextCursorGeometry,
     selection: []TextSelectionGeometry,
     inline_objects: []InlineObjectDrawCommand,
+    decorations: []TextDecorationDrawCommand,
 
     pub fn deinit(self: *GlyphDrawList) void {
+        self.allocator.free(self.decorations);
         self.allocator.free(self.inline_objects);
         self.allocator.free(self.selection);
         self.allocator.free(self.normalized_variation_coords);
@@ -220,8 +226,25 @@ pub const GlyphDrawList = struct {
 };
 
 pub fn buildGlyphDrawList(allocator: std.mem.Allocator, paragraph: paragraph_types.ParagraphLayout, options: BridgeOptions) !GlyphDrawList {
+    if (!std.math.isFinite(options.origin_x) or
+        !std.math.isFinite(options.origin_y))
+    {
+        return error.InvalidRenderOrigin;
+    }
     for (options.normalized_variation_coords) |coord| {
         if (!std.math.isFinite(coord) or coord < -1 or coord > 1) return error.BadSfnt;
+    }
+    for (options.decorations) |decoration| {
+        if (decoration.line_index >= paragraph.lines.len or
+            decoration.font_run_index >= paragraph.runs.len or
+            !std.math.isFinite(decoration.rect.x) or
+            !std.math.isFinite(decoration.rect.y) or
+            !std.math.isFinite(decoration.rect.width) or
+            !std.math.isFinite(decoration.rect.height) or
+            decoration.rect.width < 0 or decoration.rect.height < 0)
+        {
+            return error.InvalidDecorationGeometry;
+        }
     }
     var builder = BridgeBuilder.init(allocator, paragraph, options);
     defer builder.deinitScratch();
@@ -242,6 +265,7 @@ const BridgeBuilder = struct {
     color_stops: std.ArrayList(font_mod.ColorPaint.ColorStop) = .empty,
     selection: std.ArrayList(TextSelectionGeometry) = .empty,
     inline_objects: std.ArrayList(InlineObjectDrawCommand) = .empty,
+    decorations: std.ArrayList(TextDecorationDrawCommand) = .empty,
     cursor: ?TextCursorGeometry = null,
 
     fn init(allocator: std.mem.Allocator, paragraph: paragraph_types.ParagraphLayout, options: BridgeOptions) BridgeBuilder {
@@ -253,6 +277,7 @@ const BridgeBuilder = struct {
     }
 
     fn deinitScratch(self: *BridgeBuilder) void {
+        self.decorations.deinit(self.allocator);
         self.inline_objects.deinit(self.allocator);
         self.selection.deinit(self.allocator);
         self.color_stops.deinit(self.allocator);
@@ -268,6 +293,16 @@ const BridgeBuilder = struct {
     }
 
     fn build(self: *BridgeBuilder) !void {
+        try self.decorations.ensureTotalCapacity(
+            self.allocator,
+            self.options.decorations.len,
+        );
+        for (self.options.decorations) |decoration| {
+            var positioned = decoration;
+            positioned.rect.x += self.options.origin_x;
+            positioned.rect.y += self.options.origin_y;
+            self.decorations.appendAssumeCapacity(positioned);
+        }
         try self.inline_objects.ensureTotalCapacity(
             self.allocator,
             self.paragraph.inline_objects.len,
@@ -609,6 +644,9 @@ const BridgeBuilder = struct {
         const inline_objects =
             try self.inline_objects.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(inline_objects);
+        const decorations =
+            try self.decorations.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(decorations);
         const result = GlyphDrawList{
             .allocator = self.allocator,
             .glyphs = glyphs,
@@ -622,6 +660,7 @@ const BridgeBuilder = struct {
             .cursor = self.cursor,
             .selection = selection,
             .inline_objects = inline_objects,
+            .decorations = decorations,
         };
         // Requests live as long as the draw list, not as long as paragraph or
         // BridgeOptions storage. Rebind each request to its interned range.

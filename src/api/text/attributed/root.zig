@@ -15,6 +15,8 @@ pub const GlyphRun = attributed_model.AttributedGlyphRun;
 pub const GlyphRunLayout = attributed_model.AttributedGlyphRunLayout;
 pub const ParagraphLayout = attributed_model.AttributedParagraphLayout;
 pub const StyleRun = attributed_model.AttributedStyleRun;
+pub const DecorationKind = attributed_model.TextDecorationKind;
+pub const DecorationSegment = attributed_model.TextDecorationSegment;
 
 pub fn measure(
     allocator: std.mem.Allocator,

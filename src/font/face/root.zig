@@ -105,6 +105,23 @@ pub const Face = struct {
             target,
         );
     }
+
+    /// Decode a default-instance simple glyf into raw 26.6 point state.
+    ///
+    /// Glyph bytecode has not run; use the returned owner as the atomic input
+    /// to point-zone execution and pixel-path reconstruction.
+    pub fn hintingPointTransaction(
+        self: *const Face,
+        allocator: std.mem.Allocator,
+        instance: *const font_mod.TrueTypeHintingInstance,
+        glyph_id: @import("../../glyph.zig").GlyphId,
+    ) (font_mod.FontError || @import("../hinting/root.zig").Error)!font_mod.TrueTypePointTransaction {
+        return self.implementation.hintingPointTransaction(
+            allocator,
+            instance,
+            glyph_id,
+        );
+    }
 };
 
 /// An ordered fallback list. The slice and every face are borrowed.

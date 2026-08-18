@@ -143,6 +143,8 @@ pub const TrueTypeProgramKind = tt_program_mod.Kind;
 pub const TrueTypeHintingInstance = hinting.Instance;
 pub const TrueTypeHintingTarget = hinting.Target;
 pub const TrueTypeHintingError = hinting.Error;
+pub const TrueTypePointTransaction = hinting.PointTransaction;
+pub const TrueTypePixelOutline = hinting.PixelOutline;
 pub const VarcInfo = varc_mod.Info;
 
 pub const FontTableInfo = struct {
@@ -1557,6 +1559,7 @@ pub const Font = struct {
         return hinting.Instance.init(
             allocator,
             .{
+                .face_identity = @intFromPtr(self),
                 .units_per_em = head_info.units_per_em,
                 .font_program = font_program,
                 .control_value_program = control_value_program,
@@ -1576,6 +1579,80 @@ pub const Font = struct {
             },
             ppem,
             target,
+        );
+    }
+
+    /// Decode one default-instance simple glyf outline into a raw point
+    /// transaction suitable for TrueType glyph-program execution.
+    ///
+    /// Compound and variable glyphs remain explicit errors until their
+    /// component/gvar deltas can enter the same atomic transaction.
+    pub fn hintingPointTransaction(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        instance: *const TrueTypeHintingInstance,
+        glyph_id: glyph_mod.GlyphId,
+    ) (FontError || hinting.Error)!TrueTypePointTransaction {
+        if (self.format != .truetype) return error.UnsupportedHintGlyph;
+        if (instance.source.face_identity != @intFromPtr(self)) {
+            return error.StaleHintingInstance;
+        }
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        // Revalidate the complete outline stack because the transaction
+        // exposes borrowed glyph bytecode and point topology to the VM.
+        const loca = self.loca orelse return error.MissingTable;
+        const glyf = self.glyf orelse return error.MissingTable;
+        try sfnt.checksum.validate(self.data, self.maxp);
+        try sfnt.checksum.validate(self.data, loca);
+        try sfnt.checksum.validate(self.data, glyf);
+        const limits = try (try self.maxpInfo()).trueTypeLimits();
+        try loca_mod.validate(
+            self.data,
+            loca,
+            glyf,
+            self.glyph_count,
+            self.index_to_loc_format,
+        );
+        try glyf_mod.validate(
+            allocator,
+            self.data,
+            loca,
+            glyf,
+            self.glyph_count,
+            self.index_to_loc_format,
+            .{
+                .max_points = limits.max_points,
+                .max_contours = limits.max_contours,
+                .max_component_elements = limits.max_component_elements,
+                .max_component_depth = limits.max_component_depth,
+            },
+        );
+        const data = try self.glyphData(glyph_id);
+        if (data.len == 0) return error.UnsupportedHintGlyph;
+        const contour_count = try bin.readI16At(data, 0);
+        if (contour_count < 0 or self.gvar != null) {
+            return error.UnsupportedHintGlyph;
+        }
+        const horizontal = try self.horizontalMetrics(glyph_id);
+        const bounds = try self.glyphBoundsFromParsedTables(glyph_id);
+        const vertical = (try self.verticalMetrics(glyph_id)) orelse
+            VerticalMetrics{
+                .advance_height = self.units_per_em,
+                .top_side_bearing = 0,
+            };
+        return hinting.outline.decodeSimple(
+            allocator,
+            glyph_id,
+            data,
+            @intCast(contour_count),
+            .{
+                .bounds = bounds,
+                .advance_width = horizontal.advance_width,
+                .left_side_bearing = horizontal.left_side_bearing,
+                .vertical_advance = vertical.advance_height,
+                .top_side_bearing = vertical.top_side_bearing,
+            },
+            instance.scale_16_16,
         );
     }
 

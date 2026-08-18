@@ -7,6 +7,9 @@
 
 pub const types = @import("types.zig");
 pub const Instance = @import("instance.zig").Instance;
+pub const outline = @import("outline.zig");
+pub const PointTransaction = outline.Transaction;
+pub const PixelOutline = outline.PixelOutline;
 pub const Target = types.Target;
 pub const Source = types.Source;
 pub const Error = types.Error;
@@ -18,4 +21,5 @@ test {
     _ = @import("types.zig");
     _ = @import("vm.zig");
     _ = @import("instance.zig");
+    _ = @import("outline.zig");
 }

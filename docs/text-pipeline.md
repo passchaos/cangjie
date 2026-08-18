@@ -891,6 +891,18 @@ The current size instance is also the default variation location; cvar and
 GETVARIATION require the same normalized-coordinate ownership and are deferred
 to that raw-point slice rather than approximated independently.
 
+The raw-point boundary now exists for default-instance simple `glyf` glyphs as
+`Face.hintingPointTransaction`. It owns unscaled, original-scaled, and mutable
+26.6 point arrays; on-curve/touched/overlap flags; contour ends; the borrowed
+glyph instruction slice; and all four horizontal/vertical phantom points.
+`toPixelOutline` reconstructs a distinct pixel-space path and applies the
+possibly modified left phantom (`pp1`) as the FreeType-compatible glyph
+origin. Compound and gvar-backed glyphs return `UnsupportedHintGlyph` rather
+than silently losing component or variation semantics, and transactions reject
+an instance created from another face. The point-zone VM and raster bridge are
+the next layer over this owner; merely decoding the transaction does not claim
+that glyph bytecode has run.
+
 The shaping integration suite is similarly rooted at
 `src/tests/root/shaping/`, with focused diagnostics, fallback, font-contract,
 GSUB, GPOS/AAT, attachment, pipeline-state, and vertical-layout modules. Tests

@@ -21,6 +21,8 @@ pub const Error = error{
     InvalidHintStorage,
     InvalidHintCvt,
     InvalidHintOperand,
+    StaleHintingInstance,
+    UnsupportedHintGlyph,
     DivideByZero,
     UnsupportedHintInstruction,
 } || std.mem.Allocator.Error;
@@ -40,6 +42,9 @@ pub const Limits = struct {
 };
 
 pub const Source = struct {
+    /// Optional owning-face identity used to reject cross-face transactions.
+    /// Standalone VM tests use zero.
+    face_identity: usize = 0,
     units_per_em: u16,
     font_program: []const u8,
     control_value_program: []const u8,

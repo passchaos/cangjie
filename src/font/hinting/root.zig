@@ -6,6 +6,7 @@
 //! variation location and do not yet apply cvar deltas.
 
 pub const types = @import("types.zig");
+pub const compound = @import("compound.zig");
 pub const Instance = @import("instance.zig").Instance;
 pub const outline = @import("outline.zig");
 pub const PointTransaction = outline.Transaction;
@@ -19,6 +20,7 @@ test {
     _ = @import("program.zig");
     _ = @import("stack.zig");
     _ = @import("types.zig");
+    _ = @import("compound.zig");
     _ = @import("vm.zig");
     _ = @import("instance.zig");
     _ = @import("outline.zig");

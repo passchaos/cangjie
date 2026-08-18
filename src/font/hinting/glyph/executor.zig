@@ -51,6 +51,10 @@ pub fn execute(
     {
         return error.StaleHintingInstance;
     }
+    // Compound ownership is already materialized, but correct execution must
+    // hint every child before placement and only then run parent bytecode.
+    // Reject until that complete atomic lifecycle is available.
+    if (transaction.is_compound) return error.UnsupportedHintGlyph;
     try validateTransaction(transaction);
 
     // Phantom metrics are grid-fitted before bytecode, including when prep

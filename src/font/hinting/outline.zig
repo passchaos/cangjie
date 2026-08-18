@@ -17,6 +17,18 @@ pub const Point = struct {
     y: i32,
 };
 
+pub const ComponentRecord = struct {
+    glyph_id: glyph.GlyphId,
+    point_start: usize,
+    point_len: usize,
+    contour_start: usize,
+    contour_len: usize,
+    use_my_metrics: bool,
+    is_compound: bool,
+    /// Borrowed from the component glyph's validated `glyf` payload.
+    instructions: []const u8,
+};
+
 pub const PointFlag = packed struct(u8) {
     on_curve: bool = false,
     touched_x: bool = false,
@@ -50,10 +62,15 @@ pub const Transaction = struct {
     unscaled: []Point,
     flags: []PointFlag,
     contours: []u16,
+    components: []ComponentRecord = &.{},
     instructions: []const u8,
     scale_16_16: i32,
+    is_compound: bool = false,
 
     pub fn deinit(self: *Transaction) void {
+        if (self.components.len != 0) {
+            self.allocator.free(self.components);
+        }
         self.allocator.free(self.contours);
         self.allocator.free(self.flags);
         self.allocator.free(self.unscaled);

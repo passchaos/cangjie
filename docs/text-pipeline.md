@@ -891,10 +891,16 @@ The current size instance is also the default variation location; cvar and
 GETVARIATION require the same normalized-coordinate ownership and are deferred
 to that raw-point slice rather than approximated independently.
 
-The raw-point boundary now exists for default-instance simple `glyf` glyphs as
-`Face.hintingPointTransaction`. It owns unscaled, original-scaled, and mutable
-26.6 point arrays; on-curve/touched/overlap flags; contour ends; the borrowed
-glyph instruction slice; and all four horizontal/vertical phantom points.
+The raw-point boundary now exists for default-instance simple and compound
+`glyf` glyphs as `Face.hintingPointTransaction`. It owns unscaled,
+original-scaled, and mutable 26.6 point arrays; on-curve/touched/overlap flags;
+contour ends; component point/contour ranges; borrowed glyph instruction
+slices; and all four horizontal/vertical phantom points. Compound decoding
+recursively applies exact 2.14 matrices, scaled/unscaled offsets, grid-rounded
+offsets, nested point matching, and `USE_MY_METRICS` ownership. Compound
+execution still returns `UnsupportedHintGlyph`: child programs must run before
+component placement and parent bytecode, and that complete lifecycle has not
+yet been folded into the atomic executor.
 `Face.executeHintingTransaction` now runs core point-zone bytecode over private
 working copies of the glyph and persistent PPEM twilight zones. Projection and
 freedom vectors, reference points, zone pointers, loop and rounding state are
@@ -910,8 +916,9 @@ origin. `Rasterizer.drawPixelOutline` and `preparePixelOutline` consume that
 path at scale one, applying only caller x/baseline placement; they deliberately
 skip the design-outline UPEM scale, small-glyph alignment, and synthetic
 emboldening because the bytecode has already made pixel-grid decisions.
-Compound and gvar-backed glyphs still return `UnsupportedHintGlyph` rather than
-silently losing component or variation semantics, and transactions reject an
+Compound glyphs can be decoded and reconstructed, but their execution returns
+`UnsupportedHintGlyph`; gvar-backed transaction creation also returns that
+error rather than silently losing variation semantics. Transactions reject an
 instance created from another face or PPEM/target. Automatic hinted run
 rendering and remaining less-common point opcodes are the next layer.
 

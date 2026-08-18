@@ -347,6 +347,17 @@ pub fn buildTrueTypeHintingTtf(
     return buildSfnt(allocator, 0x00010000, tables);
 }
 
+/// Build a static compound glyph with USE_MY_METRICS and parent bytecode.
+pub fn buildTrueTypeCompoundHintingTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    return buildSfnt(
+        allocator,
+        0x00010000,
+        try trueTypeCompoundHintingTables(allocator),
+    );
+}
+
 pub fn buildAnkrTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try ankrTtfTables(allocator));
 }
@@ -1308,6 +1319,49 @@ fn compoundPointMatchTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[5] = .{ .tag = "loca", .data = try compoundPointMatchLocaTable(allocator) };
     tables[6] = .{ .tag = "maxp", .data = try compoundPointMatchMaxpTable(allocator) };
     tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn trueTypeCompoundHintingTables(
+    allocator: std.mem.Allocator,
+) ![]Table {
+    const tables = try allocator.alloc(Table, 8);
+    var initialized: usize = 0;
+    errdefer {
+        for (tables[0..initialized]) |table| allocator.free(table.data);
+        allocator.free(tables);
+    }
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    initialized += 1;
+    tables[1] = .{
+        .tag = "glyf",
+        .data = try trueTypeCompoundHintingGlyfTable(allocator),
+    };
+    initialized += 1;
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    initialized += 1;
+    tables[3] = .{
+        .tag = "hhea",
+        .data = try hheaTableWithMetrics(allocator, 3),
+    };
+    initialized += 1;
+    tables[4] = .{
+        .tag = "hmtx",
+        .data = try hmtxTableWithLigature(allocator),
+    };
+    initialized += 1;
+    tables[5] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    initialized += 1;
+    tables[6] = .{
+        .tag = "loca",
+        .data = try trueTypeCompoundHintingLocaTable(allocator),
+    };
+    initialized += 1;
+    tables[7] = .{
+        .tag = "maxp",
+        .data = try gvarCompoundMaxpTable(allocator),
+    };
+    initialized += 1;
     return tables;
 }
 
@@ -6737,6 +6791,29 @@ fn gvarCompoundGlyfTable(allocator: std.mem.Allocator) ![]u8 {
     return bytes;
 }
 
+fn trueTypeCompoundHintingGlyfTable(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const bytes = try allocator.alloc(u8, 60);
+    @memset(bytes, 0);
+    writeSimpleTriangleGlyph(bytes, 12, 350, 350, 250);
+
+    const off = 40;
+    writeI16(bytes, off + 0, -1);
+    writeI16(bytes, off + 2, 0);
+    writeI16(bytes, off + 4, 0);
+    writeI16(bytes, off + 6, 700);
+    writeI16(bytes, off + 8, 700);
+    // Byte XY arguments, child metric ownership, and parent instructions.
+    writeU16(bytes, off + 10, 0x0002 | 0x0100 | 0x0200);
+    writeU16(bytes, off + 12, 1);
+    bytes[off + 14] = 10;
+    bytes[off + 15] = 0;
+    writeU16(bytes, off + 16, 1);
+    bytes[off + 18] = 0x22; // CLEAR, retained as parent glyph bytecode.
+    return bytes;
+}
+
 fn compoundPointMatchGlyfTable(allocator: std.mem.Allocator) ![]u8 {
     const bytes = try allocator.alloc(u8, 110);
     @memset(bytes, 0);
@@ -7189,6 +7266,17 @@ fn gvarCompoundLocaTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 2, 6);
     writeU16(bytes, 4, 20);
     writeU16(bytes, 6, 28);
+    return bytes;
+}
+
+fn trueTypeCompoundHintingLocaTable(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const bytes = try allocator.alloc(u8, 8);
+    writeU16(bytes, 0, 0);
+    writeU16(bytes, 2, 6);
+    writeU16(bytes, 4, 20);
+    writeU16(bytes, 6, 30);
     return bytes;
 }
 

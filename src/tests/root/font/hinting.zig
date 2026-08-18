@@ -256,6 +256,120 @@ test "point transactions reject foreign compound and variable ownership" {
     );
 }
 
+test "compound point transactions preserve transformed raw topology" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCompoundPointMatchTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var instance = try face.hintingInstance(allocator, 20, .normal);
+    defer instance.deinit();
+
+    var matched = try face.hintingPointTransaction(
+        allocator,
+        &instance,
+        2,
+    );
+    defer matched.deinit();
+    try std.testing.expect(matched.is_compound);
+    try std.testing.expectEqual(@as(usize, 6), matched.real_point_count);
+    try std.testing.expectEqualSlices(u16, &.{ 2, 5 }, matched.contours);
+    try std.testing.expectEqual(@as(usize, 2), matched.components.len);
+    try std.testing.expectEqual(
+        @as(cangjie.font.GlyphId, 1),
+        matched.components[0].glyph_id,
+    );
+    try std.testing.expectEqual(
+        @as(cangjie.font.GlyphId, 1),
+        matched.components[1].glyph_id,
+    );
+    const expected = [_]struct { x: i32, y: i32 }{
+        .{ .x = 10, .y = 0 },
+        .{ .x = 110, .y = 100 },
+        .{ .x = 10, .y = 100 },
+        .{ .x = 60, .y = 50 },
+        .{ .x = 110, .y = 100 },
+        .{ .x = 60, .y = 100 },
+    };
+    for (matched.unscaled[0..matched.real_point_count], expected) |actual, wanted| {
+        try std.testing.expectEqual(wanted.x, actual.x);
+        try std.testing.expectEqual(wanted.y, actual.y);
+    }
+    try std.testing.expectEqual(
+        matched.unscaled[1],
+        matched.unscaled[4],
+    );
+    const before = try allocator.dupe(@TypeOf(matched.points[0]), matched.points);
+    defer allocator.free(before);
+    try std.testing.expectError(
+        error.UnsupportedHintGlyph,
+        face.executeHintingTransaction(&instance, &matched),
+    );
+    try std.testing.expectEqualSlices(
+        @TypeOf(matched.points[0]),
+        before,
+        matched.points,
+    );
+
+    var nested = try face.hintingPointTransaction(
+        allocator,
+        &instance,
+        3,
+    );
+    defer nested.deinit();
+    try std.testing.expectEqual(@as(usize, 9), nested.real_point_count);
+    try std.testing.expectEqualSlices(u16, &.{ 2, 5, 8 }, nested.contours);
+    try std.testing.expectEqual(@as(i32, 110), nested.unscaled[6].x);
+    try std.testing.expectEqual(@as(i32, 100), nested.unscaled[6].y);
+    try std.testing.expectEqual(@as(i32, 210), nested.unscaled[7].x);
+    try std.testing.expectEqual(@as(i32, 200), nested.unscaled[7].y);
+
+    var pixel = try nested.toPixelOutline();
+    defer pixel.deinit();
+    var design = try face.glyphs().outline(allocator, 3);
+    defer design.deinit();
+    try std.testing.expectEqual(
+        design.commands.items.len,
+        pixel.commands.items.len,
+    );
+    const scale =
+        20.0 / @as(f32, @floatFromInt(face.properties().units_per_em));
+    for (design.commands.items, pixel.commands.items) |wanted, actual| {
+        try expectScaledCommand(wanted, actual, scale);
+    }
+}
+
+test "compound transactions retain parent bytecode and USE_MY_METRICS" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildTrueTypeCompoundHintingTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var instance = try face.hintingInstance(allocator, 20, .normal);
+    defer instance.deinit();
+    var transaction = try face.hintingPointTransaction(
+        allocator,
+        &instance,
+        2,
+    );
+    defer transaction.deinit();
+
+    try std.testing.expect(transaction.is_compound);
+    try std.testing.expectEqualSlices(u8, &.{0x22}, transaction.instructions);
+    try std.testing.expectEqual(@as(usize, 1), transaction.components.len);
+    try std.testing.expect(transaction.components[0].use_my_metrics);
+    try std.testing.expect(!transaction.components[0].is_compound);
+    try std.testing.expectEqual(@as(usize, 0), transaction.components[0].instructions.len);
+    // Top-level glyph 2 advances 1000 FUnits, while USE_MY_METRICS selects
+    // component glyph 1's 800-FUnit metric. At 20 PPEM / 1000 UPEM this is
+    // exactly 16 pixels, or 1024 in 26.6.
+    try std.testing.expectEqual(
+        @as(i32, 1024),
+        transaction.phantomPoints()[1].x -
+            transaction.phantomPoints()[0].x,
+    );
+}
+
 test "hint transaction execution rejects stale PPEM ownership" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildTrueTypeHintingTtf(allocator);

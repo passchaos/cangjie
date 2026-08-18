@@ -15,11 +15,21 @@ pub const Placement = union(enum) {
     points: glyf.PointMatch,
 };
 
+/// Exact signed 2.14 matrix retained for consumers that operate on integer
+/// point zones rather than `f32` path commands.
+pub const FixedTransform = struct {
+    xx: i16 = 0x4000,
+    yx: i16 = 0,
+    xy: i16 = 0,
+    yy: i16 = 0x4000,
+};
+
 pub const Component = struct {
     flags: u16,
     glyph_id: glyph.GlyphId,
     placement: Placement,
     linear_transform: Transform,
+    fixed_transform: FixedTransform,
 
     pub fn hasMore(self: Component) bool {
         return (self.flags & 0x0020) != 0;
@@ -47,25 +57,33 @@ pub fn readComponent(reader: *bin.Reader) Error!Component {
                 .child_point = try reader.readU8(),
             } };
 
-    var transform = Transform.identity();
+    var fixed = FixedTransform{};
     if ((flags & 0x0008) != 0) {
-        const scale = f2dot14(try reader.readI16());
-        transform.xx = scale;
-        transform.yy = scale;
+        const scale = try reader.readI16();
+        fixed.xx = scale;
+        fixed.yy = scale;
     } else if ((flags & 0x0040) != 0) {
-        transform.xx = f2dot14(try reader.readI16());
-        transform.yy = f2dot14(try reader.readI16());
+        fixed.xx = try reader.readI16();
+        fixed.yy = try reader.readI16();
     } else if ((flags & 0x0080) != 0) {
-        transform.xx = f2dot14(try reader.readI16());
-        transform.yx = f2dot14(try reader.readI16());
-        transform.xy = f2dot14(try reader.readI16());
-        transform.yy = f2dot14(try reader.readI16());
+        fixed.xx = try reader.readI16();
+        fixed.yx = try reader.readI16();
+        fixed.xy = try reader.readI16();
+        fixed.yy = try reader.readI16();
     }
     return .{
         .flags = flags,
         .glyph_id = glyph_id,
         .placement = placement,
-        .linear_transform = transform,
+        .linear_transform = .{
+            .xx = f2dot14(fixed.xx),
+            .yx = f2dot14(fixed.yx),
+            .xy = f2dot14(fixed.xy),
+            .yy = f2dot14(fixed.yy),
+            .dx = 0,
+            .dy = 0,
+        },
+        .fixed_transform = fixed,
     };
 }
 

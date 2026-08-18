@@ -1630,7 +1630,7 @@ pub const Font = struct {
         const data = try self.glyphData(glyph_id);
         if (data.len == 0) return error.UnsupportedHintGlyph;
         const contour_count = try bin.readI16At(data, 0);
-        if (contour_count < 0 or self.gvar != null) {
+        if (self.gvar != null) {
             return error.UnsupportedHintGlyph;
         }
         const horizontal = try self.horizontalMetrics(glyph_id);
@@ -1640,21 +1640,40 @@ pub const Font = struct {
                 .advance_height = self.units_per_em,
                 .top_side_bearing = 0,
             };
-        return hinting.outline.decodeSimple(
+        const metrics = hinting.outline.Metrics{
+            .bounds = bounds,
+            .advance_width = horizontal.advance_width,
+            .left_side_bearing = horizontal.left_side_bearing,
+            .vertical_advance = vertical.advance_height,
+            .top_side_bearing = vertical.top_side_bearing,
+        };
+        if (contour_count >= 0) {
+            return hinting.outline.decodeSimple(
+                allocator,
+                @intFromPtr(self),
+                instance.target,
+                glyph_id,
+                data,
+                @intCast(contour_count),
+                metrics,
+                instance.scale_16_16,
+            );
+        }
+        return hinting.compound.decode(
             allocator,
             @intFromPtr(self),
             instance.target,
-            glyph_id,
-            data,
-            @intCast(contour_count),
             .{
-                .bounds = bounds,
-                .advance_width = horizontal.advance_width,
-                .left_side_bearing = horizontal.left_side_bearing,
-                .vertical_advance = vertical.advance_height,
-                .top_side_bearing = vertical.top_side_bearing,
+                .glyph_id = glyph_id,
+                .data = data,
+                .metrics = metrics,
             },
             instance.scale_16_16,
+            limits.max_component_depth,
+            .{
+                .context = self,
+                .resolveFn = resolveHintingComponent,
+            },
         );
     }
 
@@ -5297,6 +5316,35 @@ pub const Font = struct {
         }
     }
 };
+
+fn resolveHintingComponent(
+    context: *const anyopaque,
+    glyph_id: glyph_mod.GlyphId,
+) hinting.Error!hinting.compound.Source {
+    const self: *const Font = @ptrCast(@alignCast(context));
+    if (glyph_id >= self.glyph_count) return error.BadSfnt;
+    const data = self.glyphData(glyph_id) catch return error.BadSfnt;
+    const horizontal = self.horizontalMetrics(glyph_id) catch
+        return error.BadSfnt;
+    const bounds = self.glyphBoundsFromParsedTables(glyph_id) catch
+        return error.BadSfnt;
+    const vertical = (self.verticalMetrics(glyph_id) catch
+        return error.BadSfnt) orelse VerticalMetrics{
+        .advance_height = self.units_per_em,
+        .top_side_bearing = 0,
+    };
+    return .{
+        .glyph_id = glyph_id,
+        .data = data,
+        .metrics = .{
+            .bounds = bounds,
+            .advance_width = horizontal.advance_width,
+            .left_side_bearing = horizontal.left_side_bearing,
+            .vertical_advance = vertical.advance_height,
+            .top_side_bearing = vertical.top_side_bearing,
+        },
+    };
+}
 
 fn validateSbixTable(
     allocator: std.mem.Allocator,

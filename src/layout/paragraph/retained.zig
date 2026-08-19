@@ -102,6 +102,8 @@ pub const ShapedParagraph = struct {
                 self.allocator,
                 self.text,
                 self.glyphs,
+                self.runs,
+                self.normalized_variation_coords,
                 self.grapheme_clusters,
                 self.line_breaks,
                 options,

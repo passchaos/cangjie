@@ -1,25 +1,33 @@
 //! UAX #14 source boundaries mapped to reusable shaped output boundaries.
 
 const std = @import("std");
+const discretionary_hyphen = @import("../../discretionary_hyphen.zig");
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const line_break_opportunity = @import("../../line_break/opportunity.zig");
 const measure = @import("measure.zig");
 const paragraph_options = @import("../options.zig");
 const policy = @import("policy.zig");
+const run_types = @import("../../types/runs.zig");
 const shaped_boundary = @import("../../line_break/shaped_boundary.zig");
 const shared = @import("shared.zig");
 const unicode = @import("../../../unicode.zig");
+const vertical_tabs = @import("tabs.zig");
+const white_space = @import("../white_space.zig");
 
 pub fn collect(
     output: *std.ArrayList(shared.SoftCandidate),
     allocator: std.mem.Allocator,
+    text: []const u8,
     glyphs: []const GlyphPosition,
+    runs: []const run_types.CascadeRun,
+    variation_coords: []const f32,
     graphemes: []const unicode.GraphemeCluster,
     breaks: []const line_break_opportunity.Opportunity,
     segment_start: usize,
     segment_end: usize,
     segment_byte_start: usize,
     segment_byte_end: usize,
+    options: paragraph_options.Options,
 ) !void {
     for (breaks) |item| {
         if (item.kind != .soft or
@@ -29,7 +37,7 @@ pub fn collect(
         {
             continue;
         }
-        const boundary = forSourceBoundary(
+        var boundary = forSourceBoundary(
             glyphs,
             graphemes,
             segment_start,
@@ -37,6 +45,33 @@ pub fn collect(
             item.byte_offset,
             true,
         ) orelse continue;
+        const hyphen_index = boundary.glyph_end - 1;
+        if (discretionary_hyphen.isCandidate(
+            glyphs[hyphen_index].codepoint,
+        )) {
+            boundary.hyphen =
+                try discretionary_hyphen.resolveVerticalForGlyph(
+                    runs,
+                    variation_coords,
+                    hyphen_index,
+                    options.writing_mode,
+                    options.text_orientation,
+                    options.hyphenation.character,
+                ) orelse continue;
+        } else if (softHyphenEndingAt(text, item.byte_offset)) |source| {
+            boundary.hyphen =
+                try discretionary_hyphen.resolveVerticalAtBoundary(
+                    runs,
+                    variation_coords,
+                    glyphs,
+                    boundary.glyph_end,
+                    source.start,
+                    source.len,
+                    options.writing_mode,
+                    options.text_orientation,
+                    options.hyphenation.character,
+                ) orelse continue;
+        }
         try output.append(allocator, boundary);
     }
 }
@@ -91,11 +126,11 @@ pub fn lastFitting(
         if (candidate.next_glyph_start <= glyph_start or
             candidate.next_glyph_start > overflow or
             candidate.glyph_end <= glyph_start or
-            measure.inlineSize(
+            candidateInlineSize(
+                candidate,
                 glyphs,
                 prefix,
                 glyph_start,
-                candidate.glyph_end,
                 options,
             ) > limit)
         {
@@ -104,6 +139,43 @@ pub fn lastFitting(
         selected = candidate;
     }
     return selected;
+}
+
+pub fn candidateInlineSize(
+    candidate: shared.SoftCandidate,
+    glyphs: []const GlyphPosition,
+    prefix: []const f32,
+    glyph_start: usize,
+    options: paragraph_options.Options,
+) f32 {
+    const terminal_advance = if (candidate.hyphen) |hyphen|
+        hyphen.resolved.y_advance
+    else
+        0;
+    const visible_end = @min(candidate.glyph_end, glyphs.len);
+    const visible_start = @min(glyph_start, visible_end);
+    const visible = glyphs[visible_start..visible_end];
+    if (terminal_advance != 0 and vertical_tabs.contains(visible)) {
+        const fallback_advance =
+            white_space.defaultVerticalSpaceAdvance(glyphs);
+        const fallback_interval =
+            @as(f32, @floatFromInt(@max(1, options.tab_width))) *
+            fallback_advance;
+        return vertical_tabs.measureRangeWithTerminal(
+            visible,
+            options.tab_stops,
+            fallback_interval,
+            fallback_advance,
+            terminal_advance,
+        );
+    }
+    return measure.inlineSize(
+        glyphs,
+        prefix,
+        glyph_start,
+        candidate.glyph_end,
+        options,
+    ) + terminal_advance;
 }
 
 /// Return the first ordinary boundary after an overfull indivisible fragment.
@@ -213,4 +285,17 @@ fn insertSortedUnique(
 
 fn isDiscardable(glyph: GlyphPosition) bool {
     return glyph.codepoint == ' ' or glyph.isTab();
+}
+
+const SourceRange = struct {
+    start: usize,
+    len: usize,
+};
+
+fn softHyphenEndingAt(text: []const u8, byte_offset: usize) ?SourceRange {
+    const encoded = "\u{00ad}";
+    if (byte_offset < encoded.len or byte_offset > text.len) return null;
+    const start = byte_offset - encoded.len;
+    if (!std.mem.eql(u8, text[start..byte_offset], encoded)) return null;
+    return .{ .start = start, .len = encoded.len };
 }

@@ -14,6 +14,7 @@ const line_break_opportunity = @import("../../line_break/opportunity.zig");
 const measure = @import("measure.zig");
 const paragraph_options = @import("../options.zig");
 const policy = @import("policy.zig");
+const run_types = @import("../../types/runs.zig");
 const shared = @import("shared.zig");
 const unicode = @import("../../../unicode.zig");
 
@@ -43,7 +44,10 @@ const RegularFit = enum {
 pub fn apply(
     output: *std.ArrayList(shared.Range),
     allocator: std.mem.Allocator,
+    text: []const u8,
     glyphs: []const GlyphPosition,
+    runs: []const run_types.CascadeRun,
+    variation_coords: []const f32,
     prefix: []const f32,
     graphemes: []const unicode.GraphemeCluster,
     breaks: []const line_break_opportunity.Opportunity,
@@ -86,7 +90,10 @@ pub fn apply(
         try graph.enumerate(
             &boundaries,
             allocator,
+            text,
             glyphs,
+            runs,
+            variation_coords,
             graphemes,
             breaks,
             options,
@@ -171,11 +178,11 @@ fn solve(
             if (regular_fit == .found and boundary.kind == .emergency) {
                 continue;
             }
-            const width = measure.inlineSize(
+            const width = boundaryInlineSize(
+                boundary,
                 glyphs,
                 prefix,
                 start,
-                boundary.glyph_end,
                 options,
             );
             if (width > limit + width_epsilon) continue;
@@ -241,11 +248,11 @@ fn hasFittingRegular(
         edge_count += 1;
         if (edge_count > max_edges_per_state) return .limit_exceeded;
         if (boundary.kind == .emergency) continue;
-        if (measure.inlineSize(
+        if (boundaryInlineSize(
+            boundary,
             glyphs,
             prefix,
             start,
-            boundary.glyph_end,
             options,
         ) <= limit + width_epsilon) return .found;
     }
@@ -301,10 +308,32 @@ fn appendSolution(
             else
                 0,
             .starts_segment = column_index == 0,
+            .hyphen = boundary.hyphen,
         });
         previous_index = boundary_index;
         byte_start = boundary.byte_end;
     }
+}
+
+fn boundaryInlineSize(
+    boundary: graph.Boundary,
+    glyphs: []const GlyphPosition,
+    prefix: []const f32,
+    start: usize,
+    options: paragraph_options.Options,
+) f32 {
+    return @import("candidates.zig").candidateInlineSize(
+        .{
+            .glyph_end = boundary.glyph_end,
+            .next_glyph_start = boundary.next_glyph_start,
+            .byte_end = boundary.byte_end,
+            .hyphen = boundary.hyphen,
+        },
+        glyphs,
+        prefix,
+        start,
+        options,
+    );
 }
 
 fn squaredSlack(width: f32, limit: f32) f64 {
@@ -365,7 +394,10 @@ test "balanced apply transactionally retains greedy on dense edge fanout" {
     try apply(
         &ranges,
         allocator,
+        "",
         glyphs,
+        &.{},
+        &.{},
         prefix,
         graphemes,
         &.{},

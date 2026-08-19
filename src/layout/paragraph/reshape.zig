@@ -37,6 +37,13 @@ pub const Uniform = struct {
         return null;
     }
 
+    pub fn prepareVerticalHyphenMetadata(
+        _: Uniform,
+        _: []const @import("../line_break/reflow/hyphen_insertions.zig").Selected,
+    ) !void {}
+
+    pub fn commitVerticalHyphenMetadata(_: Uniform) void {}
+
     /// Resolve synthetic ellipsis ownership through the same uniform cascade
     /// and variation instance as ordinary paragraph source.
     pub fn ellipsisRun(

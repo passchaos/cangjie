@@ -77,6 +77,40 @@ pub const Recipe = struct {
         return result;
     }
 
+    pub fn prepareVerticalHyphenMetadata(
+        self: Recipe,
+        selected: []const @import("../../line_break/reflow/hyphen_insertions.zig").Selected,
+    ) !void {
+        self.commit_metadata.clearRetainingCapacity();
+        if (selected.len == 0) return;
+        try self.commit_metadata.appendSlice(
+            self.allocator,
+            self.metadata.items,
+        );
+        for (selected, 0..) |item, selected_index| {
+            const source_index = item.insert_index + selected_index;
+            const span = spanForBoundary(
+                self.spans,
+                item.glyph.cluster + item.glyph.source_byte_len,
+            ) orelse return error.InvalidStyleSpans;
+            try self.commit_metadata.insert(self.allocator, source_index, .{
+                .style_index = span.style_index,
+                .layout_spacing = 0,
+                .minimum_line_height = span.minimum_line_height,
+                .vertical_align = span.vertical_align,
+            });
+        }
+    }
+
+    pub fn commitVerticalHyphenMetadata(self: Recipe) void {
+        if (self.commit_metadata.items.len == 0) return;
+        self.metadata.clearRetainingCapacity();
+        self.metadata.appendSliceAssumeCapacity(
+            self.commit_metadata.items,
+        );
+        self.commit_metadata.clearRetainingCapacity();
+    }
+
     /// Resolve synthetic ellipsis ownership from the style that contains the
     /// terminal visible source boundary. This preserves style-local cascades,
     /// font size, variation coordinates, and public paragraph font indexes.

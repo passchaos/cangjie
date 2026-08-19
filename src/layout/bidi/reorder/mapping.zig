@@ -180,7 +180,7 @@ fn appendItemGlyph(
 ) !void {
     const glyph = glyphs[glyph_index];
     const visual_codepoint =
-        if (!glyph.isAutomaticHyphen() and
+        if (!glyph.isDiscretionaryHyphen() and
         @max(glyph.source_byte_len, 1) == item.byte_len)
             item.visual_codepoint
         else

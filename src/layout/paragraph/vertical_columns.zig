@@ -11,6 +11,9 @@ const geometry = @import("../line_break/reflow/geometry.zig");
 const line_break_analysis = @import("../line_break/analysis.zig");
 const opportunities = @import("../line_break/reflow/opportunities.zig");
 const line_break_opportunity = @import("../line_break/opportunity.zig");
+const discretionary_hyphen = @import("../discretionary_hyphen.zig");
+const hyphen_insertions =
+    @import("../line_break/reflow/hyphen_insertions.zig");
 const truncation = @import("../line_break/reflow/truncation.zig");
 const paragraph_options = @import("options.zig");
 const segmentation = @import("../../text/segmentation/root.zig");
@@ -101,11 +104,47 @@ pub fn build(
         buffer.allocator,
         text,
         buffer.glyphs.items,
+        buffer.runs.items,
+        buffer.variation_coords.items,
         graphemes,
         breaks,
         options,
     );
     defer buffer.allocator.free(ranges);
+    var selected_hyphens =
+        @import("std").ArrayList(hyphen_insertions.Selected).empty;
+    defer selected_hyphens.deinit(buffer.allocator);
+    for (ranges, 0..) |range, line_index| {
+        const hyphen = range.hyphen orelse continue;
+        if (!hyphen.synthetic) continue;
+        try selected_hyphens.append(buffer.allocator, .{
+            .line_index = line_index,
+            .insert_index = hyphen.glyph_index,
+            .run_index = hyphen.run_index,
+            .glyph = discretionary_hyphen.syntheticVertical(hyphen),
+        });
+    }
+    // Validate every in-place candidate before allocation or mutation. The
+    // synthetic path was structurally validated while collecting the records.
+    for (ranges) |range| {
+        const hyphen = range.hyphen orelse continue;
+        if (hyphen.synthetic) continue;
+        if (hyphen.glyph_index < range.glyph_start or
+            hyphen.glyph_index >= range.glyph_end or
+            hyphen.glyph_index >= buffer.glyphs.items.len)
+        {
+            return error.InvalidParagraphLayout;
+        }
+    }
+    // Reserve all insertion storage before any line or source glyph state is
+    // mutated. Once column construction starts, selected-hyphen
+    // materialization is then infallible and cannot leave a partial reflow.
+    try buffer.glyphs.ensureTotalCapacity(
+        buffer.allocator,
+        buffer.glyphs.items.len + selected_hyphens.items.len,
+    );
+    try buffer.lines.ensureTotalCapacity(buffer.allocator, ranges.len);
+    try recipe.prepareVerticalHyphenMetadata(selected_hyphens.items);
     if (options.white_space_collapse == .collapse) {
         var previous_end: usize = 0;
         for (ranges) |range| {
@@ -123,6 +162,14 @@ pub fn build(
         );
     }
     for (ranges) |range| {
+        if (range.hyphen) |hyphen| {
+            if (!hyphen.synthetic) {
+                discretionary_hyphen.materializeVertical(
+                    &buffer.glyphs.items[hyphen.glyph_index],
+                    hyphen.resolved,
+                );
+            }
+        }
         if (options.white_space_collapse == .collapse) {
             white_space.trimVerticalLineStart(
                 buffer.glyphs.items,
@@ -137,14 +184,34 @@ pub fn build(
         }
         const fallback_advance =
             white_space.defaultVerticalSpaceAdvance(buffer.glyphs.items);
-        _ = vertical_tabs.recomputeRange(
-            buffer.glyphs.items[range.glyph_start..range.glyph_end],
-            options.tab_stops,
+        const fallback_interval =
             @as(f32, @floatFromInt(@max(1, options.tab_width))) *
-                fallback_advance,
-            fallback_advance,
-        );
-        try appendColumn(
+            fallback_advance;
+        const inline_size =
+            if (range.hyphen) |hyphen|
+                if (hyphen.synthetic)
+                    vertical_tabs.recomputeRangeWithTerminal(
+                        buffer.glyphs.items[range.glyph_start..range.glyph_end],
+                        options.tab_stops,
+                        fallback_interval,
+                        fallback_advance,
+                        hyphen.resolved.y_advance,
+                    )
+                else
+                    vertical_tabs.recomputeRange(
+                        buffer.glyphs.items[range.glyph_start..range.glyph_end],
+                        options.tab_stops,
+                        fallback_interval,
+                        fallback_advance,
+                    )
+            else
+                vertical_tabs.recomputeRange(
+                    buffer.glyphs.items[range.glyph_start..range.glyph_end],
+                    options.tab_stops,
+                    fallback_interval,
+                    fallback_advance,
+                );
+        appendColumnAssumeCapacity(
             buffer,
             options,
             default_metrics,
@@ -153,8 +220,17 @@ pub fn build(
             range.byte_start,
             range.byte_end,
             range.inline_indent,
+            inline_size,
         );
     }
+    // Source U+00AD can be removed as a default-ignorable during shaping.
+    // Insert every selected visible hyphen only after all source-order line
+    // ranges exist, so run/line indexes shift through one transaction.
+    hyphen_insertions.materializeAssumeCapacity(
+        buffer,
+        selected_hyphens.items,
+    );
+    recipe.commitVerticalHyphenMetadata();
     const visible_count = @min(
         options.max_lines orelse ranges.len,
         ranges.len,
@@ -183,6 +259,8 @@ pub fn contentWidths(
     allocator: @import("std").mem.Allocator,
     text: []const u8,
     glyphs: []const GlyphPosition,
+    runs: []const @import("../types/runs.zig").CascadeRun,
+    variation_coords: []const f32,
     graphemes: []const unicode.GraphemeCluster,
     breaks: []const line_break_opportunity.Opportunity,
     options: paragraph_options.Options,
@@ -191,6 +269,8 @@ pub fn contentWidths(
         allocator,
         text,
         glyphs,
+        runs,
+        variation_coords,
         graphemes,
         breaks,
         options,
@@ -245,7 +325,7 @@ pub fn visiblePrefixOmitsSource(
         false;
 }
 
-fn appendColumn(
+fn appendColumnAssumeCapacity(
     buffer: anytype,
     options: paragraph_options.Options,
     default_metrics: geometry.BaselineMetrics,
@@ -254,22 +334,19 @@ fn appendColumn(
     byte_start: usize,
     byte_end: usize,
     inline_indent: f32,
-) !void {
-    const block_metrics = try vertical_block_metrics.resolve(
+    inline_size: f32,
+) void {
+    const block_metrics = vertical_block_metrics.resolve(
         buffer.runs.items,
         buffer.glyphs.items,
         options,
         default_metrics,
         glyph_start,
         glyph_end,
-    );
+    ) catch unreachable;
     const line_info = block_metrics.line_info;
     const metrics = line_info.metrics;
     const block_size = block_metrics.block_size;
-    var inline_size: f32 = 0;
-    for (buffer.glyphs.items[glyph_start..glyph_end]) |glyph| {
-        inline_size += glyph.y_advance;
-    }
     const resolved_alignment = if (vertical_tabs.contains(
         buffer.glyphs.items[glyph_start..glyph_end],
     ))
@@ -282,7 +359,7 @@ fn appendColumn(
         inline_size,
         resolved_alignment,
     );
-    try buffer.lines.append(buffer.allocator, .{
+    buffer.lines.appendAssumeCapacity(.{
         .glyph_start = glyph_start,
         .glyph_len = glyph_end - glyph_start,
         .run_start = line_info.run_start,

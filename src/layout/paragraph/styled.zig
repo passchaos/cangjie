@@ -271,6 +271,8 @@ const Driver = struct {
                     self.buffer.allocator,
                     self.text,
                     self.buffer.glyphs.items,
+                    self.buffer.runs.items,
+                    self.buffer.variation_coords.items,
                     intrinsic_graphemes,
                     intrinsic_breaks,
                     resolved_options,

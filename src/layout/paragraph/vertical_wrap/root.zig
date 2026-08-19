@@ -13,6 +13,7 @@ const line_break_opportunity = @import("../../line_break/opportunity.zig");
 const measure = @import("measure.zig");
 const paragraph_options = @import("../options.zig");
 const policy = @import("policy.zig");
+const run_types = @import("../../types/runs.zig");
 const shared = @import("shared.zig");
 const unicode = @import("../../../unicode.zig");
 
@@ -23,6 +24,8 @@ pub fn build(
     allocator: std.mem.Allocator,
     text: []const u8,
     glyphs: []const GlyphPosition,
+    runs: []const run_types.CascadeRun,
+    variation_coords: []const f32,
     graphemes: []const unicode.GraphemeCluster,
     breaks: []const line_break_opportunity.Opportunity,
     options: paragraph_options.Options,
@@ -57,7 +60,10 @@ pub fn build(
         try appendSegment(
             &output,
             allocator,
+            text,
             glyphs,
+            runs,
+            variation_coords,
             prefix,
             graphemes,
             effective_breaks.items,
@@ -76,7 +82,10 @@ pub fn build(
     try appendSegment(
         &output,
         allocator,
+        text,
         glyphs,
+        runs,
+        variation_coords,
         prefix,
         graphemes,
         effective_breaks.items,
@@ -90,7 +99,10 @@ pub fn build(
     try balanced.apply(
         &output,
         allocator,
+        text,
         glyphs,
+        runs,
+        variation_coords,
         prefix,
         graphemes,
         effective_breaks.items,
@@ -102,7 +114,10 @@ pub fn build(
 fn appendSegment(
     output: *std.ArrayList(Range),
     allocator: std.mem.Allocator,
+    text: []const u8,
     glyphs: []const GlyphPosition,
+    runs: []const run_types.CascadeRun,
+    variation_coords: []const f32,
     prefix: []const f32,
     graphemes: []const unicode.GraphemeCluster,
     breaks: []const line_break_opportunity.Opportunity,
@@ -155,13 +170,17 @@ fn appendSegment(
     try candidates.collect(
         &items,
         allocator,
+        text,
         glyphs,
+        runs,
+        variation_coords,
         graphemes,
         breaks,
         segment_start,
         segment_end,
         segment_byte_start,
         segment_byte_end,
+        options,
     );
     try candidates.appendBreakSpaces(
         &items,
@@ -196,6 +215,7 @@ fn appendSegment(
                 .byte_end = segment_byte_end,
                 .inline_indent = column_indent,
                 .starts_segment = first_column,
+                .hyphen = null,
             });
             return;
         }
@@ -248,6 +268,7 @@ fn appendSegment(
             .byte_end = selected.byte_end,
             .inline_indent = column_indent,
             .starts_segment = first_column,
+            .hyphen = selected.hyphen,
         });
         glyph_start = selected.next_glyph_start;
         byte_start = selected.byte_end;
@@ -290,6 +311,8 @@ test "vertical emergency break defers across unsafe output boundaries" {
         std.testing.allocator,
         "AA",
         &glyphs,
+        &.{},
+        &.{},
         &graphemes,
         &.{},
         .{ .max_width = 20.1, .writing_mode = .vertical_lr },
@@ -302,6 +325,8 @@ test "vertical emergency break defers across unsafe output boundaries" {
         std.testing.allocator,
         "AA",
         &glyphs,
+        &.{},
+        &.{},
         &graphemes,
         &.{},
         .{
@@ -379,6 +404,8 @@ test "vertical dictionary opportunity respects unsafe shaped boundary" {
         allocator,
         text,
         &glyphs,
+        &.{},
+        &.{},
         &graphemes,
         breaks,
         .{

@@ -1,5 +1,7 @@
 //! Shared value records for vertical wrapping.
 
+const discretionary_hyphen = @import("../../discretionary_hyphen.zig");
+
 pub const Range = struct {
     glyph_start: usize,
     glyph_end: usize,
@@ -11,6 +13,13 @@ pub const Range = struct {
     /// Whether this column begins a source paragraph segment. Physical column
     /// placement uses this to insert block-axis paragraph spacing.
     starts_segment: bool = false,
+    /// Source U+00AD selected as a visible terminal glyph for this column.
+    ///
+    /// Shaping may retain it as an invisible output or omit the
+    /// default-ignorable entirely. Final column construction therefore either
+    /// materializes the existing output or inserts a source-owning glyph at
+    /// the recorded boundary.
+    hyphen: ?discretionary_hyphen.VerticalCandidate = null,
 };
 
 pub const SoftCandidate = struct {
@@ -19,4 +28,5 @@ pub const SoftCandidate = struct {
     glyph_end: usize,
     next_glyph_start: usize,
     byte_end: usize,
+    hyphen: ?discretionary_hyphen.VerticalCandidate = null,
 };

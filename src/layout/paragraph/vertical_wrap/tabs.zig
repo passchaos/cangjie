@@ -57,12 +57,33 @@ pub fn measureRange(
     fallback_interval: f32,
     fallback_advance: f32,
 ) f32 {
-    return measurePrefix(
+    return measureRangeWithTerminal(
+        glyphs,
+        stops,
+        fallback_interval,
+        fallback_advance,
+        0,
+    );
+}
+
+/// Measure a selected column with a not-yet-materialized terminal glyph.
+///
+/// Discretionary hyphen selection uses this to resolve aligned tab fields
+/// against the visible line-end hyphen before mutating the source U+00AD atom.
+pub fn measureRangeWithTerminal(
+    glyphs: []const GlyphPosition,
+    stops: []const tab_ruler.Stop,
+    fallback_interval: f32,
+    fallback_advance: f32,
+    terminal_advance: f32,
+) f32 {
+    return measurePrefixWithTerminal(
         glyphs,
         glyphs.len,
         stops,
         fallback_interval,
         fallback_advance,
+        terminal_advance,
     );
 }
 
@@ -77,6 +98,24 @@ pub fn measurePrefix(
     fallback_interval: f32,
     fallback_advance: f32,
 ) f32 {
+    return measurePrefixWithTerminal(
+        glyphs,
+        prefix_len,
+        stops,
+        fallback_interval,
+        fallback_advance,
+        0,
+    );
+}
+
+fn measurePrefixWithTerminal(
+    glyphs: []const GlyphPosition,
+    prefix_len: usize,
+    stops: []const tab_ruler.Stop,
+    fallback_interval: f32,
+    fallback_advance: f32,
+    terminal_advance: f32,
+) f32 {
     var size: f32 = 0;
     const end = @min(prefix_len, glyphs.len);
     for (glyphs[0..end], 0..) |glyph, glyph_index| {
@@ -88,13 +127,13 @@ pub fn measurePrefix(
                 stops,
                 fallback_interval,
                 fallback_advance,
-                0,
+                terminal_advance,
             )
         else
             glyph.y_advance;
         size += glyph_advance;
     }
-    return size;
+    return size + terminal_advance;
 }
 
 pub fn contains(glyphs: []const GlyphPosition) bool {

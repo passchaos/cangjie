@@ -1,13 +1,19 @@
 //! Materialization of discretionary U+00AD line-end hyphens.
 //!
-//! Shaping keeps SOFT HYPHEN as a zero-advance source atom. Reflow calls this
-//! module only after selecting its UAX #14 opportunity, preserving source,
-//! caret, and bidi metadata without inserting another glyph into the stream.
+//! Horizontal shaping normally keeps SOFT HYPHEN as a zero-advance source
+//! atom. Vertical shaping may omit that default-ignorable output entirely, so
+//! paragraph reflow either replaces the retained atom or inserts one
+//! source-owning visible glyph at the selected UAX #14 boundary.
 
-const Font = @import("../font.zig").Font;
+const font_mod = @import("../font.zig");
+const Font = font_mod.Font;
 const GlyphId = @import("../glyph.zig").GlyphId;
-const GlyphOrientation = @import("glyph_position.zig").Orientation;
+const glyph_position = @import("glyph_position.zig");
+const GlyphOrientation = glyph_position.Orientation;
 const run_types = @import("types/runs.zig");
+const pipeline_types = @import("../shaping/pipeline/types.zig");
+const positioning_policy =
+    @import("../shaping/pipeline/positioning/policy.zig");
 
 pub const soft_hyphen: u21 = 0x00ad;
 
@@ -25,6 +31,37 @@ pub const Candidate = struct {
 pub const RunResolved = struct {
     run_index: usize,
     resolved: Resolved,
+};
+
+/// Vertical geometry for a materialized U+00AD source atom.
+///
+/// This is distinct from `Resolved`: horizontal reflow needs only the
+/// replacement advance, while a vertical glyph also needs orientation and its
+/// OpenType vertical origin. Keeping both records here ensures explicit and
+/// future automatic hyphens resolve through one font-instance contract.
+pub const VerticalResolved = struct {
+    glyph_id: GlyphId,
+    codepoint: u21,
+    y_advance: f32,
+    x_offset: f32,
+    y_offset: f32,
+    orientation: GlyphOrientation,
+};
+
+pub const VerticalCandidate = struct {
+    /// Original glyph index to replace, or source-order insertion boundary
+    /// when `synthetic` is true.
+    glyph_index: usize,
+    run_index: usize,
+    source_byte_start: usize,
+    source_byte_len: usize,
+    synthetic: bool = false,
+    resolved: VerticalResolved,
+};
+
+const GlyphOwner = struct {
+    run_index: usize,
+    run: run_types.CascadeRun,
 };
 
 pub fn isCandidate(codepoint: u21) bool {
@@ -80,6 +117,136 @@ pub fn resolveForGlyphRun(
     return null;
 }
 
+/// Resolve a visible vertical hyphen through the run owning `glyph_index`.
+///
+/// Run-local variation coordinates are authoritative. Styled vertical
+/// paragraphs can contain several font instances, so using paragraph-global
+/// coordinates here would select correct source boundaries but wrong metrics.
+pub fn resolveVerticalForGlyph(
+    runs: []const run_types.CascadeRun,
+    variation_coords: []const f32,
+    glyph_index: usize,
+    writing_mode: pipeline_types.WritingMode,
+    text_orientation: pipeline_types.TextOrientation,
+    character: ?u21,
+) !?VerticalCandidate {
+    const owner = glyphOwner(runs, glyph_index) orelse return null;
+    return resolveVerticalForRun(
+        owner,
+        variation_coords,
+        glyph_index,
+        writing_mode,
+        text_orientation,
+        character,
+    );
+}
+
+pub fn resolveVerticalAtBoundary(
+    runs: []const run_types.CascadeRun,
+    variation_coords: []const f32,
+    glyphs: []const glyph_position.GlyphPosition,
+    insert_index: usize,
+    source_byte_start: usize,
+    source_byte_len: usize,
+    writing_mode: pipeline_types.WritingMode,
+    text_orientation: pipeline_types.TextOrientation,
+    character: ?u21,
+) !?VerticalCandidate {
+    if (insert_index == 0 or insert_index > glyphs.len) return null;
+    const owner_index = insert_index - 1;
+    const owner = glyphOwner(runs, owner_index) orelse return null;
+    const candidate = try resolveVerticalForRun(
+        owner,
+        variation_coords,
+        owner_index,
+        writing_mode,
+        text_orientation,
+        character,
+    ) orelse return null;
+    var result = candidate;
+    result.glyph_index = insert_index;
+    result.source_byte_start = source_byte_start;
+    result.source_byte_len = source_byte_len;
+    result.synthetic = true;
+    return result;
+}
+
+fn glyphOwner(
+    runs: []const run_types.CascadeRun,
+    glyph_index: usize,
+) ?GlyphOwner {
+    for (runs, 0..) |run, run_index| {
+        if (glyph_index >= run.glyph_start and
+            glyph_index < run.glyph_start + run.glyph_len)
+        {
+            return .{ .run_index = run_index, .run = run };
+        }
+    }
+    return null;
+}
+
+fn resolveVerticalForRun(
+    owner: GlyphOwner,
+    variation_coords: []const f32,
+    glyph_index: usize,
+    writing_mode: pipeline_types.WritingMode,
+    text_orientation: pipeline_types.TextOrientation,
+    character: ?u21,
+) !?VerticalCandidate {
+    const run = owner.run;
+    const coord_end =
+        run.variation_coord_start + run.variation_coord_len;
+    if (coord_end > variation_coords.len) {
+        return error.InvalidParagraphLayout;
+    }
+    const coords =
+        variation_coords[run.variation_coord_start..coord_end];
+    const font = run_types.fontForBackend(run);
+    const horizontal =
+        try resolve(font, run.font_size, coords, character) orelse
+        return null;
+    const orientation = positioning_policy.glyphOrientation(
+        horizontal.codepoint,
+        writing_mode,
+        text_orientation,
+    );
+    const vertical_metrics = try positioning_policy.verticalMetrics(
+        font,
+        null,
+        horizontal.glyph_id,
+        coords,
+    );
+    const y_advance = if (orientation == .sideways)
+        horizontal.x_advance
+    else if (vertical_metrics) |metrics|
+        @as(f32, @floatFromInt(metrics.advance_height)) *
+            (run.font_size /
+                @as(f32, @floatFromInt(font.units_per_em)))
+    else
+        run.font_size;
+    const scale = run.font_size /
+        @as(f32, @floatFromInt(font.units_per_em));
+    const origin_y = try font_mod.shaping.verticalOriginYAtCoords(
+        font,
+        horizontal.glyph_id,
+        coords,
+    );
+    return .{
+        .glyph_index = glyph_index,
+        .run_index = owner.run_index,
+        .source_byte_start = 0,
+        .source_byte_len = 0,
+        .resolved = .{
+            .glyph_id = horizontal.glyph_id,
+            .codepoint = horizontal.codepoint,
+            .y_advance = y_advance,
+            .x_offset = -horizontal.x_advance / 2,
+            .y_offset = -@as(f32, @floatFromInt(origin_y)) * scale,
+            .orientation = orientation,
+        },
+    };
+}
+
 pub fn materialize(glyph: anytype, resolved: Resolved) void {
     glyph.glyph_id = resolved.glyph_id;
     glyph.synthetic_glyph_id = null;
@@ -89,6 +256,38 @@ pub fn materialize(glyph: anytype, resolved: Resolved) void {
     glyph.x_offset = 0;
     glyph.y_offset = 0;
     glyph.flags.discretionary_hyphen = true;
+}
+
+pub fn materializeVertical(
+    glyph: *glyph_position.GlyphPosition,
+    resolved: VerticalResolved,
+) void {
+    glyph.glyph_id = resolved.glyph_id;
+    glyph.synthetic_glyph_id = null;
+    glyph.codepoint = resolved.codepoint;
+    glyph.x_advance = 0;
+    glyph.y_advance = resolved.y_advance;
+    glyph.x_offset = resolved.x_offset;
+    glyph.y_offset = resolved.y_offset;
+    glyph.orientation = resolved.orientation;
+    glyph.flags.discretionary_hyphen = true;
+}
+
+pub fn syntheticVertical(
+    candidate: VerticalCandidate,
+) glyph_position.GlyphPosition {
+    return .{
+        .glyph_id = candidate.resolved.glyph_id,
+        .codepoint = candidate.resolved.codepoint,
+        .cluster = candidate.source_byte_start,
+        .source_byte_len = candidate.source_byte_len,
+        .x_advance = 0,
+        .y_advance = candidate.resolved.y_advance,
+        .x_offset = candidate.resolved.x_offset,
+        .y_offset = candidate.resolved.y_offset,
+        .orientation = candidate.resolved.orientation,
+        .flags = .{ .discretionary_hyphen = true },
+    };
 }
 
 pub fn synthetic(

@@ -8,6 +8,7 @@ const inline_measure = @import("measure.zig");
 const paragraph_options = @import("../options.zig");
 const paragraph_types = @import("../../types/paragraph.zig");
 const policy = @import("policy.zig");
+const run_types = @import("../../types/runs.zig");
 const shared = @import("shared.zig");
 const vertical_advances = @import("../vertical_advances.zig");
 const white_space = @import("../white_space.zig");
@@ -17,6 +18,8 @@ pub fn measure(
     allocator: std.mem.Allocator,
     text: []const u8,
     glyphs: []const GlyphPosition,
+    runs: []const run_types.CascadeRun,
+    variation_coords: []const f32,
     graphemes: []const unicode.GraphemeCluster,
     breaks: []const line_break_opportunity.Opportunity,
     options: paragraph_options.Options,
@@ -52,7 +55,10 @@ pub fn measure(
         try segment(
             allocator,
             &result,
+            text,
             working,
+            runs,
+            variation_coords,
             prefix,
             graphemes,
             effective_breaks.items,
@@ -76,7 +82,10 @@ pub fn measure(
     try segment(
         allocator,
         &result,
+        text,
         working,
+        runs,
+        variation_coords,
         prefix,
         graphemes,
         effective_breaks.items,
@@ -94,7 +103,10 @@ pub fn measure(
 fn segment(
     allocator: std.mem.Allocator,
     result: *paragraph_types.ContentWidths,
+    text: []const u8,
     glyphs: []const GlyphPosition,
+    runs: []const run_types.CascadeRun,
+    variation_coords: []const f32,
     prefix: []const f32,
     graphemes: []const unicode.GraphemeCluster,
     breaks: []const line_break_opportunity.Opportunity,
@@ -134,13 +146,17 @@ fn segment(
     try candidates.collect(
         &items,
         allocator,
+        text,
         glyphs,
+        runs,
+        variation_coords,
         graphemes,
         breaks,
         segment_start,
         segment_end,
         segment_byte_start,
         segment_byte_end,
+        options,
     );
     try candidates.appendBreakSpaces(
         &items,
@@ -158,11 +174,11 @@ fn segment(
         if (candidate.next_glyph_start <= fragment_start) continue;
         result.min = @max(
             result.min,
-            inline_measure.inlineSize(
+            candidates.candidateInlineSize(
+                candidate,
                 glyphs,
                 prefix,
                 fragment_start,
-                candidate.glyph_end,
                 options,
             ),
         );

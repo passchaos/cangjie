@@ -12,6 +12,7 @@ const line_break_opportunity = @import("../../../line_break/opportunity.zig");
 const line_break_policy = @import("../../line_break_policy.zig");
 const paragraph_options = @import("../../options.zig");
 const policy = @import("../policy.zig");
+const run_types = @import("../../../types/runs.zig");
 const shaped_boundary = @import("../../../line_break/shaped_boundary.zig");
 const shared = @import("../shared.zig");
 const unicode = @import("../../../../unicode.zig");
@@ -28,12 +29,16 @@ pub const Boundary = struct {
     next_glyph_start: usize,
     byte_end: usize,
     kind: Kind,
+    hyphen: ?@import("../../../discretionary_hyphen.zig").VerticalCandidate = null,
 };
 
 pub fn enumerate(
     output: *std.ArrayList(Boundary),
     allocator: std.mem.Allocator,
+    text: []const u8,
     glyphs: []const GlyphPosition,
+    runs: []const run_types.CascadeRun,
+    variation_coords: []const f32,
     graphemes: []const unicode.GraphemeCluster,
     breaks: []const line_break_opportunity.Opportunity,
     options: paragraph_options.Options,
@@ -60,13 +65,17 @@ pub fn enumerate(
     try candidates.collect(
         &ordinary,
         allocator,
+        text,
         glyphs,
+        runs,
+        variation_coords,
         graphemes,
         breaks,
         segment_start,
         segment_end,
         source_start,
         source_content_end,
+        options,
     );
     try candidates.appendBreakSpaces(
         &ordinary,
@@ -94,6 +103,7 @@ pub fn enumerate(
                 candidate.byte_end,
                 options,
             ),
+            .hyphen = candidate.hyphen,
         });
     }
 
@@ -237,7 +247,10 @@ test "balanced graph never manufactures an unsafe grapheme edge" {
     try enumerate(
         &boundaries,
         std.testing.allocator,
+        "AAA",
         &glyphs,
+        &.{},
+        &.{},
         &graphemes,
         &.{},
         .{

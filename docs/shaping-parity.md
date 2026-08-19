@@ -2255,6 +2255,13 @@ shaping-performance superiority.
   analysis. Positive-down tab fields, signed spacing, hard segments, bidi,
   retained/styled output, max-lines, and ellipsis are retained; an incomplete
   or complexity-limited search falls back transactionally to greedy columns.
+  Explicit U+00AD opportunities now use the same vertical boundary graph and
+  materialize a source-owning U+2010/U+002D/U+00AD fallback with the owning
+  run's orientation, variable-font instance, vertical origin, and inline
+  advance. Both retained invisible outputs and shaper-omitted
+  default-ignorables are covered; greedy/balanced fitting, aligned tabs,
+  intrinsic sizing, retained/styled metadata, bidi, interaction, renderer
+  output, custom hyphen characters, and ellipsis share that result.
   Ordinary out-of-flow source-anchor fallbacks remain zero-occupancy while
   retaining paint output. Custom out-of-flow markers now accept absolute
   presentation-only geometry directly and through placement-only concrete

@@ -14,6 +14,8 @@ test {
     _ = @import("vertical_paragraph/ranged_policy.zig");
     _ = @import("vertical_paragraph/dictionary.zig");
     _ = @import("vertical_paragraph/dictionary_integration.zig");
+    _ = @import("vertical_paragraph/soft_hyphen.zig");
+    _ = @import("vertical_paragraph/soft_hyphen_integration.zig");
     _ = @import("vertical_paragraph/balanced.zig");
     _ = @import("vertical_paragraph/balanced_integration.zig");
     _ = @import("vertical_paragraph/whitespace.zig");

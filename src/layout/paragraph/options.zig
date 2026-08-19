@@ -328,7 +328,6 @@ fn validateVerticalForText(_: []const u8, options: Options) !void {
         options.exclusions.len != 0 or
         options.line_regions.len != 0 or
         options.hyphenation.dictionary != null or
-        options.hyphenation.character != null or
         options.hyphenation.max_consecutive_lines != null or
         options.punctuation.max_compression_fraction != 0 or
         options.punctuation.end_hanging_fraction != 0)
@@ -476,6 +475,11 @@ test "vertical paragraph validation admits only implemented columns" {
     try validateForText("AA", .{
         .max_width = 100,
         .line_break_strategy = .balanced,
+        .writing_mode = .vertical_lr,
+    });
+    try validateForText("A\u{00ad}A", .{
+        .max_width = 100,
+        .hyphenation = .{ .character = 0x2010 },
         .writing_mode = .vertical_lr,
     });
     var dictionary = try segmentation.WordBreakDictionary.init(

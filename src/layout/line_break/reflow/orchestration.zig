@@ -230,6 +230,11 @@ const NoShrinkageRecipe = struct {
     pub fn minimumLineHeight(_: @This(), _: usize, _: usize) ?f32 {
         return null;
     }
+    pub fn prepareVerticalHyphenMetadata(
+        _: @This(),
+        _: []const @import("hyphen_insertions.zig").Selected,
+    ) !void {}
+    pub fn commitVerticalHyphenMetadata(_: @This()) void {}
     pub fn ellipsisRun(
         _: @This(),
         _: anytype,

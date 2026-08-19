@@ -134,6 +134,24 @@ pub fn materialize(
         fallback_advance,
         ellipsis_advance,
     );
+    // A discretionary hyphen denotes continuation into another visible
+    // column. Ellipsis terminates the visible source prefix, so retaining that
+    // hyphen would render two mutually exclusive terminal markers.
+    while (line.glyph_len > 0 and
+        buffer.glyphs.items[
+            line.glyph_start + line.glyph_len - 1
+        ].isDiscretionaryHyphen())
+    {
+        _ = buffer.glyphs.pop();
+        line.glyph_len -= 1;
+        line.height = vertical_tabs.recomputeRangeWithTerminal(
+            buffer.glyphs.items[line.glyph_start .. line.glyph_start + line.glyph_len],
+            options.tab_stops,
+            fallback_interval,
+            fallback_advance,
+            ellipsis_advance,
+        );
+    }
     while (line.glyph_len > 0 and line.height > inline_limit) {
         _ = buffer.glyphs.pop();
         line.glyph_len -= 1;

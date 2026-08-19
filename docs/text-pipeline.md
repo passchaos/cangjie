@@ -420,14 +420,22 @@ segmentation layer:
 `WrapMode.no_wrap` is also enforced by reflow now: width does not introduce
 soft lines, but mandatory Unicode line separators still do.
 
-Soft hyphen now follows the mainstream discretionary-break contract. U+00AD is
-kept as a zero-advance, invisible shaping atom when its opportunity is not
-chosen. If reflow selects that UAX #14 boundary, the same source atom is
-materialized with U+2010 from its owning font, falling back to U+002D and then
-the font's U+00AD glyph. Its advance participates in break fitting, alignment,
-justification, selection, and hit testing. Retained reflow restores the
-invisible atom before every width change, and paragraph bidi preserves a
-materialized X9 atom at the visual line end without inventing a new source
+Soft hyphen now follows the mainstream discretionary-break contract in both
+horizontal lines and vertical columns. U+00AD remains invisible when its
+opportunity is not chosen. Depending on the font's default-ignorable behavior,
+shaping may retain a zero-advance atom or omit that output entirely. If reflow
+selects the UAX #14 boundary, Cangjie therefore either materializes the atom or
+inserts one source-owning glyph at the same UTF-8 range. U+2010 is preferred
+from the owning font, with U+002D and the font's U+00AD glyph as fallbacks.
+`hyphenation.character` requests an exact supported replacement independently
+from automatic dictionary hyphenation.
+
+The resolved glyph uses the current writing mode's orientation, advance, and
+OpenType vertical origin. Its inline advance participates in greedy/balanced
+break fitting, aligned tab fields, intrinsic sizing, alignment, selection, and
+hit testing. Retained reflow restores the unselected shaping snapshot before
+every width change; styled metadata, font runs, bidi order, ellipsis, and draw
+output consume the same materialized result without inventing another source
 range. This is explicit soft-hyphen support, not language-specific automatic
 hyphenation.
 
@@ -635,7 +643,8 @@ This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
 axes, vertical paragraph validation rejects an explicit bottom-to-top
 `direction = rtl` request, justification, exclusions/line regions (including
-resolver responses that introduce an exclusion), automatic hyphenation,
+resolver responses that introduce an exclusion), automatic dictionary
+hyphenation and its consecutive-line policy,
 optical punctuation, and the resumable breaker. Retained whole-paragraph
 layout and intrinsic inline-size measurement are supported and restore the
 pristine vertical shaping snapshot between calls. Returning a concrete

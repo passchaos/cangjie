@@ -98,6 +98,9 @@ conversion allocation. Formats 1/6 match Skrifa; formats 2/5/7 additionally
 match FreeType's BGRA output and exceed Skrifa's current high-level boundary.
 The CPU renderer and draw-list
 atlas surface consume masks as alpha and PNG/BGRA content as color.
+CBLC/EBLC inspection retains distinct horizontal/vertical ppem values, strike
+orientation flags, and both horizontal and vertical `BigGlyphMetrics`
+bearings/advances instead of collapsing them into one horizontal record.
 `tools/freetype_bitmap_oracle.c` reads the retained format-8 fixture through
 FreeType and confirms parent metrics `4x2`, bearing `(0,2)`, and rows `1000` /
 `0010`; the Cangjie materializer and CPU-render tests retain the same pixels.

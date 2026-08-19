@@ -674,6 +674,16 @@ pub fn buildCbdtBgraTtfWithFormat(
     );
 }
 
+pub fn buildCbdtBgraVerticalMetricsTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const tables = try cbdtBgraTtfTables(allocator, 5);
+    // BitmapSize.ppemY differs from ppemX so public strike metadata proves
+    // that the two authored axes are retained independently.
+    tables[1].data[8 + 45] = 18;
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
 pub fn buildCompoundEbdtTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try compoundEbdtTtfTables(allocator));
 }
@@ -6463,8 +6473,8 @@ fn cblcBgraTable(
         bytes[subtable + 15] = 13;
         bytes[subtable + 16] = 12;
         bytes[subtable + 17] = 0;
-        bytes[subtable + 18] = 1;
-        bytes[subtable + 19] = 12;
+        bytes[subtable + 18] = @bitCast(@as(i8, -1));
+        bytes[subtable + 19] = 15;
     } else {
         writeU16(bytes, subtable + 8, 0);
         const metrics_len: u16 = if (image_format == 6 or image_format == 7) 8 else 5;

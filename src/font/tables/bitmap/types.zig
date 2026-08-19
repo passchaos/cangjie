@@ -247,6 +247,9 @@ pub const GlyphInfo = struct {
     bit_depth: ?u8 = null,
     row_byte_aligned: bool = false,
     advance: ?u16 = null,
+    vertical_origin_offset_x: ?i16 = null,
+    vertical_origin_offset_y: ?i16 = null,
+    vertical_advance: ?u16 = null,
     data_offset: usize,
     data_length: usize,
     is_png: bool,
@@ -255,8 +258,10 @@ pub const GlyphInfo = struct {
 pub const StrikeInfo = struct {
     source: StrikeSource,
     ppem: u16,
+    ppem_x: u16 = 0,
     ppi: u16,
     bit_depth: u8 = 0,
+    flags: u8 = 0,
     start_glyph: glyph.GlyphId = 0,
     end_glyph: glyph.GlyphId = 0,
 };
@@ -268,6 +273,9 @@ pub const Metrics = struct {
     bearing_x: i8,
     bearing_y: i8,
     advance: u8,
+    vertical_bearing_x: ?i8 = null,
+    vertical_bearing_y: ?i8 = null,
+    vertical_advance: ?u8 = null,
 };
 
 pub fn readSmallMetrics(
@@ -295,6 +303,9 @@ pub fn readBigMetrics(
         .bearing_x = @bitCast(data[offset + 2]),
         .bearing_y = @bitCast(data[offset + 3]),
         .advance = data[offset + 4],
+        .vertical_bearing_x = @bitCast(data[offset + 5]),
+        .vertical_bearing_y = @bitCast(data[offset + 6]),
+        .vertical_advance = data[offset + 7],
     };
 }
 

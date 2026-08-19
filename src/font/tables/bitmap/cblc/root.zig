@@ -63,6 +63,7 @@ pub fn strike(
     const start_glyph = try bin.readU16At(data, offset + 40);
     const end_glyph = try bin.readU16At(data, offset + 42);
     const bit_depth = data[offset + 46];
+    const flags = data[offset + 47];
     if (start_glyph > end_glyph or end_glyph >= glyph_count) {
         return error.BadSfnt;
     }
@@ -71,10 +72,13 @@ pub fn strike(
     {
         return error.BadSfnt;
     }
+    if ((flags & ~@as(u8, 0x03)) != 0) return error.BadSfnt;
     return .{
-        .ppem = data[offset + 44],
+        .ppem_x = data[offset + 44],
+        .ppem = data[offset + 45],
         .ppi = 0,
         .bit_depth = bit_depth,
+        .flags = flags,
         .offset = location_table.offset + index_array_offset,
         .index_tables_size = index_tables_size,
         .table_count = table_count,
@@ -346,9 +350,11 @@ pub fn validateGlyphData(
 
 test "CBLC fixed-size index formats validate dense and sparse invariants" {
     const selected_strike = Strike{
+        .ppem_x = 16,
         .ppem = 16,
         .ppi = 0,
         .bit_depth = 1,
+        .flags = 1,
         .offset = 0,
         .index_tables_size = 32,
         .table_count = 1,

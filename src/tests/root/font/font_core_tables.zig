@@ -603,6 +603,29 @@ test "exposes FreeType-compatible BGRA from bit-aligned bitmap formats" {
     }
 }
 
+test "preserves horizontal and vertical BigGlyphMetrics metadata" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("../../../test_font.zig")
+        .buildCbdtBgraVerticalMetricsTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const strikes = try font.bitmapStrikes(allocator);
+    defer allocator.free(strikes);
+    try std.testing.expectEqual(@as(u16, 16), strikes[0].ppem_x);
+    try std.testing.expectEqual(@as(u16, 18), strikes[0].ppem);
+    try std.testing.expectEqual(@as(u8, 1), strikes[0].flags);
+
+    const info = (try font.bitmapGlyphInfo(1, 18)) orelse
+        return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(@as(i16, 2), info.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, 13), info.origin_offset_y);
+    try std.testing.expectEqual(@as(?u16, 12), info.advance);
+    try std.testing.expectEqual(@as(?i16, 0), info.vertical_origin_offset_x);
+    try std.testing.expectEqual(@as(?i16, -1), info.vertical_origin_offset_y);
+    try std.testing.expectEqual(@as(?u16, 15), info.vertical_advance);
+}
+
 test "flattens EBDT compound bitmap components into parent metrics" {
     const allocator = std.testing.allocator;
     const bytes = try @import("../../../test_font.zig")

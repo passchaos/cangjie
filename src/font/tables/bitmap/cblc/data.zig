@@ -121,6 +121,18 @@ pub fn glyphInfo(
         .row_byte_aligned = location.image_format == 1 or
             location.image_format == 6,
         .advance = metrics.advance,
+        .vertical_origin_offset_x = if (metrics.vertical_bearing_x) |value|
+            value
+        else
+            null,
+        .vertical_origin_offset_y = if (metrics.vertical_bearing_y) |value|
+            value
+        else
+            null,
+        .vertical_advance = if (metrics.vertical_advance) |value|
+            value
+        else
+            null,
         .data_offset = @intFromPtr(payload.ptr) - @intFromPtr(data.ptr),
         .data_length = payload.len,
         .is_png = is_png,
@@ -431,9 +443,11 @@ fn validateEmbeddedDataPayload(
 test "32-bpp byte-aligned formats expose premultiplied BGRA bytes" {
     const pixels = [_]u8{ 7, 13, 64, 128, 10, 20, 30, 255 };
     const strike = Strike{
+        .ppem_x = 16,
         .ppem = 16,
         .ppi = 0,
         .bit_depth = 32,
+        .flags = 1,
         .offset = 0,
         .index_tables_size = 0,
         .table_count = 0,
@@ -487,9 +501,11 @@ test "32-bpp byte-aligned formats expose premultiplied BGRA bytes" {
 
 test "32-bpp bit-aligned formats expose FreeType-compatible BGRA" {
     const strike = Strike{
+        .ppem_x = 16,
         .ppem = 16,
         .ppi = 0,
         .bit_depth = 32,
+        .flags = 1,
         .offset = 0,
         .index_tables_size = 0,
         .table_count = 0,

@@ -4,9 +4,11 @@ const glyph = @import("../../../../glyph.zig");
 const bitmap = @import("../types.zig");
 
 pub const Strike = struct {
+    ppem_x: u16,
     ppem: u16,
     ppi: u16,
     bit_depth: u8,
+    flags: u8,
     offset: usize,
     index_tables_size: usize,
     table_count: usize,

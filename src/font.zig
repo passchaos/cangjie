@@ -4617,8 +4617,10 @@ pub const Font = struct {
             strikes.appendAssumeCapacity(.{
                 .source = source,
                 .ppem = strike.ppem,
+                .ppem_x = strike.ppem_x,
                 .ppi = strike.ppi,
                 .bit_depth = strike.bit_depth,
+                .flags = strike.flags,
                 .start_glyph = strike.start_glyph,
                 .end_glyph = strike.end_glyph,
             });

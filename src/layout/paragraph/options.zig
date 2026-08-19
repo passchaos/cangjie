@@ -327,7 +327,6 @@ fn validateVerticalForText(_: []const u8, options: Options) !void {
         !verticalAlignmentSupported(options.alignment) or
         options.exclusions.len != 0 or
         options.line_regions.len != 0 or
-        options.word_break_dictionary != null or
         options.hyphenation.dictionary != null or
         options.hyphenation.character != null or
         options.hyphenation.max_consecutive_lines != null or
@@ -478,6 +477,17 @@ test "vertical paragraph validation admits only implemented columns" {
         .max_width = 100,
         .line_break_strategy = .balanced,
         .writing_mode = .vertical_lr,
+    });
+    var dictionary = try segmentation.WordBreakDictionary.init(
+        std.testing.allocator,
+        .thai,
+        &.{"ภาษา"},
+    );
+    defer dictionary.deinit();
+    try validateForText("ภาษา", .{
+        .max_width = 100,
+        .word_break_dictionary = &dictionary,
+        .writing_mode = .vertical_rl,
     });
     try validateForText("AA", .{
         .max_width = 100,

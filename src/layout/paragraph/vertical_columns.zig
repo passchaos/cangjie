@@ -8,15 +8,18 @@
 //! without importing horizontal regions, tabs, justification, or rollback.
 
 const geometry = @import("../line_break/reflow/geometry.zig");
+const line_break_analysis = @import("../line_break/analysis.zig");
 const opportunities = @import("../line_break/reflow/opportunities.zig");
 const line_break_opportunity = @import("../line_break/opportunity.zig");
 const truncation = @import("../line_break/reflow/truncation.zig");
 const paragraph_options = @import("options.zig");
+const segmentation = @import("../../text/segmentation/root.zig");
 const vertical_advances = @import("vertical_advances.zig");
 const vertical_block_metrics = @import("vertical_block_metrics.zig");
 const vertical_ellipsis = @import("vertical_ellipsis.zig");
 const vertical_inline_alignment = @import("vertical_inline_alignment.zig");
 const vertical_wrap = @import("vertical_wrap.zig");
+const vertical_wrap_policy = @import("vertical_wrap/policy.zig");
 const vertical_tabs = @import("vertical_wrap/tabs.zig");
 const white_space = @import("white_space.zig");
 const GlyphPosition = @import("../glyph_position.zig").GlyphPosition;
@@ -29,6 +32,7 @@ pub fn build(
     default_metrics: geometry.BaselineMetrics,
     analyzed_graphemes: ?[]const unicode.GraphemeCluster,
     analyzed_line_breaks: ?[]const line_break_opportunity.Opportunity,
+    dictionary: ?*const segmentation.WordBreakDictionary,
     recipe: anytype,
 ) !void {
     buffer.lines.clearRetainingCapacity();
@@ -56,6 +60,29 @@ pub fn build(
     var owned_breaks: ?[]line_break_opportunity.Opportunity = null;
     defer if (owned_breaks) |items| buffer.allocator.free(items);
     const breaks = analyzed_line_breaks orelse breaks: {
+        // One-shot vertical layout receives no retained opportunity stream.
+        // Materialize dictionary analysis here exactly as horizontal reflow
+        // does; retained paths already pass their precomputed base. Preserve
+        // the direct UAX-only conversion when no dictionary is requested so
+        // the ordinary vertical path does not acquire extra merge allocations.
+        if (dictionary) |selected| {
+            if (vertical_wrap_policy.anyWrappingEnabled(text.len, options)) {
+                owned_breaks = try line_break_analysis.itemizeWithHyphenation(
+                    buffer.allocator,
+                    text,
+                    graphemes,
+                    selected,
+                    null,
+                    .{
+                        .wrap_mode = .word,
+                        .word_break = .normal,
+                        .overflow_wrap = .break_word,
+                    },
+                    &.{},
+                );
+                break :breaks owned_breaks.?;
+            }
+        }
         const unicode_breaks = try unicode.itemizeLineBreaks(
             buffer.allocator,
             text,

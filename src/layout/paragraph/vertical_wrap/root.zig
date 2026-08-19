@@ -317,3 +317,77 @@ test "vertical emergency break defers across unsafe output boundaries" {
     try std.testing.expectEqual(@as(usize, 1), break_all.len);
     try std.testing.expectEqual(@as(usize, 2), break_all[0].glyph_end);
 }
+
+test "vertical dictionary opportunity respects unsafe shaped boundary" {
+    const allocator = std.testing.allocator;
+    const text = "กข";
+    var dictionary =
+        try @import("../../../text/segmentation/root.zig")
+            .WordBreakDictionary.init(
+            allocator,
+            .thai,
+            &.{ "ก", "ข" },
+        );
+    defer dictionary.deinit();
+    const glyphs = [_]GlyphPosition{
+        .{
+            .glyph_id = 1,
+            .codepoint = 'ก',
+            .cluster = 0,
+            .source_byte_len = "ก".len,
+            .x_advance = 0,
+            .y_advance = 20,
+        },
+        .{
+            .glyph_id = 2,
+            .codepoint = 'ข',
+            .cluster = "ก".len,
+            .source_byte_len = "ข".len,
+            .x_advance = 0,
+            .y_advance = 20,
+            .flags = .{ .unsafe_to_break_before = true },
+        },
+    };
+    const graphemes = [_]unicode.GraphemeCluster{
+        .{ .byte_start = 0, .byte_len = "ก".len },
+        .{ .byte_start = "ก".len, .byte_len = "ข".len },
+    };
+    const breaks =
+        try @import("../../line_break/analysis.zig").itemizeWithHyphenation(
+            allocator,
+            text,
+            &graphemes,
+            &dictionary,
+            null,
+            .{
+                .wrap_mode = .word,
+                .word_break = .normal,
+                .overflow_wrap = .normal,
+            },
+            &.{},
+        );
+    defer allocator.free(breaks);
+    var saw_dictionary_boundary = false;
+    for (breaks) |item| {
+        if (item.kind == .soft and item.byte_offset == "ก".len) {
+            saw_dictionary_boundary = true;
+        }
+    }
+    try std.testing.expect(saw_dictionary_boundary);
+
+    const ranges = try build(
+        allocator,
+        text,
+        &glyphs,
+        &graphemes,
+        breaks,
+        .{
+            .max_width = 20.1,
+            .overflow_wrap = .normal,
+            .writing_mode = .vertical_lr,
+        },
+    );
+    defer allocator.free(ranges);
+    try std.testing.expectEqual(@as(usize, 1), ranges.len);
+    try std.testing.expectEqual(@as(usize, glyphs.len), ranges[0].glyph_end);
+}

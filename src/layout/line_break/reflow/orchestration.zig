@@ -61,6 +61,7 @@ pub fn buildWithJstfShrinkage(
             default_metrics,
             analyzed_graphemes,
             analyzed_line_breaks,
+            dictionary,
             recipe,
         );
     }

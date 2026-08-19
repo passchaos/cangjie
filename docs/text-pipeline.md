@@ -556,13 +556,17 @@ Paragraph layout now admits vertical writing through
 inline-size/column-height measure. Greedy `.word` wrapping applies global
 `word_break` (`normal`, `break_all`, or `keep_all`) and `overflow_wrap`
 (`normal`, `break_word`, or `anywhere`) policy to reusable UAX #14 boundaries.
-UTF-8 `line_break_policy_ranges` and attributed-span overrides may tailor those
-three properties locally; a candidate belongs to the preceding source scalar,
-matching horizontal reflow. Emergency modes fall back to extended-grapheme
-boundaries that also pass the shaper's `unsafe-to-break` contract, and a local
-`.no_wrap` or `.normal` span defers emergency wrapping until a later range
-permits it. A global `.no_wrap` keeps only hard breaks unless a range explicitly
-re-enables wrapping.
+An optional `WordBreakDictionary` adds language-authored boundaries for Thai,
+Lao, Khmer, or Myanmar before that same policy and shaped-output safety filter.
+UTF-8 `line_break_policy_ranges` and attributed-span overrides may tailor the
+three wrapping properties locally; a candidate belongs to the preceding source
+scalar, matching horizontal reflow. Emergency modes fall back to
+extended-grapheme boundaries that also pass the shaper's `unsafe-to-break`
+contract, and a local `.no_wrap` or `.normal` span defers emergency wrapping
+until a later range permits it. A global `.no_wrap` keeps only hard breaks
+unless a range explicitly re-enables wrapping. Dictionary analysis is retained
+for repeated reflow and intrinsic inline-size measurement; greedy, balanced,
+plain, and styled vertical layout consume the same opportunity stream.
 `vertical_rl` places source-order columns from right to left, while
 `vertical_lr` places them left to right. This block progression is independent
 from HarfBuzz-style BTT, which remains an inline-direction request rather than
@@ -631,7 +635,7 @@ This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
 axes, vertical paragraph validation rejects an explicit bottom-to-top
 `direction = rtl` request, justification, exclusions/line regions (including
-resolver responses that introduce an exclusion), hyphenation,
+resolver responses that introduce an exclusion), automatic hyphenation,
 optical punctuation, and the resumable breaker. Retained whole-paragraph
 layout and intrinsic inline-size measurement are supported and restore the
 pristine vertical shaping snapshot between calls. Returning a concrete
@@ -827,14 +831,14 @@ max-lines/ellipsis, justification, bidi, styled metadata, retained reflow,
 decorations, and inline-object positioning.
 
 The vertical optimizer owns a focused solver plus boundary-graph module under
-`vertical_wrap/`. It considers reusable UAX #14, ranged-policy, and emergency
-boundaries, reuses positive-down tab-field and whitespace measurement, signed
-spacing, first-column indentation, and shaped-output safety, and leaves
-physical RL/LR placement to `vertical_columns.zig`.
-Vertical exclusions, hyphenation, and justification remain rejected, so their
-horizontal-only costs do not leak into this bounded slice. If no complete safe
-path exists or the state/edge limits are reached, the already valid greedy
-columns remain authoritative.
+`vertical_wrap/`. It considers reusable UAX #14, dictionary, ranged-policy, and
+emergency boundaries, reuses positive-down tab-field and whitespace
+measurement, signed spacing, first-column indentation, and shaped-output
+safety, and leaves physical RL/LR placement to `vertical_columns.zig`.
+Vertical exclusions, automatic hyphenation, and justification remain rejected,
+so their horizontal-only costs do not leak into this bounded slice. If no
+complete safe path exists or the state/edge limits are reached, the already
+valid greedy columns remain authoritative.
 
 Line-breaking policy is split along CSS Text's independent axes rather than
 encoded as one ambiguous wrap enum:

@@ -62,6 +62,7 @@ pub fn buildWithJstfShrinkage(
             analyzed_graphemes,
             analyzed_line_breaks,
             dictionary,
+            hyphenation_dictionary,
             recipe,
         );
     }

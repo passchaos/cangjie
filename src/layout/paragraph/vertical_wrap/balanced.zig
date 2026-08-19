@@ -20,6 +20,8 @@ const unicode = @import("../../../unicode.zig");
 
 const cost_epsilon: f64 = 0.000001;
 const width_epsilon: f32 = 0.001;
+const hyphen_penalty: f64 = 0.35;
+const consecutive_hyphen_penalty: f64 = 1.0;
 const emergency_penalty: f64 = 4.0;
 // Long documents can expose a safe boundary after nearly every grapheme.
 // Bounding both dimensions keeps `.balanced` a presentation preference:
@@ -30,6 +32,7 @@ const max_edges_per_state: usize = 256;
 const State = struct {
     boundary_index: usize,
     columns: usize,
+    hyphen_run: usize,
     cost: f64,
     previous: ?usize,
 };
@@ -141,6 +144,7 @@ fn solve(
     try states.append(allocator, .{
         .boundary_index = 0,
         .columns = 0,
+        .hyphen_run = 0,
         .cost = 0,
         .previous = null,
     });
@@ -162,6 +166,7 @@ fn solve(
             start,
             remaining,
             limit,
+            state.hyphen_run,
         );
         if (regular_fit == .limit_exceeded) return null;
         var edge_count: usize = 0;
@@ -178,6 +183,14 @@ fn solve(
             if (regular_fit == .found and boundary.kind == .emergency) {
                 continue;
             }
+            const next_hyphen_run =
+                if (boundary.hyphen != null)
+                    state.hyphen_run + 1
+                else
+                    0;
+            if (options.hyphenation.max_consecutive_lines) |hyphen_limit| {
+                if (next_hyphen_run > hyphen_limit) continue;
+            }
             const width = boundaryInlineSize(
                 boundary,
                 glyphs,
@@ -186,18 +199,24 @@ fn solve(
                 options,
             );
             if (width > limit + width_epsilon) continue;
-            const cost = squaredSlack(width, limit) +
-                if (boundary.kind == .emergency)
-                    emergency_penalty
-                else
-                    0;
+            var edge_cost = squaredSlack(width, limit);
+            if (boundary.hyphen != null) {
+                edge_cost += hyphen_penalty;
+                if (state.hyphen_run != 0) {
+                    edge_cost += consecutive_hyphen_penalty;
+                }
+            }
+            if (boundary.kind == .emergency) {
+                edge_cost += emergency_penalty;
+            }
             const accepted = try insertOrImprove(
                 &states,
                 allocator,
                 .{
                     .boundary_index = end_index,
                     .columns = state.columns + 1,
-                    .cost = state.cost + cost,
+                    .hyphen_run = next_hyphen_run,
+                    .cost = state.cost + edge_cost,
                     .previous = state_index,
                 },
             );
@@ -240,11 +259,17 @@ fn hasFittingRegular(
     start: usize,
     remaining: usize,
     limit: f32,
+    hyphen_run: usize,
 ) RegularFit {
     var edge_count: usize = 0;
     for (boundaries[first_index..]) |boundary| {
         if (!eligible(boundary, remaining)) continue;
         if (boundary.glyph_end <= start) continue;
+        if (boundary.hyphen != null) {
+            if (options.hyphenation.max_consecutive_lines) |limit_count| {
+                if (hyphen_run >= limit_count) continue;
+            }
+        }
         edge_count += 1;
         if (edge_count > max_edges_per_state) return .limit_exceeded;
         if (boundary.kind == .emergency) continue;
@@ -271,7 +296,8 @@ fn insertOrImprove(
 ) !bool {
     for (states.items) |*existing| {
         if (existing.boundary_index != candidate.boundary_index or
-            existing.columns != candidate.columns)
+            existing.columns != candidate.columns or
+            existing.hyphen_run != candidate.hyphen_run)
         {
             continue;
         }

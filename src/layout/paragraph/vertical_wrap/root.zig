@@ -195,6 +195,7 @@ fn appendSegment(
     );
     var glyph_start = segment_start;
     var byte_start = segment_byte_start;
+    var consecutive_hyphenated_columns: usize = 0;
     while (glyph_start < segment_end) {
         const column_indent = if (first_column) first_indent else 0;
         const column_limit = if (wrapping_enabled)
@@ -228,6 +229,11 @@ fn appendSegment(
             column_limit,
             options,
         );
+        const visible_hyphen_allowed =
+            if (options.hyphenation.max_consecutive_lines) |hyphen_limit|
+                consecutive_hyphenated_columns < hyphen_limit
+            else
+                true;
         const selected = candidates.lastFitting(
             items.items,
             glyphs,
@@ -236,6 +242,7 @@ fn appendSegment(
             overflow,
             column_limit,
             options,
+            visible_hyphen_allowed,
         ) orelse if (policy.emergencyAllowedBefore(
             options,
             glyphs[overflow - 1].sourceByteEnd(),
@@ -253,7 +260,11 @@ fn appendSegment(
             )
         else
             emergency.afterDisabled(
-                candidates.firstUsable(items.items, glyph_start),
+                candidates.firstUsable(
+                    items.items,
+                    glyph_start,
+                    visible_hyphen_allowed,
+                ),
                 glyphs,
                 graphemes,
                 segment_end,
@@ -272,6 +283,11 @@ fn appendSegment(
         });
         glyph_start = selected.next_glyph_start;
         byte_start = selected.byte_end;
+        consecutive_hyphenated_columns =
+            if (selected.hyphen != null)
+                consecutive_hyphenated_columns + 1
+            else
+                0;
         first_column = false;
     }
 }
@@ -408,6 +424,56 @@ test "vertical dictionary opportunity respects unsafe shaped boundary" {
         &.{},
         &graphemes,
         breaks,
+        .{
+            .max_width = 20.1,
+            .overflow_wrap = .normal,
+            .writing_mode = .vertical_lr,
+        },
+    );
+    defer allocator.free(ranges);
+    try std.testing.expectEqual(@as(usize, 1), ranges.len);
+    try std.testing.expectEqual(@as(usize, glyphs.len), ranges[0].glyph_end);
+}
+
+test "vertical automatic hyphen opportunity respects unsafe shaped boundary" {
+    const allocator = std.testing.allocator;
+    const glyphs = [_]GlyphPosition{
+        .{
+            .glyph_id = 1,
+            .codepoint = 'A',
+            .cluster = 0,
+            .source_byte_len = 1,
+            .x_advance = 0,
+            .y_advance = 20,
+        },
+        .{
+            .glyph_id = 2,
+            .codepoint = 'B',
+            .cluster = 1,
+            .source_byte_len = 1,
+            .x_advance = 0,
+            .y_advance = 20,
+            .flags = .{ .unsafe_to_break_before = true },
+        },
+    };
+    const graphemes = [_]unicode.GraphemeCluster{
+        .{ .byte_start = 0, .byte_len = 1 },
+        .{ .byte_start = 1, .byte_len = 1 },
+    };
+    // No run is needed to resolve the visible glyph: the unsafe source edge
+    // must reject the automatic opportunity first.
+    const ranges = try build(
+        allocator,
+        "AB",
+        &glyphs,
+        &.{},
+        &.{},
+        &graphemes,
+        &.{.{
+            .byte_offset = 1,
+            .kind = .soft,
+            .automatic_hyphen = true,
+        }},
         .{
             .max_width = 20.1,
             .overflow_wrap = .normal,

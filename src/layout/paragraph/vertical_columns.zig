@@ -36,6 +36,7 @@ pub fn build(
     analyzed_graphemes: ?[]const unicode.GraphemeCluster,
     analyzed_line_breaks: ?[]const line_break_opportunity.Opportunity,
     dictionary: ?*const segmentation.WordBreakDictionary,
+    hyphenation_dictionary: ?*const @import("../../text/hyphenation/root.zig").Dictionary,
     recipe: anytype,
 ) !void {
     buffer.lines.clearRetainingCapacity();
@@ -68,14 +69,14 @@ pub fn build(
         // does; retained paths already pass their precomputed base. Preserve
         // the direct UAX-only conversion when no dictionary is requested so
         // the ordinary vertical path does not acquire extra merge allocations.
-        if (dictionary) |selected| {
+        if (dictionary != null or hyphenation_dictionary != null) {
             if (vertical_wrap_policy.anyWrappingEnabled(text.len, options)) {
                 owned_breaks = try line_break_analysis.itemizeWithHyphenation(
                     buffer.allocator,
                     text,
                     graphemes,
-                    selected,
-                    null,
+                    dictionary,
+                    hyphenation_dictionary,
                     .{
                         .wrap_mode = .word,
                         .word_break = .normal,

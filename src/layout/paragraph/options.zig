@@ -327,8 +327,6 @@ fn validateVerticalForText(_: []const u8, options: Options) !void {
         !verticalAlignmentSupported(options.alignment) or
         options.exclusions.len != 0 or
         options.line_regions.len != 0 or
-        options.hyphenation.dictionary != null or
-        options.hyphenation.max_consecutive_lines != null or
         options.punctuation.max_compression_fraction != 0 or
         options.punctuation.end_hanging_fraction != 0)
     {
@@ -481,6 +479,22 @@ test "vertical paragraph validation admits only implemented columns" {
         .max_width = 100,
         .hyphenation = .{ .character = 0x2010 },
         .writing_mode = .vertical_lr,
+    });
+    var hyphenation_dictionary =
+        try hyphenation.Dictionary.init(
+            std.testing.allocator,
+            "a1b",
+            "",
+            .{ .left_min = 1, .right_min = 1 },
+        );
+    defer hyphenation_dictionary.deinit();
+    try validateForText("ab", .{
+        .max_width = 100,
+        .hyphenation = .{
+            .dictionary = &hyphenation_dictionary,
+            .max_consecutive_lines = 1,
+        },
+        .writing_mode = .vertical_rl,
     });
     var dictionary = try segmentation.WordBreakDictionary.init(
         std.testing.allocator,

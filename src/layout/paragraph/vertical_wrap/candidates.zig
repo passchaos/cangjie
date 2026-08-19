@@ -31,7 +31,6 @@ pub fn collect(
 ) !void {
     for (breaks) |item| {
         if (item.kind != .soft or
-            item.automatic_hyphen or
             item.byte_offset <= segment_byte_start or
             item.byte_offset >= segment_byte_end)
         {
@@ -46,7 +45,19 @@ pub fn collect(
             true,
         ) orelse continue;
         const hyphen_index = boundary.glyph_end - 1;
-        if (discretionary_hyphen.isCandidate(
+        if (item.automatic_hyphen) {
+            boundary.hyphen =
+                try discretionary_hyphen.resolveVerticalAutomaticAtBoundary(
+                    runs,
+                    variation_coords,
+                    glyphs,
+                    boundary.glyph_end,
+                    item.byte_offset,
+                    options.writing_mode,
+                    options.text_orientation,
+                    options.hyphenation.character,
+                ) orelse continue;
+        } else if (discretionary_hyphen.isCandidate(
             glyphs[hyphen_index].codepoint,
         )) {
             boundary.hyphen =
@@ -120,12 +131,14 @@ pub fn lastFitting(
     overflow: usize,
     limit: f32,
     options: paragraph_options.Options,
+    visible_hyphen_allowed: bool,
 ) ?shared.SoftCandidate {
     var selected: ?shared.SoftCandidate = null;
     for (items) |candidate| {
         if (candidate.next_glyph_start <= glyph_start or
             candidate.next_glyph_start > overflow or
             candidate.glyph_end <= glyph_start or
+            (!visible_hyphen_allowed and candidate.hyphen != null) or
             candidateInlineSize(
                 candidate,
                 glyphs,
@@ -187,10 +200,12 @@ pub fn candidateInlineSize(
 pub fn firstUsable(
     items: []const shared.SoftCandidate,
     glyph_start: usize,
+    visible_hyphen_allowed: bool,
 ) ?shared.SoftCandidate {
     for (items) |candidate| {
         if (candidate.glyph_end > glyph_start and
-            candidate.next_glyph_start > glyph_start)
+            candidate.next_glyph_start > glyph_start and
+            (visible_hyphen_allowed or candidate.hyphen == null))
         {
             return candidate;
         }

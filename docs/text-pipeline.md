@@ -448,14 +448,23 @@ Unicode normalization mappings are explicit construction options; no language
 data, locale guess, or runtime callback is built into the library.
 
 `ParagraphOptions.hyphenation` and
-`ParagraphStyle.hyphenation` now tailor paragraph reflow with those
-boundaries. UAX #14 remains the default when its dictionary is null. A selected
-automatic boundary resolves U+2010/U+002D/U+00AD through the preceding
-cascade run, includes that advance while fitting the line, and inserts one
-zero-source-length glyph only after all logical line ranges have been chosen.
-The same policy can request another font-supported Unicode scalar and cap
-immediately consecutive visible hyphenated lines; both settings are reflow-only
-and may change between layouts of one retained paragraph.
+`ParagraphStyle.hyphenation` now tailor horizontal lines and vertical columns
+with those boundaries. UAX #14 remains the default when its dictionary is null.
+A selected automatic boundary resolves U+2010/U+002D/U+00AD through the
+preceding cascade run, includes the current inline-axis advance while fitting,
+and inserts one zero-source-length glyph only after all logical line/column
+ranges have been chosen. The same policy can request another font-supported
+Unicode scalar and cap immediately consecutive visible hyphenated lines or
+columns; both settings are reflow-only and may change between layouts of one
+retained paragraph.
+
+Vertical automatic hyphens reuse explicit U+00AD's orientation, variable-font
+instance, vertical-origin, tab-field, bidi, ellipsis, intrinsic-sizing, and
+transactional run/metadata contracts. Greedy selection resets the consecutive
+limit after an ordinary column; balanced DP carries that run length in its
+state and applies the same hyphen and consecutive-hyphen penalties as
+horizontal balancing. `word-break: break-all` suppresses automatic hyphen
+materialization rather than drawing redundant continuation marks.
 Run ownership, retained reflow, attributed metadata, bidi visual order, hit
 testing, and selection therefore consume the same materialized result without
 mutating the source text. Boundaries inside a shaped atom or marked unsafe to
@@ -643,9 +652,8 @@ This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
 axes, vertical paragraph validation rejects an explicit bottom-to-top
 `direction = rtl` request, justification, exclusions/line regions (including
-resolver responses that introduce an exclusion), automatic dictionary
-hyphenation and its consecutive-line policy,
-optical punctuation, and the resumable breaker. Retained whole-paragraph
+resolver responses that introduce an exclusion), optical punctuation, and the
+resumable breaker. Retained whole-paragraph
 layout and intrinsic inline-size measurement are supported and restore the
 pristine vertical shaping snapshot between calls. Returning a concrete
 `UnsupportedVerticalParagraphOptions` or
@@ -844,10 +852,10 @@ The vertical optimizer owns a focused solver plus boundary-graph module under
 emergency boundaries, reuses positive-down tab-field and whitespace
 measurement, signed spacing, first-column indentation, and shaped-output
 safety, and leaves physical RL/LR placement to `vertical_columns.zig`.
-Vertical exclusions, automatic hyphenation, and justification remain rejected,
-so their horizontal-only costs do not leak into this bounded slice. If no
-complete safe path exists or the state/edge limits are reached, the already
-valid greedy columns remain authoritative.
+Vertical exclusions and justification remain rejected, so their
+horizontal-only costs do not leak into this bounded slice. If no complete safe
+path exists or the state/edge limits are reached, the already valid greedy
+columns remain authoritative.
 
 Line-breaking policy is split along CSS Text's independent axes rather than
 encoded as one ambiguous wrap enum:

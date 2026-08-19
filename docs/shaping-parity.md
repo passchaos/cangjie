@@ -2262,6 +2262,12 @@ shaping-performance superiority.
   default-ignorables are covered; greedy/balanced fitting, aligned tabs,
   intrinsic sizing, retained/styled metadata, bidi, interaction, renderer
   output, custom hyphen characters, and ellipsis share that result.
+  Liang-pattern automatic boundaries now share the same vertical resolver and
+  source-neutral insertion transaction. Greedy and balanced column selection
+  enforce consecutive-hyphen limits, balanced DP retains horizontal-compatible
+  hyphen penalties, and `break-all`, unsafe shaped boundaries, missing custom
+  glyphs, retained/styled metadata, intrinsic sizing, bidi, and ellipsis are
+  covered directly.
   Ordinary out-of-flow source-anchor fallbacks remain zero-occupancy while
   retaining paint output. Custom out-of-flow markers now accept absolute
   presentation-only geometry directly and through placement-only concrete

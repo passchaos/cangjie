@@ -56,6 +56,7 @@ pub const VerticalCandidate = struct {
     source_byte_start: usize,
     source_byte_len: usize,
     synthetic: bool = false,
+    automatic: bool = false,
     resolved: VerticalResolved,
 };
 
@@ -168,6 +169,36 @@ pub fn resolveVerticalAtBoundary(
     result.source_byte_start = source_byte_start;
     result.source_byte_len = source_byte_len;
     result.synthetic = true;
+    return result;
+}
+
+pub fn resolveVerticalAutomaticAtBoundary(
+    runs: []const run_types.CascadeRun,
+    variation_coords: []const f32,
+    glyphs: []const glyph_position.GlyphPosition,
+    insert_index: usize,
+    source_boundary: usize,
+    writing_mode: pipeline_types.WritingMode,
+    text_orientation: pipeline_types.TextOrientation,
+    character: ?u21,
+) !?VerticalCandidate {
+    if (insert_index == 0 or insert_index > glyphs.len) return null;
+    const owner_index = insert_index - 1;
+    const owner = glyphOwner(runs, owner_index) orelse return null;
+    const candidate = try resolveVerticalForRun(
+        owner,
+        variation_coords,
+        owner_index,
+        writing_mode,
+        text_orientation,
+        character,
+    ) orelse return null;
+    var result = candidate;
+    result.glyph_index = insert_index;
+    result.source_byte_start = source_boundary;
+    result.source_byte_len = 0;
+    result.synthetic = true;
+    result.automatic = true;
     return result;
 }
 
@@ -286,7 +317,10 @@ pub fn syntheticVertical(
         .x_offset = candidate.resolved.x_offset,
         .y_offset = candidate.resolved.y_offset,
         .orientation = candidate.resolved.orientation,
-        .flags = .{ .discretionary_hyphen = true },
+        .flags = .{
+            .discretionary_hyphen = true,
+            .automatic_hyphen = candidate.automatic,
+        },
     };
 }
 

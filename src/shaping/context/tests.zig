@@ -37,6 +37,33 @@ test "engine owns reusable caches and resets them together" {
     try std.testing.expectEqual(context_mod.Engine.Stats{}, engine.stats());
 }
 
+test "engine releases partial GSUB cache construction on allocation failure" {
+    const test_font = @import("../../test_font.zig");
+    const bytes = try test_font.buildMinimalGsubTtf(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        struct {
+            fn run(allocator: std.mem.Allocator, font_bytes: []const u8) !void {
+                var face = try face_mod.Face.parse(allocator, font_bytes);
+                defer face.deinit();
+                var engine = context_mod.Engine.init(allocator, .{});
+                defer engine.deinit();
+                const shaped = try engine.shape(
+                    &face,
+                    .{ .text = "AA", .font_size = 20 },
+                );
+                // Cache-enabled and cache-bypassed paths must both complete
+                // without retaining partially built lookup sidecars. The
+                // exact fixture feature selection is tested independently.
+                try std.testing.expect(shaped.glyphs.len > 0);
+            }
+        }.run,
+        .{bytes},
+    );
+}
+
 test "engine optionally retains complete cascade runs" {
     const test_font = @import("../../test_font.zig");
     const bytes = try test_font.buildMinimalTtf(std.testing.allocator);

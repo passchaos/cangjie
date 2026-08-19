@@ -141,7 +141,11 @@ pub const LookupSelectionCache = struct {
 
         self.misses += 1;
         const accelerators = try font_shaping.gsubLookupAcceleratorsForShaping(font, self.allocator);
-        errdefer self.allocator.free(accelerators);
+        // Lookup accelerators own nested feature indexes and substitution
+        // sidecars. If retaining the top-level cache entry fails, freeing only
+        // its outer slice leaks those nested allocations under allocator
+        // failure injection.
+        errdefer gsub.acceleration.deinit(self.allocator, accelerators);
         try self.gsub_accelerator_entries.append(self.allocator, .{
             .font_addr = font_addr,
             .accelerators = accelerators,

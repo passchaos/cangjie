@@ -123,3 +123,11 @@ artifact still declares Zig tests. This is an inventory and evidence-maintenance
 gate, not proof of per-table semantic parity or superiority; those stronger
 claims require reference differential tests and same-host performance
 measurements.
+
+The incremental-font surface also applies table-keyed `iftk` patches: it
+validates compatibility IDs and sorted offsets, supports shared-dictionary
+Brotli diffs plus replace/drop flags, ignores duplicate tags after the first
+entry like Fontations, and rebuilds a tag-sorted SFNT with fresh table
+checksums and `head.checkSumAdjustment`. The decoder loads the system Brotli C
+runtime dynamically; unavailable platforms report
+`error.BrotliRuntimeUnavailable` rather than accepting compressed bytes.

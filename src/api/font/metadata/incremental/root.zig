@@ -53,3 +53,18 @@ pub fn freeTablePatch(
 pub fn parseGlyphPatch(patch_data: []const u8) !GlyphPatch {
     return ift.glyphKeyedPatchInfo(patch_data, 0, patch_data.len);
 }
+
+pub fn applyTablePatchAlloc(
+    allocator: std.mem.Allocator,
+    face: *const face_mod.Face,
+    expected_compatibility_id: [16]u8,
+    patch_data: []const u8,
+    max_output_size: usize,
+) ![]u8 {
+    return face_mod.backend.font(face).applyTableKeyedPatchAlloc(
+        allocator,
+        expected_compatibility_id,
+        patch_data,
+        max_output_size,
+    );
+}

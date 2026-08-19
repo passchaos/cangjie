@@ -20,6 +20,7 @@ const gasp_mod = @import("opentype/gasp.zig");
 const cmap_iter = @import("opentype/cmap_iter.zig");
 const cmap_variation = @import("opentype/cmap_variation.zig");
 const ift_mod = @import("opentype/ift.zig");
+const incremental_mod = @import("font/incremental/root.zig");
 const kerx_mod = @import("opentype/kerx.zig");
 const ltag_mod = @import("opentype/ltag.zig");
 const math_mod = @import("opentype/math.zig");
@@ -655,6 +656,7 @@ pub const Font = struct {
     /// keep `data` alive for the lifetime of the Font.
     data: []const u8,
     format: FontFormat,
+    scaler_type: u32 = 0x00010000,
     units_per_em: u16,
     index_to_loc_format: i16,
     glyph_count: u16,
@@ -1090,6 +1092,7 @@ pub const Font = struct {
         return .{
             .data = data,
             .format = format,
+            .scaler_type = scaler,
             .units_per_em = units_per_em,
             .index_to_loc_format = index_to_loc_format,
             .glyph_count = glyph_count,
@@ -1474,6 +1477,47 @@ pub const Font = struct {
         try sfnt.checksum.validate(self.data, table);
         try validateIftPatchMapTable(self.data, table);
         return try ift_mod.info(self.data, table.offset, table.length);
+    }
+
+    /// Apply one table-keyed IFT patch and return a canonical owned SFNT.
+    ///
+    /// `expected_compatibility_id` comes from the selected patch-map entry. It
+    /// must match both this face's IFT table and the patch payload before any
+    /// Brotli stream is decoded.
+    pub fn applyTableKeyedPatchAlloc(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        expected_compatibility_id: [16]u8,
+        patch_data: []const u8,
+        max_output_size: usize,
+    ) (FontError || incremental_mod.table_keyed.Error)![]u8 {
+        const patch_map = (try self.iftPatchMapInfo()) orelse
+            return error.MissingTable;
+        if (!std.mem.eql(
+            u8,
+            &patch_map.compatibility_id,
+            &expected_compatibility_id,
+        )) return error.IncompatiblePatch;
+        const source_tables = try allocator.alloc(
+            incremental_mod.table_keyed.Table,
+            self.owned_tables.len,
+        );
+        defer allocator.free(source_tables);
+        for (source_tables, self.owned_tables) |*table, record| {
+            try sfnt.checksum.validate(self.data, record);
+            table.* = .{
+                .tag = record.tag,
+                .data = self.data[record.offset .. record.offset + record.length],
+            };
+        }
+        return incremental_mod.table_keyed.applyAlloc(
+            allocator,
+            self.scaler_type,
+            source_tables,
+            expected_compatibility_id,
+            patch_data,
+            max_output_size,
+        );
     }
 
     /// Read validated top-level metadata from the optional OpenType `VARC` table.

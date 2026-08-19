@@ -640,6 +640,134 @@ test "incremental font transfer inspection and patch parsers are public" {
     );
 }
 
+test "table-keyed IFT patches rebuild a validated owned SFNT" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildIftTtf(allocator);
+    defer allocator.free(bytes);
+    const patch = try test_font.buildIftTableKeyedPatch(allocator);
+    defer allocator.free(patch);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var compatibility_id: [16]u8 = undefined;
+    for (&compatibility_id, 0..) |*byte, index| byte.* = @intCast(index);
+    const patched = cangjie.font.metadata.incremental.applyTablePatchAlloc(
+        allocator,
+        &face,
+        compatibility_id,
+        patch,
+        1024 * 1024,
+    ) catch |err| switch (err) {
+        error.BrotliRuntimeUnavailable => return,
+        else => return err,
+    };
+    defer allocator.free(patched);
+    var patched_face = try cangjie.font.Face.parse(allocator, patched);
+    defer patched_face.deinit();
+    const core = cangjie.font.metadata.core.inspect(&patched_face);
+    // Fontations processes the first occurrence of a duplicate tag and ignores
+    // later entries, so replacement wins over the duplicate drop record.
+    try std.testing.expectEqualStrings(
+        "replaced",
+        (try core.tableData("kern".*)).?,
+    );
+    try std.testing.expect((try core.tableData("glyf".*)) != null);
+}
+
+test "table-keyed IFT patching rejects compatibility and offset failures" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildIftTtf(allocator);
+    defer allocator.free(bytes);
+    const patch = try test_font.buildIftTableKeyedPatch(allocator);
+    defer allocator.free(patch);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var compatibility_id: [16]u8 = undefined;
+    for (&compatibility_id, 0..) |*byte, index| byte.* = @intCast(index);
+
+    var wrong = compatibility_id;
+    wrong[0] = 99;
+    try std.testing.expectError(
+        error.IncompatiblePatch,
+        cangjie.font.metadata.incremental.applyTablePatchAlloc(
+            allocator,
+            &face,
+            wrong,
+            patch,
+            1024 * 1024,
+        ),
+    );
+    const malformed = try allocator.dupe(u8, patch);
+    defer allocator.free(malformed);
+    std.mem.writeInt(u32, malformed[30..34], 1, .big);
+    try std.testing.expectError(
+        error.BadSfnt,
+        cangjie.font.metadata.incremental.applyTablePatchAlloc(
+            allocator,
+            &face,
+            compatibility_id,
+            malformed,
+            1024 * 1024,
+        ),
+    );
+}
+
+test "table-keyed IFT applies shared-dictionary Brotli diffs" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildIftTtf(allocator);
+    defer allocator.free(bytes);
+    const patch = try test_font.buildIftSharedDictionaryPatch(allocator);
+    defer allocator.free(patch);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var compatibility_id: [16]u8 = undefined;
+    for (&compatibility_id, 0..) |*byte, index| byte.* = @intCast(index);
+
+    const patched = cangjie.font.metadata.incremental.applyTablePatchAlloc(
+        allocator,
+        &face,
+        compatibility_id,
+        patch,
+        1024 * 1024,
+    ) catch |err| switch (err) {
+        error.BrotliRuntimeUnavailable => return,
+        else => return err,
+    };
+    defer allocator.free(patched);
+    var patched_face = try cangjie.font.Face.parse(allocator, patched);
+    defer patched_face.deinit();
+    try std.testing.expectEqualStrings(
+        "hijkabcdeflmnohijkabcdeflmno\n",
+        (try cangjie.font.metadata.core.inspect(&patched_face)
+            .tableData("dict".*)).?,
+    );
+}
+
+test "table-keyed IFT drop removes an optional table" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildIftTtf(allocator);
+    defer allocator.free(bytes);
+    const patch = try test_font.buildIftDropTablePatch(allocator);
+    defer allocator.free(patch);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var compatibility_id: [16]u8 = undefined;
+    for (&compatibility_id, 0..) |*byte, index| byte.* = @intCast(index);
+    const patched = try cangjie.font.metadata.incremental.applyTablePatchAlloc(
+        allocator,
+        &face,
+        compatibility_id,
+        patch,
+        1024 * 1024,
+    );
+    defer allocator.free(patched);
+    var patched_face = try cangjie.font.Face.parse(allocator, patched);
+    defer patched_face.deinit();
+    try std.testing.expect(
+        (try cangjie.font.metadata.core.inspect(&patched_face)
+            .tableData("dict".*)) == null,
+    );
+}
+
 test "concrete engine remains valid after a value move" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalTtf(allocator);

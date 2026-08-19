@@ -708,6 +708,66 @@ pub fn buildIftTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try iftTtfTables(allocator));
 }
 
+pub fn buildIftTableKeyedPatch(allocator: std.mem.Allocator) ![]u8 {
+    const replace_stream = [_]u8{
+        27, 7, 0, 248, 165, 202, 228, 130, 146, 56, 166, 0,
+    };
+    const count: usize = 2;
+    const header_len = 26 + (count + 1) * 4;
+    const replace_len = 9 + replace_stream.len;
+    const drop_len = 9;
+    const bytes = try allocator.alloc(u8, header_len + replace_len + drop_len);
+    @memset(bytes, 0);
+    @memcpy(bytes[0..4], "iftk");
+    for (0..16) |index| bytes[8 + index] = @intCast(index);
+    writeU16(bytes, 24, count);
+    writeU32(bytes, 26, @intCast(header_len));
+    writeU32(bytes, 30, @intCast(header_len + replace_len));
+    writeU32(bytes, 34, @intCast(bytes.len));
+    @memcpy(bytes[header_len..][0..4], "kern");
+    bytes[header_len + 4] = 1;
+    writeU32(bytes, header_len + 5, 8);
+    @memcpy(bytes[header_len + 9 ..][0..replace_stream.len], &replace_stream);
+    const drop = header_len + replace_len;
+    @memcpy(bytes[drop..][0..4], "kern");
+    bytes[drop + 4] = 2;
+    return bytes;
+}
+
+pub fn buildIftDropTablePatch(allocator: std.mem.Allocator) ![]u8 {
+    const header_len: usize = 26 + 2 * 4;
+    const bytes = try allocator.alloc(u8, header_len + 9);
+    @memset(bytes, 0);
+    @memcpy(bytes[0..4], "iftk");
+    for (0..16) |index| bytes[8 + index] = @intCast(index);
+    writeU16(bytes, 24, 1);
+    writeU32(bytes, 26, header_len);
+    writeU32(bytes, 30, @intCast(bytes.len));
+    @memcpy(bytes[header_len..][0..4], "dict");
+    bytes[header_len + 4] = 2;
+    return bytes;
+}
+
+pub fn buildIftSharedDictionaryPatch(allocator: std.mem.Allocator) ![]u8 {
+    const stream = [_]u8{
+        0xa1, 0xe0, 0x00, 0xc0, 0x2f, 0x3a, 0x38, 0xf4,
+        0x01, 0xd1, 0xaf, 0x54, 0x84, 0x14, 0x71, 0x2a,
+        0x80, 0x04, 0xa2, 0x1c, 0xd3, 0xdd, 0x07,
+    };
+    const header_len: usize = 26 + 2 * 4;
+    const bytes = try allocator.alloc(u8, header_len + 9 + stream.len);
+    @memset(bytes, 0);
+    @memcpy(bytes[0..4], "iftk");
+    for (0..16) |index| bytes[8 + index] = @intCast(index);
+    writeU16(bytes, 24, 1);
+    writeU32(bytes, 26, header_len);
+    writeU32(bytes, 30, @intCast(bytes.len));
+    @memcpy(bytes[header_len..][0..4], "dict");
+    writeU32(bytes, header_len + 5, 29);
+    @memcpy(bytes[header_len + 9 ..], &stream);
+    return bytes;
+}
+
 pub fn buildMathTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try mathTtfTables(allocator));
 }
@@ -2465,7 +2525,7 @@ fn varcHvarTtfTables(allocator: std.mem.Allocator) ![]Table {
 }
 
 fn iftTtfTables(allocator: std.mem.Allocator) ![]Table {
-    const tables = try allocator.alloc(Table, 9);
+    const tables = try allocator.alloc(Table, 10);
     errdefer allocator.free(tables);
     tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
@@ -2476,6 +2536,7 @@ fn iftTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[6] = .{ .tag = "kern", .data = try kernTable(allocator) };
     tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[9] = .{ .tag = "dict", .data = try allocator.dupe(u8, "abcdef\n") };
     return tables;
 }
 

@@ -89,7 +89,7 @@ test "vertical exclusions honor indent and explicit-region precedence" {
     try std.testing.expectApproxEqAbs(@as(f32, 7), explicit.lines[0].y, 0.001);
 }
 
-test "vertical-rl exclusions remain explicitly unsupported" {
+test "vertical-rl exclusion advances left across a fully blocked band" {
     const allocator = std.testing.allocator;
     const bytes = try @import("../../../../test_font.zig")
         .buildVerticalMetricsTtf(allocator);
@@ -98,13 +98,36 @@ test "vertical-rl exclusions remain explicitly unsupported" {
     defer font.deinit();
     var buffer = LayoutBuffer.init(allocator);
     defer buffer.deinit();
-    try std.testing.expectError(
-        error.UnsupportedVerticalParagraphOptions,
-        layout(&font, &buffer, "A", .{
-            .max_width = 40,
-            .exclusions = &.{paragraph.Exclusion{ .x = 0, .y = 0, .width = 20, .height = 20 }},
-            .writing_mode = .vertical_rl,
-            .text_orientation = .upright,
-        }),
-    );
+    const result = try layout(&font, &buffer, "AA", .{
+        .max_width = 40,
+        .exclusions = &.{paragraph.Exclusion{ .x = -20, .y = 0, .width = 20, .height = 40 }},
+        .writing_mode = .vertical_rl,
+        .text_orientation = .upright,
+    });
+    try std.testing.expectEqual(@as(usize, 1), result.lines.len);
+    // The local -40 origin is translated by the paragraph's 20-unit width.
+    try std.testing.expectApproxEqAbs(@as(f32, -20), result.lines[0].x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), result.lines[0].y, 0.001);
+}
+
+test "vertical-rl exclusion chooses the widest positive-down fragment" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("../../../../test_font.zig")
+        .buildVerticalMetricsTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const result = try layout(&font, &buffer, "AAAA", .{
+        .max_width = 100,
+        .exclusions = &.{paragraph.Exclusion{ .x = -20, .y = 0, .width = 20, .height = 30 }},
+        .writing_mode = .vertical_rl,
+        .text_orientation = .upright,
+    });
+    try std.testing.expectEqual(@as(usize, 2), result.lines.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 30), result.lines[0].y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 70), result.lines[0].region_inline_size, 0.001);
+    try std.testing.expectEqual(@as(usize, 3), result.lines[0].glyph_len);
 }

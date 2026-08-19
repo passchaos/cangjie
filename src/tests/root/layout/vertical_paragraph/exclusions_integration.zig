@@ -88,3 +88,42 @@ test "styled vertical exclusion reaches geometry and renderer" {
     defer draw_list.deinit();
     try std.testing.expectApproxEqAbs(@as(f32, 30), draw_list.glyphs[0].baseline_y, 0.001);
 }
+
+test "retained vertical-rl exclusions preserve reverse block progression" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("../../../../test_font.zig")
+        .buildVerticalMetricsTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var shaped = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        FontCascade.init(&.{&font}),
+        &shape_buffer,
+        "AAAA",
+        20,
+        .{ .max_width = 100, .writing_mode = .vertical_rl, .text_orientation = .upright },
+    );
+    defer shaped.deinit();
+    var reflow = support.ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+
+    const result = try shaped.layout(&reflow, .{
+        .max_width = 100,
+        .exclusions = &.{.{ .x = -20, .y = 0, .width = 20, .height = 30 }},
+        .writing_mode = .vertical_rl,
+        .text_orientation = .upright,
+    });
+    try std.testing.expectEqual(@as(usize, 2), result.lines.len);
+    try std.testing.expect(result.lines[0].x > result.lines[1].x);
+    try std.testing.expectApproxEqAbs(@as(f32, 30), result.lines[0].y, 0.001);
+
+    var geometry = try paragraph.buildGeometry(allocator, "AAAA", result, .{});
+    defer geometry.deinit();
+    try std.testing.expectApproxEqAbs(@as(f32, 30), geometry.lines[0].bounds.y, 0.001);
+    var draw_list = try support.buildGlyphDrawList(allocator, result, .{});
+    defer draw_list.deinit();
+    try std.testing.expectApproxEqAbs(@as(f32, 30), draw_list.glyphs[0].baseline_y, 0.001);
+}

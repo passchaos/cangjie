@@ -327,9 +327,7 @@ pub fn shapeOptions(options: Options) shaping_plan.ShapeOptions {
 /// become an accidental vertical no-op.
 fn validateVerticalForText(_: []const u8, options: Options) !void {
     if (options.direction != .ltr or
-        !verticalAlignmentSupported(options.alignment) or
-        (options.exclusions.len != 0 and
-            options.writing_mode != .vertical_lr))
+        !verticalAlignmentSupported(options.alignment))
     {
         return error.UnsupportedVerticalParagraphOptions;
     }

@@ -494,6 +494,16 @@ fn placeColumns(
         }
         total_width += line.width;
     }
+    if (options.exclusions.len != 0) {
+        // Exclusion resolution already assigned physical right-to-left block
+        // origins. Translate the negative local coordinate space so the last
+        // source column ends at x=0, matching ordinary vertical-rl placement.
+        for (lines, ranges) |*line, range| {
+            line.x = range.block_start + total_width;
+            line.region_x = line.x;
+        }
+        return;
+    }
     var right = total_width;
     for (lines, ranges, 0..) |*line, range, index| {
         if (index != 0 and range.starts_segment) {

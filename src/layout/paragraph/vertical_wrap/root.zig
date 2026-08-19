@@ -219,12 +219,14 @@ fn appendSegment(
     var glyph_start = segment_start;
     var byte_start = segment_byte_start;
     var consecutive_hyphenated_columns: usize = 0;
-    var natural_block_start: f32 = if (output.items.len == 0)
+    var natural_block_edge: f32 = if (output.items.len == 0)
         0
     else block_start: {
         const previous = output.items[output.items.len - 1];
-        break :block_start previous.block_start + previous.block_size +
-            options.paragraph_spacing;
+        break :block_start if (options.writing_mode == .vertical_lr)
+            previous.block_start + previous.block_size + options.paragraph_spacing
+        else
+            previous.block_start - options.paragraph_spacing;
     };
     while (glyph_start < segment_end) {
         const visual_index = output.items.len;
@@ -237,7 +239,11 @@ fn appendSegment(
             glyph_start,
             segment_end,
         );
-        const resolved_region = try vertical_inline_region.resolveLr(
+        const natural_block_start = if (options.writing_mode == .vertical_lr)
+            natural_block_edge
+        else
+            natural_block_edge - candidate_block_metrics.block_size;
+        const resolved_region = try vertical_inline_region.resolve(
             allocator,
             options,
             visual_index,
@@ -334,6 +340,14 @@ fn appendSegment(
             glyph_start,
             selected.glyph_end,
         );
+        // RL resolution conservatively tested the complete remaining segment's
+        // width. Anchor a narrower selected prefix to that same right edge so
+        // mixed-width columns do not acquire an artificial horizontal gap.
+        const selected_block_start = if (options.writing_mode == .vertical_lr)
+            resolved_region.block_start
+        else
+            resolved_region.block_start + candidate_block_metrics.block_size -
+                selected_block_metrics.block_size;
         try output.append(allocator, .{
             .glyph_start = glyph_start,
             .glyph_end = selected.glyph_end,
@@ -342,7 +356,7 @@ fn appendSegment(
             .inline_indent = column_indent,
             .starts_segment = first_column,
             .visual_index = visual_index,
-            .block_start = resolved_region.block_start,
+            .block_start = selected_block_start,
             // Resolving with the complete remaining segment above is
             // conservative for mixed-width fallback/object columns. Persist
             // the selected range's exact block width for placement and for the
@@ -360,8 +374,10 @@ fn appendSegment(
             else
                 0;
         first_column = false;
-        natural_block_start = resolved_region.block_start +
-            selected_block_metrics.block_size;
+        natural_block_edge = if (options.writing_mode == .vertical_lr)
+            selected_block_start + selected_block_metrics.block_size
+        else
+            selected_block_start;
     }
 }
 

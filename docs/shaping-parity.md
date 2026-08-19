@@ -2280,13 +2280,16 @@ shaping-performance superiority.
   RL/LR placement honors supplied x, and retained resolver replay, styled
   metadata, TextGeometry, renderer pens, alignment, justification, optical
   punctuation, and ellipsis consume the retained region geometry.
-  Static and out-of-flow-resolver exclusions now support vertical-lr. Physical
+  Static and out-of-flow-resolver exclusions now support both vertical block
+  progressions. Physical
   x-band overlap produces unavailable positive-down y intervals; each column
   selects the widest remaining fragment, while a fully blocked band advances
-  to the nearest rectangle right edge without manufacturing source output.
+  to the nearest rectangle edge in block progression without manufacturing
+  source output.
   Indentation, explicit-region precedence, retained/styled restoration,
-  TextGeometry, and renderer origins are covered. Vertical-rl exclusion
-  traversal remains explicit rejection.
+  TextGeometry, and renderer origins are covered. Fully blocked vertical-rl
+  bands advance left, and the resolved local coordinates translate into the
+  same terminal-at-zero convention as ordinary RL columns.
   `ShapedParagraph.breakLines` now commits one vertical column per caller
   advance. Per-column regions and max-height retry the same source boundary
   transactionally, partial layouts expose only committed columns, checkpoints
@@ -2309,9 +2312,8 @@ shaping-performance superiority.
   presentation-only geometry directly and through placement-only concrete
   resolver replay; retained/styled layout, intrinsic sizing, draw output, and
   line-limit visibility keep those bounds outside flow metrics. Bottom-to-top
-  inline progression, physical left/right alignment, and vertical-rl
-  exclusions are
-  rejected explicitly until they are migrated to the shared
+  inline progression and physical left/right alignment are rejected explicitly
+  until they are migrated to the shared
   inline/block-axis model; this is not yet full vertical paragraph parity.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`

@@ -91,15 +91,16 @@ pub fn resolve(
 ///
 /// This is the axis transpose of `resolve`: exclusions intersecting the
 /// column's x band contribute unavailable y intervals. A fully blocked column
-/// returns the nearest physical right edge so vertical-lr flow can advance its
-/// block cursor without creating an empty source column.
-pub fn resolveVerticalLr(
+/// returns the nearest physical edge in `block_direction` so vertical flow can
+/// advance its block cursor without creating an empty source column.
+pub fn resolveVertical(
     allocator: std.mem.Allocator,
     items: []const Exclusion,
     container_y: f32,
     container_height: f32,
     column_left: f32,
     column_width: f32,
+    block_direction: enum { left_to_right, right_to_left },
 ) !Resolution {
     if (items.len == 0 or
         container_height <= 0 or
@@ -131,7 +132,15 @@ pub fn resolveVerticalLr(
             .x = top,
             .width = bottom - top,
         });
-        blocked_until = @min(blocked_until, item.x + item.width);
+        blocked_until = switch (block_direction) {
+            .left_to_right => @min(blocked_until, item.x + item.width),
+            // `column_left` is the physical left edge. Advancing one RL band
+            // places the next left edge immediately before the exclusion.
+            .right_to_left => if (std.math.isInf(blocked_until))
+                item.x - column_width
+            else
+                @max(blocked_until, item.x - column_width),
+        };
     }
     return resolveIntervals(
         intervals.items,
@@ -201,28 +210,43 @@ test "vertical exclusion resolution transposes block and inline axes" {
         .width = 20,
         .height = 30,
     }};
-    const fragment = try resolveVerticalLr(
+    const fragment = try resolveVertical(
         std.testing.allocator,
         &items,
         0,
         100,
         0,
         20,
+        .left_to_right,
     );
     try std.testing.expectEqual(
         Resolution{ .available = .{ .x = 30, .width = 70 } },
         fragment,
     );
-    const blocked = try resolveVerticalLr(
+    const blocked = try resolveVertical(
         std.testing.allocator,
         &items,
         0,
         30,
         0,
         20,
+        .left_to_right,
     );
     try std.testing.expectEqual(
         Resolution{ .blocked_until = 20 },
         blocked,
+    );
+    const blocked_rl = try resolveVertical(
+        std.testing.allocator,
+        &items,
+        0,
+        30,
+        0,
+        20,
+        .right_to_left,
+    );
+    try std.testing.expectEqual(
+        Resolution{ .blocked_until = -20 },
+        blocked_rl,
     );
 }

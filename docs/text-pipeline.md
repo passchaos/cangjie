@@ -659,14 +659,13 @@ Retained reflow and styled layout may replace those bounds without changing
 column selection, paragraph metrics, or intrinsic inline sizes. The concrete
 `OutOfFlowResolver` therefore supports placement-only vertical replay, and
 objects removed by `max_lines` neither render nor request placement. Optional
-resolver exclusions participate in vertical-lr reflow through the same static
+resolver exclusions participate in vertical LR/RL reflow through the same static
 rectangle pipeline as caller-authored exclusions.
 
 This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
 axes, vertical paragraph validation rejects an explicit bottom-to-top
-`direction = rtl` request, exclusions in vertical-rl, and physical left/right
-alignment.
+`direction = rtl` request and physical left/right alignment.
 Retained whole-paragraph
 layout and intrinsic inline-size measurement are supported and restore the
 pristine vertical shaping snapshot between calls. Returning a concrete
@@ -865,8 +864,9 @@ The vertical optimizer owns a focused solver plus boundary-graph module under
 emergency boundaries, reuses positive-down tab-field and whitespace
 measurement, signed spacing, first-column indentation, and shaped-output
 safety, and leaves physical RL/LR placement to `vertical_columns.zig`.
-Vertical-lr exclusions use the greedy path; vertical-rl still rejects them
-until reverse block traversal is explicit. If no complete safe path exists or
+Vertical exclusions use the greedy path in either LR or RL block progression;
+fully blocked bands advance to the nearest physical edge in that direction. If
+no complete safe path exists or
 the state/edge limits are reached, the already valid greedy
 columns remain authoritative.
 

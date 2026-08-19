@@ -38,12 +38,13 @@ pub const Resolved = struct {
     indent: f32,
 };
 
-/// Resolve the next vertical-lr column band against physical exclusions.
+/// Resolve the next vertical column band against physical exclusions.
 ///
 /// Explicit caller regions bypass exclusions and preserve their absolute x/y
-/// geometry. Natural columns may advance right across fully blocked bands; a
-/// nonempty band chooses its widest remaining positive-down y fragment.
-pub fn resolveLr(
+/// geometry. Natural columns advance in the writing mode's physical block
+/// direction across fully blocked bands; a nonempty band chooses its widest
+/// remaining positive-down y fragment.
+pub fn resolve(
     allocator: std.mem.Allocator,
     options: paragraph_options.Options,
     visual_index: usize,
@@ -91,13 +92,17 @@ pub fn resolveLr(
         if (attempts > options.exclusions.len) {
             return error.InvalidParagraphOptions;
         }
-        switch (try exclusions.resolveVerticalLr(
+        switch (try exclusions.resolveVertical(
             allocator,
             options.exclusions,
             container_y,
             container_size,
             block_start,
             block_size,
+            if (options.writing_mode == .vertical_lr)
+                .left_to_right
+            else
+                .right_to_left,
         )) {
             .available => |region| return .{
                 .block_start = block_start,
@@ -106,7 +111,11 @@ pub fn resolveLr(
                 .indent = normalized_indent,
             },
             .blocked_until => |next_x| {
-                if (!std.math.isFinite(next_x) or next_x <= block_start) {
+                const advances = if (options.writing_mode == .vertical_lr)
+                    next_x > block_start
+                else
+                    next_x < block_start;
+                if (!std.math.isFinite(next_x) or !advances) {
                     return error.InvalidParagraphOptions;
                 }
                 block_start = next_x;

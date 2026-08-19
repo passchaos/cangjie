@@ -1226,6 +1226,15 @@ That row must not be used as a speed headline until line-break/metric semantics
 are reconciled; it does show that Arabic paragraph construction, not the Latin
 or Japanese default path, is the current Parley-relative deficit.
 
+The benchmark CLIs now accept an optional width so this ambiguity can be
+separated from the timing deficit. At 180 units both Arabic engines produce
+the same 144 glyphs and five lines. The fixed-CPU-30 serial matrix measured
+Cangjie at `102,885`/`103,092 ns` and Parley at `67,333`/`66,774 ns`; Cangjie
+is still about `1.54x` slower on this output-count-equivalent row. Exact line
+break byte ranges and positions are represented differently and are not yet a
+cross-engine checksum equality claim, but the width control proves the 200-unit
+4/5-line difference did not create the Arabic performance deficit.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

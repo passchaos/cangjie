@@ -13,6 +13,7 @@ pub fn main(init: std.process.Init) !void {
     const text_path = args.next() orelse return usage();
     const iterations = try parsePositive(args.next() orelse return usage());
     const sample_count = try parsePositive(args.next() orelse return usage());
+    const width = if (args.next()) |value| try parseFinitePositiveFloat(value) else 200.0;
     if (args.next() != null) return usage();
 
     const font_bytes: []u8 = if (std.mem.eql(u8, font_path, "builtin:minimal"))
@@ -49,7 +50,7 @@ pub fn main(init: std.process.Init) !void {
     var line_count: usize = 0;
     for (samples) |*sample| {
         for (0..3) |_| {
-            const layout = try layoutOnce(&engine, cascade, text);
+            const layout = try layoutOnce(&engine, cascade, text, width);
             const current_checksum = layoutChecksum(layout);
             if (checksum != 0 and checksum != current_checksum) return error.UnstableOutput;
             checksum = current_checksum;
@@ -59,7 +60,7 @@ pub fn main(init: std.process.Init) !void {
         var batch_checksum: u64 = 0;
         const start = std.Io.Clock.now(.awake, init.io).nanoseconds;
         for (0..iterations) |_| {
-            const layout = try layoutOnce(&engine, cascade, text);
+            const layout = try layoutOnce(&engine, cascade, text, width);
             if (layout.glyphs.len != glyph_count or layout.lines.len != line_count) {
                 return error.UnstableOutput;
             }
@@ -74,9 +75,9 @@ pub fn main(init: std.process.Init) !void {
     const median = @as(f64, @floatFromInt(samples[samples.len / 2])) /
         @as(f64, @floatFromInt(iterations));
     std.debug.print(
-        "engine=cangjie\ttext_bytes={d}\titerations={d}\tsamples={d}\t" ++
+        "engine=cangjie\ttext_bytes={d}\twidth={d:.3}\titerations={d}\tsamples={d}\t" ++
             "median_ns_per_iter={d:.3}\tglyphs={d}\tlines={d}\tchecksum={x:0>16}\n",
-        .{ text.len, iterations, sample_count, median, glyph_count, line_count, checksum },
+        .{ text.len, width, iterations, sample_count, median, glyph_count, line_count, checksum },
     );
 }
 
@@ -84,11 +85,12 @@ fn layoutOnce(
     engine: *cangjie.shaping.Engine,
     cascade: cangjie.font.Cascade,
     text: []const u8,
+    width: f32,
 ) !cangjie.paragraph.Layout {
     return engine.layout(cascade, .{
         .text = text,
         .font_size = 16,
-        .options = .{ .max_width = 200 },
+        .options = .{ .max_width = width },
     });
 }
 
@@ -133,9 +135,15 @@ fn parsePositive(value: []const u8) !usize {
     return parsed;
 }
 
+fn parseFinitePositiveFloat(value: []const u8) !f32 {
+    const parsed = try std.fmt.parseFloat(f32, value);
+    if (!std.math.isFinite(parsed) or parsed <= 0) return error.InvalidArguments;
+    return parsed;
+}
+
 fn usage() error{InvalidArguments} {
     std.debug.print(
-        "usage: paragraph-bench FONT TEXT ITERATIONS SAMPLES\n",
+        "usage: paragraph-bench FONT TEXT ITERATIONS SAMPLES [WIDTH]\n",
         .{},
     );
     return error.InvalidArguments;

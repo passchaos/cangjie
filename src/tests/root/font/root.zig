@@ -16,6 +16,7 @@ test {
     _ = @import("../../../font/tests/layout/root.zig");
     _ = @import("../../../font/tests/metadata/root.zig");
     _ = @import("../../../font/tests/sfnt/root.zig");
+    _ = @import("../../../font/tests/subset.zig");
     _ = @import("../../../font/tests/system.zig");
     _ = @import("../../../font/tests/truetype/root.zig");
     _ = @import("../../../font/tests/variations/root.zig");

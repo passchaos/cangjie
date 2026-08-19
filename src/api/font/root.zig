@@ -29,3 +29,4 @@ pub const Cascade = face.Cascade;
 pub const metadata = @import("metadata.zig");
 pub const container = @import("container.zig");
 pub const database = @import("database.zig");
+pub const subset = @import("subset.zig");

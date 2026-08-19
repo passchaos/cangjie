@@ -553,6 +553,27 @@ test "color inspection exposes table-level palette and asset metadata" {
     try std.testing.expectEqual(@as(usize, 0), strikes.len);
     try std.testing.expect((try color.bestBitmapPpem(16)) == null);
     try std.testing.expect((try color.bitmapMask(1, 16)) == null);
+    try std.testing.expect((try color.bitmapBgra(1, 16)) == null);
+}
+
+test "color inspection exposes borrowed premultiplied BGRA bitmaps" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCbdtBgraTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    const color = cangjie.font.metadata.color.inspect(&face);
+    const bgra = (try color.bitmapBgra(1, 16)) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 2), bgra.width);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 7, 13, 64, 128, 10, 20, 30, 255 },
+        bgra.data,
+    );
+    const selected = (try color.bitmapData(1, 16)) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(u8, bgra.data, selected.bgra.data);
 }
 
 test "incremental font transfer inspection and patch parsers are public" {

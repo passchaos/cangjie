@@ -658,6 +658,22 @@ pub fn buildEbdtBitmapTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try ebdtBitmapTtfTables(allocator));
 }
 
+pub fn buildCbdtBgraTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildCbdtBgraTtfWithFormat(allocator, 1);
+}
+
+/// Reference fixture for Skrifa's complete raw 32-bpp BDT format set.
+pub fn buildCbdtBgraTtfWithFormat(
+    allocator: std.mem.Allocator,
+    image_format: u16,
+) ![]u8 {
+    return buildSfnt(
+        allocator,
+        0x00010000,
+        try cbdtBgraTtfTables(allocator, image_format),
+    );
+}
+
 pub fn buildVarcTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try varcTtfTables(allocator));
 }
@@ -2350,6 +2366,23 @@ fn ebdtBitmapTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[9] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn cbdtBgraTtfTables(
+    allocator: std.mem.Allocator,
+    image_format: u16,
+) ![]Table {
+    const tables = try allocator.alloc(Table, 8);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "CBDT", .data = try cbdtBgraTable(allocator, image_format) };
+    tables[1] = .{ .tag = "CBLC", .data = try cblcBgraTable(allocator, image_format) };
+    tables[2] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
 
@@ -6252,6 +6285,93 @@ fn eblcBitmapTable(allocator: std.mem.Allocator) ![]u8 {
     writeU32(bytes, subtable + 4, 4);
     writeU16(bytes, subtable + 8, 0);
     writeU16(bytes, subtable + 10, 6);
+    return bytes;
+}
+
+fn cbdtBgraTable(
+    allocator: std.mem.Allocator,
+    image_format: u16,
+) ![]u8 {
+    const metrics_len: usize = switch (image_format) {
+        1, 2 => 5,
+        5 => 0,
+        6, 7 => 8,
+        else => return error.InvalidBitmapImageFormat,
+    };
+    const bytes = try allocator.alloc(u8, 4 + metrics_len + 2 * 4);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 3);
+    writeU16(bytes, 2, 0);
+    const off = 4;
+    if (metrics_len != 0) {
+        bytes[off + 0] = 1; // height.
+        bytes[off + 1] = 2; // width.
+        bytes[off + 2] = 2; // bearingX/horiBearingX.
+        bytes[off + 3] = 13; // bearingY/horiBearingY.
+        bytes[off + 4] = 12; // advance/horiAdvance.
+    }
+    // Premultiplied sRGB BGRA, matching Skrifa's BitmapData::Bgra contract.
+    const pixels = [_]u8{
+        7,  13, 64, 128,
+        10, 20, 30, 255,
+    };
+    @memcpy(bytes[off + metrics_len ..], &pixels);
+    return bytes;
+}
+
+fn cblcBgraTable(
+    allocator: std.mem.Allocator,
+    image_format: u16,
+) ![]u8 {
+    const uses_shared_metrics = image_format == 5;
+    const subtable_size: usize = if (uses_shared_metrics) 20 else 12;
+    const bytes = try allocator.alloc(u8, 8 + 48 + 8 + subtable_size);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 3);
+    writeU16(bytes, 2, 0);
+    writeU32(bytes, 4, 1);
+
+    const size = 8;
+    writeU32(bytes, size + 0, 56);
+    writeU32(bytes, size + 4, @intCast(8 + subtable_size));
+    writeU32(bytes, size + 8, 1);
+    bytes[size + 16] = 13;
+    bytes[size + 17] = @bitCast(@as(i8, -3));
+    bytes[size + 18] = 12;
+    bytes[size + 28] = 13;
+    bytes[size + 29] = @bitCast(@as(i8, -3));
+    bytes[size + 30] = 12;
+    writeU16(bytes, size + 40, 1);
+    writeU16(bytes, size + 42, 1);
+    bytes[size + 44] = 16;
+    bytes[size + 45] = 16;
+    bytes[size + 46] = 32;
+    bytes[size + 47] = 1;
+
+    const record = 56;
+    writeU16(bytes, record + 0, 1);
+    writeU16(bytes, record + 2, 1);
+    writeU32(bytes, record + 4, 8);
+
+    const subtable = 64;
+    writeU16(bytes, subtable + 0, if (uses_shared_metrics) 2 else 3);
+    writeU16(bytes, subtable + 2, image_format);
+    writeU32(bytes, subtable + 4, 4);
+    if (uses_shared_metrics) {
+        writeU32(bytes, subtable + 8, 8); // Fixed image size.
+        bytes[subtable + 12] = 1;
+        bytes[subtable + 13] = 2;
+        bytes[subtable + 14] = 2;
+        bytes[subtable + 15] = 13;
+        bytes[subtable + 16] = 12;
+        bytes[subtable + 17] = 0;
+        bytes[subtable + 18] = 1;
+        bytes[subtable + 19] = 12;
+    } else {
+        writeU16(bytes, subtable + 8, 0);
+        const metrics_len: u16 = if (image_format == 6 or image_format == 7) 8 else 5;
+        writeU16(bytes, subtable + 10, metrics_len + 8);
+    }
     return bytes;
 }
 

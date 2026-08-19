@@ -146,6 +146,70 @@ pub fn glyphPng(
     return best;
 }
 
+pub fn glyphBgra(
+    data: []const u8,
+    location_table: types.Table,
+    data_table: types.Table,
+    glyph_count: u16,
+    glyph_id: glyph.GlyphId,
+    size_px: f32,
+    source: types.StrikeSource,
+) types.Error!?types.GlyphBgra {
+    const strike_count = try strikeCount(data, location_table);
+    var best: ?types.GlyphBgra = null;
+    for (0..strike_count) |strike_index| {
+        const current =
+            try strike(data, location_table, glyph_count, strike_index);
+        const location =
+            (try glyphLocation(data, current, glyph_id)) orelse continue;
+        const candidate = (try cblc_data.glyphBgra(
+            data,
+            data_table,
+            current,
+            location,
+            source,
+        )) orelse continue;
+        if (best == null or
+            types.ppemIsPreferred(candidate.ppem, best.?.ppem, size_px))
+        {
+            best = candidate;
+        }
+    }
+    return best;
+}
+
+pub fn glyphData(
+    data: []const u8,
+    location_table: types.Table,
+    data_table: types.Table,
+    glyph_count: u16,
+    glyph_id: glyph.GlyphId,
+    size_px: f32,
+    source: types.StrikeSource,
+) types.Error!?types.GlyphData {
+    const strike_count = try strikeCount(data, location_table);
+    var best: ?types.GlyphData = null;
+    for (0..strike_count) |strike_index| {
+        const current =
+            try strike(data, location_table, glyph_count, strike_index);
+        const location =
+            (try glyphLocation(data, current, glyph_id)) orelse continue;
+        const candidate = (try cblc_data.glyphData(
+            data,
+            data_table,
+            current,
+            location,
+            source,
+        )) orelse continue;
+        if (best == null or
+            types.ppemIsPreferred(candidate.ppem(), best.?.ppem(), size_px))
+        {
+            best = candidate;
+        }
+    }
+    return best;
+}
+
 pub fn glyphMask(
     data: []const u8,
     location_table: types.Table,

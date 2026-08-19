@@ -98,6 +98,33 @@ test "renders raw EBDT mask coverage at bitmap bearings" {
     try std.testing.expectEqual(@as(u8, 0), target.at(7, 3).a);
 }
 
+test "renders raw CBDT premultiplied BGRA at bitmap bearings" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("../../../test_font.zig")
+        .buildCbdtBgraTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const glyph_id = try font.glyphIndex('A');
+
+    var target = try ColorRenderTarget.init(allocator, 24, 24);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&target, &font, glyph_id, 16, 3, 16, 0);
+
+    // Bearing (2, 13) places the two authored pixels at (5, 3). The first
+    // stored sample is BGRA 7,13,64,128 and is already premultiplied.
+    try std.testing.expectEqual(
+        Rgba{ .r = 64, .g = 13, .b = 7, .a = 128 },
+        target.at(5, 3),
+    );
+    try std.testing.expectEqual(
+        Rgba{ .r = 30, .g = 20, .b = 10, .a = 255 },
+        target.at(6, 3),
+    );
+    try std.testing.expectEqual(@as(u8, 0), target.at(4, 3).a);
+}
+
 test "selects a larger CBDT strike before upscaling a smaller image when available" {
     const allocator = std.testing.allocator;
     const io = std.Io.Threaded.global_single_threaded.io();

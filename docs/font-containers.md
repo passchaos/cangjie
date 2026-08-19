@@ -90,8 +90,10 @@ WOFF1, Annapurna SIL WOFF1/WOFF2, and a variable General Sans WOFF2.
 
 Embedded bitmap coverage includes sbix PNG, CBDT PNG formats 17/18/19, and
 raw EBDT/CBDT formats 1/2/5/6/7. Raw strikes expose borrowed 1/2/4/8-bpp
-mask payloads with row-alignment metadata and bounded 8-bit coverage decoding;
-the CPU renderer and draw-list atlas surface consume them as alpha masks.
+mask payloads with row-alignment metadata and bounded 8-bit coverage decoding.
+Byte-aligned 32-bpp formats 1/6 expose Skrifa-compatible premultiplied sRGB
+BGRA payloads without a conversion allocation. The CPU renderer and draw-list
+atlas surface consume masks as alpha and PNG/BGRA content as color.
 
 ## Performance Scope
 

@@ -545,3 +545,39 @@ test "parses CBDT CBLC PNG bitmap glyphs" {
     try std.testing.expect(std.mem.eql(u8, bitmap.data[1..4], "PNG"));
     try std.testing.expectEqual(@as(?u16, 16), try font.bestBitmapStrikePpem(18));
 }
+
+test "exposes Skrifa-compatible premultiplied BGRA bitmap data" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("../../../test_font.zig")
+        .buildCbdtBgraTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const glyph_id = try font.glyphIndex('A');
+
+    const info = (try font.bitmapGlyphInfo(glyph_id, 16)) orelse
+        return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(@as(?u8, 32), info.bit_depth);
+    try std.testing.expectEqual(@as(?u16, 1), info.image_format);
+    try std.testing.expectEqual(@as(usize, 8), info.data_length);
+    try std.testing.expect((try font.bitmapGlyphPng(glyph_id, 16)) == null);
+    try std.testing.expect((try font.bitmapGlyphMask(glyph_id, 16)) == null);
+
+    const bgra = (try font.bitmapGlyphBgra(glyph_id, 16)) orelse
+        return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(BitmapStrikeSource.cblc_cbdt, bgra.source);
+    try std.testing.expectEqual(@as(u16, 16), bgra.ppem);
+    try std.testing.expectEqual(@as(i16, 2), bgra.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, 13), bgra.origin_offset_y);
+    try std.testing.expectEqual(@as(u32, 2), bgra.width);
+    try std.testing.expectEqual(@as(u32, 1), bgra.height);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 7, 13, 64, 128, 10, 20, 30, 255 },
+        bgra.data,
+    );
+    const selected = (try font.bitmapGlyphData(glyph_id, 16)) orelse
+        return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(@as(u16, 16), selected.ppem());
+    try std.testing.expectEqualSlices(u8, bgra.data, selected.bgra.data);
+}

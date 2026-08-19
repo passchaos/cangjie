@@ -332,7 +332,9 @@ pub const ResolvedSvgGlyphDocument = svg_mod.ResolvedDocument;
 // Preserve the established public type identities while their implementation
 // and table grammar live in the focused embedded-bitmap module.
 pub const BitmapGlyphPng = bitmap_mod.GlyphPng;
+pub const BitmapGlyphBgra = bitmap_mod.GlyphBgra;
 pub const BitmapGlyphMask = bitmap_mod.GlyphMask;
+pub const BitmapGlyphData = bitmap_mod.GlyphData;
 pub const BitmapGlyphInfo = bitmap_mod.GlyphInfo;
 pub const BitmapStrikeSource = bitmap_mod.StrikeSource;
 pub const BitmapStrikeInfo = bitmap_mod.StrikeInfo;
@@ -4728,6 +4730,150 @@ pub const Font = struct {
             try sfnt.checksum.validate(self.data, ebdt);
             try validateCblcCbdtTables(self.data, eblc, ebdt, self.glyph_count);
             if (try bitmap_mod.cblc.glyphPng(self.data, bitmapTable(eblc), bitmapTable(ebdt), self.glyph_count, glyph_id, size_px, .eblc_ebdt)) |png| return png;
+        }
+        return null;
+    }
+
+    /// Return uncompressed premultiplied BGRA pixels from the preferred
+    /// 32-bpp EBDT/CBDT strike. The returned slice borrows the face bytes.
+    pub fn bitmapGlyphBgra(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+        size_px: f32,
+    ) FontError!?BitmapGlyphBgra {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try bitmap_mod.validateRequestSize(size_px);
+        if (self.cblc != null and self.cbdt != null) {
+            const cblc = self.cblc.?;
+            const cbdt = self.cbdt.?;
+            try sfnt.checksum.validate(self.data, cblc);
+            try sfnt.checksum.validate(self.data, cbdt);
+            try validateCblcCbdtTables(
+                self.data,
+                cblc,
+                cbdt,
+                self.glyph_count,
+            );
+            if (try bitmap_mod.cblc.glyphBgra(
+                self.data,
+                bitmapTable(cblc),
+                bitmapTable(cbdt),
+                self.glyph_count,
+                glyph_id,
+                size_px,
+                .cblc_cbdt,
+            )) |bgra| return bgra;
+        }
+        if (self.eblc != null and self.ebdt != null) {
+            const eblc = self.eblc.?;
+            const ebdt = self.ebdt.?;
+            try sfnt.checksum.validate(self.data, eblc);
+            try sfnt.checksum.validate(self.data, ebdt);
+            try validateCblcCbdtTables(
+                self.data,
+                eblc,
+                ebdt,
+                self.glyph_count,
+            );
+            if (try bitmap_mod.cblc.glyphBgra(
+                self.data,
+                bitmapTable(eblc),
+                bitmapTable(ebdt),
+                self.glyph_count,
+                glyph_id,
+                size_px,
+                .eblc_ebdt,
+            )) |bgra| return bgra;
+        }
+        return null;
+    }
+
+    /// Select one bitmap representation globally by strike size.
+    ///
+    /// This is the renderer-facing boundary for fonts that mix raw and PNG
+    /// strikes. The more specific accessors remain useful for inspection, but
+    /// must not be called in a fixed content-order to choose what to draw.
+    pub fn bitmapGlyphData(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+        size_px: f32,
+    ) FontError!?BitmapGlyphData {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try bitmap_mod.validateRequestSize(size_px);
+        if (self.sbix) |sbix| {
+            try sfnt.checksum.validate(self.data, sbix);
+            try validateSbixTable(
+                self.allocator,
+                self.data,
+                sbix,
+                self.glyph_count,
+            );
+            const strike_count =
+                try bitmap_mod.sbix.strikeCount(self.data, bitmapTable(sbix));
+            var best: ?BitmapGlyphPng = null;
+            for (0..strike_count) |strike_index| {
+                const strike = try bitmap_mod.sbix.strike(
+                    self.data,
+                    bitmapTable(sbix),
+                    self.glyph_count,
+                    strike_index,
+                );
+                if (try bitmap_mod.sbix.glyphPng(
+                    self.data,
+                    strike,
+                    glyph_id,
+                    self.glyph_count,
+                )) |candidate| {
+                    if (best == null or bitmap_mod.ppemIsPreferred(
+                        candidate.ppem,
+                        best.?.ppem,
+                        size_px,
+                    )) best = candidate;
+                }
+            }
+            if (best) |png_glyph| return .{ .png = png_glyph };
+        }
+        if (self.cblc != null and self.cbdt != null) {
+            const cblc = self.cblc.?;
+            const cbdt = self.cbdt.?;
+            try sfnt.checksum.validate(self.data, cblc);
+            try sfnt.checksum.validate(self.data, cbdt);
+            try validateCblcCbdtTables(
+                self.data,
+                cblc,
+                cbdt,
+                self.glyph_count,
+            );
+            if (try bitmap_mod.cblc.glyphData(
+                self.data,
+                bitmapTable(cblc),
+                bitmapTable(cbdt),
+                self.glyph_count,
+                glyph_id,
+                size_px,
+                .cblc_cbdt,
+            )) |glyph_data| return glyph_data;
+        }
+        if (self.eblc != null and self.ebdt != null) {
+            const eblc = self.eblc.?;
+            const ebdt = self.ebdt.?;
+            try sfnt.checksum.validate(self.data, eblc);
+            try sfnt.checksum.validate(self.data, ebdt);
+            try validateCblcCbdtTables(
+                self.data,
+                eblc,
+                ebdt,
+                self.glyph_count,
+            );
+            if (try bitmap_mod.cblc.glyphData(
+                self.data,
+                bitmapTable(eblc),
+                bitmapTable(ebdt),
+                self.glyph_count,
+                glyph_id,
+                size_px,
+                .eblc_ebdt,
+            )) |glyph_data| return glyph_data;
         }
         return null;
     }

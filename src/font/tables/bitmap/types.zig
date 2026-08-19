@@ -38,6 +38,24 @@ pub const GlyphPng = struct {
     data: []const u8,
 };
 
+/// Borrowed uncompressed 32-bit EBDT/CBDT color pixels.
+///
+/// OpenType stores these samples in premultiplied BGRA order in the sRGB
+/// color space. Keeping that byte contract explicit prevents callers from
+/// accidentally applying alpha a second time or treating the first channel as
+/// red. Only image formats with byte-aligned rows expose this record, matching
+/// Skrifa's high-level bitmap contract.
+pub const GlyphBgra = struct {
+    source: StrikeSource,
+    ppem: u16,
+    ppi: u16,
+    origin_offset_x: i16,
+    origin_offset_y: i16,
+    width: u32,
+    height: u32,
+    data: []const u8,
+};
+
 /// Borrowed single-channel EBDT/CBDT bitmap data.
 ///
 /// Pixels are stored most-significant-bit first. `row_byte_aligned`
@@ -108,6 +126,23 @@ pub const GlyphMask = struct {
         errdefer allocator.free(output);
         try self.decodeToSlice(output);
         return output;
+    }
+};
+
+/// One high-level glyph selected across all strikes of a bitmap table family.
+///
+/// Keeping source kind and strike selection in one value is important when a
+/// font mixes PNG, BGRA, and mask strikes: selecting each kind independently
+/// and then imposing a renderer precedence could ignore a closer strike.
+pub const GlyphData = union(enum) {
+    png: GlyphPng,
+    bgra: GlyphBgra,
+    mask: GlyphMask,
+
+    pub fn ppem(self: GlyphData) u16 {
+        return switch (self) {
+            inline else => |glyph_data| glyph_data.ppem,
+        };
     }
 };
 

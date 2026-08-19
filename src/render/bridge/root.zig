@@ -20,9 +20,9 @@ pub const GlyphRenderMode = enum {
 /// Pixel contract for a glyph atlas entry.
 ///
 /// Outline and COLR layer requests produce one-channel coverage. Embedded PNG
-/// glyphs already contain color and alpha, so consumers must allocate and cache
-/// them separately as premultiplied RGBA. Raw EBDT/CBDT masks retain the
-/// ordinary alpha-mask contract.
+/// glyphs and 32-bpp EBDT/CBDT glyphs already contain color and alpha, so
+/// consumers must allocate and cache them separately as premultiplied RGBA.
+/// Raw EBDT/CBDT masks retain the ordinary alpha-mask contract.
 pub const GlyphAtlasContent = enum {
     alpha_mask,
     premultiplied_rgba,
@@ -166,6 +166,7 @@ pub const ColorGlyphPaint = union(enum) {
     colr_v1_composite: font_mod.ColorPaint.Composite,
     svg_document: []const u8,
     embedded_png: font_mod.BitmapGlyphPng,
+    embedded_bgra: font_mod.BitmapGlyphBgra,
 };
 
 pub const ColorGlyphDrawCommand = struct {
@@ -177,6 +178,7 @@ pub const ColorGlyphDrawCommand = struct {
     svg_document: ?[]const u8 = null,
     owns_svg_document: bool = false,
     embedded_png: ?font_mod.BitmapGlyphPng = null,
+    embedded_bgra: ?font_mod.BitmapGlyphBgra = null,
     has_colr_v1_paint: bool = false,
     paint: ColorGlyphPaint = .none,
 };
@@ -408,6 +410,10 @@ const BridgeBuilder = struct {
                 continue;
             }
             const output_index = self.glyphs.items.len;
+            const bitmap_data = try font.bitmapGlyphData(
+                glyph.glyph_id,
+                run.font_size,
+            );
             const color_index: ?usize = if (self.options.include_color_glyphs)
                 try self.appendColorGlyph(
                     font,
@@ -416,13 +422,18 @@ const BridgeBuilder = struct {
                     output_index,
                     run_variation_coords,
                     run_variation_hash,
+                    bitmap_data,
                 )
             else
                 null;
             const embedded_png = if (color_index) |index| self.color_glyphs.items[index].embedded_png else null;
-            const embedded_mask = try font.bitmapGlyphMask(glyph.glyph_id, run.font_size);
-            const atlas_content: GlyphAtlasContent = if (embedded_png != null) .premultiplied_rgba else .alpha_mask;
-            const atlas_index: ?usize = if (font.hasOutlineData() or embedded_png != null or embedded_mask != null)
+            const embedded_bgra = if (color_index) |index| self.color_glyphs.items[index].embedded_bgra else null;
+            const embedded_mask = if (color_index == null and bitmap_data != null) switch (bitmap_data.?) {
+                .mask => |mask| mask,
+                .png, .bgra => null,
+            } else null;
+            const atlas_content: GlyphAtlasContent = if (embedded_png != null or embedded_bgra != null) .premultiplied_rgba else .alpha_mask;
+            const atlas_index: ?usize = if (font.hasOutlineData() or embedded_png != null or embedded_bgra != null or embedded_mask != null)
                 try self.atlasRequestIndex(.{
                     .font = run.font,
                     .glyph_id = glyph.glyph_id,
@@ -484,6 +495,7 @@ const BridgeBuilder = struct {
         glyph_index: usize,
         variation_coords: []const f32,
         variation_hash: u64,
+        bitmap_data: ?font_mod.BitmapGlyphData,
     ) !?usize {
         const layer_start = self.color_layers.items.len;
         const layers = try font.colorLayers(self.allocator, glyph_id);
@@ -536,11 +548,19 @@ const BridgeBuilder = struct {
         // renderer should consume rather than exposing a lower-priority PNG as
         // if it were additional paint.
         const selected_svg = if (layer_len == 0 and color_paint == null) svg_document else null;
-        const selected_png = if (layer_len == 0 and color_paint == null and selected_svg == null)
-            try font.bitmapGlyphPng(glyph_id, font_size)
-        else
-            null;
-        if (layer_len == 0 and selected_svg == null and color_paint == null and selected_png == null) return null;
+        const can_select_bitmap = layer_len == 0 and
+            color_paint == null and selected_svg == null;
+        const selected_png: ?font_mod.BitmapGlyphPng = if (can_select_bitmap and
+            bitmap_data != null) switch (bitmap_data.?) {
+            .png => |png| png,
+            .bgra, .mask => null,
+        } else null;
+        const selected_bgra: ?font_mod.BitmapGlyphBgra = if (can_select_bitmap and
+            bitmap_data != null) switch (bitmap_data.?) {
+            .bgra => |bgra| bgra,
+            .png, .mask => null,
+        } else null;
+        if (layer_len == 0 and selected_svg == null and color_paint == null and selected_png == null and selected_bgra == null) return null;
 
         const color_index = self.color_glyphs.items.len;
         try self.color_glyphs.append(self.allocator, .{
@@ -551,8 +571,16 @@ const BridgeBuilder = struct {
             .color_stop_len = self.color_stops.items.len - color_stop_start,
             .svg_document = selected_svg,
             .embedded_png = selected_png,
+            .embedded_bgra = selected_bgra,
             .has_colr_v1_paint = color_paint != null,
-            .paint = colorGlyphPaint(layer_start, layer_len, selected_svg, color_paint, selected_png),
+            .paint = colorGlyphPaint(
+                layer_start,
+                layer_len,
+                selected_svg,
+                color_paint,
+                selected_png,
+                selected_bgra,
+            ),
         });
         // Appending the command is the only fallible operation after selecting
         // the document. Transfer gzip ownership only after that succeeds so an
@@ -812,6 +840,7 @@ fn colorGlyphPaint(
     svg_document: ?[]const u8,
     color_paint: ?font_mod.ColorPaint,
     embedded_png: ?font_mod.BitmapGlyphPng,
+    embedded_bgra: ?font_mod.BitmapGlyphBgra,
 ) ColorGlyphPaint {
     if (color_paint) |paint| {
         return switch (paint) {
@@ -830,6 +859,7 @@ fn colorGlyphPaint(
     if (layer_len > 0) return .{ .colr_v0_layers = .{ .layer_start = layer_start, .layer_len = layer_len } };
     if (svg_document) |document| return .{ .svg_document = document };
     if (embedded_png) |png| return .{ .embedded_png = png };
+    if (embedded_bgra) |bgra| return .{ .embedded_bgra = bgra };
     return .none;
 }
 

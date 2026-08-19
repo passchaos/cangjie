@@ -136,6 +136,22 @@ pub const View = struct {
     ) font.FontError!?font.BitmapGlyphMask {
         return self.implementation().bitmapGlyphMask(glyph_id, size_px);
     }
+
+    pub fn bitmapBgra(
+        self: View,
+        glyph_id: glyph.GlyphId,
+        size_px: f32,
+    ) font.FontError!?font.BitmapGlyphBgra {
+        return self.implementation().bitmapGlyphBgra(glyph_id, size_px);
+    }
+
+    pub fn bitmapData(
+        self: View,
+        glyph_id: glyph.GlyphId,
+        size_px: f32,
+    ) font.FontError!?font.BitmapGlyphData {
+        return self.implementation().bitmapGlyphData(glyph_id, size_px);
+    }
 };
 
 pub fn inspect(face: *const face_mod.Face) View {

@@ -77,6 +77,22 @@ pub const View = struct {
         return self.implementation.bitmapGlyphInfo(glyph_id, size_px);
     }
 
+    pub fn bitmapBgra(
+        self: View,
+        glyph_id: glyph_mod.GlyphId,
+        size_px: f32,
+    ) font_mod.FontError!?font_mod.BitmapGlyphBgra {
+        return self.implementation.bitmapGlyphBgra(glyph_id, size_px);
+    }
+
+    pub fn bitmapData(
+        self: View,
+        glyph_id: glyph_mod.GlyphId,
+        size_px: f32,
+    ) font_mod.FontError!?font_mod.BitmapGlyphData {
+        return self.implementation.bitmapGlyphData(glyph_id, size_px);
+    }
+
     pub fn bitmapMask(
         self: View,
         glyph_id: glyph_mod.GlyphId,

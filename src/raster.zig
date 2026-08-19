@@ -1175,12 +1175,30 @@ pub const Rasterizer = struct {
                     return;
                 }
             }
-            if (try font.bitmapGlyphPng(glyph_id, font_size)) |bitmap| {
-                try self.renderEmbeddedPng(target, bitmap, font_size, x, baseline_y);
-                return;
-            }
-            if (try font.bitmapGlyphMask(glyph_id, font_size)) |bitmap| {
-                try self.renderEmbeddedMask(target, bitmap, font_size, x, baseline_y);
+            if (try font.bitmapGlyphData(glyph_id, font_size)) |bitmap| {
+                switch (bitmap) {
+                    .png => |png_glyph| try self.renderEmbeddedPng(
+                        target,
+                        png_glyph,
+                        font_size,
+                        x,
+                        baseline_y,
+                    ),
+                    .bgra => |bgra_glyph| try self.renderEmbeddedBgra(
+                        target,
+                        bgra_glyph,
+                        font_size,
+                        x,
+                        baseline_y,
+                    ),
+                    .mask => |mask_glyph| try self.renderEmbeddedMask(
+                        target,
+                        mask_glyph,
+                        font_size,
+                        x,
+                        baseline_y,
+                    ),
+                }
                 return;
             }
             // Bitmap-only emoji fonts often leave spacing/control glyphs out of
@@ -1301,6 +1319,38 @@ pub const Rasterizer = struct {
             target.width,
             target.height,
             pixels,
+            bitmap.width,
+            bitmap.height,
+            left,
+            top,
+            strike_scale,
+        );
+    }
+
+    fn renderEmbeddedBgra(
+        self: *Rasterizer,
+        target: *ColorRenderTarget,
+        bitmap: font_mod.BitmapGlyphBgra,
+        font_size: f32,
+        x: f32,
+        baseline_y: f32,
+    ) !void {
+        _ = self;
+        if (bitmap.ppem == 0) return error.BadSfnt;
+        const strike_scale =
+            font_size / @as(f32, @floatFromInt(bitmap.ppem));
+        if (!std.math.isFinite(strike_scale) or strike_scale <= 0) {
+            return error.InvalidBitmapSize;
+        }
+        const left = x +
+            @as(f32, @floatFromInt(bitmap.origin_offset_x)) * strike_scale;
+        const top = baseline_y -
+            @as(f32, @floatFromInt(bitmap.origin_offset_y)) * strike_scale;
+        bitmap_raster.blendScaledPremultipliedBgra8(
+            target.pixels,
+            target.width,
+            target.height,
+            bitmap.data,
             bitmap.width,
             bitmap.height,
             left,

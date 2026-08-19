@@ -297,6 +297,42 @@ test "render bridge emits raw EBDT coverage as an alpha atlas request" {
     try std.testing.expectEqual(GlyphAtlasContent.alpha_mask, draw_list.atlas_requests[0].content);
 }
 
+test "render bridge emits raw CBDT BGRA as a color atlas request" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCbdtBgraTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const font_mod.Font{&font};
+    const cascade = font_fallback.Cascade.init(&fonts);
+    var layout_buffer = context_output.Buffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
+        cascade,
+        &layout_buffer,
+        "A",
+        16,
+        .{ .max_width = 100 },
+    );
+
+    var draw_list = try buildGlyphDrawList(allocator, paragraph, .{});
+    defer draw_list.deinit();
+    try std.testing.expectEqual(@as(usize, 1), draw_list.atlas_requests.len);
+    try std.testing.expectEqual(
+        GlyphAtlasContent.premultiplied_rgba,
+        draw_list.atlas_requests[0].content,
+    );
+    const command = draw_list.color_glyphs[0];
+    const bgra = command.embedded_bgra orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 2), bgra.width);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 7, 13, 64, 128, 10, 20, 30, 255 },
+        command.paint.embedded_bgra.data,
+    );
+}
+
 test "render bridge resolves sbix dupe records before atlas emission" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildSbixDupePngTtf(allocator);

@@ -43,8 +43,9 @@ pub const GlyphPng = struct {
 /// OpenType stores these samples in premultiplied BGRA order in the sRGB
 /// color space. Keeping that byte contract explicit prevents callers from
 /// accidentally applying alpha a second time or treating the first channel as
-/// red. Only image formats with byte-aligned rows expose this record, matching
-/// Skrifa's high-level bitmap contract.
+/// red. At 32 bits per pixel, formats 2/5/7 also end every pixel and row on a
+/// byte boundary; Cangjie and FreeType expose those raw bytes even though
+/// Skrifa's high-level layer currently declines nominally bit-aligned data.
 pub const GlyphBgra = struct {
     source: StrikeSource,
     ppem: u16,

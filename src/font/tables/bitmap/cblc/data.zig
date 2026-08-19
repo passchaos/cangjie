@@ -175,10 +175,9 @@ pub fn glyphPng(
 
 /// Return uncompressed premultiplied BGRA pixels from a 32-bpp strike.
 ///
-/// This follows Skrifa's `BitmapData::Bgra` boundary: 32-bit content is
-/// surfaced only for byte-aligned image formats 1 and 6. `read-fonts` reports
-/// formats 2/5/7 as bit-aligned and Skrifa deliberately declines them even
-/// though 32 happens to divide evenly into bytes.
+/// Formats 1/6 match Skrifa's `BitmapData::Bgra` boundary. Cangjie additionally
+/// follows FreeType for formats 2/5/7: at 32 bits per pixel, nominal bit
+/// alignment is also exact byte/pixel alignment and the payload is BGRA.
 pub fn glyphBgra(
     data: []const u8,
     data_table: types.Table,
@@ -188,8 +187,9 @@ pub fn glyphBgra(
 ) types.Error!?types.GlyphBgra {
     if (selected_strike.bit_depth != 32) return null;
     const metrics_len: usize = switch (location.image_format) {
-        1 => 5,
-        6 => 8,
+        1, 2 => 5,
+        5 => 0,
+        6, 7 => 8,
         else => return null,
     };
     if (location.offset > data_table.length or
@@ -201,8 +201,9 @@ pub fn glyphBgra(
     const image = data[image_start .. image_start + location.length];
     if (image.len < metrics_len) return error.BadSfnt;
     const metrics = switch (location.image_format) {
-        1 => try types.readSmallMetrics(image, 0),
-        6 => try types.readBigMetrics(image, 0),
+        1, 2 => try types.readSmallMetrics(image, 0),
+        5 => location.shared_metrics orelse return error.BadSfnt,
+        6, 7 => try types.readBigMetrics(image, 0),
         else => unreachable,
     };
     const pixel_count = std.math.mul(
@@ -484,7 +485,7 @@ test "32-bpp byte-aligned formats expose premultiplied BGRA bytes" {
     }
 }
 
-test "32-bpp bit-aligned formats match Skrifa's unsupported boundary" {
+test "32-bpp bit-aligned formats expose FreeType-compatible BGRA" {
     const strike = Strike{
         .ppem = 16,
         .ppi = 0,
@@ -495,19 +496,40 @@ test "32-bpp bit-aligned formats match Skrifa's unsupported boundary" {
         .start_glyph = 1,
         .end_glyph = 1,
     };
+    const shared = types.Metrics{
+        .height = 1,
+        .width = 1,
+        .bearing_x = 0,
+        .bearing_y = 1,
+        .advance = 1,
+    };
     var data: [16]u8 = .{0} ** 16;
     for ([_]u16{ 2, 5, 7 }) |format| {
-        try std.testing.expect((try glyphBgra(
+        const metrics_len: usize = if (format == 5) 0 else if (format == 2) 5 else 8;
+        if (metrics_len != 0) {
+            data[0] = 1;
+            data[1] = 1;
+            data[3] = 1;
+            data[4] = 1;
+        }
+        @memcpy(data[metrics_len..][0..4], &[_]u8{ 7, 13, 64, 128 });
+        const bgra = (try glyphBgra(
             &data,
-            .{ .offset = 0, .length = data.len },
+            .{ .offset = 0, .length = metrics_len + 4 },
             strike,
             .{
                 .image_format = format,
                 .offset = 0,
-                .length = data.len,
+                .length = metrics_len + 4,
+                .shared_metrics = if (format == 5) shared else null,
             },
             .cblc_cbdt,
-        )) == null);
+        )) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualSlices(
+            u8,
+            &.{ 7, 13, 64, 128 },
+            bgra.data,
+        );
     }
 }
 

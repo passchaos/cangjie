@@ -93,8 +93,10 @@ raw EBDT/CBDT formats 1/2/5/6/7. Compound formats 8/9 recursively flatten
 same-strike components under a FreeType-compatible depth guard. Raw strikes
 expose borrowed 1/2/4/8-bpp mask payloads with row-alignment metadata and
 bounded 8-bit coverage decoding.
-Byte-aligned 32-bpp formats 1/6 expose Skrifa-compatible premultiplied sRGB
-BGRA payloads without a conversion allocation. The CPU renderer and draw-list
+All raw 32-bpp formats expose premultiplied sRGB BGRA payloads without a
+conversion allocation. Formats 1/6 match Skrifa; formats 2/5/7 additionally
+match FreeType's BGRA output and exceed Skrifa's current high-level boundary.
+The CPU renderer and draw-list
 atlas surface consume masks as alpha and PNG/BGRA content as color.
 `tools/freetype_bitmap_oracle.c` reads the retained format-8 fixture through
 FreeType and confirms parent metrics `4x2`, bearing `(0,2)`, and rows `1000` /

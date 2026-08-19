@@ -582,6 +582,27 @@ test "exposes Skrifa-compatible premultiplied BGRA bitmap data" {
     try std.testing.expectEqualSlices(u8, bgra.data, selected.bgra.data);
 }
 
+test "exposes FreeType-compatible BGRA from bit-aligned bitmap formats" {
+    const allocator = std.testing.allocator;
+    inline for ([_]u16{ 2, 5, 7 }) |format| {
+        const bytes = try @import("../../../test_font.zig")
+            .buildCbdtBgraTtfWithFormat(allocator, format);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        const glyph_id = try font.glyphIndex('A');
+        const bgra = (try font.bitmapGlyphBgra(glyph_id, 16)) orelse
+            return error.MissingBitmapGlyph;
+        try std.testing.expectEqual(@as(i16, 2), bgra.origin_offset_x);
+        try std.testing.expectEqual(@as(i16, 13), bgra.origin_offset_y);
+        try std.testing.expectEqualSlices(
+            u8,
+            &.{ 7, 13, 64, 128, 10, 20, 30, 255 },
+            bgra.data,
+        );
+    }
+}
+
 test "flattens EBDT compound bitmap components into parent metrics" {
     const allocator = std.testing.allocator;
     const bytes = try @import("../../../test_font.zig")

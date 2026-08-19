@@ -2,6 +2,7 @@
 
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const paragraph_options = @import("../options.zig");
+const punctuation_hanging = @import("../../punctuation/hanging.zig");
 const tabs = @import("../tabs.zig");
 const vertical_tabs = @import("tabs.zig");
 const white_space = @import("../white_space.zig");
@@ -55,6 +56,29 @@ pub fn inlineSize(
         visible_start,
         visible_end,
         options.white_space_collapse,
+    );
+}
+
+/// Occupied inline measure used by line fitting.
+///
+/// The full glyph advance remains in `inlineSize`; an eligible logical-end
+/// punctuation glyph may protrude below the requested column measure.
+pub fn occupiedInlineSize(
+    glyphs: []const GlyphPosition,
+    prefix: []const f32,
+    start: usize,
+    end: usize,
+    options: paragraph_options.Options,
+) f32 {
+    const full = inlineSize(glyphs, prefix, start, end, options);
+    return @max(
+        0,
+        full - punctuation_hanging.verticalLogicalEndAmount(
+            glyphs,
+            start,
+            @min(end, glyphs.len),
+            options.punctuation.end_hanging_fraction,
+        ),
     );
 }
 
@@ -122,7 +146,7 @@ pub fn firstOverflow(
 ) usize {
     var index = glyph_start + 1;
     while (index <= glyph_end and
-        prospectiveInlineSize(
+        occupiedProspectiveInlineSize(
             glyphs,
             prefix,
             glyph_start,
@@ -134,4 +158,31 @@ pub fn firstOverflow(
         index += 1;
     }
     return @min(index, glyph_end);
+}
+
+fn occupiedProspectiveInlineSize(
+    glyphs: []const GlyphPosition,
+    prefix: []const f32,
+    start: usize,
+    end: usize,
+    segment_end: usize,
+    options: paragraph_options.Options,
+) f32 {
+    const full = prospectiveInlineSize(
+        glyphs,
+        prefix,
+        start,
+        end,
+        segment_end,
+        options,
+    );
+    return @max(
+        0,
+        full - punctuation_hanging.verticalLogicalEndAmount(
+            glyphs,
+            start,
+            @min(end, glyphs.len),
+            options.punctuation.end_hanging_fraction,
+        ),
+    );
 }

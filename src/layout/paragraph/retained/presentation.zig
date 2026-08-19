@@ -15,6 +15,7 @@ const kashida_justification = @import("../../justification/kashida.zig");
 const paragraph_reflow = @import("../../line_break/reflow/root.zig");
 const punctuation_compression = @import("../../punctuation/compression.zig");
 const punctuation_hanging = @import("../../punctuation/hanging.zig");
+const vertical_hanging = @import("../vertical_hanging.zig");
 
 pub fn apply(
     buffer: anytype,
@@ -35,6 +36,7 @@ pub fn apply(
                 options.direction == .rtl,
             );
         }
+        vertical_hanging.apply(buffer, options);
         bidi_reorder.recomputeRunOffsets(buffer);
         try inline_object.position(
             buffer,

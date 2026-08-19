@@ -348,7 +348,7 @@ fn boundaryInlineSize(
     start: usize,
     options: paragraph_options.Options,
 ) f32 {
-    return @import("candidates.zig").candidateInlineSize(
+    return @import("candidates.zig").candidateOccupiedInlineSize(
         .{
             .glyph_end = boundary.glyph_end,
             .next_glyph_start = boundary.next_glyph_start,

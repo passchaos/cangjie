@@ -139,7 +139,7 @@ pub fn lastFitting(
             candidate.next_glyph_start > overflow or
             candidate.glyph_end <= glyph_start or
             (!visible_hyphen_allowed and candidate.hyphen != null) or
-            candidateInlineSize(
+            candidateOccupiedInlineSize(
                 candidate,
                 glyphs,
                 prefix,
@@ -189,6 +189,32 @@ pub fn candidateInlineSize(
         candidate.glyph_end,
         options,
     ) + terminal_advance;
+}
+
+pub fn candidateOccupiedInlineSize(
+    candidate: shared.SoftCandidate,
+    glyphs: []const GlyphPosition,
+    prefix: []const f32,
+    glyph_start: usize,
+    options: paragraph_options.Options,
+) f32 {
+    // A visible hyphen becomes the logical end and is never hangable.
+    if (candidate.hyphen != null) {
+        return candidateInlineSize(
+            candidate,
+            glyphs,
+            prefix,
+            glyph_start,
+            options,
+        );
+    }
+    return measure.occupiedInlineSize(
+        glyphs,
+        prefix,
+        glyph_start,
+        candidate.glyph_end,
+        options,
+    );
 }
 
 /// Return the first ordinary boundary after an overfull indivisible fragment.

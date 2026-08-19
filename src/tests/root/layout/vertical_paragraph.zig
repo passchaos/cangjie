@@ -18,6 +18,8 @@ test {
     _ = @import("vertical_paragraph/soft_hyphen_integration.zig");
     _ = @import("vertical_paragraph/automatic_hyphen.zig");
     _ = @import("vertical_paragraph/automatic_hyphen_integration.zig");
+    _ = @import("vertical_paragraph/hanging.zig");
+    _ = @import("vertical_paragraph/hanging_integration.zig");
     _ = @import("vertical_paragraph/balanced.zig");
     _ = @import("vertical_paragraph/balanced_integration.zig");
     _ = @import("vertical_paragraph/whitespace.zig");

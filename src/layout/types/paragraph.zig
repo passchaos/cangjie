@@ -181,13 +181,16 @@ pub const ParagraphLine = struct {
     /// bottom. Null is the compatibility sentinel for manually constructed
     /// lines whose post-processing should use paragraph options.
     resolved_alignment: ?TextAlign = null,
-    /// Portion of edge glyph advance protruding before the physical line box.
+    /// Portion of edge glyph advance protruding before the occupied inline box.
     ///
-    /// Glyph positions and caret geometry still include this ink. `x` remains
-    /// the first glyph origin, while `width` reports occupied measure after
-    /// subtracting both hanging portions.
+    /// Glyph positions and caret geometry still include this ink. This is
+    /// physical left horizontally and top vertically.
     hang_start: f32 = 0,
-    /// Portion of edge glyph advance protruding after the physical line box.
+    /// Portion of edge glyph advance protruding after the occupied inline box.
+    ///
+    /// This is physical right horizontally and bottom vertically. `width`
+    /// reports occupied inline measure horizontally; `height` does so
+    /// vertically.
     hang_end: f32 = 0,
     /// Physical line-box width. In a vertical column this is the block size,
     /// not the accumulated glyph advance.
@@ -198,8 +201,9 @@ pub const ParagraphLine = struct {
     /// aligned lines. Keeping the target on the selected line lets later
     /// source-level Kashida reshaping run before generic spacing expansion.
     justification_target: ?f32 = null,
-    /// Physical line-box height. In a vertical column this is the inline
-    /// extent accumulated from glyph y advances.
+    /// Physical line-box height. In a vertical column this is occupied inline
+    /// measure after subtracting optical hanging; glyph/caret advances retain
+    /// the complete source extent.
     height: f32,
     /// Line-local block-axis glyph origin: distance from top horizontally and
     /// from left vertically.

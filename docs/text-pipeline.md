@@ -487,14 +487,18 @@ every width/alignment change, preventing justification from accumulating.
 
 `ParagraphOptions.punctuation.end_hanging_fraction` and the corresponding
 `ParagraphStyle` policy optionally let East Asian closing, exclamation, and
-nonstarter punctuation protrude from the logical inline-end margin. Reflow
-uses the reduced occupied measure for fitting and justification, while
-`ParagraphLine.hang_start`/`hang_end` record the final physical side after bidi.
-Glyph advances and source ranges remain unchanged, so rendering, selection,
-caret, retained reflow, attributed metadata, alignment, and paragraph metrics
-share one explicit optical geometry contract. The default fraction is zero.
-Language-specific inter-punctuation compression remains separate from this
-portable line-edge feature.
+nonstarter punctuation protrude from the logical inline-end margin on both
+horizontal lines and vertical columns. Reflow uses the reduced occupied
+measure for fitting, balanced badness, and alignment. After line-local bidi,
+`ParagraphLine.hang_start`/`hang_end` record the physical inline side:
+left/right horizontally and top/bottom vertically. Vertical positive-down
+layout therefore writes line-end protrusion to `hang_end`, shortens occupied
+`height`, and leaves the complete glyph/caret/selection advance below that box.
+Glyph advances and source ranges remain unchanged, so rendering, TextGeometry,
+retained reflow, attributed metadata, intrinsic inline sizing, tabs, ellipsis,
+alignment, and paragraph metrics share one explicit optical geometry contract.
+The default fraction is zero. Language-specific inter-punctuation compression
+remains separate and is still rejected for vertical paragraphs.
 
 `ParagraphOptions.punctuation.max_compression_fraction` adds a separate
 CLREQ-style overfull-line stage. Eligible East Asian opening, closing,
@@ -852,7 +856,7 @@ The vertical optimizer owns a focused solver plus boundary-graph module under
 emergency boundaries, reuses positive-down tab-field and whitespace
 measurement, signed spacing, first-column indentation, and shaped-output
 safety, and leaves physical RL/LR placement to `vertical_columns.zig`.
-Vertical exclusions and justification remain rejected, so their
+Vertical exclusions, punctuation compression, and justification remain rejected, so their
 horizontal-only costs do not leak into this bounded slice. If no complete safe
 path exists or the state/edge limits are reached, the already valid greedy
 columns remain authoritative.

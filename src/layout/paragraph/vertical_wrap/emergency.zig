@@ -27,7 +27,7 @@ pub fn fittingOrNext(
     var last_fitting: ?usize = null;
     var candidate = glyph_start + 1;
     while (candidate <= @min(overflow, segment_end)) : (candidate += 1) {
-        if (measure.inlineSize(
+        if (measure.occupiedInlineSize(
             glyphs,
             prefix,
             glyph_start,

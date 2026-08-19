@@ -28,6 +28,34 @@ pub fn logicalEndAmount(
     return @max(0, glyph.x_advance) * fraction;
 }
 
+/// Vertical counterpart of `logicalEndAmount`.
+///
+/// The paragraph's supported vertical inline direction is positive-down, so
+/// the logical end is the final source-order glyph and its y advance supplies
+/// the protruding measure.
+pub fn verticalLogicalEndAmount(
+    glyphs: []const GlyphPosition,
+    glyph_start: usize,
+    glyph_end: usize,
+    fraction: f32,
+) f32 {
+    if (fraction <= 0 or glyph_end <= glyph_start + 1) return 0;
+    const glyph = glyphs[glyph_end - 1];
+    if (!isEligible(glyph)) return 0;
+    return @max(0, glyph.y_advance) * fraction;
+}
+
+/// Recompute vertical hanging after column-local bidi establishes visual order.
+pub fn verticalVisualEndAmount(
+    glyphs: []const GlyphPosition,
+    fraction: f32,
+) f32 {
+    if (fraction <= 0 or glyphs.len <= 1) return 0;
+    const glyph = glyphs[glyphs.len - 1];
+    if (!isEligible(glyph)) return 0;
+    return @max(0, glyph.y_advance) * fraction;
+}
+
 pub fn visualEndAmount(
     glyphs: []const GlyphPosition,
     direction: anytype,

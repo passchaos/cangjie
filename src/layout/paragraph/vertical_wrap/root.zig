@@ -202,7 +202,7 @@ fn appendSegment(
             @max(0, max_inline_size - column_indent)
         else
             std.math.inf(f32);
-        if (measure.inlineSize(
+        if (measure.occupiedInlineSize(
             glyphs,
             prefix,
             glyph_start,

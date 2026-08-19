@@ -36,6 +36,7 @@ const paragraph_source_items =
 const paragraph_tabs = @import("../layout/paragraph/tabs.zig");
 const retained_paragraph = @import("../layout/paragraph/retained.zig");
 const paragraph_reshape = @import("../layout/paragraph/reshape.zig");
+const vertical_hanging = @import("../layout/paragraph/vertical_hanging.zig");
 const styled_paragraph_layout = @import("../layout/paragraph/styled.zig");
 const paragraph_types = @import("../layout/types/paragraph.zig");
 const run_types = @import("../layout/types/runs.zig");
@@ -773,6 +774,7 @@ fn finishUniformParagraph(
                 options.direction,
             );
         }
+        vertical_hanging.apply(buffer, options);
         bidi_reorder.recomputeRunOffsets(buffer);
         try inline_object.position(
             buffer,

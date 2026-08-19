@@ -20,6 +20,7 @@ const source_items = @import("source_items.zig");
 const tabs = @import("tabs.zig");
 const vertical_columns = @import("vertical_columns.zig");
 const vertical_ellipsis = @import("vertical_ellipsis.zig");
+const vertical_hanging = @import("vertical_hanging.zig");
 const vertical_align = @import("vertical_align.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 const run_types = @import("../types/runs.zig");
@@ -384,6 +385,7 @@ const Driver = struct {
                 );
             }
             try self.applyBidi(resolved_options);
+            vertical_hanging.apply(self.buffer, resolved_options);
             bidi_reorder.recomputeRunOffsets(self.buffer);
             try inline_object.position(
                 self.buffer,

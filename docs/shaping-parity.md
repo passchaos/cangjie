@@ -2268,6 +2268,12 @@ shaping-performance superiority.
   hyphen penalties, and `break-all`, unsafe shaped boundaries, missing custom
   glyphs, retained/styled metadata, intrinsic sizing, bidi, and ellipsis are
   covered directly.
+  Line-end East Asian punctuation can now hang along the positive-down inline
+  axis. Greedy/emergency/balanced fitting use occupied height; final
+  column-local bidi assigns bottom-edge `hang_end`, then top/center/bottom
+  alignment, paragraph metrics, retained/styled layout, tabs, interaction,
+  renderer output, and ellipsis consume the same unchanged glyph advances.
+  Inter-punctuation compression remains explicitly unsupported vertically.
   Ordinary out-of-flow source-anchor fallbacks remain zero-occupancy while
   retaining paint output. Custom out-of-flow markers now accept absolute
   presentation-only geometry directly and through placement-only concrete

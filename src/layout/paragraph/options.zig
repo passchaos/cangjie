@@ -327,8 +327,7 @@ fn validateVerticalForText(_: []const u8, options: Options) !void {
         !verticalAlignmentSupported(options.alignment) or
         options.exclusions.len != 0 or
         options.line_regions.len != 0 or
-        options.punctuation.max_compression_fraction != 0 or
-        options.punctuation.end_hanging_fraction != 0)
+        options.punctuation.max_compression_fraction != 0)
     {
         return error.UnsupportedVerticalParagraphOptions;
     }
@@ -478,6 +477,11 @@ test "vertical paragraph validation admits only implemented columns" {
     try validateForText("A\u{00ad}A", .{
         .max_width = 100,
         .hyphenation = .{ .character = 0x2010 },
+        .writing_mode = .vertical_lr,
+    });
+    try validateForText("一。", .{
+        .max_width = 100,
+        .punctuation = .{ .end_hanging_fraction = 0.5 },
         .writing_mode = .vertical_lr,
     });
     var hyphenation_dictionary =

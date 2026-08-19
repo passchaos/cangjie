@@ -119,7 +119,7 @@ fn segment(
 ) !void {
     result.max = @max(
         result.max,
-        inline_measure.inlineSize(
+        inline_measure.occupiedInlineSize(
             glyphs,
             prefix,
             segment_start,
@@ -130,7 +130,7 @@ fn segment(
     if (!wrapping_enabled or segment_start >= segment_end) {
         result.min = @max(
             result.min,
-            inline_measure.inlineSize(
+            inline_measure.occupiedInlineSize(
                 glyphs,
                 prefix,
                 segment_start,
@@ -174,7 +174,7 @@ fn segment(
         if (candidate.next_glyph_start <= fragment_start) continue;
         result.min = @max(
             result.min,
-            candidates.candidateInlineSize(
+            candidates.candidateOccupiedInlineSize(
                 candidate,
                 glyphs,
                 prefix,
@@ -186,7 +186,7 @@ fn segment(
     }
     result.min = @max(
         result.min,
-        inline_measure.inlineSize(
+        inline_measure.occupiedInlineSize(
             glyphs,
             prefix,
             fragment_start,

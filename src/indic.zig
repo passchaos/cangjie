@@ -47,6 +47,66 @@ pub fn markSourceSyllables(source_syllables: []u8, codepoints: []const u21, scri
     }
 }
 
+/// Build the two source-parallel Indic maps in one syllable walk.
+///
+/// Both maps use identical syllable boundaries. Keeping the legacy functions
+/// above as focused public helpers preserves their test surface, while the
+/// production shaper avoids decoding every boundary twice.
+pub fn markSourceSyllablesAndBasicFeatures(
+    source_syllables: []u8,
+    source_features: []u32,
+    codepoints: []const u21,
+    script_tag: unicode.OpenTypeScriptTag,
+) bool {
+    @memset(source_syllables, 0);
+    @memset(source_features, 0);
+
+    var marked = false;
+    var source: usize = 0;
+    var serial: u8 = 1;
+    while (source < codepoints.len) {
+        if (!isIndicSyllableCodepoint(codepoints[source], script_tag)) {
+            source += 1;
+            continue;
+        }
+        const syllable_start = source;
+        const syllable_end = indicSyllableEnd(
+            codepoints,
+            syllable_start,
+            script_tag,
+        );
+        @memset(source_syllables[syllable_start..syllable_end], serial);
+        serial +%= 1;
+        if (serial == 0) serial = 1;
+
+        if (hasInitialReph(
+            codepoints,
+            syllable_start,
+            syllable_end,
+            script_tag,
+        )) {
+            source_features[syllable_start] |= rphf_source_mask;
+            marked = true;
+        }
+        if (markHalfSources(
+            source_features,
+            codepoints,
+            syllable_start,
+            syllable_end,
+            script_tag,
+        )) marked = true;
+        if (markPrefSources(
+            source_features,
+            codepoints,
+            syllable_start,
+            syllable_end,
+            script_tag,
+        )) marked = true;
+        source = syllable_end;
+    }
+    return marked;
+}
+
 pub fn reorderPreBaseMatras(
     glyph_ids: *std.ArrayList(GlyphId),
     glyph_source_indices: *std.ArrayList(usize),
@@ -514,6 +574,33 @@ pub fn markBasicSourceFeatures(source_features: []u32, codepoints: []const u21, 
     }
 
     return marked;
+}
+
+test "combined Indic source maps match independent builders" {
+    const codepoints = [_]u21{
+        0x0915, 0x094d, 0x0937, 0x093f, ' ',
+        0x0930, 0x094d, 0x0915, 0x093e,
+    };
+    var expected_syllables: [codepoints.len]u8 = undefined;
+    markSourceSyllables(&expected_syllables, &codepoints, .dev2);
+    var expected_features: [codepoints.len]u32 = undefined;
+    const expected_marked = markBasicSourceFeatures(
+        &expected_features,
+        &codepoints,
+        .dev2,
+    );
+
+    var syllables: [codepoints.len]u8 = undefined;
+    var features: [codepoints.len]u32 = undefined;
+    const marked = markSourceSyllablesAndBasicFeatures(
+        &syllables,
+        &features,
+        &codepoints,
+        .dev2,
+    );
+    try std.testing.expectEqual(expected_marked, marked);
+    try std.testing.expectEqualSlices(u8, &expected_syllables, &syllables);
+    try std.testing.expectEqualSlices(u32, &expected_features, &features);
 }
 
 pub fn recordPrefSubstitutions(glyph_source_indices: []const usize, glyph_stage_substituted: []const bool, source_pref_substituted: []bool) void {

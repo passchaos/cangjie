@@ -3003,3 +3003,17 @@ shaping-performance superiority.
   `746.081`/`745.761` versus `758.687`/`753.144 ns/glyph`; Roboto,
   SourceSerifVariable, and Amiri words still trailed. The broader performance
   objective therefore remains open.
+- Indic source preparation now derives syllable ids and source-scoped basic
+  feature masks in one syllable walk. Both maps use the same boundaries, but
+  the old production path called the specialized boundary scanner twice per
+  shaped item before any staged lookup ran. The independent builders remain as
+  focused test surfaces and a new differential verifies the fused result. A
+  fixed-CPU-30 B/A/A/B 11-sample matrix reduced NotoSansDevanagari
+  `hi-words` medians from `1483.591`/`1487.765` to
+  `1454.802`/`1454.693 ns/glyph`, about `2.1%`. Interleaved five-iteration
+  counters reduced retired instructions by `0.80%`, branches by `1.19%`, and
+  cycles by `1.68%`. Roboto retired instructions/branches were identical and
+  cycles improved about `2.4%`; Amiri long text improved about `0.05%` in
+  instructions/branches and `0.45%` in cycles. All checksums were unchanged,
+  and the complete HarfBuzz/HarfRust parity umbrella passes, including the
+  10,000-line Hindi corpus at `b01a5388ce792b49`.

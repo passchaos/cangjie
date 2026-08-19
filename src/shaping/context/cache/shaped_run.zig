@@ -1,4 +1,4 @@
-//! Owned cache storage for complete shaped runs.
+//! Bounded owned cache storage for complete shaped runs.
 //!
 //! This module owns cached glyph/run arrays and the source identity needed to
 //! validate a hit. Copying an entry into a caller's output buffer remains an
@@ -82,16 +82,28 @@ pub const ShapedRunCacheEntry = struct {
     runs: []run_types.CascadeRun,
     variation_coords: []f32,
     hits: usize = 0,
+    last_used: u64 = 0,
 };
 
 pub const ShapedRunCache = struct {
+    pub const default_max_entries: usize = 32;
+
     allocator: std.mem.Allocator,
     entries: std.ArrayList(ShapedRunCacheEntry) = .empty,
+    max_entries: usize,
+    clock: u64 = 0,
     hits: usize = 0,
     misses: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) ShapedRunCache {
-        return .{ .allocator = allocator };
+        return initWithCapacity(allocator, default_max_entries);
+    }
+
+    pub fn initWithCapacity(
+        allocator: std.mem.Allocator,
+        max_entries: usize,
+    ) ShapedRunCache {
+        return .{ .allocator = allocator, .max_entries = max_entries };
     }
 
     pub fn deinit(self: *ShapedRunCache) void {
@@ -101,18 +113,9 @@ pub const ShapedRunCache = struct {
     }
 
     pub fn clear(self: *ShapedRunCache) void {
-        for (self.entries.items) |entry| {
-            self.allocator.free(entry.key.fonts);
-            self.allocator.free(entry.key.text);
-            self.allocator.free(entry.key.features);
-            self.allocator.free(entry.key.normalized_variation_coords);
-            self.allocator.free(entry.key.context_before);
-            self.allocator.free(entry.key.context_after);
-            self.allocator.free(entry.glyphs);
-            self.allocator.free(entry.runs);
-            self.allocator.free(entry.variation_coords);
-        }
+        for (self.entries.items) |entry| self.freeEntry(entry);
         self.entries.clearRetainingCapacity();
+        self.clock = 0;
         self.hits = 0;
         self.misses = 0;
     }
@@ -131,10 +134,12 @@ pub const ShapedRunCache = struct {
         self: *ShapedRunCache,
         key_value: ShapedRunCacheKey,
     ) ?*const ShapedRunCacheEntry {
+        const now = self.tick();
         for (self.entries.items) |*entry| {
             if (!entry.key.eql(key_value)) continue;
             self.hits += 1;
             entry.hits += 1;
+            entry.last_used = now;
             return entry;
         }
         self.misses += 1;
@@ -146,6 +151,7 @@ pub const ShapedRunCache = struct {
         key_value: ShapedRunCacheKey,
         shaped: run_types.ShapedText,
     ) !void {
+        if (self.max_entries == 0) return;
         const fonts = try self.allocator.dupe(*const Font, key_value.fonts);
         errdefer self.allocator.free(fonts);
         const text = try self.allocator.dupe(u8, key_value.text);
@@ -190,12 +196,52 @@ pub const ShapedRunCache = struct {
         owned_key.normalized_variation_coords = normalized_variation_coords;
         owned_key.context_before = context_before;
         owned_key.context_after = context_after;
-        try self.entries.append(self.allocator, .{
+        const owned = ShapedRunCacheEntry{
             .key = owned_key,
             .glyphs = glyphs,
             .runs = runs,
             .variation_coords = variation_coords,
-        });
+            .last_used = self.tick(),
+        };
+        // Evict only after every allocation for the replacement succeeded.
+        // An out-of-memory error therefore leaves all prior cache entries
+        // intact rather than discarding a valid resident for a failed insert.
+        if (self.entries.items.len == self.max_entries) {
+            const evicted = self.entries.swapRemove(self.oldestEntryIndex());
+            self.freeEntry(evicted);
+        }
+        try self.entries.append(self.allocator, owned);
+    }
+
+    fn freeEntry(self: *ShapedRunCache, entry: ShapedRunCacheEntry) void {
+        self.allocator.free(entry.key.fonts);
+        self.allocator.free(entry.key.text);
+        self.allocator.free(entry.key.features);
+        self.allocator.free(entry.key.normalized_variation_coords);
+        self.allocator.free(entry.key.context_before);
+        self.allocator.free(entry.key.context_after);
+        self.allocator.free(entry.glyphs);
+        self.allocator.free(entry.runs);
+        self.allocator.free(entry.variation_coords);
+    }
+
+    fn oldestEntryIndex(self: *const ShapedRunCache) usize {
+        var oldest: usize = 0;
+        for (self.entries.items[1..], 1..) |entry, index| {
+            if (entry.last_used < self.entries.items[oldest].last_used) {
+                oldest = index;
+            }
+        }
+        return oldest;
+    }
+
+    fn tick(self: *ShapedRunCache) u64 {
+        self.clock +%= 1;
+        if (self.clock == 0) {
+            for (self.entries.items) |*entry| entry.last_used = 0;
+            self.clock = 1;
+        }
+        return self.clock;
     }
 };
 
@@ -280,4 +326,31 @@ test "shaped-run cache owns borrowed key text" {
     const mutated = ShapedRunCacheKey.init(&.{}, &text, 20, .{});
     try std.testing.expect(cache.lookup(original) != null);
     try std.testing.expect(cache.lookup(mutated) == null);
+}
+
+test "shaped-run cache evicts least recently used entries at capacity" {
+    var cache = ShapedRunCache.initWithCapacity(std.testing.allocator, 2);
+    defer cache.deinit();
+    const shaped = run_types.ShapedText{ .glyphs = &.{}, .runs = &.{} };
+    const a = ShapedRunCacheKey.init(&.{}, "a", 20, .{});
+    const b = ShapedRunCacheKey.init(&.{}, "b", 20, .{});
+    const c = ShapedRunCacheKey.init(&.{}, "c", 20, .{});
+
+    try cache.store(a, shaped);
+    try cache.store(b, shaped);
+    try std.testing.expect(cache.lookup(a) != null);
+    try cache.store(c, shaped);
+
+    try std.testing.expectEqual(@as(usize, 2), cache.entries.items.len);
+    try std.testing.expect(cache.lookup(a) != null);
+    try std.testing.expect(cache.lookup(b) == null);
+    try std.testing.expect(cache.lookup(c) != null);
+}
+
+test "zero-capacity shaped-run cache retains no output" {
+    var cache = ShapedRunCache.initWithCapacity(std.testing.allocator, 0);
+    defer cache.deinit();
+    const key_value = ShapedRunCacheKey.init(&.{}, "a", 20, .{});
+    try cache.store(key_value, .{ .glyphs = &.{}, .runs = &.{} });
+    try std.testing.expectEqual(@as(usize, 0), cache.entries.items.len);
 }

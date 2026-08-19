@@ -2958,3 +2958,14 @@ shaping-performance superiority.
   Devanagari instructions rose `0.13%`, branches fell `0.20%`, and its
   single-order cycles rose about `1.05%`. All A/B checksums were identical, and
   the full ReleaseFast, corpus, shaping, and USE gates pass unchanged.
+- Complete shaped-run caching remains opt-in after a workload audit found that
+  Roboto `en-words`, Amiri `fa-words`, and NotoSansDevanagari `hi-words` contain
+  no repeated lines: enabling the cache adds lookup and ownership work without
+  a possible hit. A two-hit admission prototype still regressed the Roboto
+  unique-word median substantially, so it was not retained. The production
+  cache now addresses the independent correctness problem instead: it has a
+  32-entry LRU bound (with a zero-capacity mode for explicit callers), frees an
+  evicted run's complete exact key and shaped output, and refreshes recency on
+  exact collision-safe hits. This prevents an opt-in cache from growing without
+  bound while preserving its first-repeat hit behavior and the default-off
+  performance policy.

@@ -21,6 +21,7 @@ const tabs = @import("tabs.zig");
 const vertical_columns = @import("vertical_columns.zig");
 const vertical_ellipsis = @import("vertical_ellipsis.zig");
 const vertical_hanging = @import("vertical_hanging.zig");
+const vertical_justification = @import("vertical_justification.zig");
 const vertical_align = @import("vertical_align.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 const run_types = @import("../types/runs.zig");
@@ -384,6 +385,7 @@ const Driver = struct {
                     ellipsis_count,
                 );
             }
+            vertical_justification.apply(self.buffer, resolved_options);
             try punctuation_compression.apply(
                 self.buffer,
                 resolved_options,

@@ -195,7 +195,8 @@ pub const ParagraphLine = struct {
     /// Physical line-box width. In a vertical column this is the block size,
     /// not the accumulated glyph advance.
     width: f32,
-    /// Full-advance measure requested for a justified soft-wrapped line.
+    /// Full inline-advance measure requested for a justified soft-wrapped
+    /// line/column.
     ///
     /// This remains null for hard-break, terminal, truncated, and naturally
     /// aligned lines. Keeping the target on the selected line lets later

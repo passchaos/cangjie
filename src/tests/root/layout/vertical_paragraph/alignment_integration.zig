@@ -182,7 +182,7 @@ test "vertical alignment is reflected by geometry and draw output" {
     );
 }
 
-test "vertical alignment rejects block-axis and justification requests" {
+test "vertical alignment rejects physical block-axis requests" {
     const allocator = std.testing.allocator;
     const bytes = try @import("../../../../test_font.zig")
         .buildVerticalMetricsTtf(allocator);
@@ -191,7 +191,7 @@ test "vertical alignment rejects block-axis and justification requests" {
     defer font.deinit();
     var buffer = LayoutBuffer.init(allocator);
     defer buffer.deinit();
-    for ([_]paragraph.Align{ .left, .right, .justify }) |alignment| {
+    for ([_]paragraph.Align{ .left, .right }) |alignment| {
         try std.testing.expectError(
             error.UnsupportedVerticalParagraphOptions,
             layout(&font, &buffer, "A", .{

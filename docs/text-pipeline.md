@@ -472,15 +472,16 @@ break remain unavailable. Callers own language selection and dictionary
 lifetime; Cangjie deliberately does not infer either from locale.
 
 `TextAlign.justify` now provides portable inter-word and CJK inter-character
-justification. Reflow first expands UAX #14 `SP` source atoms on non-terminal
-soft-wrapped lines. If no expandable space exists, it distributes the remaining
-width between adjacent Han/Kana/Hangul/Yi/Nushu source atoms. The conservative
+justification on horizontal lines and positive-down vertical columns. Reflow
+first expands UAX #14 `SP` source atoms on non-terminal soft-wrapped fragments.
+If no expandable space exists, it distributes the remaining inline measure
+between adjacent Han/Kana/Hangul/Yi/Nushu source atoms. The conservative
 CJK fallback excludes punctuation, nonstarters, combining output, and repeated
 GSUB outputs for one source atom; language-specific punctuation compression and
-hanging remain separate tailoring. Hard-break lines, final paragraph lines,
-ellipsized terminal lines, tabs, non-breaking glue, unbounded layouts, and
-lines without safe opportunities retain their natural width.
-The expansion is stored in glyph advances, so rendering, hit testing,
+hanging remain separate tailoring. Hard-break fragments, final paragraph
+fragments, ellipsized terminal fragments, tabs, non-breaking glue, unbounded
+layouts, and fragments without safe opportunities retain their natural size.
+The expansion is stored in x or y glyph advances, so rendering, hit testing,
 selection geometry, bidi visual reordering, and debug overlays consume one
 consistent layout result. Retained reflow restores pristine advances before
 every width/alignment change, preventing justification from accumulating.
@@ -865,9 +866,9 @@ The vertical optimizer owns a focused solver plus boundary-graph module under
 emergency boundaries, reuses positive-down tab-field and whitespace
 measurement, signed spacing, first-column indentation, and shaped-output
 safety, and leaves physical RL/LR placement to `vertical_columns.zig`.
-Vertical exclusions and justification remain rejected, so their
-horizontal-only costs do not leak into this bounded slice. If no complete safe
-path exists or the state/edge limits are reached, the already valid greedy
+Vertical exclusions remain rejected, so their horizontal-region costs do not
+leak into this bounded slice. If no complete safe path exists or the state/edge
+limits are reached, the already valid greedy
 columns remain authoritative.
 
 Line-breaking policy is split along CSS Text's independent axes rather than

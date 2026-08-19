@@ -37,6 +37,8 @@ const paragraph_tabs = @import("../layout/paragraph/tabs.zig");
 const retained_paragraph = @import("../layout/paragraph/retained.zig");
 const paragraph_reshape = @import("../layout/paragraph/reshape.zig");
 const vertical_hanging = @import("../layout/paragraph/vertical_hanging.zig");
+const vertical_justification =
+    @import("../layout/paragraph/vertical_justification.zig");
 const styled_paragraph_layout = @import("../layout/paragraph/styled.zig");
 const paragraph_types = @import("../layout/types/paragraph.zig");
 const run_types = @import("../layout/types/runs.zig");
@@ -765,9 +767,11 @@ fn finishUniformParagraph(
     if (options.writing_mode.isVertical()) {
         // Vertical column construction has already completed its admitted
         // y-axis presentation stages, including ellipsis fitting. UAX #9 then
-        // permutes each final column along positive-down y; horizontal-only
-        // horizontal-only reshaping remains outside this branch. Compression
-        // is an inline-axis transform and runs before the visual permutation.
+        // permutes each final column along positive-down y. Source-level JSTF,
+        // variable-axis, and Kashida reshaping remain horizontal-only; generic
+        // spacing and compression are inline-axis transforms and run before the
+        // visual permutation.
+        vertical_justification.apply(buffer, options);
         try punctuation_compression.apply(buffer, options);
         if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
             try applyParagraphLineBidiVisualOrder(

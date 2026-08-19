@@ -1,7 +1,7 @@
-//! Portable horizontal justification after shaping and line selection.
+//! Portable inline-axis justification after shaping and line selection.
 //!
 //! Inter-word expansion remains the primary strategy because it applies
-//! consistently across scripts. When a line has no expandable UAX #14 `SP`
+//! consistently across scripts. When a fragment has no expandable UAX #14 `SP`
 //! atom, East Asian text falls back to conservative inter-character expansion
 //! between adjacent ideographic/Kana/Hangul/Yi/Nushu source atoms. Punctuation,
 //! nonstarters, combining output, and repeated GSUB output clusters are not
@@ -9,6 +9,7 @@
 
 const std = @import("std");
 const GlyphPosition = @import("../glyph_position.zig").GlyphPosition;
+const pipeline_types = @import("../../shaping/pipeline/types.zig");
 const unicode = @import("../../unicode.zig");
 
 const OpportunityKind = enum {
@@ -18,14 +19,15 @@ const OpportunityKind = enum {
 
 pub fn apply(
     glyphs: []GlyphPosition,
-    natural_width: f32,
-    target_width: f32,
+    natural_size: f32,
+    target_size: f32,
+    writing_mode: pipeline_types.WritingMode,
 ) f32 {
     if (glyphs.len == 0 or
-        !std.math.isFinite(target_width) or
-        target_width <= natural_width)
+        !std.math.isFinite(target_size) or
+        target_size <= natural_size)
     {
-        return natural_width;
+        return natural_size;
     }
 
     var kind: OpportunityKind = .space;
@@ -33,10 +35,10 @@ pub fn apply(
     if (opportunity_count == 0) {
         kind = .cjk_inter_character;
         opportunity_count = countCjkBoundaries(glyphs);
-        if (opportunity_count == 0) return natural_width;
+        if (opportunity_count == 0) return natural_size;
     }
 
-    const total_extra = target_width - natural_width;
+    const total_extra = target_size - natural_size;
     const extra_per_opportunity =
         total_extra / @as(f32, @floatFromInt(opportunity_count));
     var applied_extra: f32 = 0;
@@ -63,6 +65,7 @@ pub fn apply(
                     extra_per_opportunity,
                     &applied_count,
                     &applied_extra,
+                    writing_mode,
                 );
             }
         },
@@ -84,6 +87,7 @@ pub fn apply(
                         extra_per_opportunity,
                         &applied_count,
                         &applied_extra,
+                        writing_mode,
                     );
                 }
                 index = atom_end;
@@ -91,7 +95,7 @@ pub fn apply(
         },
     }
     std.debug.assert(applied_count == opportunity_count);
-    return natural_width + applied_extra;
+    return natural_size + applied_extra;
 }
 
 fn applyOpportunity(
@@ -101,6 +105,7 @@ fn applyOpportunity(
     extra_per_opportunity: f32,
     applied_count: *usize,
     applied_extra: *f32,
+    writing_mode: pipeline_types.WritingMode,
 ) void {
     applied_count.* += 1;
     // Give the final opportunity the floating-point residual so reported line
@@ -109,7 +114,11 @@ fn applyOpportunity(
         total_extra - applied_extra.*
     else
         extra_per_opportunity;
-    glyph.x_advance += extra;
+    if (writing_mode.isVertical()) {
+        glyph.y_advance += extra;
+    } else {
+        glyph.x_advance += extra;
+    }
     applied_extra.* += extra;
 }
 
@@ -195,7 +204,7 @@ test "inter-word justification counts one opportunity per source atom" {
         .{ .glyph_id = 4, .codepoint = 'A', .cluster = 2, .x_advance = 10 },
     };
 
-    try std.testing.expectApproxEqAbs(@as(f32, 30), apply(&glyphs, 25, 30), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 30), apply(&glyphs, 25, 30, .horizontal_tb), 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 8), glyphs[1].x_advance, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 2), glyphs[2].x_advance, 0.001);
 
@@ -208,7 +217,7 @@ test "inter-word justification counts one opportunity per source atom" {
     };
     try std.testing.expectApproxEqAbs(
         @as(f32, 30),
-        apply(&reused_cluster, 20, 30),
+        apply(&reused_cluster, 20, 30, .horizontal_tb),
         0.001,
     );
     try std.testing.expectApproxEqAbs(@as(f32, 10), reused_cluster[0].x_advance, 0.001);
@@ -220,7 +229,7 @@ test "inter-word justification counts one opportunity per source atom" {
         .{ .glyph_id = 2, .codepoint = 0x00a0, .cluster = 1, .x_advance = 5 },
         .{ .glyph_id = 3, .codepoint = 'A', .cluster = 3, .x_advance = 10 },
     };
-    try std.testing.expectApproxEqAbs(@as(f32, 25), apply(&glued, 25, 30), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 25), apply(&glued, 25, 30, .horizontal_tb), 0.001);
 }
 
 test "CJK inter-character expansion respects source atoms and punctuation" {
@@ -232,7 +241,7 @@ test "CJK inter-character expansion respects source atoms and punctuation" {
     };
     try std.testing.expectApproxEqAbs(
         @as(f32, 36),
-        apply(&ideographs, 30, 36),
+        apply(&ideographs, 30, 36, .horizontal_tb),
         0.001,
     );
     try std.testing.expectApproxEqAbs(@as(f32, 13), ideographs[0].x_advance, 0.001);
@@ -247,7 +256,7 @@ test "CJK inter-character expansion respects source atoms and punctuation" {
     };
     try std.testing.expectApproxEqAbs(
         @as(f32, 30),
-        apply(&punctuation, 30, 36),
+        apply(&punctuation, 30, 36, .horizontal_tb),
         0.001,
     );
 }
@@ -258,7 +267,34 @@ test "spaces take precedence over inter-character expansion" {
         .{ .glyph_id = 2, .codepoint = ' ', .cluster = 3, .x_advance = 5 },
         .{ .glyph_id = 3, .codepoint = 0x4e01, .cluster = 4, .x_advance = 10 },
     };
-    try std.testing.expectApproxEqAbs(@as(f32, 35), apply(&glyphs, 25, 35), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 35), apply(&glyphs, 25, 35, .horizontal_tb), 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 10), glyphs[0].x_advance, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 15), glyphs[1].x_advance, 0.001);
+}
+
+test "vertical justification updates only positive-down advances" {
+    var glyphs = [_]GlyphPosition{
+        .{
+            .glyph_id = 1,
+            .codepoint = 0x4e00,
+            .cluster = 0,
+            .x_advance = 0,
+            .y_advance = 10,
+        },
+        .{
+            .glyph_id = 2,
+            .codepoint = 0x4e01,
+            .cluster = 3,
+            .x_advance = 0,
+            .y_advance = 10,
+        },
+    };
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 30),
+        apply(&glyphs, 20, 30, .vertical_rl),
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(@as(f32, 20), glyphs[0].y_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), glyphs[1].y_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), glyphs[0].x_advance, 0.001);
 }

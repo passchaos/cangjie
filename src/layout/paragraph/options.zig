@@ -126,9 +126,9 @@ pub const Options = struct {
     line_break_strategy: paragraph_types.LineBreakStrategy = .greedy,
     /// Inline-axis alignment.
     ///
-    /// Vertical paragraphs currently support `.start`, `.center`, and `.end`
-    /// as top/center/bottom. Physical `.left`/`.right` and `.justify` remain
-    /// horizontal-only.
+    /// Vertical paragraphs support `.start`, `.center`, and `.end` as
+    /// top/center/bottom, plus `.justify` for generic inline-axis space/CJK
+    /// expansion. Physical `.left`/`.right` remain horizontal-only.
     alignment: paragraph_types.TextAlign = .start,
     line_height: ?f32 = null,
     /// Paragraph base/inline direction.
@@ -334,8 +334,8 @@ fn validateVerticalForText(_: []const u8, options: Options) !void {
 
 fn verticalAlignmentSupported(alignment: paragraph_types.TextAlign) bool {
     return switch (alignment) {
-        .start, .center, .end => true,
-        .left, .right, .justify => false,
+        .start, .center, .end, .justify => true,
+        .left, .right => false,
     };
 }
 
@@ -471,6 +471,7 @@ test "vertical paragraph validation admits only implemented columns" {
     try validateForText("AA", .{
         .max_width = 100,
         .line_break_strategy = .balanced,
+        .alignment = .justify,
         .writing_mode = .vertical_lr,
     });
     try validateForText("A\u{00ad}A", .{

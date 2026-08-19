@@ -16,9 +16,9 @@ pub fn origin(
     const available = @max(0, max_inline_size - indent);
     const slack = @max(0, available - inline_size);
     return indent + switch (alignment) {
-        .start => 0,
+        .start, .justify => 0,
         .center => slack / 2,
         .end => slack,
-        .left, .right, .justify => unreachable,
+        .left, .right => unreachable,
     };
 }

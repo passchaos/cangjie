@@ -5,7 +5,8 @@
 //! justification, truncation, and rollback checkpoints coupled to physical x.
 //! Width-induced selection is delegated to the focused `vertical_wrap`
 //! modules. This owner applies resolved metrics and physical RL/LR progression
-//! without importing horizontal regions, tabs, justification, or rollback.
+//! without importing horizontal regions, horizontal tab geometry, source-level
+//! justification reshaping, or rollback.
 
 const geometry = @import("../line_break/reflow/geometry.zig");
 const line_break_analysis = @import("../line_break/analysis.zig");
@@ -162,7 +163,7 @@ pub fn build(
             buffer.glyphs.items.len,
         );
     }
-    for (ranges) |range| {
+    for (ranges, 0..) |range, range_index| {
         if (range.hyphen) |hyphen| {
             if (!hyphen.synthetic) {
                 discretionary_hyphen.materializeVertical(
@@ -222,6 +223,14 @@ pub fn build(
             range.byte_end,
             range.inline_indent,
             inline_size,
+            justificationTarget(
+                buffer.glyphs.items[range.glyph_start..range.glyph_end],
+                ranges,
+                range_index,
+                range.inline_indent,
+                inline_size,
+                options,
+            ),
         );
     }
     // Source U+00AD can be removed as a default-ignorable during shaping.
@@ -239,6 +248,13 @@ pub fn build(
     const content_omitted = visible_count < ranges.len;
     if (visible_count < ranges.len) {
         truncation.keepPrefix(buffer, visible_count);
+    }
+    // The last visible column is terminal after max-lines truncation, even if
+    // its original range was followed by another soft column. Ellipsis is a
+    // terminal marker too, so neither path may retain an expansion target.
+    if (buffer.lines.items.len != 0) {
+        buffer.lines.items[buffer.lines.items.len - 1].justification_target =
+            null;
     }
     if (options.ellipsis and content_omitted and visible_count != 0) {
         _ = try vertical_ellipsis.materialize(
@@ -336,6 +352,7 @@ fn appendColumnAssumeCapacity(
     byte_end: usize,
     inline_indent: f32,
     inline_size: f32,
+    justification_target: ?f32,
 ) void {
     const block_metrics = vertical_block_metrics.resolve(
         buffer.runs.items,
@@ -374,6 +391,7 @@ fn appendColumnAssumeCapacity(
         .region_width = block_size,
         .resolved_alignment = resolved_alignment,
         .width = block_size,
+        .justification_target = justification_target,
         .height = inline_size,
         // A vertical glyph's HarfBuzz x offset is relative to the column
         // center, not to a horizontal alphabetic baseline.
@@ -382,6 +400,26 @@ fn appendColumnAssumeCapacity(
         .descent = metrics.descent,
         .leading = metrics.leading,
     });
+}
+
+fn justificationTarget(
+    glyphs: []const GlyphPosition,
+    ranges: []const vertical_wrap.Range,
+    range_index: usize,
+    inline_indent: f32,
+    inline_size: f32,
+    options: paragraph_options.Options,
+) ?f32 {
+    if (options.alignment != .justify or
+        range_index + 1 >= ranges.len or
+        ranges[range_index + 1].starts_segment or
+        vertical_tabs.contains(glyphs) or
+        options.max_width <= 0 or
+        !@import("std").math.isFinite(options.max_width))
+    {
+        return null;
+    }
+    return @max(inline_size, options.max_width - @max(0, inline_indent));
 }
 
 fn placeColumns(

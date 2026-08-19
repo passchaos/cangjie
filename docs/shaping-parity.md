@@ -2268,6 +2268,12 @@ shaping-performance superiority.
   hyphen penalties, and `break-all`, unsafe shaped boundaries, missing custom
   glyphs, retained/styled metadata, intrinsic sizing, bidi, and ellipsis are
   covered directly.
+  Generic `TextAlign.justify` now expands UAX #14 spaces or conservative CJK
+  source boundaries along positive-down y. Only non-terminal soft columns
+  receive a target; hard/terminal/truncated/ellipsized/tab-ruler/unbounded
+  columns retain natural size. Greedy and balanced selection, retained/styled
+  restoration, bidi, interaction/TextGeometry, renderer pens, punctuation
+  processing, and RL/LR placement consume the same expanded advances.
   Line-end East Asian punctuation can now hang along the positive-down inline
   axis. Greedy/emergency/balanced fitting use occupied height; final
   column-local bidi assigns bottom-edge `hang_end`, then top/center/bottom
@@ -2286,7 +2292,7 @@ shaping-performance superiority.
   resolver replay; retained/styled layout, intrinsic sizing, draw output, and
   line-limit visibility keep those bounds outside flow metrics. Bottom-to-top
   inline progression, physical left/right alignment, exclusions (including
-  resolver responses that introduce one), justification, and incremental
+  resolver responses that introduce one), and incremental
   breaking are rejected explicitly until they are migrated to the shared
   inline/block-axis model; this is not yet full vertical paragraph parity.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,

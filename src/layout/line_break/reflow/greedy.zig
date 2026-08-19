@@ -10,8 +10,7 @@ const automatic_hyphens = @import("automatic_hyphens.zig");
 const balanced = @import("balanced.zig");
 const discretionary_hyphen = @import("../../discretionary_hyphen.zig");
 const geometry = @import("geometry.zig");
-const horizontal_justification =
-    @import("../../justification/horizontal.zig");
+const inline_justification = @import("../../justification/inline.zig");
 const jstf_shrinkage =
     @import("../../justification/jstf/shrinkage.zig");
 const inline_object = @import("../../inline_object/root.zig");
@@ -1261,10 +1260,11 @@ pub fn applyPendingJustification(buffer: anytype) void {
         const natural_width = geometry.lineWidth(
             buffer.glyphs.items[line.glyph_start..line_end],
         );
-        line.width = horizontal_justification.apply(
+        line.width = inline_justification.apply(
             buffer.glyphs.items[line.glyph_start..line_end],
             natural_width,
             target,
+            .horizontal_tb,
         );
         line.justification_target = null;
     }

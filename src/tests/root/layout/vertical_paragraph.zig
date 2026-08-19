@@ -32,6 +32,8 @@ test {
     _ = @import("vertical_paragraph/inline_object_integration.zig");
     _ = @import("vertical_paragraph/alignment.zig");
     _ = @import("vertical_paragraph/alignment_integration.zig");
+    _ = @import("vertical_paragraph/justification.zig");
+    _ = @import("vertical_paragraph/justification_integration.zig");
     _ = @import("vertical_paragraph/out_of_flow.zig");
     _ = @import("vertical_paragraph/out_of_flow_integration.zig");
     _ = @import("vertical_paragraph/max_lines.zig");

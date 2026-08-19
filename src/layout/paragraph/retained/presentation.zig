@@ -16,6 +16,7 @@ const paragraph_reflow = @import("../../line_break/reflow/root.zig");
 const punctuation_compression = @import("../../punctuation/compression.zig");
 const punctuation_hanging = @import("../../punctuation/hanging.zig");
 const vertical_hanging = @import("../vertical_hanging.zig");
+const vertical_justification = @import("../vertical_justification.zig");
 
 pub fn apply(
     buffer: anytype,
@@ -28,8 +29,9 @@ pub fn apply(
         // Vertical column construction has already applied line limits,
         // ellipsis, alignment, tabs, and object block metrics. Apply UAX #9 to
         // each final column before rebuilding run pens and positioned objects;
-        // justification remains unsupported here. Punctuation compression is
+        // Generic inline-axis justification and punctuation compression are
         // applied in logical order before bidi, exactly like horizontal lines.
+        vertical_justification.apply(buffer, options);
         try punctuation_compression.apply(buffer, options);
         if (needs_bidi_reorder) {
             try bidi_reorder.applyLines(

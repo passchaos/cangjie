@@ -622,9 +622,10 @@ and `.end` place each column at top, center, or bottom of its post-indent
 segments reset indentation before alignment. Overfull and unbounded columns
 remain at logical start rather than moving backward. Columns containing active
 absolute tab rulers are pinned to `.start`, matching horizontal tab-ruler
-behavior. Physical `.left` / `.right` and `.justify` remain explicitly
-unsupported for vertical paragraphs because they require separate block-axis
-or expansion semantics.
+behavior. Physical `.left` / `.right` remain explicitly unsupported for
+vertical paragraphs because they require separate block-axis semantics.
+`.justify` is supported independently as inline-axis expansion along
+positive-down y.
 
 `max_lines` limits vertical output to a source-order column prefix. Glyphs,
 font runs, line ranges, positioned objects, and attributed metadata are
@@ -1294,9 +1295,11 @@ Vertical-lr columns transpose the same resolver: rectangles intersecting the
 column's physical x band subtract y intervals from its positive-down inline
 container. The widest remaining y fragment determines wrapping/alignment; a
 fully blocked band advances the block cursor to the nearest exclusion right
-edge without creating an empty source column. Explicit `line_regions` take
-precedence, `.no_wrap` ignores exclusions, and out-of-flow resolver responses
-replay through the same path. Vertical-rl exclusion traversal remains rejected.
+edge without creating an empty source column. Vertical-rl mirrors that
+traversal toward the nearest exclusion left edge, then translates its local
+right-to-left coordinates into final paragraph space. Explicit `line_regions`
+take precedence, `.no_wrap` ignores exclusions, and out-of-flow resolver
+responses replay through the same path.
 
 Paragraph inline objects use U+FFFC OBJECT REPLACEMENT CHARACTER as their
 stable UTF-8 source anchor. `cangjie.paragraph.InlineObject` supports in-flow

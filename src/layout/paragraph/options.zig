@@ -187,9 +187,10 @@ pub const Options = struct {
     paragraph_spacing: f32 = 0,
     /// Rectangular paragraph-space areas unavailable to wrapped text.
     ///
-    /// Horizontal lines and vertical-lr columns choose the widest remaining
-    /// contiguous inline fragment. Vertical-rl exclusion traversal remains
-    /// unsupported. Exclusions are ignored by `.no_wrap`.
+    /// Horizontal lines and vertical columns choose the widest remaining
+    /// contiguous inline fragment. Fully blocked vertical-lr/vertical-rl
+    /// bands advance in their respective physical block directions.
+    /// Exclusions are ignored by `.no_wrap`.
     exclusions: []const exclusions.Exclusion = &.{},
     /// Caller-selected paragraph-space geometry for a visual-fragment prefix.
     ///

@@ -1235,6 +1235,14 @@ break byte ranges and positions are represented differently and are not yet a
 cross-engine checksum equality claim, but the width control proves the 200-unit
 4/5-line difference did not create the Arabic performance deficit.
 
+`paragraph-bench` also accepts a final `reflow` phase that prepares the
+width-independent paragraph once and measures only restore, line selection,
+presentation, and output reuse. On the same Arabic 180-unit row this phase is
+about `17,333 ns`, versus roughly `103,000 ns` for complete construction. Thus
+about 83% of Cangjie's measured cost lies before or outside repeatable reflow
+(shaping, Unicode/fallback setup, and one-shot orchestration); line breaking
+itself is not the primary Parley-relative bottleneck.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

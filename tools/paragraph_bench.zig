@@ -14,6 +14,7 @@ pub fn main(init: std.process.Init) !void {
     const iterations = try parsePositive(args.next() orelse return usage());
     const sample_count = try parsePositive(args.next() orelse return usage());
     const width = if (args.next()) |value| try parseFinitePositiveFloat(value) else 200.0;
+    const phase = if (args.next()) |value| try parsePhase(value) else Phase.layout;
     if (args.next() != null) return usage();
 
     const font_bytes: []u8 = if (std.mem.eql(u8, font_path, "builtin:minimal"))
@@ -42,6 +43,17 @@ pub fn main(init: std.process.Init) !void {
     const cascade = cangjie.font.Cascade.init(&faces);
     var engine = cangjie.shaping.Engine.init(allocator, .{});
     defer engine.deinit();
+    var retained = if (phase == .reflow)
+        try engine.prepareParagraph(cascade, .{
+            .text = text,
+            .font_size = 16,
+            .options = .{ .max_width = width },
+        })
+    else
+        null;
+    defer if (retained) |*paragraph| paragraph.deinit();
+    var reflow = cangjie.paragraph.ReflowBuffer.init(allocator);
+    defer reflow.deinit();
 
     const samples = try allocator.alloc(i128, sample_count);
     defer allocator.free(samples);
@@ -50,7 +62,15 @@ pub fn main(init: std.process.Init) !void {
     var line_count: usize = 0;
     for (samples) |*sample| {
         for (0..3) |_| {
-            const layout = try layoutOnce(&engine, cascade, text, width);
+            const layout = try benchmarkOnce(
+                phase,
+                &engine,
+                cascade,
+                text,
+                width,
+                if (retained) |*paragraph| paragraph else null,
+                &reflow,
+            );
             const current_checksum = layoutChecksum(layout);
             if (checksum != 0 and checksum != current_checksum) return error.UnstableOutput;
             checksum = current_checksum;
@@ -60,7 +80,15 @@ pub fn main(init: std.process.Init) !void {
         var batch_checksum: u64 = 0;
         const start = std.Io.Clock.now(.awake, init.io).nanoseconds;
         for (0..iterations) |_| {
-            const layout = try layoutOnce(&engine, cascade, text, width);
+            const layout = try benchmarkOnce(
+                phase,
+                &engine,
+                cascade,
+                text,
+                width,
+                if (retained) |*paragraph| paragraph else null,
+                &reflow,
+            );
             if (layout.glyphs.len != glyph_count or layout.lines.len != line_count) {
                 return error.UnstableOutput;
             }
@@ -75,10 +103,27 @@ pub fn main(init: std.process.Init) !void {
     const median = @as(f64, @floatFromInt(samples[samples.len / 2])) /
         @as(f64, @floatFromInt(iterations));
     std.debug.print(
-        "engine=cangjie\ttext_bytes={d}\twidth={d:.3}\titerations={d}\tsamples={d}\t" ++
+        "engine=cangjie\tphase={s}\ttext_bytes={d}\twidth={d:.3}\titerations={d}\tsamples={d}\t" ++
             "median_ns_per_iter={d:.3}\tglyphs={d}\tlines={d}\tchecksum={x:0>16}\n",
-        .{ text.len, width, iterations, sample_count, median, glyph_count, line_count, checksum },
+        .{ @tagName(phase), text.len, width, iterations, sample_count, median, glyph_count, line_count, checksum },
     );
+}
+
+const Phase = enum { layout, reflow };
+
+fn benchmarkOnce(
+    phase: Phase,
+    engine: *cangjie.shaping.Engine,
+    cascade: cangjie.font.Cascade,
+    text: []const u8,
+    width: f32,
+    retained: ?*const cangjie.paragraph.Shaped,
+    reflow: *cangjie.paragraph.ReflowBuffer,
+) !cangjie.paragraph.Layout {
+    return switch (phase) {
+        .layout => layoutOnce(engine, cascade, text, width),
+        .reflow => retained.?.layout(reflow, .{ .max_width = width }),
+    };
 }
 
 fn layoutOnce(
@@ -141,9 +186,15 @@ fn parseFinitePositiveFloat(value: []const u8) !f32 {
     return parsed;
 }
 
+fn parsePhase(value: []const u8) !Phase {
+    if (std.mem.eql(u8, value, "layout")) return .layout;
+    if (std.mem.eql(u8, value, "reflow")) return .reflow;
+    return error.InvalidArguments;
+}
+
 fn usage() error{InvalidArguments} {
     std.debug.print(
-        "usage: paragraph-bench FONT TEXT ITERATIONS SAMPLES [WIDTH]\n",
+        "usage: paragraph-bench FONT TEXT ITERATIONS SAMPLES [WIDTH] [layout|reflow]\n",
         .{},
     );
     return error.InvalidArguments;

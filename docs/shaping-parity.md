@@ -2984,3 +2984,10 @@ shaping-performance superiority.
   SourceSerifVariable `en-words` by about `4.5%`, Amiri `fa-words` by about
   `6.4%`, and Amiri `fa-thelittleprince` by about `2.0%`. All A/B checksums
   were identical.
+  A post-change fixed-CPU-30 Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix
+  measured NotoSansDevanagari at `1462.429`/`1464.667` versus
+  `951.391`/`947.447 ns/glyph`, leaving Cangjie about `54%` slower.
+  Amiri `fa-thelittleprince` remained a small Cangjie win at
+  `746.081`/`745.761` versus `758.687`/`753.144 ns/glyph`; Roboto,
+  SourceSerifVariable, and Amiri words still trailed. The broader performance
+  objective therefore remains open.

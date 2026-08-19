@@ -2273,7 +2273,13 @@ shaping-performance superiority.
   column-local bidi assigns bottom-edge `hang_end`, then top/center/bottom
   alignment, paragraph metrics, retained/styled layout, tabs, interaction,
   renderer output, and ellipsis consume the same unchanged glyph advances.
-  Inter-punctuation compression remains explicitly unsupported vertically.
+  CLREQ/JIS/GB/CNS punctuation compression now shares the inline-axis capacity
+  model with horizontal lines. Greedy/emergency/balanced fitting and intrinsic
+  sizing operate on effective occupied height, final logical-order mutation
+  updates y advance/offset before column-local bidi, and retained/styled
+  reflow, interaction geometry, renderer output, hanging, tabs, and ellipsis
+  consume the same result. Compression is transactional for indivisible
+  overfull fragments whose capacity cannot fit the requested measure.
   Ordinary out-of-flow source-anchor fallbacks remain zero-occupancy while
   retaining paint output. Custom out-of-flow markers now accept absolute
   presentation-only geometry directly and through placement-only concrete

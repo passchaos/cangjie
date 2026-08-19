@@ -697,6 +697,7 @@ fn evaluateLine(
         options.punctuation.max_compression_fraction,
         hanging_fraction,
         options.punctuation.convention,
+        options.writing_mode,
     );
     return .{
         .fits = @max(0, width - hanging) <=

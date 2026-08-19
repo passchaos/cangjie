@@ -766,7 +766,9 @@ fn finishUniformParagraph(
         // Vertical column construction has already completed its admitted
         // y-axis presentation stages, including ellipsis fitting. UAX #9 then
         // permutes each final column along positive-down y; horizontal-only
-        // reshaping and punctuation passes remain outside this branch.
+        // horizontal-only reshaping remains outside this branch. Compression
+        // is an inline-axis transform and runs before the visual permutation.
+        try punctuation_compression.apply(buffer, options);
         if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
             try applyParagraphLineBidiVisualOrder(
                 buffer,

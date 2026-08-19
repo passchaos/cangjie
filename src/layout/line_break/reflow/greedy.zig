@@ -498,6 +498,7 @@ fn advanceWithPlan(
                 options.punctuation.max_compression_fraction,
                 options.punctuation.end_hanging_fraction,
                 options.punctuation.convention,
+                options.writing_mode,
             );
         const overflow_allowance = @max(
             current_compression_capacity,
@@ -702,6 +703,7 @@ fn advanceWithPlan(
                         options.punctuation.max_compression_fraction,
                         candidate_hanging_fraction,
                         options.punctuation.convention,
+                        options.writing_mode,
                     );
                 const candidate_hyphen_advance =
                     visibleHyphenAdvance(last_break);

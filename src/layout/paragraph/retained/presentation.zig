@@ -28,7 +28,9 @@ pub fn apply(
         // Vertical column construction has already applied line limits,
         // ellipsis, alignment, tabs, and object block metrics. Apply UAX #9 to
         // each final column before rebuilding run pens and positioned objects;
-        // optical punctuation and justification remain unsupported here.
+        // justification remains unsupported here. Punctuation compression is
+        // applied in logical order before bidi, exactly like horizontal lines.
+        try punctuation_compression.apply(buffer, options);
         if (needs_bidi_reorder) {
             try bidi_reorder.applyLines(
                 buffer,

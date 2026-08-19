@@ -384,6 +384,10 @@ const Driver = struct {
                     ellipsis_count,
                 );
             }
+            try punctuation_compression.apply(
+                self.buffer,
+                resolved_options,
+            );
             try self.applyBidi(resolved_options);
             vertical_hanging.apply(self.buffer, resolved_options);
             bidi_reorder.recomputeRunOffsets(self.buffer);

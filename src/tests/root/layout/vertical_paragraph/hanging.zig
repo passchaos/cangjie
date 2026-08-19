@@ -86,7 +86,7 @@ test "vertical punctuation hanging expands fit without changing advances" {
     );
 }
 
-test "vertical punctuation compression remains explicitly unsupported" {
+test "vertical punctuation compression expands fit and mutates only inline geometry" {
     const allocator = std.testing.allocator;
     const bytes = try hangingFont(allocator);
     defer allocator.free(bytes);
@@ -95,18 +95,90 @@ test "vertical punctuation compression remains explicitly unsupported" {
     var buffer = LayoutBuffer.init(allocator);
     defer buffer.deinit();
 
-    try std.testing.expectError(
-        error.UnsupportedVerticalParagraphOptions,
-        layout(&font, &buffer, wrapping_text, .{
-            .max_width = 50,
-            .punctuation = .{
-                .max_compression_fraction = 1,
-                .end_hanging_fraction = 0.5,
-            },
-            .writing_mode = .vertical_lr,
-            .text_orientation = .upright,
-        }),
+    const result = try layout(&font, &buffer, wrapping_text, .{
+        .max_width = 50,
+        .punctuation = .{ .max_compression_fraction = 1 },
+        .writing_mode = .vertical_lr,
+        .text_orientation = .upright,
+    });
+    try std.testing.expectEqual(@as(usize, 3), result.lines[0].glyph_len);
+    const glyphs = result.lines[0].glyphs(result);
+    try std.testing.expectEqual(@as(u21, 0x3002), glyphs[2].codepoint);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), glyphs[2].y_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), glyphs[2].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 50), result.lines[0].height, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), result.lines[0].hang_end, 0.001);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 50),
+        result.selectionRectForBytes(0, "一丁。".len).height,
+        0.001,
     );
+}
+
+test "vertical compression and hanging do not double count one edge" {
+    const allocator = std.testing.allocator;
+    const bytes = try hangingFont(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const constrained = try layout(&font, &buffer, "一。丂", .{
+        .max_width = 25,
+        .punctuation = .{
+            .convention = .jis,
+            .max_compression_fraction = 1,
+            .end_hanging_fraction = 0.5,
+        },
+        .writing_mode = .vertical_rl,
+        .text_orientation = .upright,
+    });
+    // The terminal glyph offers ten units of hanging and five effective units
+    // of compression after overlap. Adding those would incorrectly fit the
+    // 40-unit prefix in 25; the shared contract admits only the larger one.
+    try std.testing.expectEqual(@as(usize, 1), constrained.lines[0].glyph_len);
+
+    const result = try layout(&font, &buffer, "一。丂", .{
+        .max_width = 35,
+        .punctuation = .{
+            .convention = .jis,
+            .max_compression_fraction = 1,
+            .end_hanging_fraction = 0.5,
+        },
+        .writing_mode = .vertical_rl,
+        .text_orientation = .upright,
+    });
+    try std.testing.expectEqual(@as(usize, 2), result.lines[0].glyph_len);
+    const glyphs = result.lines[0].glyphs(result);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), result.lines[0].hang_end, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 30), result.lines[0].height, 0.001);
+    // Hanging already makes this prefix fit, so compression leaves its full
+    // source/caret advance intact.
+    try std.testing.expectApproxEqAbs(@as(f32, 20), glyphs[1].y_advance, 0.001);
+}
+
+test "vertical compression leaves unfit indivisible fragments unchanged" {
+    const allocator = std.testing.allocator;
+    const bytes = try hangingFont(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const result = try layout(&font, &buffer, "一。", .{
+        .max_width = 5,
+        .wrap_mode = .no_wrap,
+        .punctuation = .{ .max_compression_fraction = 1 },
+        .writing_mode = .vertical_lr,
+        .text_orientation = .upright,
+    });
+    try std.testing.expectEqual(@as(usize, 1), result.lines.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 40), result.lines[0].height, 0.001);
+    for (result.glyphs) |glyph| {
+        try std.testing.expectApproxEqAbs(@as(f32, 20), glyph.y_advance, 0.001);
+    }
 }
 
 test "vertical balanced wrapping and alignment use occupied hanging height" {
@@ -148,6 +220,38 @@ test "vertical balanced wrapping and alignment use occupied hanging height" {
             0.001,
         );
     }
+}
+
+test "vertical balanced wrapping scores compressed occupied height" {
+    const allocator = std.testing.allocator;
+    const bytes = try hangingFont(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const result = try layout(&font, &buffer, "一。、丁。丂", .{
+        .max_width = 45,
+        .line_break_strategy = .balanced,
+        .punctuation = .{
+            .convention = .jis,
+            .max_compression_fraction = 1,
+        },
+        .writing_mode = .vertical_lr,
+        .text_orientation = .upright,
+    });
+    try std.testing.expectEqual(@as(usize, 3), result.lines[0].glyph_len);
+    try std.testing.expect(result.lines[0].height <= 45.001);
+    var saw_reduced_advance = false;
+    for (result.lines[0].glyphs(result)) |glyph| {
+        if ((glyph.codepoint == 0x3001 or glyph.codepoint == 0x3002) and
+            glyph.y_advance < 20)
+        {
+            saw_reduced_advance = true;
+        }
+    }
+    try std.testing.expect(saw_reduced_advance);
 }
 
 test "vertical hanging uses final bidi visual bottom edge" {
@@ -214,6 +318,6 @@ fn inlineAdvance(glyphs: []const support.GlyphPosition) f32 {
 fn hangingFont(allocator: std.mem.Allocator) ![]u8 {
     return @import("../../../../test_font.zig").buildCodepointSetTtf(
         allocator,
-        &.{ 0x3002, 0x4e00, 0x4e01, 0x4e02 },
+        &.{ 0x3001, 0x3002, 0x4e00, 0x4e01, 0x4e02 },
     );
 }

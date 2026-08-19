@@ -2,6 +2,7 @@
 
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const paragraph_options = @import("../options.zig");
+const punctuation_compression = @import("../../punctuation/compression.zig");
 const punctuation_hanging = @import("../../punctuation/hanging.zig");
 const tabs = @import("../tabs.zig");
 const vertical_tabs = @import("tabs.zig");
@@ -61,8 +62,11 @@ pub fn inlineSize(
 
 /// Occupied inline measure used by line fitting.
 ///
-/// The full glyph advance remains in `inlineSize`; an eligible logical-end
-/// punctuation glyph may protrude below the requested column measure.
+/// The full glyph advance remains in `inlineSize`. Fitting subtracts optical
+/// hanging directly and admits the independently mutable punctuation capacity
+/// as another reduction. Taking the larger, rather than their sum, preserves
+/// the horizontal contract: compressing the glyph that also hangs consumes
+/// an equal part of its protrusion until the two capacities no longer overlap.
 pub fn occupiedInlineSize(
     glyphs: []const GlyphPosition,
     prefix: []const f32,
@@ -71,14 +75,12 @@ pub fn occupiedInlineSize(
     options: paragraph_options.Options,
 ) f32 {
     const full = inlineSize(glyphs, prefix, start, end, options);
-    return @max(
-        0,
-        full - punctuation_hanging.verticalLogicalEndAmount(
-            glyphs,
-            start,
-            @min(end, glyphs.len),
-            options.punctuation.end_hanging_fraction,
-        ),
+    return occupiedWithPolicy(
+        full,
+        glyphs,
+        start,
+        @min(end, glyphs.len),
+        options,
     );
 }
 
@@ -176,13 +178,36 @@ fn occupiedProspectiveInlineSize(
         segment_end,
         options,
     );
-    return @max(
-        0,
-        full - punctuation_hanging.verticalLogicalEndAmount(
-            glyphs,
-            start,
-            @min(end, glyphs.len),
-            options.punctuation.end_hanging_fraction,
-        ),
+    return occupiedWithPolicy(
+        full,
+        glyphs,
+        start,
+        @min(end, glyphs.len),
+        options,
     );
+}
+
+fn occupiedWithPolicy(
+    full: f32,
+    glyphs: []const GlyphPosition,
+    start: usize,
+    end: usize,
+    options: paragraph_options.Options,
+) f32 {
+    const hanging = punctuation_hanging.verticalLogicalEndAmount(
+        glyphs,
+        start,
+        end,
+        options.punctuation.end_hanging_fraction,
+    );
+    const compression = punctuation_compression.effectiveCapacity(
+        glyphs,
+        start,
+        end,
+        options.punctuation.max_compression_fraction,
+        options.punctuation.end_hanging_fraction,
+        options.punctuation.convention,
+        options.writing_mode,
+    );
+    return @max(0, full - @max(hanging, compression));
 }

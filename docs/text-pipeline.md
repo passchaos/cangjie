@@ -498,7 +498,7 @@ Glyph advances and source ranges remain unchanged, so rendering, TextGeometry,
 retained reflow, attributed metadata, intrinsic inline sizing, tabs, ellipsis,
 alignment, and paragraph metrics share one explicit optical geometry contract.
 The default fraction is zero. Language-specific inter-punctuation compression
-remains separate and is still rejected for vertical paragraphs.
+remains a separate, explicit policy.
 
 `ParagraphOptions.punctuation.max_compression_fraction` adds a separate
 CLREQ-style overfull-line stage. Eligible East Asian opening, closing,
@@ -509,6 +509,15 @@ only the minimum reduction needed to fit the already selected line. The
 resulting advance/offset changes are explicit glyph geometry, so rendering,
 caret, selection, bidi, retained reflow, attributed metadata, and ellipsis
 remain synchronized. The default is zero.
+
+The same compression policy operates on positive-down vertical inline
+geometry. Capacity and fitting read `y_advance`; top-side compression raises
+the glyph through shaping `y_offset`, bottom-side compression shortens only the
+advance, and the final occupied `ParagraphLine.height` is recomputed after
+column-local bidi. Greedy, emergency, and balanced selection plus intrinsic
+inline sizing use the effective capacity without double-counting a terminal
+glyph that also hangs. A selected overfull indivisible fragment is left
+unchanged when its complete compression capacity cannot make it fit.
 
 `ParagraphOptions.punctuation.convention` explicitly selects `.generic`, `.gb`,
 `.cns`, or `.jis`; Cangjie does not infer it from locale or OpenType shaping
@@ -856,7 +865,7 @@ The vertical optimizer owns a focused solver plus boundary-graph module under
 emergency boundaries, reuses positive-down tab-field and whitespace
 measurement, signed spacing, first-column indentation, and shaped-output
 safety, and leaves physical RL/LR placement to `vertical_columns.zig`.
-Vertical exclusions, punctuation compression, and justification remain rejected, so their
+Vertical exclusions and justification remain rejected, so their
 horizontal-only costs do not leak into this bounded slice. If no complete safe
 path exists or the state/edge limits are reached, the already valid greedy
 columns remain authoritative.

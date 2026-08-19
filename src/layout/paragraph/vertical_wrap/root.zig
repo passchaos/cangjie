@@ -4,6 +4,7 @@
 //! `vertical_columns.zig`; this module selects only safe source/glyph ranges.
 
 const std = @import("std");
+const balanced = @import("balanced.zig");
 const candidates = @import("candidates.zig");
 const emergency = @import("emergency.zig");
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
@@ -85,6 +86,15 @@ pub fn build(
         glyphs.len,
         segment_byte_start,
         text.len,
+    );
+    try balanced.apply(
+        &output,
+        allocator,
+        glyphs,
+        prefix,
+        graphemes,
+        effective_breaks.items,
+        options,
     );
     return output.toOwnedSlice(allocator);
 }

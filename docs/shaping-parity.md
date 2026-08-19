@@ -2246,6 +2246,13 @@ shaping-performance superiority.
   interaction geometry, and renderer output. Explicit `direction=rtl` still
   means unsupported bottom-to-top inline progression; RL/LR remains block-axis
   column order.
+  Greedy and balanced line-break strategies now both operate on vertical
+  source-order columns. The balanced path preserves greedy's per-hard-segment
+  column count, then performs bounded squared-slack optimization over the same
+  UAX/ranged/emergency and unsafe-to-break boundary graph. Positive-down tab
+  fields, signed spacing, hard segments, bidi, retained/styled output,
+  max-lines, and ellipsis are retained; an incomplete or complexity-limited
+  search falls back transactionally to greedy columns.
   Ordinary out-of-flow source-anchor fallbacks remain zero-occupancy while
   retaining paint output. Custom out-of-flow markers now accept absolute
   presentation-only geometry directly and through placement-only concrete

@@ -324,7 +324,6 @@ pub fn shapeOptions(options: Options) shaping_plan.ShapeOptions {
 /// become an accidental vertical no-op.
 fn validateVerticalForText(_: []const u8, options: Options) !void {
     if (options.direction != .ltr or
-        options.line_break_strategy != .greedy or
         !verticalAlignmentSupported(options.alignment) or
         options.exclusions.len != 0 or
         options.line_regions.len != 0 or
@@ -473,6 +472,11 @@ test "vertical paragraph validation admits only implemented columns" {
         .max_width = 100,
         .word_break = .keep_all,
         .overflow_wrap = .normal,
+        .writing_mode = .vertical_lr,
+    });
+    try validateForText("AA", .{
+        .max_width = 100,
+        .line_break_strategy = .balanced,
         .writing_mode = .vertical_lr,
     });
     try validateForText("AA", .{

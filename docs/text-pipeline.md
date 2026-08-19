@@ -811,18 +811,30 @@ while whole-layout retained vertical reflow is already available through
 `ShapedParagraph.layout`.
 
 `ParagraphOptions.line_break_strategy` independently selects greedy or
-balanced soft-boundary policy. `.balanced` first obtains the current greedy
-line-count contract, then performs bounded dynamic programming over every
-reusable UAX #14, dictionary/hyphenation, and emergency grapheme boundary in
-each hard-break segment. It minimizes total squared unused measure without
-increasing line count, while adding explicit penalties for emergency breaks,
-hyphenation, and consecutive hyphenated lines. Every candidate is measured
-against final tab-field advances, optical punctuation capacity, font/inline
-object line metrics, first-line indentation, and exclusion regions. The chosen
-boundaries are then committed by the ordinary reflow transaction, so visible
-hyphens, max-lines/ellipsis, justification, bidi, styled metadata, retained
-reflow, decorations, and inline-object positioning retain one implementation.
-`.no_wrap` and unbounded layouts deliberately ignore the strategy.
+balanced soft-boundary policy. Both horizontal lines and vertical columns first
+obtain the current greedy count per hard-break segment, then use bounded
+dynamic programming to minimize total squared unused measure without adding
+lines or columns. `.no_wrap` and unbounded layouts deliberately ignore the
+strategy.
+
+The horizontal optimizer considers reusable UAX #14, dictionary/hyphenation,
+and emergency grapheme boundaries. It adds penalties for emergency breaks,
+hyphenation, and consecutive hyphenated lines, and measures candidates against
+final tab-field advances, optical punctuation capacity, font/inline-object line
+metrics, first-line indentation, and exclusion regions. Chosen boundaries are
+committed through ordinary horizontal reflow, retaining visible hyphens,
+max-lines/ellipsis, justification, bidi, styled metadata, retained reflow,
+decorations, and inline-object positioning.
+
+The vertical optimizer owns a focused solver plus boundary-graph module under
+`vertical_wrap/`. It considers reusable UAX #14, ranged-policy, and emergency
+boundaries, reuses positive-down tab-field and whitespace measurement, signed
+spacing, first-column indentation, and shaped-output safety, and leaves
+physical RL/LR placement to `vertical_columns.zig`.
+Vertical exclusions, hyphenation, and justification remain rejected, so their
+horizontal-only costs do not leak into this bounded slice. If no complete safe
+path exists or the state/edge limits are reached, the already valid greedy
+columns remain authoritative.
 
 Line-breaking policy is split along CSS Text's independent axes rather than
 encoded as one ambiguous wrap enum:

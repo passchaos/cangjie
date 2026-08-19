@@ -41,3 +41,19 @@ Skrifa's Apache-licensed `src/string.rs` at that commit.
 - Project: <https://github.com/googlefonts/fontations>
 - Copyright: 2019 Fontations Developers
 - License: Apache License 2.0; see `licenses/Apache-2.0.txt`
+
+## Fontations Attribute Test Fonts
+
+`src/tests/data/fontations_cmap12_font1.ttf` and
+`src/tests/data/fontations_cmap14_font1.ttf` are copied verbatim from
+Fontations `font-test-data` at commit
+`bb6f87166aa8bac93ff9df5ea67d58b7091b3e2a`. Their SHA-256 values are,
+respectively,
+`1134860fcfa1ab18ac0f4020c30b40aa8caf6bf0287dbc3854cceb97b169a34d` and
+`9e3f0ff71bf961702f81f485030095ad78794654c9d6b3b1e1167469b9f8c30b`.
+They provide the authoritative head fallback and OS/2/post oblique records for
+the Skrifa `MetadataProvider::attributes` differential test.
+
+- Project: <https://github.com/googlefonts/fontations>
+- Copyright: 2019 Fontations Developers
+- License: Apache License 2.0; see `licenses/Apache-2.0.txt`

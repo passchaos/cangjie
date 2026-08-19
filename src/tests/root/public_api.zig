@@ -461,6 +461,95 @@ test "localized names match the Fontations names-only reference fixture" {
     try std.testing.expectEqualStrings("NameTest", try preferred.decodeUtf8(&value_buffer));
 }
 
+test "face attributes match Skrifa's Fontations reference fixtures" {
+    const allocator = std.testing.allocator;
+
+    const fallback_upstream = @embedFile("../data/fontations_cmap12_font1.ttf");
+    const fallback_head = try sfntTable(fallback_upstream, "head");
+    const fallback_head_copy = try allocator.dupe(u8, fallback_head);
+    defer allocator.free(fallback_head_copy);
+    // A transplanted head table needs a fresh font-wide adjustment; the test
+    // builder intentionally owns only table checksums, so zero the field as it
+    // does for its native head fixture.
+    @memset(fallback_head_copy[8..12], 0);
+    const fallback_bytes = try test_font.buildTtfWithMetadataTables(allocator, &.{
+        .{ .tag = "head".*, .data = fallback_head_copy },
+    });
+    defer allocator.free(fallback_bytes);
+    var fallback = try cangjie.font.Face.parse(allocator, fallback_bytes);
+    defer fallback.deinit();
+    const fallback_attributes = try fallback.attributes();
+    try std.testing.expectEqual(cangjie.font.Stretch.normal, fallback_attributes.stretch);
+    try std.testing.expectEqual(cangjie.font.Style.italic, fallback_attributes.style);
+    try std.testing.expectEqual(cangjie.font.Weight.bold, fallback_attributes.weight);
+
+    const os2_upstream = @embedFile("../data/fontations_cmap14_font1.ttf");
+    const os2_head = try allocator.dupe(u8, try sfntTable(os2_upstream, "head"));
+    defer allocator.free(os2_head);
+    @memset(os2_head[8..12], 0);
+    const os2_bytes = try test_font.buildTtfWithMetadataTables(allocator, &.{
+        .{ .tag = "head".*, .data = os2_head },
+        .{ .tag = "OS/2".*, .data = try sfntTable(os2_upstream, "OS/2") },
+        .{ .tag = "post".*, .data = try sfntTable(os2_upstream, "post") },
+    });
+    defer allocator.free(os2_bytes);
+    var os2 = try cangjie.font.Face.parse(allocator, os2_bytes);
+    defer os2.deinit();
+    const os2_attributes = try os2.attributes();
+    try std.testing.expectEqual(cangjie.font.Stretch.semi_condensed, os2_attributes.stretch);
+    try std.testing.expectEqual(@as(f32, 87.5), os2_attributes.stretch.percentage());
+    try std.testing.expectEqual(cangjie.font.Weight.extra_bold, os2_attributes.weight);
+    switch (os2_attributes.style) {
+        .oblique => |angle| try std.testing.expectEqual(@as(?f32, -14.0), angle),
+        else => return error.TestExpectedOblique,
+    }
+
+    // The italic bit has higher precedence than oblique when both are set.
+    const italic_os2 = try allocator.dupe(u8, try sfntTable(os2_upstream, "OS/2"));
+    defer allocator.free(italic_os2);
+    const selection = std.mem.readInt(u16, italic_os2[62..64], .big);
+    std.mem.writeInt(u16, italic_os2[62..64], selection | 0x0001, .big);
+    const italic_bytes = try test_font.buildTtfWithMetadataTables(allocator, &.{
+        .{ .tag = "head".*, .data = os2_head },
+        .{ .tag = "OS/2".*, .data = italic_os2 },
+        .{ .tag = "post".*, .data = try sfntTable(os2_upstream, "post") },
+    });
+    defer allocator.free(italic_bytes);
+    var italic = try cangjie.font.Face.parse(allocator, italic_bytes);
+    defer italic.deinit();
+    try std.testing.expectEqual(cangjie.font.Style.italic, (try italic.attributes()).style);
+
+    // Without post, retain oblique classification but leave its angle unknown.
+    const no_post_bytes = try test_font.buildTtfWithMetadataTables(allocator, &.{
+        .{ .tag = "head".*, .data = os2_head },
+        .{ .tag = "OS/2".*, .data = try sfntTable(os2_upstream, "OS/2") },
+    });
+    defer allocator.free(no_post_bytes);
+    var no_post = try cangjie.font.Face.parse(allocator, no_post_bytes);
+    defer no_post.deinit();
+    switch ((try no_post.attributes()).style) {
+        .oblique => |angle| try std.testing.expect(angle == null),
+        else => return error.TestExpectedOblique,
+    }
+}
+
+fn sfntTable(bytes: []const u8, tag: []const u8) ![]const u8 {
+    if (tag.len != 4 or bytes.len < 12) return error.InvalidFixture;
+    const table_count = std.mem.readInt(u16, bytes[4..6], .big);
+    for (0..table_count) |index| {
+        const record_offset = 12 + index * 16;
+        if (record_offset > bytes.len or bytes.len - record_offset < 16) {
+            return error.InvalidFixture;
+        }
+        if (!std.mem.eql(u8, bytes[record_offset..][0..4], tag)) continue;
+        const offset: usize = @intCast(std.mem.readInt(u32, bytes[record_offset + 8 ..][0..4], .big));
+        const length: usize = @intCast(std.mem.readInt(u32, bytes[record_offset + 12 ..][0..4], .big));
+        if (offset > bytes.len or length > bytes.len - offset) return error.InvalidFixture;
+        return bytes[offset .. offset + length];
+    }
+    return error.MissingTable;
+}
+
 test "core font inspection is reachable through the public metadata domain" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalTtf(allocator);

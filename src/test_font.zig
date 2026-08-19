@@ -559,6 +559,73 @@ pub fn buildTtfWithNameTable(
     return buildSfnt(allocator, 0x00010000, tables);
 }
 
+/// Add or replace selected table payloads in the minimal TTF fixture. This is
+/// used to embed authoritative upstream metadata tables while retaining a
+/// complete outline-bearing Face accepted by Cangjie's whole-font parser.
+pub fn buildTtfWithMetadataTables(
+    allocator: std.mem.Allocator,
+    replacements: []const MetadataTable,
+) ![]u8 {
+    const base = try minimalTtfTables(allocator);
+    var base_owned = true;
+    defer if (base_owned) {
+        for (base) |table| allocator.free(table.data);
+        allocator.free(base);
+    };
+    var append_count: usize = 0;
+    for (replacements, 0..) |replacement, index| {
+        for (replacements[0..index]) |previous| {
+            if (std.mem.eql(u8, &replacement.tag, &previous.tag)) {
+                return error.DuplicateMetadataTable;
+            }
+        }
+        var found = false;
+        for (base) |table| {
+            if (std.mem.eql(u8, table.tag, &replacement.tag)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) append_count += 1;
+    }
+
+    const tables = try allocator.alloc(Table, base.len + append_count);
+    @memcpy(tables[0..base.len], base);
+    allocator.free(base);
+    base_owned = false;
+
+    var initialized = base.len;
+    var owns_tables = true;
+    errdefer if (owns_tables) {
+        for (tables[0..initialized]) |table| allocator.free(table.data);
+        allocator.free(tables);
+    };
+    for (replacements) |*replacement| {
+        for (tables[0..initialized]) |*table| {
+            if (!std.mem.eql(u8, table.tag, &replacement.tag)) continue;
+            const copy = try allocator.dupe(u8, replacement.data);
+            allocator.free(table.data);
+            table.data = copy;
+            break;
+        } else {
+            tables[initialized] = .{
+                // `replacement` points into the caller's slice, which outlives
+                // this synchronous build and therefore keeps the tag stable.
+                .tag = &replacement.tag,
+                .data = try allocator.dupe(u8, replacement.data),
+            };
+            initialized += 1;
+        }
+    }
+    owns_tables = false; // buildSfnt takes ownership of the complete array.
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
+pub const MetadataTable = struct {
+    tag: [4]u8,
+    data: []const u8,
+};
+
 pub fn buildNamedTtfWithStyle(allocator: std.mem.Allocator, family: []const u8, subfamily: []const u8, full_name: []const u8, weight: u16, width: u16, italic: bool, bold: bool) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try styledTtfTables(allocator, family, subfamily, full_name, weight, width, italic, bold));
 }

@@ -8,6 +8,12 @@ const std = @import("std");
 
 const font_mod = @import("../../font.zig");
 const Font = font_mod.Font;
+const attributes_mod = @import("attributes.zig");
+
+pub const Attributes = attributes_mod.Attributes;
+pub const Stretch = attributes_mod.Stretch;
+pub const Style = attributes_mod.Style;
+pub const Weight = attributes_mod.Weight;
 
 pub const Properties = struct {
     format: font_mod.FontFormat,
@@ -70,6 +76,11 @@ pub const Face = struct {
             .descender = implementation.descender,
             .line_gap = implementation.line_gap,
         };
+    }
+
+    /// Return classification attributes for the default font instance.
+    pub fn attributes(self: *const Face) font_mod.FontError!Attributes {
+        return attributes_mod.read(&self.implementation);
     }
 
     pub fn glyphs(self: *const Face) Glyphs {

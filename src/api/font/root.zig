@@ -10,6 +10,10 @@ const glyph = @import("../../glyph.zig");
 
 pub const Face = face.Face;
 pub const Properties = face.Properties;
+pub const Attributes = face.Attributes;
+pub const Stretch = face.Stretch;
+pub const Style = face.Style;
+pub const Weight = face.Weight;
 pub const Glyphs = face.Glyphs;
 pub const GlyphSession = face.GlyphSession;
 pub const Metrics = face.Metrics;

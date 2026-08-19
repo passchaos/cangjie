@@ -15,6 +15,7 @@ pub fn main(init: std.process.Init) !void {
     const sample_count = try parsePositive(args.next() orelse return usage());
     const width = if (args.next()) |value| try parseFinitePositiveFloat(value) else 200.0;
     const phase = if (args.next()) |value| try parsePhase(value) else Phase.layout;
+    const direction = if (args.next()) |value| try parseDirection(value) else Direction.auto;
     if (args.next() != null) return usage();
 
     const font_bytes: []u8 = if (std.mem.eql(u8, font_path, "builtin:minimal"))
@@ -39,6 +40,14 @@ pub fn main(init: std.process.Init) !void {
     defer allocator.free(text_bytes);
     const text = firstLine(text_bytes);
     if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
+    const resolved_direction = switch (direction) {
+        .auto => switch (try cangjie.text.bidi.direction(text)) {
+            .rtl => cangjie.shaping.Direction.rtl,
+            else => cangjie.shaping.Direction.ltr,
+        },
+        .ltr => cangjie.shaping.Direction.ltr,
+        .rtl => cangjie.shaping.Direction.rtl,
+    };
     const faces = [_]*const cangjie.font.Face{&face};
     const cascade = cangjie.font.Cascade.init(&faces);
     var engine = cangjie.shaping.Engine.init(allocator, .{});
@@ -47,7 +56,7 @@ pub fn main(init: std.process.Init) !void {
         try engine.prepareParagraph(cascade, .{
             .text = text,
             .font_size = 16,
-            .options = .{ .max_width = width },
+            .options = .{ .max_width = width, .direction = resolved_direction },
         })
     else
         null;
@@ -68,6 +77,7 @@ pub fn main(init: std.process.Init) !void {
                 cascade,
                 text,
                 width,
+                resolved_direction,
                 if (retained) |*paragraph| paragraph else null,
                 &reflow,
             );
@@ -86,6 +96,7 @@ pub fn main(init: std.process.Init) !void {
                 cascade,
                 text,
                 width,
+                resolved_direction,
                 if (retained) |*paragraph| paragraph else null,
                 &reflow,
             );
@@ -103,13 +114,14 @@ pub fn main(init: std.process.Init) !void {
     const median = @as(f64, @floatFromInt(samples[samples.len / 2])) /
         @as(f64, @floatFromInt(iterations));
     std.debug.print(
-        "engine=cangjie\tphase={s}\ttext_bytes={d}\twidth={d:.3}\titerations={d}\tsamples={d}\t" ++
+        "engine=cangjie\tphase={s}\tdirection={s}\ttext_bytes={d}\twidth={d:.3}\titerations={d}\tsamples={d}\t" ++
             "median_ns_per_iter={d:.3}\tglyphs={d}\tlines={d}\tchecksum={x:0>16}\n",
-        .{ @tagName(phase), text.len, width, iterations, sample_count, median, glyph_count, line_count, checksum },
+        .{ @tagName(phase), @tagName(direction), text.len, width, iterations, sample_count, median, glyph_count, line_count, checksum },
     );
 }
 
 const Phase = enum { layout, reflow };
+const Direction = enum { auto, ltr, rtl };
 
 fn benchmarkOnce(
     phase: Phase,
@@ -117,12 +129,13 @@ fn benchmarkOnce(
     cascade: cangjie.font.Cascade,
     text: []const u8,
     width: f32,
+    direction: cangjie.shaping.Direction,
     retained: ?*const cangjie.paragraph.Shaped,
     reflow: *cangjie.paragraph.ReflowBuffer,
 ) !cangjie.paragraph.Layout {
     return switch (phase) {
-        .layout => layoutOnce(engine, cascade, text, width),
-        .reflow => retained.?.layout(reflow, .{ .max_width = width }),
+        .layout => layoutOnce(engine, cascade, text, width, direction),
+        .reflow => retained.?.layout(reflow, .{ .max_width = width, .direction = direction }),
     };
 }
 
@@ -131,11 +144,12 @@ fn layoutOnce(
     cascade: cangjie.font.Cascade,
     text: []const u8,
     width: f32,
+    direction: cangjie.shaping.Direction,
 ) !cangjie.paragraph.Layout {
     return engine.layout(cascade, .{
         .text = text,
         .font_size = 16,
-        .options = .{ .max_width = width },
+        .options = .{ .max_width = width, .direction = direction },
     });
 }
 
@@ -188,9 +202,16 @@ fn parsePhase(value: []const u8) !Phase {
     return error.InvalidArguments;
 }
 
+fn parseDirection(value: []const u8) !Direction {
+    if (std.mem.eql(u8, value, "auto")) return .auto;
+    if (std.mem.eql(u8, value, "ltr")) return .ltr;
+    if (std.mem.eql(u8, value, "rtl")) return .rtl;
+    return error.InvalidArguments;
+}
+
 fn usage() error{InvalidArguments} {
     std.debug.print(
-        "usage: paragraph-bench FONT TEXT ITERATIONS SAMPLES [WIDTH] [layout|reflow]\n",
+        "usage: paragraph-bench FONT TEXT ITERATIONS SAMPLES [WIDTH] [layout|reflow] [auto|ltr|rtl]\n",
         .{},
     );
     return error.InvalidArguments;

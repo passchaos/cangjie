@@ -1234,6 +1234,9 @@ is still about `1.54x` slower on this output-count-equivalent row. Exact line
 break byte ranges and positions are represented differently and are not yet a
 cross-engine checksum equality claim, but the width control proves the 200-unit
 4/5-line difference did not create the Arabic performance deficit.
+The runners now default to the same first-strong (`auto`) paragraph direction
+and also accept explicit `ltr`/`rtl`; earlier Arabic Cangjie measurements used
+its explicit-LTR API default and remain only as historical harness data.
 
 `paragraph-bench` also accepts a final `reflow` phase that prepares the
 width-independent paragraph once and measures only restore, line selection,
@@ -1270,6 +1273,12 @@ Arabic row improved to `92,306 ns`; Latin and Japanese controls also measured
 `24,038 ns` and `49,173 ns`, with unchanged checksums, glyph counts, and line
 counts. The exact gains include the corrected constant-size benchmark consumer
 above, while the focused membership tests retain boundary hits and misses.
+After direction parity, the current fixed-CPU-30 medians are `85,092 ns` for
+Cangjie versus `67,321 ns` for Parley on Arabic (about `26.4%` slower),
+`23,849` versus `45,739 ns` on Latin (about `1.92x` faster), and `49,725` versus
+`148,880 ns` on Japanese (about `2.99x` faster). All three rows retain equal
+source length, glyph count, and line count across engines. Arabic remains the
+only deficit in this default-style three-script matrix.
 
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another

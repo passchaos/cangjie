@@ -14,8 +14,8 @@ graph. Example:
 
 ```sh
 cargo run --release --manifest-path tools/parley_layout_oracle/Cargo.toml -- \
-  /path/to/Roboto-Regular.ttf /path/to/latin.txt 1000 31 [FAMILY] [WIDTH]
+  /path/to/Roboto-Regular.ttf /path/to/latin.txt 1000 31 [FAMILY] [WIDTH] [DIRECTION]
 
 zig build paragraph-bench -Doptimize=ReleaseFast -- \
-  /path/to/Roboto-Regular.ttf /path/to/latin.txt 1000 31 [WIDTH]
+  /path/to/Roboto-Regular.ttf /path/to/latin.txt 1000 31 [WIDTH] [PHASE] [DIRECTION]
 ```

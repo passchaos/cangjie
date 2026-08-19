@@ -1,5 +1,5 @@
 use parley::{
-    Alignment, AlignmentOptions, FontContext, FontFamily, Layout, LayoutContext,
+    Alignment, AlignmentOptions, BaseDirection, FontContext, FontFamily, Layout, LayoutContext,
     PositionedLayoutItem, StyleProperty,
     fontique::{Blob, Collection, CollectionOptions, SourceCache},
 };
@@ -20,6 +20,7 @@ fn main() {
         .map(|value| value.parse().unwrap())
         .unwrap_or(200.0);
     assert!(width.is_finite() && width > 0.0);
+    let direction = args.next().unwrap_or_else(|| "auto".to_owned());
     let text_file = fs::read_to_string(text_path).unwrap();
     let text = text_file.lines().next().unwrap_or("");
     let font_data = fs::read(font_path).unwrap();
@@ -42,7 +43,14 @@ fn main() {
     let mut lines = 0usize;
     for _ in 0..samples {
         for _ in 0..3 {
-            let result = run_once(&mut font_cx, &mut layout_cx, text, &family_name, width);
+            let result = run_once(
+                &mut font_cx,
+                &mut layout_cx,
+                text,
+                &family_name,
+                width,
+                &direction,
+            );
             assert!(
                 checksum == 0 || checksum == result.0,
                 "unstable layout output"
@@ -52,7 +60,14 @@ fn main() {
         let start = Instant::now();
         let mut batch_checksum = 0xcbf29ce484222325u64;
         for _ in 0..iterations {
-            let result = run_once(&mut font_cx, &mut layout_cx, text, &family_name, width);
+            let result = run_once(
+                &mut font_cx,
+                &mut layout_cx,
+                text,
+                &family_name,
+                width,
+                &direction,
+            );
             assert_eq!(
                 (result.1, result.2),
                 (glyphs, lines),
@@ -67,7 +82,7 @@ fn main() {
     values.sort_by(f64::total_cmp);
     let median = values[values.len() / 2];
     println!(
-        "engine=parley\ttext_bytes={}\twidth={width:.3}\titerations={}\tsamples={}\tmedian_ns_per_iter={median:.3}\tglyphs={glyphs}\tlines={lines}\tchecksum={checksum:016x}",
+        "engine=parley\tdirection={direction}\ttext_bytes={}\twidth={width:.3}\titerations={}\tsamples={}\tmedian_ns_per_iter={median:.3}\tglyphs={glyphs}\tlines={lines}\tchecksum={checksum:016x}",
         text.len(),
         iterations,
         samples
@@ -80,10 +95,17 @@ fn run_once(
     text: &str,
     family_name: &str,
     width: f32,
+    direction: &str,
 ) -> (u64, usize, usize) {
     let mut builder = layout_cx.ranged_builder(font_cx, text, 1.0, true);
     builder.push_default(FontFamily::named(family_name));
     builder.push_default(StyleProperty::FontSize(16.0));
+    builder.set_base_direction(match direction {
+        "auto" => BaseDirection::Auto,
+        "ltr" => BaseDirection::Ltr,
+        "rtl" => BaseDirection::Rtl,
+        _ => panic!("direction must be auto, ltr, or rtl"),
+    });
     let mut layout: Layout<Brush> = builder.build(text);
     layout.break_all_lines(Some(width));
     layout.align(Alignment::Start, AlignmentOptions::default());

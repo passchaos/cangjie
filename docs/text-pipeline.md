@@ -629,13 +629,13 @@ not yet moved to the shared inline/block-axis model.
 
 This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
-axes, vertical paragraph validation rejects bottom-to-top/RTL text, bidi
-controls, justification, exclusions/line regions (including resolver responses
-that introduce an exclusion), hyphenation,
+axes, vertical paragraph validation rejects an explicit bottom-to-top
+`direction = rtl` request, justification, exclusions/line regions (including
+resolver responses that introduce an exclusion), hyphenation,
 optical punctuation, and the resumable breaker. Retained whole-paragraph
 layout and intrinsic inline-size measurement are supported and restore the
 pristine vertical shaping snapshot between calls. Returning a concrete
-`UnsupportedVerticalParagraphOptions`, `UnsupportedVerticalParagraphText`, or
+`UnsupportedVerticalParagraphOptions` or
 `UnsupportedVerticalParagraphBreaker` error is part of this boundary: an
 unsupported request must never fall through the horizontal x-axis machinery
 and produce plausible but false geometry.
@@ -1221,9 +1221,18 @@ out-of-range request while preserving duplicate-tolerant canonical set
 semantics used by production fonts.
 
 Paragraph shaping now retains glyph atoms in logical source order and applies
-bidi visual ordering only after line ranges are known. Each line builds its own
-bidi map from `ParagraphLine.byte_start/byte_len`; mixed LTR/RTL text therefore
-reorders independently when a width change creates different line boundaries.
+bidi visual ordering only after line ranges are known. One complete UAX #9
+paragraph resolution supplies levels to each final line/column, where L1/L2
+produces the local visual order. Mixed LTR/RTL text, embeddings, overrides, and
+isolates therefore reorder independently when a width change creates different
+boundaries without losing paragraph-wide explicit state. Horizontal lines map
+that order to x; vertical paragraphs with `direction = ltr` map it to
+positive-down y while RL/LR continues to select only column progression.
+Font-run ownership, styled glyph metadata, tabs, inline objects, ellipsis,
+retained reflow, hit testing, owned TextGeometry, and renderer commands follow
+the same permutation. Explicit `direction = rtl` remains reserved for
+bottom-to-top vertical inline progression and is rejected until that geometry
+exists.
 
 `ParagraphOptions.exclusions` adds platform-neutral rectangular float/exclusion
 geometry. Each wrapped visual line subtracts vertically intersecting rectangles

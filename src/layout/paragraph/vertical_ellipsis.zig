@@ -146,12 +146,12 @@ pub fn materialize(
         );
     }
 
-    const cluster = if (line.glyph_len > 0)
-        buffer.glyphs.items[
-            line.glyph_start + line.glyph_len - 1
-        ].cluster
-    else
-        line.byte_start;
+    // This is a zero-length insertion at the visible source boundary, not
+    // another output of the preceding scalar. Giving dots that scalar's
+    // cluster would let an RTL level reverse the synthetic tail inside the
+    // cluster. A boundary cluster has no UAX #9 scalar owner, so line-local
+    // reorder preserves the dots as its final unseen outputs.
+    const cluster = line.byteEnd();
     const synthetic_run_index = try ellipsis_runs.prepare(
         buffer,
         buffer.glyphs.items.len,

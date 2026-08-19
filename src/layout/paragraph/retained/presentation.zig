@@ -25,10 +25,16 @@ pub fn apply(
 ) !void {
     if (options.writing_mode.isVertical()) {
         // Vertical column construction has already applied line limits,
-        // ellipsis, alignment, tabs, and object block metrics. The admitted
-        // subset has no bidi permutation, optical punctuation, or
-        // justification; only final two-dimensional run pens and positioned
-        // object output remain.
+        // ellipsis, alignment, tabs, and object block metrics. Apply UAX #9 to
+        // each final column before rebuilding run pens and positioned objects;
+        // optical punctuation and justification remain unsupported here.
+        if (needs_bidi_reorder) {
+            try bidi_reorder.applyLines(
+                buffer,
+                text,
+                options.direction == .rtl,
+            );
+        }
         bidi_reorder.recomputeRunOffsets(buffer);
         try inline_object.position(
             buffer,

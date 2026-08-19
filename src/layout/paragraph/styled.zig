@@ -381,6 +381,7 @@ const Driver = struct {
                     ellipsis_count,
                 );
             }
+            try self.applyBidi(resolved_options);
             bidi_reorder.recomputeRunOffsets(self.buffer);
             try inline_object.position(
                 self.buffer,
@@ -459,29 +460,7 @@ const Driver = struct {
             self.buffer.lines.items,
         );
         try punctuation_compression.apply(self.buffer, resolved_options);
-        if (plan_bidi.paragraphNeedsReorder(
-            self.text,
-            resolved_options.direction,
-        )) {
-            const visual_order = try styled_bidi.visualPermutation(
-                self.buffer.allocator,
-                self.text,
-                resolved_options.direction == .rtl,
-                self.buffer.lines.items,
-                self.buffer.glyphs.items,
-            );
-            defer self.buffer.allocator.free(visual_order);
-            try bidi_reorder.applyLines(
-                self.buffer,
-                self.text,
-                resolved_options.direction == .rtl,
-            );
-            try styled_buffer.reorderByPermutation(
-                &self.styled.metadata,
-                self.styled.allocator,
-                visual_order,
-            );
-        }
+        try self.applyBidi(resolved_options);
         try vertical_align.apply(
             self.buffer.glyphs.items,
             self.buffer.runs.items,
@@ -496,6 +475,36 @@ const Driver = struct {
             self.options.inline_objects,
             self.options.out_of_flow_placements,
             resolved_options.writing_mode,
+        );
+    }
+
+    /// Apply one line-local UAX #9 permutation transaction to glyphs, runs,
+    /// and their attributed metadata sidecar.
+    fn applyBidi(
+        self: *@This(),
+        options: paragraph_options.Options,
+    ) !void {
+        if (!plan_bidi.paragraphNeedsReorder(
+            self.text,
+            options.direction,
+        )) return;
+        const visual_order = try styled_bidi.visualPermutation(
+            self.buffer.allocator,
+            self.text,
+            options.direction == .rtl,
+            self.buffer.lines.items,
+            self.buffer.glyphs.items,
+        );
+        defer self.buffer.allocator.free(visual_order);
+        try bidi_reorder.applyLines(
+            self.buffer,
+            self.text,
+            options.direction == .rtl,
+        );
+        try styled_buffer.reorderByPermutation(
+            &self.styled.metadata,
+            self.styled.allocator,
+            visual_order,
         );
     }
 

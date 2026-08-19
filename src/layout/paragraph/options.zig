@@ -131,6 +131,13 @@ pub const Options = struct {
     /// horizontal-only.
     alignment: paragraph_types.TextAlign = .start,
     line_height: ?f32 = null,
+    /// Paragraph base/inline direction.
+    ///
+    /// In vertical paragraphs `.ltr` means the currently supported
+    /// top-to-bottom inline progression; UAX #9 still resolves strong RTL
+    /// source, explicit embeddings/overrides, and isolates inside each final
+    /// column. `.rtl` requests bottom-to-top inline progression and remains
+    /// unsupported by vertical paragraph geometry.
     direction: pipeline_types.TextDirection = .ltr,
     /// Physical writing mode shared by shaping and final paragraph geometry.
     ///
@@ -315,7 +322,7 @@ pub fn shapeOptions(options: Options) shaping_plan.ShapeOptions {
 /// after shaping. Keeping this list explicit makes new support an auditable
 /// axis-conversion task instead of allowing a newly added paragraph option to
 /// become an accidental vertical no-op.
-fn validateVerticalForText(text: []const u8, options: Options) !void {
+fn validateVerticalForText(_: []const u8, options: Options) !void {
     if (options.direction != .ltr or
         options.line_break_strategy != .greedy or
         !verticalAlignmentSupported(options.alignment) or
@@ -329,26 +336,6 @@ fn validateVerticalForText(text: []const u8, options: Options) !void {
         options.punctuation.end_hanging_fraction != 0)
     {
         return error.UnsupportedVerticalParagraphOptions;
-    }
-    var iterator = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    while (iterator.nextCodepoint()) |codepoint| {
-        if (switch (unicode.exactBidiClassForCodepoint(codepoint)) {
-            .r,
-            .al,
-            .rle,
-            .rlo,
-            .rli,
-            .lre,
-            .lro,
-            .pdf,
-            .lri,
-            .fsi,
-            .pdi,
-            => true,
-            else => false,
-        }) {
-            return error.UnsupportedVerticalParagraphText;
-        }
     }
 }
 

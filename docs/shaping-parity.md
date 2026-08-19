@@ -2239,15 +2239,22 @@ shaping-performance superiority.
   nonnegative, and an over-compressed request fails explicitly instead of
   producing reverse wrap/caret topology. Plain, intrinsic, retained, styled,
   tab-ruler, interaction, TextGeometry, and renderer output share that proof.
+  UAX #9 source bidi now resolves once per paragraph and applies L1/L2 inside
+  each final column along positive-down y, including strong R/AL text,
+  embeddings/overrides, isolates, mirroring, hard/soft columns, fallback runs,
+  fontless tabs/objects, ellipsis, retained reflow, styled metadata,
+  interaction geometry, and renderer output. Explicit `direction=rtl` still
+  means unsupported bottom-to-top inline progression; RL/LR remains block-axis
+  column order.
   Ordinary out-of-flow source-anchor fallbacks remain zero-occupancy while
   retaining paint output. Custom out-of-flow markers now accept absolute
   presentation-only geometry directly and through placement-only concrete
   resolver replay; retained/styled layout, intrinsic sizing, draw output, and
-  line-limit visibility keep those bounds outside flow metrics. Bidi handling,
-  physical left/right alignment, exclusions (including resolver responses that
-  introduce one), justification, and incremental breaking are rejected
-  explicitly until they are migrated to the shared inline/block-axis model;
-  this is not yet full vertical paragraph parity.
+  line-limit visibility keep those bounds outside flow metrics. Bottom-to-top
+  inline progression, physical left/right alignment, exclusions (including
+  resolver responses that introduce one), justification, and incremental
+  breaking are rejected explicitly until they are migrated to the shared
+  inline/block-axis model; this is not yet full vertical paragraph parity.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari

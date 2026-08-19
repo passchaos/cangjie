@@ -763,9 +763,16 @@ fn finishUniformParagraph(
 ) !void {
     if (options.writing_mode.isVertical()) {
         // Vertical column construction has already completed its admitted
-        // y-axis presentation stages, including ellipsis fitting. Refresh the
-        // public two-dimensional run pens and positioned objects without
-        // entering horizontal-only reshaping, bidi, or punctuation passes.
+        // y-axis presentation stages, including ellipsis fitting. UAX #9 then
+        // permutes each final column along positive-down y; horizontal-only
+        // reshaping and punctuation passes remain outside this branch.
+        if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
+            try applyParagraphLineBidiVisualOrder(
+                buffer,
+                text,
+                options.direction,
+            );
+        }
         bidi_reorder.recomputeRunOffsets(buffer);
         try inline_object.position(
             buffer,

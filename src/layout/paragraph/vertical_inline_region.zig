@@ -2,6 +2,7 @@
 
 const std = @import("std");
 
+const exclusions = @import("exclusions.zig");
 const paragraph_options = @import("options.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 const vertical_inline_alignment = @import("vertical_inline_alignment.zig");
@@ -28,6 +29,90 @@ pub fn limit(
         return std.math.inf(f32);
     }
     return @max(0, options.max_width - natural_indent);
+}
+
+pub const Resolved = struct {
+    block_start: f32,
+    inline_start: f32,
+    inline_size: f32,
+    indent: f32,
+};
+
+/// Resolve the next vertical-lr column band against physical exclusions.
+///
+/// Explicit caller regions bypass exclusions and preserve their absolute x/y
+/// geometry. Natural columns may advance right across fully blocked bands; a
+/// nonempty band chooses its widest remaining positive-down y fragment.
+pub fn resolveLr(
+    allocator: std.mem.Allocator,
+    options: paragraph_options.Options,
+    visual_index: usize,
+    natural_block_start: f32,
+    block_size: f32,
+    natural_indent: f32,
+    wrapping_enabled: bool,
+) !Resolved {
+    if (visual_index < options.line_regions.len) {
+        const region = options.line_regions[visual_index];
+        return .{
+            .block_start = region.x,
+            .inline_start = region.y,
+            .inline_size = if (wrapping_enabled)
+                region.width
+            else
+                std.math.inf(f32),
+            .indent = 0,
+        };
+    }
+    const normalized_indent = @max(0, natural_indent);
+    const container_y = normalized_indent;
+    const container_size = if (wrapping_enabled and
+        options.max_width > 0 and
+        std.math.isFinite(options.max_width))
+        @max(0, options.max_width - normalized_indent)
+    else if (wrapping_enabled and options.exclusions.len != 0)
+        // Match horizontal unbounded exclusion behavior: a finite rectangle can
+        // shift the origin but the remaining inline fragment stays unbounded.
+        std.math.inf(f32)
+    else
+        std.math.inf(f32);
+    if (!wrapping_enabled or options.exclusions.len == 0) {
+        return .{
+            .block_start = natural_block_start,
+            .inline_start = container_y,
+            .inline_size = container_size,
+            .indent = normalized_indent,
+        };
+    }
+
+    var block_start = natural_block_start;
+    var attempts: usize = 0;
+    while (true) : (attempts += 1) {
+        if (attempts > options.exclusions.len) {
+            return error.InvalidParagraphOptions;
+        }
+        switch (try exclusions.resolveVerticalLr(
+            allocator,
+            options.exclusions,
+            container_y,
+            container_size,
+            block_start,
+            block_size,
+        )) {
+            .available => |region| return .{
+                .block_start = block_start,
+                .inline_start = region.x,
+                .inline_size = region.width,
+                .indent = normalized_indent,
+            },
+            .blocked_until => |next_x| {
+                if (!std.math.isFinite(next_x) or next_x <= block_start) {
+                    return error.InvalidParagraphOptions;
+                }
+                block_start = next_x;
+            },
+        }
+    }
 }
 
 pub fn start(

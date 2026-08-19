@@ -2280,6 +2280,13 @@ shaping-performance superiority.
   RL/LR placement honors supplied x, and retained resolver replay, styled
   metadata, TextGeometry, renderer pens, alignment, justification, optical
   punctuation, and ellipsis consume the retained region geometry.
+  Static and out-of-flow-resolver exclusions now support vertical-lr. Physical
+  x-band overlap produces unavailable positive-down y intervals; each column
+  selects the widest remaining fragment, while a fully blocked band advances
+  to the nearest rectangle right edge without manufacturing source output.
+  Indentation, explicit-region precedence, retained/styled restoration,
+  TextGeometry, and renderer origins are covered. Vertical-rl exclusion
+  traversal remains explicit rejection.
   Line-end East Asian punctuation can now hang along the positive-down inline
   axis. Greedy/emergency/balanced fitting use occupied height; final
   column-local bidi assigns bottom-edge `hang_end`, then top/center/bottom
@@ -2297,8 +2304,8 @@ shaping-performance superiority.
   presentation-only geometry directly and through placement-only concrete
   resolver replay; retained/styled layout, intrinsic sizing, draw output, and
   line-limit visibility keep those bounds outside flow metrics. Bottom-to-top
-  inline progression, physical left/right alignment, exclusions (including
-  resolver responses that introduce one), and incremental breaking are
+  inline progression, physical left/right alignment, vertical-rl exclusions,
+  and incremental breaking are
   rejected explicitly until they are migrated to the shared
   inline/block-axis model; this is not yet full vertical paragraph parity.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,

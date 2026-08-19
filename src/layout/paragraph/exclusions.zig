@@ -78,31 +78,102 @@ pub fn resolve(
         });
         blocked_until = @min(blocked_until, item.y + item.height);
     }
-    if (intervals.items.len == 0) {
+    return resolveIntervals(
+        intervals.items,
+        container_x,
+        container_width,
+        rtl,
+        blocked_until,
+    );
+}
+
+/// Resolve a positive-down inline fragment for one physical vertical column.
+///
+/// This is the axis transpose of `resolve`: exclusions intersecting the
+/// column's x band contribute unavailable y intervals. A fully blocked column
+/// returns the nearest physical right edge so vertical-lr flow can advance its
+/// block cursor without creating an empty source column.
+pub fn resolveVerticalLr(
+    allocator: std.mem.Allocator,
+    items: []const Exclusion,
+    container_y: f32,
+    container_height: f32,
+    column_left: f32,
+    column_width: f32,
+) !Resolution {
+    if (items.len == 0 or
+        container_height <= 0 or
+        column_width <= 0)
+    {
         return .{ .available = .{
-            .x = container_x,
-            .width = container_width,
+            .x = container_y,
+            .width = container_height,
         } };
     }
-    std.sort.heap(Region, intervals.items, {}, regionLessThan);
 
-    var cursor = container_x;
-    var best = Region{ .x = container_x, .width = 0 };
-    for (intervals.items) |interval| {
+    var intervals = std.ArrayList(Region).empty;
+    defer intervals.deinit(allocator);
+    var blocked_until = std.math.inf(f32);
+    for (items) |item| {
+        if (item.width == 0 or item.height == 0 or
+            item.x >= column_left + column_width or
+            item.x + item.width <= column_left)
+        {
+            continue;
+        }
+        const top = @max(container_y, item.y);
+        const bottom = @min(
+            container_y + container_height,
+            item.y + item.height,
+        );
+        if (bottom <= top) continue;
+        try intervals.append(allocator, .{
+            .x = top,
+            .width = bottom - top,
+        });
+        blocked_until = @min(blocked_until, item.x + item.width);
+    }
+    return resolveIntervals(
+        intervals.items,
+        container_y,
+        container_height,
+        false,
+        blocked_until,
+    );
+}
+
+fn resolveIntervals(
+    intervals: []Region,
+    container_start: f32,
+    container_size: f32,
+    prefer_end: bool,
+    blocked_until: f32,
+) Resolution {
+    if (intervals.len == 0) {
+        return .{ .available = .{
+            .x = container_start,
+            .width = container_size,
+        } };
+    }
+    std.sort.heap(Region, intervals, {}, regionLessThan);
+
+    var cursor = container_start;
+    var best = Region{ .x = container_start, .width = 0 };
+    for (intervals) |interval| {
         if (interval.x > cursor) {
             chooseBest(&best, .{
                 .x = cursor,
                 .width = interval.x - cursor,
-            }, rtl);
+            }, prefer_end);
         }
         cursor = @max(cursor, interval.x + interval.width);
-        if (cursor >= container_x + container_width) break;
+        if (cursor >= container_start + container_size) break;
     }
-    if (cursor < container_x + container_width) {
+    if (cursor < container_start + container_size) {
         chooseBest(&best, .{
             .x = cursor,
-            .width = container_x + container_width - cursor,
-        }, rtl);
+            .width = container_start + container_size - cursor,
+        }, prefer_end);
     }
     if (best.width > 0) return .{ .available = best };
     return .{ .blocked_until = blocked_until };
@@ -121,4 +192,37 @@ fn chooseBest(best: *Region, candidate: Region, rtl: bool) void {
 fn regionLessThan(_: void, lhs: Region, rhs: Region) bool {
     if (lhs.x != rhs.x) return lhs.x < rhs.x;
     return lhs.width < rhs.width;
+}
+
+test "vertical exclusion resolution transposes block and inline axes" {
+    const items = [_]Exclusion{.{
+        .x = 0,
+        .y = 0,
+        .width = 20,
+        .height = 30,
+    }};
+    const fragment = try resolveVerticalLr(
+        std.testing.allocator,
+        &items,
+        0,
+        100,
+        0,
+        20,
+    );
+    try std.testing.expectEqual(
+        Resolution{ .available = .{ .x = 30, .width = 70 } },
+        fragment,
+    );
+    const blocked = try resolveVerticalLr(
+        std.testing.allocator,
+        &items,
+        0,
+        30,
+        0,
+        20,
+    );
+    try std.testing.expectEqual(
+        Resolution{ .blocked_until = 20 },
+        blocked,
+    );
 }

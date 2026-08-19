@@ -17,6 +17,8 @@ const run_types = @import("../../types/runs.zig");
 const shared = @import("shared.zig");
 const unicode = @import("../../../unicode.zig");
 const vertical_inline_region = @import("../vertical_inline_region.zig");
+const vertical_block_metrics = @import("../vertical_block_metrics.zig");
+const geometry = @import("../../line_break/reflow/geometry.zig");
 
 pub const Range = shared.Range;
 pub const intrinsicWidths = intrinsic.measure;
@@ -30,6 +32,8 @@ pub fn build(
     graphemes: []const unicode.GraphemeCluster,
     breaks: []const line_break_opportunity.Opportunity,
     options: paragraph_options.Options,
+    default_metrics: geometry.BaselineMetrics,
+    recipe: anytype,
 ) ![]Range {
     var output = std.ArrayList(Range).empty;
     errdefer output.deinit(allocator);
@@ -69,6 +73,8 @@ pub fn build(
             graphemes,
             effective_breaks.items,
             options,
+            default_metrics,
+            recipe,
             wrapping_enabled,
             output.items.len,
             segment_start,
@@ -92,6 +98,8 @@ pub fn build(
         graphemes,
         effective_breaks.items,
         options,
+        default_metrics,
+        recipe,
         wrapping_enabled,
         output.items.len,
         segment_start,
@@ -125,6 +133,8 @@ fn appendSegment(
     graphemes: []const unicode.GraphemeCluster,
     breaks: []const line_break_opportunity.Opportunity,
     options: paragraph_options.Options,
+    default_metrics: geometry.BaselineMetrics,
+    recipe: anytype,
     wrapping_enabled: bool,
     visual_base: usize,
     segment_start: usize,
@@ -158,7 +168,10 @@ fn appendSegment(
         @max(0, options.max_width - first_indent)
     else
         std.math.inf(f32);
-    if (!std.math.isFinite(limit) and visual_base >= options.line_regions.len) {
+    if (!std.math.isFinite(limit) and
+        visual_base >= options.line_regions.len and
+        options.exclusions.len == 0)
+    {
         try output.append(allocator, .{
             .glyph_start = segment_start,
             .glyph_end = segment_end,
@@ -206,20 +219,38 @@ fn appendSegment(
     var glyph_start = segment_start;
     var byte_start = segment_byte_start;
     var consecutive_hyphenated_columns: usize = 0;
+    var natural_block_start: f32 = if (output.items.len == 0)
+        0
+    else block_start: {
+        const previous = output.items[output.items.len - 1];
+        break :block_start previous.block_start + previous.block_size +
+            options.paragraph_spacing;
+    };
     while (glyph_start < segment_end) {
         const visual_index = output.items.len;
         const natural_indent = if (first_column) first_indent else 0;
-        const column_indent = vertical_inline_region.indent(
+        const candidate_block_metrics = try vertical_block_metrics.resolve(
+            runs,
+            glyphs,
             options,
-            visual_index,
-            natural_indent,
+            default_metrics,
+            glyph_start,
+            segment_end,
         );
-        const column_limit = vertical_inline_region.limit(
+        const resolved_region = try vertical_inline_region.resolveLr(
+            allocator,
             options,
             visual_index,
+            natural_block_start,
+            @max(
+                candidate_block_metrics.block_size,
+                recipe.minimumLineHeight(glyph_start, segment_end) orelse 0,
+            ),
             natural_indent,
             wrapping_enabled,
         );
+        const column_indent = resolved_region.indent;
+        const column_limit = resolved_region.inline_size;
         if (measure.occupiedInlineSize(
             glyphs,
             prefix,
@@ -235,6 +266,10 @@ fn appendSegment(
                 .inline_indent = column_indent,
                 .starts_segment = first_column,
                 .visual_index = visual_index,
+                .block_start = resolved_region.block_start,
+                .block_size = candidate_block_metrics.block_size,
+                .inline_start = resolved_region.inline_start,
+                .inline_size = resolved_region.inline_size,
                 .hyphen = null,
             });
             return;
@@ -291,6 +326,14 @@ fn appendSegment(
                 overflow,
                 options,
             );
+        const selected_block_metrics = try vertical_block_metrics.resolve(
+            runs,
+            glyphs,
+            options,
+            default_metrics,
+            glyph_start,
+            selected.glyph_end,
+        );
         try output.append(allocator, .{
             .glyph_start = glyph_start,
             .glyph_end = selected.glyph_end,
@@ -299,6 +342,14 @@ fn appendSegment(
             .inline_indent = column_indent,
             .starts_segment = first_column,
             .visual_index = visual_index,
+            .block_start = resolved_region.block_start,
+            // Resolving with the complete remaining segment above is
+            // conservative for mixed-width fallback/object columns. Persist
+            // the selected range's exact block width for placement and for the
+            // following column's block cursor.
+            .block_size = selected_block_metrics.block_size,
+            .inline_start = resolved_region.inline_start,
+            .inline_size = resolved_region.inline_size,
             .hyphen = selected.hyphen,
         });
         glyph_start = selected.next_glyph_start;
@@ -309,6 +360,8 @@ fn appendSegment(
             else
                 0;
         first_column = false;
+        natural_block_start = resolved_region.block_start +
+            selected_block_metrics.block_size;
     }
 }
 
@@ -317,6 +370,36 @@ fn isMandatory(codepoint: u21) bool {
         .mandatory, .carriage_return, .line_feed, .next_line => true,
         else => false,
     };
+}
+
+const TestRecipe = struct {
+    pub fn minimumLineHeight(_: TestRecipe, _: usize, _: usize) ?f32 {
+        return null;
+    }
+};
+
+fn buildTest(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    glyphs: []const GlyphPosition,
+    runs: []const run_types.CascadeRun,
+    variation_coords: []const f32,
+    graphemes: []const unicode.GraphemeCluster,
+    breaks: []const line_break_opportunity.Opportunity,
+    options: paragraph_options.Options,
+) ![]Range {
+    return build(
+        allocator,
+        text,
+        glyphs,
+        runs,
+        variation_coords,
+        graphemes,
+        breaks,
+        options,
+        .{ .ascent = 16, .descent = 4, .leading = 0 },
+        TestRecipe{},
+    );
 }
 
 test "vertical emergency break defers across unsafe output boundaries" {
@@ -343,7 +426,7 @@ test "vertical emergency break defers across unsafe output boundaries" {
         .{ .byte_start = 0, .byte_len = 1 },
         .{ .byte_start = 1, .byte_len = 1 },
     };
-    const ranges = try build(
+    const ranges = try buildTest(
         std.testing.allocator,
         "AA",
         &glyphs,
@@ -357,7 +440,7 @@ test "vertical emergency break defers across unsafe output boundaries" {
     try std.testing.expectEqual(@as(usize, 1), ranges.len);
     try std.testing.expectEqual(@as(usize, 2), ranges[0].glyph_end);
 
-    const break_all = try build(
+    const break_all = try buildTest(
         std.testing.allocator,
         "AA",
         &glyphs,
@@ -436,7 +519,7 @@ test "vertical dictionary opportunity respects unsafe shaped boundary" {
     }
     try std.testing.expect(saw_dictionary_boundary);
 
-    const ranges = try build(
+    const ranges = try buildTest(
         allocator,
         text,
         &glyphs,
@@ -482,7 +565,7 @@ test "vertical automatic hyphen opportunity respects unsafe shaped boundary" {
     };
     // No run is needed to resolve the visible glyph: the unsafe source edge
     // must reject the automatic opportunity first.
-    const ranges = try build(
+    const ranges = try buildTest(
         allocator,
         "AB",
         &glyphs,

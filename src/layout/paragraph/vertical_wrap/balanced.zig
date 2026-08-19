@@ -58,6 +58,7 @@ pub fn apply(
     options: paragraph_options.Options,
 ) !void {
     if (options.line_break_strategy != .balanced or
+        options.exclusions.len != 0 or
         output.items.len <= 1 or
         !policy.anyWrappingEnabled(
             output.items[output.items.len - 1].byte_end,
@@ -340,6 +341,10 @@ fn appendSolution(
             .inline_indent = greedy[column_index].inline_indent,
             .starts_segment = column_index == 0,
             .visual_index = greedy[column_index].visual_index,
+            .block_start = greedy[column_index].block_start,
+            .block_size = greedy[column_index].block_size,
+            .inline_start = greedy[column_index].inline_start,
+            .inline_size = greedy[column_index].inline_size,
             .hyphen = boundary.hyphen,
         });
         previous_index = boundary_index;

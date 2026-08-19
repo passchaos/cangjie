@@ -659,14 +659,14 @@ Retained reflow and styled layout may replace those bounds without changing
 column selection, paragraph metrics, or intrinsic inline sizes. The concrete
 `OutOfFlowResolver` therefore supports placement-only vertical replay, and
 objects removed by `max_lines` neither render nor request placement. Optional
-resolver exclusions remain unsupported because vertical exclusion regions have
-not yet moved to the shared inline/block-axis model.
+resolver exclusions participate in vertical-lr reflow through the same static
+rectangle pipeline as caller-authored exclusions.
 
 This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
 axes, vertical paragraph validation rejects an explicit bottom-to-top
-`direction = rtl` request, exclusions (including resolver responses that
-introduce one), physical left/right alignment, and the resumable breaker.
+`direction = rtl` request, exclusions in vertical-rl, physical left/right
+alignment, and the resumable breaker.
 Retained whole-paragraph
 layout and intrinsic inline-size measurement are supported and restore the
 pristine vertical shaping snapshot between calls. Returning a concrete
@@ -866,9 +866,9 @@ The vertical optimizer owns a focused solver plus boundary-graph module under
 emergency boundaries, reuses positive-down tab-field and whitespace
 measurement, signed spacing, first-column indentation, and shaped-output
 safety, and leaves physical RL/LR placement to `vertical_columns.zig`.
-Vertical exclusions remain rejected, so their horizontal-region costs do not
-leak into this bounded slice. If no complete safe path exists or the state/edge
-limits are reached, the already valid greedy
+Vertical-lr exclusions use the greedy path; vertical-rl still rejects them
+until reverse block traversal is explicit. If no complete safe path exists or
+the state/edge limits are reached, the already valid greedy
 columns remain authoritative.
 
 Line-breaking policy is split along CSS Text's independent axes rather than
@@ -1291,6 +1291,13 @@ chosen fragment so alignment, optical punctuation, compression, justification,
 ellipsis, styled minimum line heights, retained reflow, caret geometry, and
 rendering all consume one final measure. Multiple simultaneous fragments on a
 single baseline remain outside the current one-line/one-fragment model.
+Vertical-lr columns transpose the same resolver: rectangles intersecting the
+column's physical x band subtract y intervals from its positive-down inline
+container. The widest remaining y fragment determines wrapping/alignment; a
+fully blocked band advances the block cursor to the nearest exclusion right
+edge without creating an empty source column. Explicit `line_regions` take
+precedence, `.no_wrap` ignores exclusions, and out-of-flow resolver responses
+replay through the same path. Vertical-rl exclusion traversal remains rejected.
 
 Paragraph inline objects use U+FFFC OBJECT REPLACEMENT CHARACTER as their
 stable UTF-8 source anchor. `cangjie.paragraph.InlineObject` supports in-flow

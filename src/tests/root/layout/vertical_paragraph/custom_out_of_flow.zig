@@ -195,7 +195,7 @@ test "vertical resolver supports placement-only replay" {
     );
 }
 
-test "vertical resolver exclusions remain outside the direct-placement slice" {
+test "vertical resolver replays custom placement with an exclusion" {
     const allocator = std.testing.allocator;
     const bytes = try @import("../../../../test_font.zig")
         .buildVerticalMetricsTtf(allocator);
@@ -236,16 +236,21 @@ test "vertical resolver exclusions remain outside the direct-placement slice" {
         .exclusion = .{ .x = 0, .y = 0, .width = 20, .height = 20 },
     });
     const replay = try resolver.pass();
-    try std.testing.expectError(
-        error.UnsupportedVerticalParagraphOptions,
-        TextShaper.layoutParagraphUtf8(
-            FontCascade.init(&.{&font}),
-            &buffer,
-            marker,
-            20,
-            replay.options,
-        ),
+    const final = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&.{&font}),
+        &buffer,
+        marker,
+        20,
+        replay.options,
     );
+    try std.testing.expectEqual(
+        paragraph.OutOfFlowStep.complete,
+        try resolver.next(replay, final),
+    );
+    try std.testing.expectEqual(@as(usize, 1), final.inline_objects.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), final.lines[0].y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), final.inline_objects[0].x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), final.inline_objects[0].y, 0.001);
 }
 
 test "vertical max-lines hides custom objects and their placements" {

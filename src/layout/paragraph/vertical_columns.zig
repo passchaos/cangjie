@@ -112,6 +112,8 @@ pub fn build(
         graphemes,
         breaks,
         options,
+        default_metrics,
+        recipe,
     );
     defer buffer.allocator.free(ranges);
     var selected_hyphens =
@@ -225,6 +227,8 @@ pub fn build(
             range.inline_indent,
             inline_size,
             range.visual_index,
+            range.inline_start,
+            range.inline_size,
             justificationTarget(
                 buffer.glyphs.items[range.glyph_start..range.glyph_end],
                 ranges,
@@ -359,6 +363,8 @@ fn appendColumnAssumeCapacity(
     inline_indent: f32,
     inline_size: f32,
     visual_index: usize,
+    resolved_inline_start: f32,
+    resolved_inline_size: f32,
     justification_target: ?f32,
 ) void {
     const block_metrics = vertical_block_metrics.resolve(
@@ -378,16 +384,14 @@ fn appendColumnAssumeCapacity(
         @import("../types/paragraph.zig").TextAlign.start
     else
         options.alignment;
-    const region_inline_start = vertical_inline_region.start(
-        options,
-        visual_index,
-        inline_indent,
-    );
-    const region_inline_size = vertical_inline_region.available(
-        options,
-        visual_index,
-        inline_indent,
-    );
+    const region_inline_start = if (options.exclusions.len != 0)
+        resolved_inline_start
+    else
+        vertical_inline_region.start(options, visual_index, inline_indent);
+    const region_inline_size = if (options.exclusions.len != 0)
+        resolved_inline_size
+    else
+        vertical_inline_region.available(options, visual_index, inline_indent);
     const inline_origin = vertical_inline_alignment.originInRegion(
         region_inline_start,
         region_inline_size,
@@ -466,6 +470,12 @@ fn placeColumns(
             }
             if (range.visual_index < options.line_regions.len) {
                 line.x = options.line_regions[range.visual_index].x;
+                line.region_x = line.x;
+                x = line.x + line.width;
+                continue;
+            }
+            if (options.exclusions.len != 0) {
+                line.x = range.block_start;
                 line.region_x = line.x;
                 x = line.x + line.width;
                 continue;

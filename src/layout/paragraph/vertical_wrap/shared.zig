@@ -16,6 +16,14 @@ pub const Range = struct {
     /// Final visual column index used to resolve caller-supplied inline
     /// regions after balanced wrapping has chosen its source boundaries.
     visual_index: usize = 0,
+    /// Resolved physical block-axis origin and width used while selecting this
+    /// column against exclusions. The final builder revalidates them before
+    /// presentation; they remain zero for ordinary unconstrained columns.
+    block_start: f32 = 0,
+    block_size: f32 = 0,
+    /// Resolved positive-down fragment after static exclusion subtraction.
+    inline_start: f32 = 0,
+    inline_size: f32 = 0,
     /// Source U+00AD selected as a visible terminal glyph for this column.
     ///
     /// Shaping may retain it as an invisible output or omit the

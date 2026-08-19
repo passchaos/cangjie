@@ -187,8 +187,9 @@ pub const Options = struct {
     paragraph_spacing: f32 = 0,
     /// Rectangular paragraph-space areas unavailable to wrapped text.
     ///
-    /// Lines choose the widest remaining contiguous horizontal fragment.
-    /// Exclusions are ignored by `.no_wrap`.
+    /// Horizontal lines and vertical-lr columns choose the widest remaining
+    /// contiguous inline fragment. Vertical-rl exclusion traversal remains
+    /// unsupported. Exclusions are ignored by `.no_wrap`.
     exclusions: []const exclusions.Exclusion = &.{},
     /// Caller-selected paragraph-space geometry for a visual-fragment prefix.
     ///
@@ -327,7 +328,8 @@ pub fn shapeOptions(options: Options) shaping_plan.ShapeOptions {
 fn validateVerticalForText(_: []const u8, options: Options) !void {
     if (options.direction != .ltr or
         !verticalAlignmentSupported(options.alignment) or
-        options.exclusions.len != 0)
+        (options.exclusions.len != 0 and
+            options.writing_mode != .vertical_lr))
     {
         return error.UnsupportedVerticalParagraphOptions;
     }
@@ -456,6 +458,11 @@ test "vertical paragraph validation admits only implemented columns" {
     try validateForText("AA", .{
         .max_width = 100,
         .writing_mode = .vertical_rl,
+    });
+    try validateForText("AA", .{
+        .max_width = 100,
+        .exclusions = &.{.{ .x = 0, .y = 0, .width = 20, .height = 20 }},
+        .writing_mode = .vertical_lr,
     });
     try validateForText("AA", .{
         .max_width = 100,

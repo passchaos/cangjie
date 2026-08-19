@@ -36,6 +36,8 @@ test {
     _ = @import("vertical_paragraph/justification_integration.zig");
     _ = @import("vertical_paragraph/column_regions.zig");
     _ = @import("vertical_paragraph/column_regions_integration.zig");
+    _ = @import("vertical_paragraph/exclusions.zig");
+    _ = @import("vertical_paragraph/exclusions_integration.zig");
     _ = @import("vertical_paragraph/out_of_flow.zig");
     _ = @import("vertical_paragraph/out_of_flow_integration.zig");
     _ = @import("vertical_paragraph/max_lines.zig");

@@ -576,6 +576,27 @@ test "color inspection exposes borrowed premultiplied BGRA bitmaps" {
     try std.testing.expectEqualSlices(u8, bgra.data, selected.bgra.data);
 }
 
+test "color inspection exposes owned compound bitmap materialization" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCompoundEbdtTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var compound = (try cangjie.font.metadata.color.inspect(&face)
+        .compoundBitmapAlloc(allocator, 2, 16)) orelse
+        return error.TestUnexpectedResult;
+    defer compound.deinit();
+    try std.testing.expectEqual(
+        cangjie.font.metadata.color.OwnedBitmapData.Kind.mask8,
+        compound.kind,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 255, 0, 0, 0, 0, 0, 255, 0 },
+        compound.data,
+    );
+}
+
 test "incremental font transfer inspection and patch parsers are public" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildIftTtf(allocator);

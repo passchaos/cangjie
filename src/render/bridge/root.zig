@@ -28,6 +28,15 @@ pub const GlyphAtlasContent = enum {
     premultiplied_rgba,
 };
 
+/// Storage required to materialize an atlas request.
+///
+/// Compound EBDT/CBDT images are not directly borrowed assets: the backend
+/// must recursively flatten their component list before upload.
+pub const GlyphAtlasSource = enum {
+    direct,
+    compound_bitmap,
+};
+
 pub const BridgeOptions = struct {
     origin_x: f32 = 0,
     origin_y: f32 = 0,
@@ -52,6 +61,7 @@ pub const GlyphAtlasCacheKey = struct {
     variation_coord_count: usize = 0,
     render_mode: GlyphRenderMode,
     content: GlyphAtlasContent = .alpha_mask,
+    source: GlyphAtlasSource = .direct,
 };
 
 pub const GlyphAtlasRequest = struct {
@@ -63,6 +73,7 @@ pub const GlyphAtlasRequest = struct {
     variation_hash: u64 = 0,
     render_mode: GlyphRenderMode = .atlas_mask,
     content: GlyphAtlasContent = .alpha_mask,
+    source: GlyphAtlasSource = .direct,
 
     pub fn cacheKey(self: GlyphAtlasRequest) GlyphAtlasCacheKey {
         return .{
@@ -74,6 +85,7 @@ pub const GlyphAtlasRequest = struct {
             .variation_coord_count = self.normalized_variation_coords.len,
             .render_mode = self.render_mode,
             .content = self.content,
+            .source = self.source,
         };
     }
 };
@@ -414,6 +426,13 @@ const BridgeBuilder = struct {
                 glyph.glyph_id,
                 run.font_size,
             );
+            const bitmap_info = try font.bitmapGlyphInfo(
+                glyph.glyph_id,
+                run.font_size,
+            );
+            const compound_bitmap = bitmap_info != null and
+                (bitmap_info.?.image_format == 8 or
+                    bitmap_info.?.image_format == 9);
             const color_index: ?usize = if (self.options.include_color_glyphs)
                 try self.appendColorGlyph(
                     font,
@@ -433,7 +452,7 @@ const BridgeBuilder = struct {
                 .png, .bgra => null,
             } else null;
             const atlas_content: GlyphAtlasContent = if (embedded_png != null or embedded_bgra != null) .premultiplied_rgba else .alpha_mask;
-            const atlas_index: ?usize = if (font.hasOutlineData() or embedded_png != null or embedded_bgra != null or embedded_mask != null)
+            const atlas_index: ?usize = if (font.hasOutlineData() or embedded_png != null or embedded_bgra != null or embedded_mask != null or compound_bitmap)
                 try self.atlasRequestIndex(.{
                     .font = run.font,
                     .glyph_id = glyph.glyph_id,
@@ -442,6 +461,10 @@ const BridgeBuilder = struct {
                     .variation_hash = run_variation_hash,
                     .render_mode = self.options.render_mode,
                     .content = atlas_content,
+                    .source = if (compound_bitmap)
+                        .compound_bitmap
+                    else
+                        .direct,
                 })
             else
                 null;
@@ -801,7 +824,8 @@ fn sameAtlasRequest(a: GlyphAtlasRequest, b: GlyphAtlasRequest) bool {
         a.variation_hash == b.variation_hash and
         variationCoordinatesEqual(a.normalized_variation_coords, b.normalized_variation_coords) and
         a.render_mode == b.render_mode and
-        a.content == b.content;
+        a.content == b.content and
+        a.source == b.source;
 }
 
 fn variationCoordinatesEqual(a: []const f32, b: []const f32) bool {

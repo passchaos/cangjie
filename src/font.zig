@@ -335,6 +335,7 @@ pub const BitmapGlyphPng = bitmap_mod.GlyphPng;
 pub const BitmapGlyphBgra = bitmap_mod.GlyphBgra;
 pub const BitmapGlyphMask = bitmap_mod.GlyphMask;
 pub const BitmapGlyphData = bitmap_mod.GlyphData;
+pub const OwnedBitmapGlyphData = bitmap_mod.OwnedGlyphData;
 pub const BitmapGlyphInfo = bitmap_mod.GlyphInfo;
 pub const BitmapStrikeSource = bitmap_mod.StrikeSource;
 pub const BitmapStrikeInfo = bitmap_mod.StrikeInfo;
@@ -876,7 +877,9 @@ pub const Font = struct {
         const has_horizontal_metrics = hhea != null and hmtx != null;
         if ((hhea == null) != (hmtx == null)) return error.MissingTable;
         const has_glyf_outlines = glyf != null and loca != null;
-        const has_embedded_bitmaps = sbix != null or (cblc != null and cbdt != null);
+        const has_embedded_bitmaps = sbix != null or
+            (cblc != null and cbdt != null) or
+            (eblc != null and ebdt != null);
         const has_layout_tables = gsub != null or gpos != null;
         const format = try maxp_mod.selectFormat(
             data,
@@ -4866,6 +4869,66 @@ pub const Font = struct {
                 self.glyph_count,
             );
             if (try bitmap_mod.cblc.glyphData(
+                self.data,
+                bitmapTable(eblc),
+                bitmapTable(ebdt),
+                self.glyph_count,
+                glyph_id,
+                size_px,
+                .eblc_ebdt,
+            )) |glyph_data| return glyph_data;
+        }
+        return null;
+    }
+
+    /// Flatten a compound EBDT/CBDT glyph from the preferred strike.
+    ///
+    /// Formats 8/9 reference other glyphs in the same strike and therefore
+    /// require allocator-owned pixels. Noncompound glyphs return null so the
+    /// borrowed `bitmapGlyphData` path remains allocation-free.
+    pub fn compoundBitmapGlyphAlloc(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+        size_px: f32,
+    ) FontError!?OwnedBitmapGlyphData {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try bitmap_mod.validateRequestSize(size_px);
+        if (self.cblc != null and self.cbdt != null) {
+            const cblc = self.cblc.?;
+            const cbdt = self.cbdt.?;
+            try sfnt.checksum.validate(self.data, cblc);
+            try sfnt.checksum.validate(self.data, cbdt);
+            try validateCblcCbdtTables(
+                self.data,
+                cblc,
+                cbdt,
+                self.glyph_count,
+            );
+            if (try bitmap_mod.cblc.compoundGlyphAlloc(
+                allocator,
+                self.data,
+                bitmapTable(cblc),
+                bitmapTable(cbdt),
+                self.glyph_count,
+                glyph_id,
+                size_px,
+                .cblc_cbdt,
+            )) |glyph_data| return glyph_data;
+        }
+        if (self.eblc != null and self.ebdt != null) {
+            const eblc = self.eblc.?;
+            const ebdt = self.ebdt.?;
+            try sfnt.checksum.validate(self.data, eblc);
+            try sfnt.checksum.validate(self.data, ebdt);
+            try validateCblcCbdtTables(
+                self.data,
+                eblc,
+                ebdt,
+                self.glyph_count,
+            );
+            if (try bitmap_mod.cblc.compoundGlyphAlloc(
+                allocator,
                 self.data,
                 bitmapTable(eblc),
                 bitmapTable(ebdt),

@@ -125,6 +125,25 @@ test "renders raw CBDT premultiplied BGRA at bitmap bearings" {
     try std.testing.expectEqual(@as(u8, 0), target.at(4, 3).a);
 }
 
+test "renders EBDT compound components at parent bearings" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("../../../test_font.zig")
+        .buildCompoundEbdtTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var target = try ColorRenderTarget.init(allocator, 16, 16);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&target, &font, 2, 16, 3, 8, 0);
+    // Parent bearing (0,2) places the 4x2 canvas at (3,6). Components put
+    // coverage at canvas pixels (0,0) and (2,1).
+    try std.testing.expectEqual(@as(u8, 255), target.at(3, 6).a);
+    try std.testing.expectEqual(@as(u8, 255), target.at(5, 7).a);
+    try std.testing.expectEqual(@as(u8, 0), target.at(4, 6).a);
+}
+
 test "selects a larger CBDT strike before upscaling a smaller image when available" {
     const allocator = std.testing.allocator;
     const io = std.Io.Threaded.global_single_threaded.io();

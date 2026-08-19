@@ -67,6 +67,8 @@ pub fn glyphInfo(
         5 => 0,
         6, 7, 18 => 8,
         19 => 0,
+        8 => 5,
+        9 => 8,
         else => return null,
     };
     const needs_embedded_length = switch (location.image_format) {
@@ -83,10 +85,13 @@ pub fn glyphInfo(
         5 => location.shared_metrics orelse return error.BadSfnt,
         6, 7, 18 => types.readBigMetrics(image, 0) catch unreachable,
         19 => location.shared_metrics orelse return error.BadSfnt,
+        8 => types.readSmallMetrics(image, 0) catch unreachable,
+        9 => types.readBigMetrics(image, 0) catch unreachable,
         else => unreachable,
     };
     const payload = switch (location.image_format) {
         1, 2, 5, 6, 7 => image[metrics_len..],
+        8, 9 => image[metrics_len..],
         17, 18, 19 => payload: {
             const data_len = try bin.readU32At(image, metrics_len);
             if (data_len > image.len - metrics_len - 4) return error.BadSfnt;
@@ -249,6 +254,59 @@ pub fn glyphData(
         source,
     )) |mask_glyph| return .{ .mask = mask_glyph };
     return null;
+}
+
+pub const Compound = struct {
+    metrics: types.Metrics,
+    components: []const u8,
+
+    pub fn count(self: Compound) usize {
+        return self.components.len / 4;
+    }
+
+    pub fn component(self: Compound, index: usize) types.Error!types.CompoundComponent {
+        if (index >= self.count()) return error.BadSfnt;
+        const offset = index * 4;
+        return .{
+            .glyph_id = try bin.readU16At(self.components, offset),
+            .x_offset = @bitCast(self.components[offset + 2]),
+            .y_offset = @bitCast(self.components[offset + 3]),
+        };
+    }
+};
+
+pub fn compound(
+    data: []const u8,
+    data_table: types.Table,
+    location: GlyphLocation,
+) types.Error!?Compound {
+    const metrics_len: usize = switch (location.image_format) {
+        8 => 5,
+        9 => 8,
+        else => return null,
+    };
+    if (location.offset > data_table.length or
+        location.length > data_table.length - location.offset)
+    {
+        return error.BadSfnt;
+    }
+    const image_start = data_table.offset + location.offset;
+    const image = data[image_start .. image_start + location.length];
+    const components_start = metrics_len + if (location.image_format == 8) @as(usize, 3) else 2;
+    if (image.len < components_start) return error.BadSfnt;
+    const metrics = if (location.image_format == 8)
+        try types.readSmallMetrics(image, 0)
+    else
+        try types.readBigMetrics(image, 0);
+    const count_offset = metrics_len + if (location.image_format == 8) @as(usize, 1) else 0;
+    const component_count = try bin.readU16At(image, count_offset);
+    const component_bytes = std.math.mul(usize, component_count, 4) catch
+        return error.BadSfnt;
+    if (component_bytes > image.len - components_start) return error.BadSfnt;
+    return .{
+        .metrics = metrics,
+        .components = image[components_start .. components_start + component_bytes],
+    };
 }
 
 /// Return one raw monochrome embedded bitmap payload.

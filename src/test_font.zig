@@ -674,6 +674,20 @@ pub fn buildCbdtBgraTtfWithFormat(
     );
 }
 
+pub fn buildCompoundEbdtTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try compoundEbdtTtfTables(allocator));
+}
+
+pub fn buildRecursiveCompoundEbdtTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    return buildSfnt(
+        allocator,
+        0x00010000,
+        try recursiveCompoundEbdtTtfTables(allocator),
+    );
+}
+
 pub fn buildVarcTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try varcTtfTables(allocator));
 }
@@ -2383,6 +2397,29 @@ fn cbdtBgraTtfTables(
     tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
     tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
     tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn compoundEbdtTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 8);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "EBDT", .data = try compoundEbdtTable(allocator) };
+    tables[2] = .{ .tag = "EBLC", .data = try compoundEblcTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 3) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTableWithColorGlyphs(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 3) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn recursiveCompoundEbdtTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try compoundEbdtTtfTables(allocator);
+    allocator.free(tables[1].data);
+    tables[1].data = try recursiveCompoundEbdtTable(allocator);
+    allocator.free(tables[2].data);
+    tables[2].data = try recursiveCompoundEblcTable(allocator);
     return tables;
 }
 
@@ -6372,6 +6409,126 @@ fn cblcBgraTable(
         const metrics_len: u16 = if (image_format == 6 or image_format == 7) 8 else 5;
         writeU16(bytes, subtable + 10, metrics_len + 8);
     }
+    return bytes;
+}
+
+fn compoundEbdtTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 26);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 2);
+    writeU16(bytes, 2, 0);
+
+    // Glyph 1: a 2x1 format-1 mask with authored pixels 10.
+    bytes[4] = 1;
+    bytes[5] = 2;
+    bytes[6] = 0;
+    bytes[7] = 1;
+    bytes[8] = 2;
+    bytes[9] = 0b1000_0000;
+
+    // Glyph 2: a 4x2 format-8 canvas containing glyph 1 at (0,0) and (2,1).
+    bytes[10] = 2;
+    bytes[11] = 4;
+    bytes[12] = 0;
+    bytes[13] = 2;
+    bytes[14] = 4;
+    bytes[15] = 0; // padding.
+    writeU16(bytes, 16, 2);
+    writeU16(bytes, 18, 1);
+    bytes[20] = 0;
+    bytes[21] = 0;
+    writeU16(bytes, 22, 1);
+    bytes[24] = 2;
+    bytes[25] = 1;
+    return bytes;
+}
+
+fn compoundEblcTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 8 + 48 + 16 + 24);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 2);
+    writeU16(bytes, 2, 0);
+    writeU32(bytes, 4, 1);
+    const size = 8;
+    writeU32(bytes, size + 0, 56);
+    writeU32(bytes, size + 4, 40);
+    writeU32(bytes, size + 8, 2);
+    writeU16(bytes, size + 40, 1);
+    writeU16(bytes, size + 42, 2);
+    bytes[size + 44] = 16;
+    bytes[size + 45] = 16;
+    bytes[size + 46] = 1;
+    bytes[size + 47] = 1;
+
+    const records = 56;
+    writeU16(bytes, records + 0, 1);
+    writeU16(bytes, records + 2, 1);
+    writeU32(bytes, records + 4, 16);
+    writeU16(bytes, records + 8, 2);
+    writeU16(bytes, records + 10, 2);
+    writeU32(bytes, records + 12, 28);
+
+    const first = 72;
+    writeU16(bytes, first + 0, 3);
+    writeU16(bytes, first + 2, 1);
+    writeU32(bytes, first + 4, 4);
+    writeU16(bytes, first + 8, 0);
+    writeU16(bytes, first + 10, 6);
+
+    const second = 84;
+    writeU16(bytes, second + 0, 3);
+    writeU16(bytes, second + 2, 8);
+    writeU32(bytes, second + 4, 4);
+    writeU16(bytes, second + 8, 6);
+    writeU16(bytes, second + 10, 22);
+    return bytes;
+}
+
+fn recursiveCompoundEbdtTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 22);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 2);
+    writeU16(bytes, 2, 0);
+    // Glyph 1 references glyph 2; glyph 2 references glyph 1.
+    inline for ([_]usize{ 4, 13 }, 0..) |offset, index| {
+        bytes[offset + 0] = 1;
+        bytes[offset + 1] = 1;
+        bytes[offset + 2] = 0;
+        bytes[offset + 3] = 1;
+        bytes[offset + 4] = 1;
+        bytes[offset + 5] = 0;
+        writeU16(bytes, offset + 6, 1);
+        writeU16(bytes, offset + 8, if (index == 0) 2 else 1);
+    }
+    return bytes;
+}
+
+fn recursiveCompoundEblcTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 8 + 48 + 8 + 14);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 2);
+    writeU16(bytes, 2, 0);
+    writeU32(bytes, 4, 1);
+    const size = 8;
+    writeU32(bytes, size + 0, 56);
+    writeU32(bytes, size + 4, 22);
+    writeU32(bytes, size + 8, 1);
+    writeU16(bytes, size + 40, 1);
+    writeU16(bytes, size + 42, 2);
+    bytes[size + 44] = 16;
+    bytes[size + 45] = 16;
+    bytes[size + 46] = 1;
+    const record = 56;
+    writeU16(bytes, record + 0, 1);
+    writeU16(bytes, record + 2, 2);
+    writeU32(bytes, record + 4, 8);
+    const subtable = 64;
+    writeU16(bytes, subtable + 0, 3);
+    writeU16(bytes, subtable + 2, 8);
+    writeU32(bytes, subtable + 4, 4);
+    writeU16(bytes, subtable + 8, 0);
+    writeU16(bytes, subtable + 10, 9);
+    writeU16(bytes, subtable + 12, 18);
     return bytes;
 }
 

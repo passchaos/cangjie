@@ -16,6 +16,7 @@ pub const GlyphPng = types.GlyphPng;
 pub const GlyphBgra = types.GlyphBgra;
 pub const GlyphMask = types.GlyphMask;
 pub const GlyphData = types.GlyphData;
+pub const OwnedGlyphData = types.OwnedGlyphData;
 pub const GlyphInfo = types.GlyphInfo;
 pub const StrikeSource = types.StrikeSource;
 pub const StrikeInfo = types.StrikeInfo;

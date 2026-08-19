@@ -1175,6 +1175,22 @@ pub const Rasterizer = struct {
                     return;
                 }
             }
+            if (try font.compoundBitmapGlyphAlloc(
+                self.allocator,
+                glyph_id,
+                font_size,
+            )) |compound_value| {
+                var compound = compound_value;
+                defer compound.deinit();
+                try self.renderOwnedEmbeddedBitmap(
+                    target,
+                    compound,
+                    font_size,
+                    x,
+                    baseline_y,
+                );
+                return;
+            }
             if (try font.bitmapGlyphData(glyph_id, font_size)) |bitmap| {
                 switch (bitmap) {
                     .png => |png_glyph| try self.renderEmbeddedPng(
@@ -1357,6 +1373,51 @@ pub const Rasterizer = struct {
             top,
             strike_scale,
         );
+    }
+
+    fn renderOwnedEmbeddedBitmap(
+        self: *Rasterizer,
+        target: *ColorRenderTarget,
+        bitmap: font_mod.OwnedBitmapGlyphData,
+        font_size: f32,
+        x: f32,
+        baseline_y: f32,
+    ) !void {
+        _ = self;
+        if (bitmap.ppem == 0) return error.BadSfnt;
+        const strike_scale =
+            font_size / @as(f32, @floatFromInt(bitmap.ppem));
+        if (!std.math.isFinite(strike_scale) or strike_scale <= 0) {
+            return error.InvalidBitmapSize;
+        }
+        const left = x +
+            @as(f32, @floatFromInt(bitmap.origin_offset_x)) * strike_scale;
+        const top = baseline_y -
+            @as(f32, @floatFromInt(bitmap.origin_offset_y)) * strike_scale;
+        switch (bitmap.kind) {
+            .mask8 => bitmap_raster.blendScaledMask8(
+                target.pixels,
+                target.width,
+                target.height,
+                bitmap.data,
+                bitmap.width,
+                bitmap.height,
+                left,
+                top,
+                strike_scale,
+            ),
+            .premultiplied_bgra8 => bitmap_raster.blendScaledPremultipliedBgra8(
+                target.pixels,
+                target.width,
+                target.height,
+                bitmap.data,
+                bitmap.width,
+                bitmap.height,
+                left,
+                top,
+                strike_scale,
+            ),
+        }
     }
 
     fn renderColorPaint(self: *Rasterizer, target: *ColorRenderTarget, font: *const font_mod.Font, paint: font_mod.ColorPaint, fallback_glyph_id: glyph_mod.GlyphId, font_size: f32, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {

@@ -209,6 +209,7 @@ pub const BitmapGlyphPng = @import("../../font.zig").BitmapGlyphPng;
 pub const BitmapGlyphBgra = @import("../../font.zig").BitmapGlyphBgra;
 pub const BitmapGlyphMask = @import("../../font.zig").BitmapGlyphMask;
 pub const BitmapGlyphData = @import("../../font.zig").BitmapGlyphData;
+pub const OwnedBitmapGlyphData = @import("../../font.zig").OwnedBitmapGlyphData;
 pub const BitmapGlyphInfo = @import("../../font.zig").BitmapGlyphInfo;
 pub const BitmapStrikeInfo = @import("../../font.zig").BitmapStrikeInfo;
 pub const BitmapStrikeSource = @import("../../font.zig").BitmapStrikeSource;

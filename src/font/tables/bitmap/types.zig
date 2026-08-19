@@ -56,6 +56,37 @@ pub const GlyphBgra = struct {
     data: []const u8,
 };
 
+pub const CompoundComponent = struct {
+    glyph_id: glyph.GlyphId,
+    x_offset: i8,
+    y_offset: i8,
+};
+
+/// Allocator-owned result of flattening an EBDT/CBDT compound glyph.
+///
+/// The pixel payload is either one byte of coverage or four bytes of
+/// premultiplied BGRA per pixel. Parent image metrics define the canvas and
+/// placement; component metrics affect only their recursive source images.
+pub const OwnedGlyphData = struct {
+    allocator: std.mem.Allocator,
+    source: StrikeSource,
+    ppem: u16,
+    ppi: u16,
+    origin_offset_x: i16,
+    origin_offset_y: i16,
+    width: u32,
+    height: u32,
+    kind: Kind,
+    data: []u8,
+
+    pub const Kind = enum { mask8, premultiplied_bgra8 };
+
+    pub fn deinit(self: *OwnedGlyphData) void {
+        self.allocator.free(self.data);
+        self.* = undefined;
+    }
+};
+
 /// Borrowed single-channel EBDT/CBDT bitmap data.
 ///
 /// Pixels are stored most-significant-bit first. `row_byte_aligned`

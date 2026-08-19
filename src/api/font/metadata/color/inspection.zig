@@ -152,6 +152,19 @@ pub const View = struct {
     ) font.FontError!?font.BitmapGlyphData {
         return self.implementation().bitmapGlyphData(glyph_id, size_px);
     }
+
+    pub fn compoundBitmapAlloc(
+        self: View,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph.GlyphId,
+        size_px: f32,
+    ) font.FontError!?font.OwnedBitmapGlyphData {
+        return self.implementation().compoundBitmapGlyphAlloc(
+            allocator,
+            glyph_id,
+            size_px,
+        );
+    }
 };
 
 pub fn inspect(face: *const face_mod.Face) View {

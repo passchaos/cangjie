@@ -15,6 +15,7 @@ pub const BitmapPng = font.BitmapGlyphPng;
 pub const BitmapBgra = font.BitmapGlyphBgra;
 pub const BitmapMask = font.BitmapGlyphMask;
 pub const BitmapData = font.BitmapGlyphData;
+pub const OwnedBitmapData = font.OwnedBitmapGlyphData;
 pub const BitmapGlyph = font.BitmapGlyphInfo;
 pub const BitmapStrike = font.BitmapStrikeInfo;
 pub const BitmapStrikeSource = font.BitmapStrikeSource;

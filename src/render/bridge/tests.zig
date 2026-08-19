@@ -16,6 +16,7 @@ const test_font = @import("../../test_font.zig");
 const BridgeOptions = bridge.BridgeOptions;
 const GlyphAtlasContent = bridge.GlyphAtlasContent;
 const GlyphAtlasRequest = bridge.GlyphAtlasRequest;
+const GlyphAtlasSource = bridge.GlyphAtlasSource;
 const GlyphRenderMode = bridge.GlyphRenderMode;
 const buildGlyphDrawList = bridge.buildGlyphDrawList;
 
@@ -330,6 +331,61 @@ test "render bridge emits raw CBDT BGRA as a color atlas request" {
         u8,
         &.{ 7, 13, 64, 128, 10, 20, 30, 255 },
         command.paint.embedded_bgra.data,
+    );
+}
+
+test "render bridge marks compound EBDT atlas materialization" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCompoundEbdtTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const glyphs = [_]glyph_position.GlyphPosition{.{
+        .glyph_id = 2,
+        .codepoint = 'A',
+        .cluster = 0,
+        .x_advance = 4,
+    }};
+    const runs = [_]run_types.CascadeRun{.{
+        .font = face_mod.backend.face(&font),
+        .font_index = 0,
+        .font_size = 16,
+        .glyph_start = 0,
+        .glyph_len = 1,
+        .x_offset = 0,
+    }};
+    const lines = [_]paragraph_types.ParagraphLine{.{
+        .glyph_start = 0,
+        .glyph_len = 1,
+        .run_start = 0,
+        .run_len = 1,
+        .byte_start = 0,
+        .byte_len = 1,
+        .x = 0,
+        .y = 0,
+        .width = 4,
+        .height = 16,
+        .baseline = 12,
+        .ascent = 12,
+        .descent = 4,
+        .leading = 0,
+    }};
+    var draw_list = try buildGlyphDrawList(allocator, .{
+        .glyphs = &glyphs,
+        .runs = &runs,
+        .lines = &lines,
+        .width = 4,
+        .height = 16,
+    }, .{});
+    defer draw_list.deinit();
+    try std.testing.expectEqual(@as(usize, 1), draw_list.atlas_requests.len);
+    try std.testing.expectEqual(
+        GlyphAtlasSource.compound_bitmap,
+        draw_list.atlas_requests[0].source,
+    );
+    try std.testing.expectEqual(
+        GlyphAtlasSource.compound_bitmap,
+        draw_list.atlas_requests[0].cacheKey().source,
     );
 }
 

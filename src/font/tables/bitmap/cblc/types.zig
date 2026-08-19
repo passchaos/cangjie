@@ -22,3 +22,8 @@ pub const GlyphLocation = struct {
     /// images. CBDT image format 19 has no inline metrics and consumes it.
     shared_metrics: ?bitmap.Metrics = null,
 };
+
+pub const SelectedGlyph = struct {
+    strike: Strike,
+    location: GlyphLocation,
+};

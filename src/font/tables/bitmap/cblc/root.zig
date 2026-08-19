@@ -8,9 +8,11 @@ const types = @import("../types.zig");
 const cblc_data = @import("data.zig");
 const cblc_types = @import("types.zig");
 const cblc_index = @import("index.zig");
+const materialize = @import("materialize.zig");
 
 pub const Strike = cblc_types.Strike;
 pub const GlyphLocation = cblc_types.GlyphLocation;
+pub const SelectedGlyph = cblc_types.SelectedGlyph;
 
 pub const glyphLocation = cblc_index.glyphLocation;
 pub const imageLocation = cblc_index.imageLocation;
@@ -208,6 +210,65 @@ pub fn glyphData(
         }
     }
     return best;
+}
+
+pub fn selectedGlyph(
+    data: []const u8,
+    location_table: types.Table,
+    glyph_count: u16,
+    glyph_id: glyph.GlyphId,
+    size_px: f32,
+) types.Error!?SelectedGlyph {
+    const strike_count = try strikeCount(data, location_table);
+    var best: ?SelectedGlyph = null;
+    for (0..strike_count) |strike_index| {
+        const current =
+            try strike(data, location_table, glyph_count, strike_index);
+        const location =
+            (try glyphLocation(data, current, glyph_id)) orelse continue;
+        if (best == null or types.ppemIsPreferred(
+            current.ppem,
+            best.?.strike.ppem,
+            size_px,
+        )) {
+            best = .{ .strike = current, .location = location };
+        }
+    }
+    return best;
+}
+
+pub fn glyphLocationInStrike(
+    data: []const u8,
+    selected_strike: Strike,
+    glyph_id: glyph.GlyphId,
+) types.Error!?GlyphLocation {
+    return glyphLocation(data, selected_strike, glyph_id);
+}
+
+pub fn compoundGlyphAlloc(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    location_table: types.Table,
+    data_table: types.Table,
+    glyph_count: u16,
+    glyph_id: glyph.GlyphId,
+    size_px: f32,
+    source: types.StrikeSource,
+) types.Error!?types.OwnedGlyphData {
+    const selected = (try selectedGlyph(
+        data,
+        location_table,
+        glyph_count,
+        glyph_id,
+        size_px,
+    )) orelse return null;
+    return materialize.glyphAlloc(
+        allocator,
+        data,
+        data_table,
+        selected,
+        source,
+    );
 }
 
 pub fn glyphMask(

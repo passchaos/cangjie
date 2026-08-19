@@ -581,3 +581,45 @@ test "exposes Skrifa-compatible premultiplied BGRA bitmap data" {
     try std.testing.expectEqual(@as(u16, 16), selected.ppem());
     try std.testing.expectEqualSlices(u8, bgra.data, selected.bgra.data);
 }
+
+test "flattens EBDT compound bitmap components into parent metrics" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("../../../test_font.zig")
+        .buildCompoundEbdtTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.bitmapGlyphInfo(2, 16)) orelse
+        return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(@as(?u16, 8), info.image_format);
+    try std.testing.expectEqual(@as(u32, 4), info.width);
+    try std.testing.expectEqual(@as(u32, 2), info.height);
+    var compound = (try font.compoundBitmapGlyphAlloc(allocator, 2, 16)) orelse
+        return error.MissingBitmapGlyph;
+    defer compound.deinit();
+    try std.testing.expectEqual(
+        support.OwnedBitmapGlyphData.Kind.mask8,
+        compound.kind,
+    );
+    try std.testing.expectEqual(@as(i16, 0), compound.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, 2), compound.origin_offset_y);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 255, 0, 0, 0, 0, 0, 255, 0 },
+        compound.data,
+    );
+}
+
+test "rejects recursive compound bitmap cycles during materialization" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("../../../test_font.zig")
+        .buildRecursiveCompoundEbdtTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    try std.testing.expectError(
+        error.BadSfnt,
+        font.compoundBitmapGlyphAlloc(allocator, 1, 16),
+    );
+}

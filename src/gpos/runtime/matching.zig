@@ -71,10 +71,21 @@ pub fn glyphInMarkFilteringSet(
     glyphs: []const GlyphId,
     glyph: GlyphId,
 ) bool {
-    for (glyphs) |candidate| {
-        if (candidate == glyph) return true;
+    // GDEF Coverage expansion preserves strictly increasing glyph order.
+    // Filtering sets in Arabic fonts commonly contain dozens of marks, and
+    // every GPOS lookup probes them repeatedly; binary search avoids turning
+    // each visibility check into a linear walk.
+    var low: usize = 0;
+    var high = glyphs.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (glyphs[mid] < glyph) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
     }
-    return false;
+    return low < glyphs.len and glyphs[low] == glyph;
 }
 
 pub fn validateMarkFilteringSetIndex(run: Options) Error!void {

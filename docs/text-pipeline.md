@@ -1262,6 +1262,15 @@ Arabic 180-unit medians are approximately `93,779 ns` for Cangjie and
 `66,725 ns` for Parley. Cangjie still trails by about `40.5%`, so correcting
 the harness narrows but does not erase the real Arabic deficit.
 
+Owned GDEF MarkGlyphSetsDef coverages are strictly sorted, so GSUB and GPOS
+LookupFlag membership now uses binary search instead of walking every glyph in
+the selected set. Noto Kufi Arabic's active sets contain up to 80 glyphs and
+were a top paragraph-profile cost. Fixed-CPU-30 medians on the output-equivalent
+Arabic row improved to `92,306 ns`; Latin and Japanese controls also measured
+`24,038 ns` and `49,173 ns`, with unchanged checksums, glyph counts, and line
+counts. The exact gains include the corrected constant-size benchmark consumer
+above, while the focused membership tests retain boundary hits and misses.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

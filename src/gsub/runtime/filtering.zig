@@ -221,10 +221,17 @@ fn glyphInMarkFilteringSet(
     glyphs: []const GlyphId,
     glyph: GlyphId,
 ) bool {
-    for (glyphs) |candidate| {
-        if (candidate == glyph) return true;
+    var low: usize = 0;
+    var high = glyphs.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (glyphs[mid] < glyph) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
     }
-    return false;
+    return low < glyphs.len and glyphs[low] == glyph;
 }
 
 fn cgjPreventedMarkReorder(run: Options, glyph_index: usize) bool {

@@ -32,6 +32,16 @@ test "LookupFlag combines mark filtering sets and attachment classes" {
     );
 }
 
+test "mark filtering set membership uses sorted GDEF coverage order" {
+    const set = [_]u16{ 2, 17, 48, 91, 255 };
+    try std.testing.expect(runtime.matching.glyphInMarkFilteringSet(&set, 2));
+    try std.testing.expect(runtime.matching.glyphInMarkFilteringSet(&set, 48));
+    try std.testing.expect(runtime.matching.glyphInMarkFilteringSet(&set, 255));
+    try std.testing.expect(!runtime.matching.glyphInMarkFilteringSet(&set, 0));
+    try std.testing.expect(!runtime.matching.glyphInMarkFilteringSet(&set, 18));
+    try std.testing.expect(!runtime.matching.glyphInMarkFilteringSet(&set, 256));
+}
+
 test "source metadata controls default-ignorable visibility" {
     const sources = [_]usize{ 0, 1, 2 };
     const codepoints = [_]u21{ 'A', 0x034f, 'B' };

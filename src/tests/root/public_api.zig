@@ -642,6 +642,47 @@ test "normal metric view resolves MVAR deltas" {
     );
 }
 
+test "global metrics match Skrifa reference fixtures" {
+    const allocator = std.testing.allocator;
+    const simple_upstream = @embedFile("../data/fontations_simple_glyf.ttf");
+    const simple_head = try allocator.dupe(u8, try sfntTable(simple_upstream, "head"));
+    defer allocator.free(simple_head);
+    @memset(simple_head[8..12], 0);
+    const simple_bytes = try test_font.buildTtfWithMetadataTables(allocator, &.{
+        .{ .tag = "head".*, .data = simple_head },
+        .{ .tag = "OS/2".*, .data = try sfntTable(simple_upstream, "OS/2") },
+    });
+    defer allocator.free(simple_bytes);
+    var simple = try cangjie.font.Face.parse(allocator, simple_bytes);
+    defer simple.deinit();
+    const unscaled = try simple.metrics().global(null);
+    try std.testing.expectEqual(@as(u16, 1024), unscaled.units_per_em);
+    try std.testing.expectEqual(@as(u16, 2), unscaled.glyph_count);
+    try std.testing.expectEqual(@as(f32, 950), unscaled.ascent);
+    try std.testing.expectEqual(@as(f32, -250), unscaled.descent);
+    try std.testing.expectEqual(@as(?f32, 512), unscaled.x_height);
+    try std.testing.expectEqual(@as(?f32, 717), unscaled.cap_height);
+    try std.testing.expectEqual(@as(?f32, 1275), unscaled.average_width);
+    try std.testing.expectEqual(@as(f32, 51), unscaled.bounds.x_min);
+    try std.testing.expectEqual(@as(f32, 998), unscaled.bounds.x_max);
+
+    _ = @embedFile("../data/fontations_vazirmatn_var.ttf");
+    const variable_bytes = try test_font.buildTtfWithGlobalMetricValues(
+        allocator,
+        2100,
+        -1100,
+        1336,
+    );
+    defer allocator.free(variable_bytes);
+    var variable = try cangjie.font.Face.parse(allocator, variable_bytes);
+    defer variable.deinit();
+    const scaled = try variable.metrics().global(1000);
+    try std.testing.expectEqual(@as(f32, 2100), scaled.ascent);
+    try std.testing.expectEqual(@as(f32, -1100), scaled.descent);
+    try std.testing.expectEqual(@as(?f32, 1336), scaled.max_width);
+    try std.testing.expect(scaled.average_width == null);
+}
+
 test "variation inspection exposes table-level variable font data" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMetricVariationTtf(allocator);

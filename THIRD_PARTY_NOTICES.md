@@ -57,3 +57,18 @@ the Skrifa `MetadataProvider::attributes` differential test.
 - Project: <https://github.com/googlefonts/fontations>
 - Copyright: 2019 Fontations Developers
 - License: Apache License 2.0; see `licenses/Apache-2.0.txt`
+
+## Fontations Metric Test Fonts
+
+`src/tests/data/fontations_simple_glyf.ttf` and
+`src/tests/data/fontations_vazirmatn_var.ttf` are copied verbatim from
+Fontations `font-test-data` at commit
+`bb6f87166aa8bac93ff9df5ea67d58b7091b3e2a`. Their SHA-256 values are
+`426163779071781433bf33d55449ec343cd13e1439d8f83747dc5b5655875d3d` and
+`c6f1e46d4ed8c59e14b5a90af56378ca9d6c39bba218bda643f6fc0764f8dabb`.
+They provide the authoritative global metric values used by Skrifa's metric
+tests, including OS/2 typographic selection and missing-OS/2 fallback.
+
+- Project: <https://github.com/googlefonts/fontations>
+- Copyright: 2019 Fontations Developers
+- License: Apache License 2.0; see `licenses/Apache-2.0.txt`

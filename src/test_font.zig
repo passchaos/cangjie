@@ -621,6 +621,22 @@ pub fn buildTtfWithMetadataTables(
     return buildSfnt(allocator, 0x00010000, tables);
 }
 
+pub fn buildTtfWithGlobalMetricValues(
+    allocator: std.mem.Allocator,
+    ascender: i16,
+    descender: i16,
+    advance_max: u16,
+) ![]u8 {
+    const hhea = try hheaTable(allocator);
+    defer allocator.free(hhea);
+    writeI16(hhea, 4, ascender);
+    writeI16(hhea, 6, descender);
+    writeU16(hhea, 10, advance_max);
+    return buildTtfWithMetadataTables(allocator, &.{
+        .{ .tag = "hhea".*, .data = hhea },
+    });
+}
+
 pub const MetadataTable = struct {
     tag: [4]u8,
     data: []const u8,

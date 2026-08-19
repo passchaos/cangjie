@@ -17,6 +17,7 @@ pub const Weight = face.Weight;
 pub const Glyphs = face.Glyphs;
 pub const GlyphSession = face.GlyphSession;
 pub const Metrics = face.Metrics;
+pub const GlobalMetrics = @import("../../font/face/views/metrics.zig").Global;
 pub const Names = face.Names;
 pub const NameId = font_mod.NameId;
 pub const LocalizedName = font_mod.LocalizedName;

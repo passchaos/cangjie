@@ -2,10 +2,18 @@
 
 const font_mod = @import("../../../font.zig");
 const glyph_mod = @import("../../../glyph.zig");
+const global_metrics = @import("global_metrics.zig");
+
+pub const Global = global_metrics.Metrics;
 
 pub const View = struct {
     /// Borrowed source-level view backing; use the methods below.
     implementation: *const font_mod.Font,
+
+    /// Return unscaled design metrics (`null`) or metrics scaled to `size`.
+    pub fn global(self: View, size: ?f32) font_mod.FontError!Global {
+        return global_metrics.read(self.implementation, size);
+    }
 
     pub fn horizontal(
         self: View,

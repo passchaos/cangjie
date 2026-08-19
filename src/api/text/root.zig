@@ -12,3 +12,4 @@ pub const vertical = @import("vertical.zig");
 pub const opentype = @import("opentype/root.zig");
 pub const style = @import("style/root.zig");
 pub const attributed = @import("attributed/root.zig");
+pub const hyphenation = @import("../../text/hyphenation/root.zig");

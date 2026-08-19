@@ -621,6 +621,27 @@ test "metric inspection exposes table and presentation metrics" {
     try std.testing.expect((try inspection.verticalOrigins(allocator)) == null);
 }
 
+test "normal metric view resolves MVAR deltas" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildMvarTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+
+    const metrics = face.metrics();
+    try std.testing.expectEqual(
+        @as(?i32, 7),
+        try metrics.variationDelta("hasc".*, &.{1}),
+    );
+    try std.testing.expectEqual(
+        @as(?i32, 0),
+        try metrics.variationDelta("hdsc".*, &.{1}),
+    );
+    try std.testing.expect(
+        (try metrics.variationDelta("zzzz".*, &.{1})) == null,
+    );
+}
+
 test "variation inspection exposes table-level variable font data" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMetricVariationTtf(allocator);

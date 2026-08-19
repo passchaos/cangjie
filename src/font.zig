@@ -2031,6 +2031,56 @@ pub const Font = struct {
         mvar_mod.free(allocator, info_value);
     }
 
+    /// Resolve one MVAR metric tag at normalized coordinates. Unknown tags,
+    /// absent MVAR, and the 0xffff sentinel return null/zero without exposing
+    /// the ItemVariationStore grammar to high-level metric clients.
+    pub fn mvarDeltaAtCoords(
+        self: *const Font,
+        value_tag: [4]u8,
+        normalized_coords: []const f32,
+    ) FontError!?i32 {
+        const mvar = self.mvar orelse return null;
+        const fvar = self.fvar orelse return error.BadSfnt;
+        try sfnt.checksum.validate(self.data, fvar);
+        try fvar_mod.validate(self.data, fvar);
+        const fvar_info = try fvar_mod.info(self.data, fvar);
+        if (normalized_coords.len > fvar_info.axis_count) return error.BadSfnt;
+        try sfnt.checksum.validate(self.data, mvar);
+        try metric_variation_validation.validateMvar(
+            self.data,
+            mvar,
+            fvar_info.axis_count,
+        );
+        const header = try mvar_mod.header(self.data, mvar.offset, mvar.length);
+        const store_offset = header.item_variation_store_offset orelse return 0;
+        var low: usize = 0;
+        var high = header.value_record_count;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const record = try mvar_mod.valueRecordAt(self.data, mvar.offset, header, mid);
+            if (std.mem.order(u8, &record.value_tag, &value_tag) == .lt) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        if (low >= header.value_record_count) return null;
+        const record = try mvar_mod.valueRecordAt(self.data, mvar.offset, header, low);
+        if (!std.mem.eql(u8, &record.value_tag, &value_tag)) return null;
+        if (!record.hasVariationData()) return 0;
+        return try metric_variation_mod.itemVariationDelta(
+            self.data,
+            mvar.offset,
+            mvar.length,
+            store_offset,
+            .{
+                .outer = record.delta_set_outer_index,
+                .inner = record.delta_set_inner_index,
+            },
+            normalized_coords,
+        );
+    }
+
     /// Read validated metadata from the optional OpenType `VVAR` table.
     pub fn vvarInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?VvarInfo {
         const vvar = (try self.metricVariationTableForRead(.vvar)) orelse return null;

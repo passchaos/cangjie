@@ -72,4 +72,16 @@ pub const View = struct {
     ) font_mod.FontError!font_mod.FontDecorationMetrics {
         return self.implementation.decorationMetrics();
     }
+
+    /// Resolve one OpenType MVAR value tag in design units.
+    pub fn variationDelta(
+        self: View,
+        value_tag: [4]u8,
+        normalized_coords: []const f32,
+    ) font_mod.FontError!?i32 {
+        return self.implementation.mvarDeltaAtCoords(
+            value_tag,
+            normalized_coords,
+        );
+    }
 };

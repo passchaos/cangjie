@@ -3584,6 +3584,18 @@ pub fn build(b: *std.Build) void {
     });
     bench_smoke_step.dependOn(&glyph_freetype_raster_smoke_cmd.step);
 
+    const glyph_freetype_raster_reuse_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
+    glyph_freetype_raster_reuse_smoke_cmd.addArgs(&.{
+        "--engine",     "freetype",
+        "--mode",       "raster-reuse",
+        "--format",     "tsv",
+        "--builtin",    "gvar-compound",
+        "--iterations", "1",
+        "--warmup",     "0",
+        "--samples",    "1",
+    });
+    bench_smoke_step.dependOn(&glyph_freetype_raster_reuse_smoke_cmd.step);
+
     const glyph_compare_freetype_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
     glyph_compare_freetype_smoke_cmd.addArgs(&.{
         "--engine",     "compare-freetype",

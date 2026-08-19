@@ -41,17 +41,19 @@ const FreeTypeFace = struct {
 };
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, options: options_mod.Options) !report.Result {
-    if (options.mode == .outline_session or options.mode == .raster_reuse or options.mode == .raster_prepared) return error.InvalidArguments;
+    if (options.mode == .outline_session or options.mode == .raster_prepared) return error.InvalidArguments;
     const ft_face = try FreeTypeFace.init(font_bytes, options);
     defer ft_face.deinit();
 
     const glyph_id = resolveGlyphId(ft_face.face, options);
     var empty_target_pixels: [0]u8 = .{};
-    const target_pixels: []u8 = if (options.mode == .raster)
+    const target_pixels: []u8 = if (options.mode == .raster or
+        options.mode == .raster_reuse)
         try allocator.alloc(u8, @as(usize, options.target_size) * options.target_size)
     else
         empty_target_pixels[0..];
-    defer if (options.mode == .raster) allocator.free(target_pixels);
+    defer if (options.mode == .raster or options.mode == .raster_reuse)
+        allocator.free(target_pixels);
 
     if (options.warmup != 0) {
         var warmup_checksum: u64 = 0;
@@ -95,16 +97,16 @@ fn runIterations(face: ft.FT_Face, glyph_id: ft.FT_UInt, options: options_mod.Op
     const load_flags: ft.FT_Int32 = switch (options.mode) {
         .outline => ft.FT_LOAD_NO_SCALE | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
         .outline_session => unreachable,
-        .raster => ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
-        .raster_reuse, .raster_prepared => unreachable,
+        .raster, .raster_reuse => ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
+        .raster_prepared => unreachable,
     };
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         if (ft.FT_Load_Glyph(face, glyph_id, load_flags) != 0) return error.FreeTypeFailed;
         checksum.* = updateChecksum(checksum.*, switch (options.mode) {
             .outline => outlineChecksum(face.*.glyph),
-            .raster => rasterTargetChecksum(face.*.glyph, options, target_pixels),
-            .outline_session, .raster_reuse, .raster_prepared => unreachable,
+            .raster, .raster_reuse => rasterTargetChecksum(face.*.glyph, options, target_pixels),
+            .outline_session, .raster_prepared => unreachable,
         });
     }
 }

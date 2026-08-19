@@ -181,7 +181,6 @@ pub fn parse(args: []const []const u8) !Options {
     if (options.target_size == 0 or options.samples_per_axis == 0 or options.iterations == 0 or options.samples == 0) return error.InvalidArguments;
     if ((options.engine == .freetype or options.engine == .compare_freetype) and
         (options.mode == .outline_session or
-            options.mode == .raster_reuse or
             options.mode == .raster_prepared)) return error.InvalidArguments;
     return options;
 }

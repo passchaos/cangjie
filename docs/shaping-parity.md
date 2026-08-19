@@ -1099,6 +1099,18 @@ Current local snapshot after the Nastaliq parity work:
   for Roboto `A`, `4.6%` for `g`, `4.3%` for `é`, `2.9%` for Amiri `س`,
   and `4.8%` for `م`. All five target checksums remained byte-identical, and
   boundary/huge-finite differential tests cover the fast and defensive paths.
+- `glyph-bench --mode raster-reuse` now accepts FreeType as well as Cangjie,
+  establishing an explicitly symmetric reused-face/reused-target lifecycle.
+  This is a colder boundary than the earlier `raster` row: Cangjie reuses its
+  decoded outline, target, and rasterizer, while FreeType reuses its face and
+  target but still performs `FT_Load_Glyph(FT_LOAD_RENDER)` per iteration. On
+  fixed CPU 30 at 64 px, Cangjie/FreeType medians were approximately
+  `10,923/1,751 ns` for Roboto `A`, `15,066/1,902 ns` for `g`, and
+  `10,589/2,017 ns` for `é`. The larger `5.2--7.9x` gap proves that scan
+  conversion itself, not only Cangjie's one-shot outline/setup overhead,
+  remains the dominant FreeType-relative deficit. Checksums are stable within
+  each engine but intentionally differ because their antialiasing algorithms
+  expose different pixel coverage.
 - A final fixed-CPU-30 absolute Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix at
   commit `30984d9` measured Amiri `fa-thelittleprince` at `765.566` versus
   `794.637 ns/glyph`, a Cangjie lead of about `3.66%`; Amiri `fa-words` at

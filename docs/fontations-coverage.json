@@ -204,8 +204,8 @@
     },
     {
       "tag": "IFT /IFTX",
-      "artifact": "src/opentype/ift.zig",
-      "test": "src/tests/root/font/font_core_tables.zig",
+      "artifact": "src/font/incremental/glyph_keyed/root.zig",
+      "test": "src/tests/root/public_api.zig",
       "upstream_modules": [
         "ift"
       ]

@@ -134,3 +134,12 @@ entry like Fontations, and rebuilds a tag-sorted SFNT with fresh table
 checksums and `head.checkSumAdjustment`. The decoder loads the system Brotli C
 runtime dynamically; unavailable platforms report
 `error.BrotliRuntimeUnavailable` rather than accepting compressed bytes.
+
+Glyph-keyed `ifgk` patch groups are applied atomically as well. Cangjie
+authenticates every selected `IFT `/`IFTX` compatibility id, decodes and
+validates every `GlyphPatches` directory before reconstruction, merges
+duplicate table/glyph keys with first-patch priority, and rebuilds the coupled
+`glyf`/`loca`, `gvar`, CFF, and CFF2 CharStrings data defined by the IFT
+specification. Unknown table tags are ignored. Application-bitmap bits are
+committed only after every supported table succeeds, and the operation returns
+a separately owned canonical SFNT without modifying the borrowed source face.

@@ -1521,6 +1521,43 @@ pub const Font = struct {
         );
     }
 
+    /// Atomically apply one IFT glyph-keyed patch group.
+    ///
+    /// Every patch is authenticated against the selected `IFT `/`IFTX`
+    /// compatibility id before decoding. `application_bits` are absolute bit
+    /// indexes in that patch's source table and are committed only if every
+    /// glyph-table reconstruction succeeds. The returned standalone SFNT is
+    /// owned by `allocator`; this borrowed face is never modified.
+    pub fn applyGlyphKeyedPatchesAlloc(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        patches: []const incremental_mod.glyph_keyed.Patch,
+        max_output_size: usize,
+    ) (FontError || incremental_mod.glyph_keyed.Error)![]u8 {
+        const ift_info = try self.iftPatchMapInfo();
+        const iftx_info = try self.iftxPatchMapInfo();
+        const source_tables = try allocator.alloc(
+            incremental_mod.sfnt_builder.Table,
+            self.owned_tables.len,
+        );
+        defer allocator.free(source_tables);
+        for (source_tables, self.owned_tables) |*table, record| {
+            try sfnt.checksum.validate(self.data, record);
+            table.* = .{
+                .tag = record.tag,
+                .data = self.data[record.offset .. record.offset + record.length],
+            };
+        }
+        return incremental_mod.glyph_keyed.applyAlloc(allocator, .{
+            .scaler = self.scaler_type,
+            .glyph_count = self.glyph_count,
+            .index_to_loc_format = self.index_to_loc_format,
+            .base_tables = source_tables,
+            .ift_info = ift_info,
+            .iftx_info = iftx_info,
+        }, patches, max_output_size);
+    }
+
     /// Read validated top-level metadata from the optional OpenType `VARC` table.
     pub fn varcInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?VarcInfo {
         const varc = self.varc orelse return null;

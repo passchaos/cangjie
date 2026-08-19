@@ -890,6 +890,27 @@ pub fn buildIftSharedDictionaryPatch(allocator: std.mem.Allocator) ![]u8 {
     return bytes;
 }
 
+/// Fontations-compatible `ifgk` patch replacing glyph 1 in the synthetic
+/// short-loca fixture. The Brotli stream expands to one `GlyphPatches` record
+/// (`glyf`, gid 1) whose outline has a 600-unit xMax instead of 700.
+pub fn buildIftGlyphKeyedPatch(allocator: std.mem.Allocator) ![]u8 {
+    const stream = [_]u8{
+        0x1b, 0x30, 0x00, 0xf8, 0x8f, 0xd4, 0x5a, 0x4d,
+        0x4d, 0xf7, 0x22, 0xaa, 0xdd, 0xde, 0x83, 0x06,
+        0x14, 0x34, 0x9e, 0x59, 0x40, 0x25, 0x81, 0x04,
+        0xac, 0x95, 0x17, 0x6f, 0x8c, 0x14, 0x08, 0x28,
+        0x12, 0x39, 0xf7, 0x6d, 0x34, 0x4c, 0x81, 0x5a,
+        0x55, 0x31, 0xfb, 0x88, 0xf8, 0x15,
+    };
+    const bytes = try allocator.alloc(u8, 29 + stream.len);
+    @memset(bytes, 0);
+    @memcpy(bytes[0..4], "ifgk");
+    for (0..16) |index| bytes[9 + index] = @intCast(index);
+    writeU32(bytes, 25, 49);
+    @memcpy(bytes[29..], &stream);
+    return bytes;
+}
+
 pub fn buildMathTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try mathTtfTables(allocator));
 }

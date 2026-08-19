@@ -863,11 +863,11 @@ test "incremental font transfer inspection and patch parsers are public" {
     try std.testing.expect((try inspection.extensionPatchMap()) == null);
 
     var table_patch: [34]u8 = .{0} ** 34;
-    @memcpy(table_patch[0..4], "IFTB");
+    @memcpy(table_patch[0..4], "iftk");
     for (0..16) |index| table_patch[8 + index] = @intCast(index);
     std.mem.writeInt(u16, table_patch[24..26], 1, .big);
-    std.mem.writeInt(u32, table_patch[26..30], 0, .big);
-    std.mem.writeInt(u32, table_patch[30..34], 0, .big);
+    std.mem.writeInt(u32, table_patch[26..30], 34, .big);
+    std.mem.writeInt(u32, table_patch[30..34], 34, .big);
     const parsed_table = try incremental.parseTablePatch(
         allocator,
         &table_patch,
@@ -875,12 +875,12 @@ test "incremental font transfer inspection and patch parsers are public" {
     defer incremental.freeTablePatch(allocator, parsed_table);
     try std.testing.expectEqualSlices(
         u32,
-        &.{ 0, 0 },
+        &.{ 34, 34 },
         parsed_table.patch_offsets,
     );
 
     var glyph_patch: [31]u8 = .{0} ** 31;
-    @memcpy(glyph_patch[0..4], "IFTG");
+    @memcpy(glyph_patch[0..4], "ifgk");
     std.mem.writeInt(u32, glyph_patch[25..29], 256, .big);
     glyph_patch[29] = 0xaa;
     glyph_patch[30] = 0xbb;
@@ -923,6 +923,115 @@ test "table-keyed IFT patches rebuild a validated owned SFNT" {
         (try core.tableData("kern".*)).?,
     );
     try std.testing.expect((try core.tableData("glyf".*)) != null);
+}
+
+test "glyph-keyed IFT patches atomically replace glyph data" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildIftTtf(allocator);
+    defer allocator.free(bytes);
+    const patch = try test_font.buildIftGlyphKeyedPatch(allocator);
+    defer allocator.free(patch);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var compatibility_id: [16]u8 = undefined;
+    for (&compatibility_id, 0..) |*byte, index| byte.* = @intCast(index);
+    const inputs = [_]cangjie.font.metadata.incremental.GlyphPatchInput{.{
+        .source = .ift,
+        .expected_compatibility_id = compatibility_id,
+        .application_bits = &.{520},
+        .data = patch,
+    }};
+    const patched = cangjie.font.metadata.incremental.applyGlyphPatchesAlloc(
+        allocator,
+        &face,
+        &inputs,
+        1024 * 1024,
+    ) catch |err| switch (err) {
+        error.BrotliRuntimeUnavailable => return,
+        else => return err,
+    };
+    defer allocator.free(patched);
+    var patched_face = try cangjie.font.Face.parse(allocator, patched);
+    defer patched_face.deinit();
+    const bounds = try patched_face.glyphs().bounds(1);
+    try std.testing.expectEqual(@as(i16, 600), bounds.x_max);
+
+    // The source face remains unchanged; applying a patch is a transaction that
+    // returns a separate owned font rather than mutating borrowed bytes.
+    const original = try face.glyphs().bounds(1);
+    try std.testing.expectEqual(@as(i16, 700), original.x_max);
+
+    // Fontations 0.6.1 reconstructs this exact fixture as 42-byte glyf and
+    // short loca offsets {0, 12, 42}. Retaining the table bytes gives an
+    // independent reference boundary beyond merely reparsing our own output.
+    const core = cangjie.font.metadata.core.inspect(&patched_face);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{
+            0, 0, 0,  0,  0,  0, 0,  0,  0,  0,   0, 0,
+            0, 1, 0,  0,  0,  0, 2,  88, 2,  188, 0, 2,
+            0, 0, 49, 33, 37, 1, 94, 1,  94, 250, 2, 188,
+            0, 0, 0,  0,  0,  0,
+        },
+        (try core.tableData("glyf".*)).?,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 0, 0, 0, 6, 0, 21 },
+        (try core.tableData("loca".*)).?,
+    );
+    const patched_ift = (try core.tableData("IFT ".*)).?;
+    try std.testing.expectEqual(@as(u8, 0xab), patched_ift[65]);
+    const source_ift = (try cangjie.font.metadata.core.inspect(&face)
+        .tableData("IFT ".*)).?;
+    try std.testing.expectEqual(@as(u8, 0xaa), source_ift[65]);
+}
+
+test "glyph-keyed IFT rejects incompatible and malformed patch groups" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildIftTtf(allocator);
+    defer allocator.free(bytes);
+    const patch = try test_font.buildIftGlyphKeyedPatch(allocator);
+    defer allocator.free(patch);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var compatibility_id: [16]u8 = undefined;
+    for (&compatibility_id, 0..) |*byte, index| byte.* = @intCast(index);
+
+    var wrong = compatibility_id;
+    wrong[0] = 99;
+    const incompatible = [_]cangjie.font.metadata.incremental.GlyphPatchInput{.{
+        .source = .ift,
+        .expected_compatibility_id = wrong,
+        .data = patch,
+    }};
+    try std.testing.expectError(
+        error.IncompatiblePatch,
+        cangjie.font.metadata.incremental.applyGlyphPatchesAlloc(
+            allocator,
+            &face,
+            &incompatible,
+            1024 * 1024,
+        ),
+    );
+
+    const malformed = try allocator.dupe(u8, patch);
+    defer allocator.free(malformed);
+    malformed[8] = 0x80;
+    const malformed_inputs = [_]cangjie.font.metadata.incremental.GlyphPatchInput{.{
+        .source = .ift,
+        .expected_compatibility_id = compatibility_id,
+        .data = malformed,
+    }};
+    try std.testing.expectError(
+        error.BadSfnt,
+        cangjie.font.metadata.incremental.applyGlyphPatchesAlloc(
+            allocator,
+            &face,
+            &malformed_inputs,
+            1024 * 1024,
+        ),
+    );
 }
 
 test "table-keyed IFT patching rejects compatibility and offset failures" {

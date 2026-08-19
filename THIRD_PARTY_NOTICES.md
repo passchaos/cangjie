@@ -72,3 +72,16 @@ tests, including OS/2 typographic selection and missing-OS/2 fallback.
 - Project: <https://github.com/googlefonts/fontations>
 - Copyright: 2019 Fontations Developers
 - License: Apache License 2.0; see `licenses/Apache-2.0.txt`
+
+## Fontations Incremental Font Transfer Reference
+
+The glyph-keyed IFT differential expectations in
+`src/tests/root/public_api.zig` were generated with Fontations
+`incremental-font-transfer` 0.6.1 at commit
+`bb6f87166aa8bac93ff9df5ea67d58b7091b3e2a`. They cover the canonical
+`glyf`/`loca` output for the retained synthetic `ifgk` patch; no Fontations
+source or binary fixture is redistributed for this test.
+
+- Project: <https://github.com/googlefonts/fontations>
+- Copyright: 2019 Fontations Developers
+- License: Apache License 2.0; see `licenses/Apache-2.0.txt`

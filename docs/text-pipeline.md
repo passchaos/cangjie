@@ -1301,6 +1301,13 @@ as its target lookup instead of reparsing the borrowed Coverage table for each
 candidate. The Arabic median reduced further to `75,414 ns`, about `12.0%`
 above the retained Parley row, with identical output checksum and counts.
 
+The `auto` benchmark now resolves first-strong direction inside each measured
+layout call, matching Parley's builder boundary rather than resolving it once
+before timing. A 5,000-iteration, 31-sample CPU-30 Cangjie/Parley/Parley/
+Cangjie matrix measured `75,539`/`75,551 ns` versus `68,314`/`66,560 ns`.
+Direction resolution therefore leaves a stable Arabic deficit of roughly
+`11--13.5%`; it is no longer hidden outside the Cangjie timing boundary.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

@@ -40,14 +40,6 @@ pub fn main(init: std.process.Init) !void {
     defer allocator.free(text_bytes);
     const text = firstLine(text_bytes);
     if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
-    const resolved_direction = switch (direction) {
-        .auto => switch (try cangjie.text.bidi.direction(text)) {
-            .rtl => cangjie.shaping.Direction.rtl,
-            else => cangjie.shaping.Direction.ltr,
-        },
-        .ltr => cangjie.shaping.Direction.ltr,
-        .rtl => cangjie.shaping.Direction.rtl,
-    };
     const faces = [_]*const cangjie.font.Face{&face};
     const cascade = cangjie.font.Cascade.init(&faces);
     var engine = cangjie.shaping.Engine.init(allocator, .{});
@@ -56,7 +48,7 @@ pub fn main(init: std.process.Init) !void {
         try engine.prepareParagraph(cascade, .{
             .text = text,
             .font_size = 16,
-            .options = .{ .max_width = width, .direction = resolved_direction },
+            .options = .{ .max_width = width, .direction = try resolvedDirection(direction, text) },
         })
     else
         null;
@@ -77,7 +69,7 @@ pub fn main(init: std.process.Init) !void {
                 cascade,
                 text,
                 width,
-                resolved_direction,
+                direction,
                 if (retained) |*paragraph| paragraph else null,
                 &reflow,
             );
@@ -96,7 +88,7 @@ pub fn main(init: std.process.Init) !void {
                 cascade,
                 text,
                 width,
-                resolved_direction,
+                direction,
                 if (retained) |*paragraph| paragraph else null,
                 &reflow,
             );
@@ -129,13 +121,22 @@ fn benchmarkOnce(
     cascade: cangjie.font.Cascade,
     text: []const u8,
     width: f32,
-    direction: cangjie.shaping.Direction,
+    direction: Direction,
     retained: ?*const cangjie.paragraph.Shaped,
     reflow: *cangjie.paragraph.ReflowBuffer,
 ) !cangjie.paragraph.Layout {
     return switch (phase) {
-        .layout => layoutOnce(engine, cascade, text, width, direction),
-        .reflow => retained.?.layout(reflow, .{ .max_width = width, .direction = direction }),
+        .layout => layoutOnce(
+            engine,
+            cascade,
+            text,
+            width,
+            try resolvedDirection(direction, text),
+        ),
+        .reflow => retained.?.layout(reflow, .{
+            .max_width = width,
+            .direction = try resolvedDirection(direction, text),
+        }),
     };
 }
 
@@ -207,6 +208,20 @@ fn parseDirection(value: []const u8) !Direction {
     if (std.mem.eql(u8, value, "ltr")) return .ltr;
     if (std.mem.eql(u8, value, "rtl")) return .rtl;
     return error.InvalidArguments;
+}
+
+fn resolvedDirection(
+    direction: Direction,
+    text: []const u8,
+) !cangjie.shaping.Direction {
+    return switch (direction) {
+        .auto => switch (try cangjie.text.bidi.direction(text)) {
+            .rtl => .rtl,
+            else => .ltr,
+        },
+        .ltr => .ltr,
+        .rtl => .rtl,
+    };
 }
 
 fn usage() error{InvalidArguments} {

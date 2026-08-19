@@ -27,16 +27,16 @@ pub const Window = struct {
     regions: regions_mod.Regions,
 
     input_classes: [max_region_glyphs]u16 = undefined,
-    input_class_valid: [max_region_glyphs]bool =
-        [_]bool{false} ** max_region_glyphs,
+    /// Highest prefix whose class values have been decoded. Regions extend
+    /// monotonically, so a count avoids clearing three 64-byte validity arrays
+    /// for every candidate position in class-heavy Indic fonts.
+    input_class_len: usize = 0,
 
     backtrack_classes: [max_region_glyphs]u16 = undefined,
-    backtrack_class_valid: [max_region_glyphs]bool =
-        [_]bool{false} ** max_region_glyphs,
+    backtrack_class_len: usize = 0,
 
     lookahead_classes: [max_region_glyphs]u16 = undefined,
-    lookahead_class_valid: [max_region_glyphs]bool =
-        [_]bool{false} ** max_region_glyphs,
+    lookahead_class_len: usize = 0,
     cached_lookahead_start: usize = std.math.maxInt(usize),
 
     pub fn init(
@@ -79,13 +79,14 @@ pub const Window = struct {
 
     pub fn inputClassAt(self: *Window, index: usize) Error!?u16 {
         const indices = (try self.inputIndices(index + 1)) orelse return null;
-        if (!self.input_class_valid[index]) {
-            self.input_classes[index] = try table.class_def.value(
+        while (self.input_class_len <= index) {
+            const decoded_index = self.input_class_len;
+            self.input_classes[decoded_index] = try table.class_def.value(
                 self.view,
                 self.class_defs.input,
-                self.glyphs[indices[index]],
+                self.glyphs[indices[decoded_index]],
             );
-            self.input_class_valid[index] = true;
+            self.input_class_len += 1;
         }
         return self.input_classes[index];
     }
@@ -93,13 +94,14 @@ pub const Window = struct {
     pub fn backtrackClassAt(self: *Window, index: usize) Error!?u16 {
         const indices =
             (try self.backtrackIndices(index + 1)) orelse return null;
-        if (!self.backtrack_class_valid[index]) {
-            self.backtrack_classes[index] = try table.class_def.value(
+        while (self.backtrack_class_len <= index) {
+            const decoded_index = self.backtrack_class_len;
+            self.backtrack_classes[decoded_index] = try table.class_def.value(
                 self.view,
                 self.class_defs.backtrack,
-                self.glyphs[indices[index]],
+                self.glyphs[indices[decoded_index]],
             );
-            self.backtrack_class_valid[index] = true;
+            self.backtrack_class_len += 1;
         }
         return self.backtrack_classes[index];
     }
@@ -116,15 +118,16 @@ pub const Window = struct {
         const start = self.regions.input[input_count - 1] + 1;
         if (self.cached_lookahead_start != start) {
             self.cached_lookahead_start = start;
-            @memset(&self.lookahead_class_valid, false);
+            self.lookahead_class_len = 0;
         }
-        if (!self.lookahead_class_valid[index]) {
-            self.lookahead_classes[index] = try table.class_def.value(
+        while (self.lookahead_class_len <= index) {
+            const decoded_index = self.lookahead_class_len;
+            self.lookahead_classes[decoded_index] = try table.class_def.value(
                 self.view,
                 self.class_defs.lookahead,
-                self.glyphs[indices[index]],
+                self.glyphs[indices[decoded_index]],
             );
-            self.lookahead_class_valid[index] = true;
+            self.lookahead_class_len += 1;
         }
         return self.lookahead_classes[index];
     }

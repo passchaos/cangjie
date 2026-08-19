@@ -2574,6 +2574,16 @@ shaping-performance superiority.
   smoke runs reliably.
 - Avoid retaining optimizations that only improve a single noisy run or regress
   Roboto/word-list smoke cases.
+- Chaining class windows now track decoded class prefixes by length instead of
+  zeroing three 64-byte validity arrays for every candidate glyph. Region
+  discovery is monotone, so later authored rules extend the same prefix while a
+  changed lookahead origin resets one length. A four-pair fixed-CPU-30 ABBA run
+  with 31-sample medians reduced NotoSansDevanagari `hi-words` from an average
+  `1556.1` to `1549.1 ns/glyph` (about `0.45%`) and Roboto `en-words` from
+  `253.1` to `245.5 ns/glyph` (about `3.0%`), with unchanged corpus checksums.
+  The Devanagari win is small but repeatable; more importantly, perf had
+  attributed about `5.6%` to memset inside class/glyph/coverage contextual
+  windows, and this removes the class-window share without new allocations.
 - Font cascade selection now treats each extended grapheme/shaping cluster as
   one fallback unit. A font must cover every visible scalar, explicit cmap-14
   UVS support wins when present, and default-ignorable join controls do not

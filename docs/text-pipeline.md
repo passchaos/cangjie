@@ -1214,6 +1214,18 @@ at this newly retained default Latin paragraph boundary. This is one controlled
 workload, not evidence of overall Parley superiority; Arabic, Japanese, styled,
 spacing, justification, and longer paragraph matrices remain required.
 
+The first script expansion reinforces that caution. With the same fixed-CPU-30
+protocol, the first 570-byte Japanese paragraph produced 190 glyphs and seven
+lines in both engines; Cangjie measured `60,642`/`60,876 ns` versus Parley's
+`136,778`/`135,030 ns`, about a `2.23x` Cangjie lead. The first 200-byte Arabic
+paragraph produced 144 glyphs in both engines, but Cangjie selected four lines
+while Parley selected five, so it is not an output-equivalent performance row.
+Its timings nevertheless expose the next optimization target: Cangjie measured
+`99,972`/`100,176 ns` versus Parley's `66,594`/`67,708 ns`, about `1.50x` slower.
+That row must not be used as a speed headline until line-break/metric semantics
+are reconciled; it does show that Arabic paragraph construction, not the Latin
+or Japanese default path, is the current Parley-relative deficit.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

@@ -14,6 +14,7 @@ fn main() {
     let text_path = args.next().expect("text path");
     let iterations: usize = args.next().expect("iterations").parse().unwrap();
     let samples: usize = args.next().expect("samples").parse().unwrap();
+    let family_name = args.next().unwrap_or_else(|| "Roboto".to_owned());
     let text_file = fs::read_to_string(text_path).unwrap();
     let text = text_file.lines().next().unwrap_or("");
     let font_data = fs::read(font_path).unwrap();
@@ -23,7 +24,7 @@ fn main() {
         system_fonts: false,
     });
     collection.register_fonts(Blob::new(Arc::new(font_data)), None);
-    assert!(collection.family_id("Roboto").is_some());
+    assert!(collection.family_id(&family_name).is_some());
     let mut font_cx = FontContext {
         collection,
         source_cache: SourceCache::default(),
@@ -36,7 +37,7 @@ fn main() {
     let mut lines = 0usize;
     for _ in 0..samples {
         for _ in 0..3 {
-            let result = run_once(&mut font_cx, &mut layout_cx, text);
+            let result = run_once(&mut font_cx, &mut layout_cx, text, &family_name);
             assert!(
                 checksum == 0 || checksum == result.0,
                 "unstable layout output"
@@ -46,7 +47,7 @@ fn main() {
         let start = Instant::now();
         let mut batch_checksum = 0u64;
         for _ in 0..iterations {
-            let result = run_once(&mut font_cx, &mut layout_cx, text);
+            let result = run_once(&mut font_cx, &mut layout_cx, text, &family_name);
             assert_eq!(result, (checksum, glyphs, lines), "unstable layout output");
             batch_checksum = mix(batch_checksum, result.0);
         }
@@ -67,9 +68,10 @@ fn run_once(
     font_cx: &mut FontContext,
     layout_cx: &mut LayoutContext<Brush>,
     text: &str,
+    family_name: &str,
 ) -> (u64, usize, usize) {
     let mut builder = layout_cx.ranged_builder(font_cx, text, 1.0, true);
-    builder.push_default(FontFamily::named("Roboto"));
+    builder.push_default(FontFamily::named(family_name));
     builder.push_default(StyleProperty::FontSize(16.0));
     let mut layout: Layout<Brush> = builder.build(text);
     layout.break_all_lines(Some(200.0));

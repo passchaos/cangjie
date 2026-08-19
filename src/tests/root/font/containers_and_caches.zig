@@ -520,7 +520,10 @@ test "caches shaped runs for repeated shaping requests" {
     try std.testing.expectEqual(@as(usize, 1), shaped_cache.misses);
     const fallback_misses_after_first = fallback_cache.misses;
     const metrics_misses_after_first = metrics_cache.misses;
-    try std.testing.expect(fallback_misses_after_first > 0);
+    // A one-face cascade has no fallback choice and now bypasses the fallback
+    // cache entirely; the shaped-run cache must still prevent any later cache
+    // traffic and preserve exact output.
+    try std.testing.expectEqual(@as(usize, 0), fallback_misses_after_first);
     try std.testing.expect(metrics_misses_after_first > 0);
 
     var second_buffer = LayoutBuffer.init(allocator);

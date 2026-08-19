@@ -1243,6 +1243,16 @@ about 83% of Cangjie's measured cost lies before or outside repeatable reflow
 (shaping, Unicode/fallback setup, and one-shot orchestration); line breaking
 itself is not the primary Parley-relative bottleneck.
 
+Single-face cascades now bypass grapheme-by-grapheme fallback segmentation:
+with no overrides, every valid source cluster must resolve to font index zero,
+so scanning Unicode boundaries merely to rediscover that invariant was wasted
+work. The fallback and shaped-run cache contracts explicitly retain zero
+fallback probes for this case. On the Arabic 180-unit row, fixed-CPU-30 medians
+fell from roughly `103,000 ns` to `98,362 ns`; the same run measured Latin at
+`27,754 ns` and Japanese at `56,077 ns`, both improvements over the preceding
+`29,656` and `60,876 ns` retained rows. Output checksums, glyph counts, and line
+counts remained identical for all three scripts.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

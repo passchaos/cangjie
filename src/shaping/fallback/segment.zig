@@ -51,6 +51,21 @@ pub fn shape(context: anytype, input: Input) !Pen {
     var segment_font_index: ?usize = null;
     var next_pen = input.pen;
 
+    if (input.text.len == 0) return next_pen;
+    if (input.cascade.fonts.len == 1 and input.font_overrides.len == 0) {
+        // A one-face cascade cannot make a fallback decision. Shape the whole
+        // valid UTF-8 item directly instead of segmenting every grapheme only
+        // to rediscover font index zero; this is especially material for
+        // Arabic and CJK paragraph builders that use one explicit face.
+        return context.appendSegment(
+            input.cascade,
+            0,
+            input.text,
+            input.cluster_base,
+            next_pen,
+        );
+    }
+
     if (isAscii(input.text)) {
         // Every ASCII byte is one grapheme. Avoid Unicode iteration on the
         // dominant Latin/UI path while preserving CR/LF face selection.
@@ -111,6 +126,55 @@ pub fn shape(context: anytype, input: Input) !Pen {
         );
     }
     return next_pen;
+}
+
+test "single-face cascades bypass fallback segmentation unless overridden" {
+    const test_font = @import("../../test_font.zig");
+    const bytes = try test_font.buildCodepointSetTtf(
+        std.testing.allocator,
+        &.{ 0x0628, 0x0640 },
+    );
+    defer std.testing.allocator.free(bytes);
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    const cascade = font_fallback.Cascade.init(&.{&font});
+
+    const Context = struct {
+        calls: usize = 0,
+        text_len: usize = 0,
+
+        pub fn appendSegment(
+            self: *@This(),
+            _: font_fallback.Cascade,
+            font_index: usize,
+            text: []const u8,
+            _: usize,
+            pen: Pen,
+        ) !Pen {
+            try std.testing.expectEqual(@as(usize, 0), font_index);
+            self.calls += 1;
+            self.text_len += text.len;
+            return pen;
+        }
+    };
+
+    var direct = Context{};
+    _ = try shape(&direct, .{ .cascade = cascade, .text = "بـب" });
+    try std.testing.expectEqual(@as(usize, 1), direct.calls);
+    try std.testing.expectEqual("بـب".len, direct.text_len);
+
+    var overridden = Context{};
+    _ = try shape(&overridden, .{
+        .cascade = cascade,
+        .text = "بـب",
+        .font_overrides = &.{.{
+            .byte_start = 2,
+            .byte_len = 2,
+            .font = &font,
+        }},
+    });
+    try std.testing.expectEqual(@as(usize, 1), overridden.calls);
+    try std.testing.expectEqual("بـب".len, overridden.text_len);
 }
 
 pub fn isAscii(text: []const u8) bool {

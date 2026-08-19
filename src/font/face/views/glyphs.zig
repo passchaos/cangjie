@@ -81,6 +81,18 @@ pub const View = struct {
         );
     }
 
+    /// Create a lightweight outline-decoding session for immutable face bytes.
+    ///
+    /// `Face.parse` already proves whole-table grammar and checksums. The
+    /// ordinary `outline` methods deliberately repeat those borrowed-byte
+    /// checks so post-parse mutation is reported. A session instead reuses the
+    /// parse proof for atlas construction and other trusted, repeated outline
+    /// reads. The caller must keep both the face and its borrowed source bytes
+    /// alive and unchanged for the complete session lifetime.
+    pub fn session(self: View) Session {
+        return .{ .implementation = self.implementation };
+    }
+
     pub fn name(
         self: View,
         glyph_id: glyph_mod.GlyphId,
@@ -116,6 +128,37 @@ pub const View = struct {
         normalized_coords: []const f32,
     ) font_mod.FontError![]font_mod.LigatureCaret {
         return self.implementation.ligatureCarets(
+            allocator,
+            glyph_id,
+            normalized_coords,
+        );
+    }
+};
+
+/// Borrowed parsed-face proof for repeated outline decoding.
+pub const Session = struct {
+    implementation: *const font_mod.Font,
+
+    pub fn outline(
+        self: Session,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+    ) font_mod.FontError!glyph_mod.GlyphOutline {
+        return font_mod.raster_backend.glyphOutline(
+            self.implementation,
+            allocator,
+            glyph_id,
+        );
+    }
+
+    pub fn outlineAt(
+        self: Session,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+        normalized_coords: []const f32,
+    ) font_mod.FontError!glyph_mod.GlyphOutline {
+        return font_mod.raster_backend.glyphOutlineAtCoords(
+            self.implementation,
             allocator,
             glyph_id,
             normalized_coords,

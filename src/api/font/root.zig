@@ -11,6 +11,7 @@ const glyph = @import("../../glyph.zig");
 pub const Face = face.Face;
 pub const Properties = face.Properties;
 pub const Glyphs = face.Glyphs;
+pub const GlyphSession = face.GlyphSession;
 pub const Metrics = face.Metrics;
 pub const Names = face.Names;
 pub const Variations = face.Variations;

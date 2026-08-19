@@ -2597,6 +2597,17 @@ shaping-performance superiority.
   the four complex glyphs reduced cycles by roughly 16.7–22.0%. Direct and
   prepared target checksums are byte-identical, with differential tests for
   1/2/3/4 samples, repeated calls, empty outlines, and small-size emboldening.
+- Repeated public outline decoding now has an explicit parsed-proof
+  `font.GlyphSession`, while `Face.glyphs().outline` retains whole-table
+  borrowed-byte revalidation. On the built-in compound TrueType fixture, an
+  11-sample ReleaseFast run measured about `146 ns/glyph` for the session,
+  `616 ns/glyph` for the strict API, and `181 ns/glyph` for FreeType's
+  no-scale/no-hinting load: the trusted Cangjie session was about `1.24x`
+  faster than FreeType with identical Cangjie outline checksums. The
+  `outline-session` benchmark mode retains default and varied-output parity;
+  mutation tests document that only the strict API authenticates later source
+  changes. Raster benchmarks now use the same parse-proof path as production
+  rendering instead of charging the defensive public checksum pass per glyph.
 - Predecoded PairPos format 2 accelerators now merge coverage membership and
   class1 into one sorted `(glyph, class)` table. Every covered first glyph gets
   its explicit or implicit-zero class during accelerator construction, so the

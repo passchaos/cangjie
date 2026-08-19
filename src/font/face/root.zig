@@ -209,6 +209,7 @@ pub const Cascade = struct {
 };
 
 pub const Glyphs = @import("views/glyphs.zig").View;
+pub const GlyphSession = @import("views/glyphs.zig").Session;
 pub const Metrics = @import("views/metrics.zig").View;
 pub const Names = @import("views/names.zig").View;
 pub const Variations = @import("views/variations.zig").View;

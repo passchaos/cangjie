@@ -31,6 +31,14 @@ newly reconstructed bytes, so `cangjie.font.container.OwnedFace` owns both the
 decoded allocation and the `Face` borrowing it. Destroying `OwnedFace`
 deinitializes the parser before releasing those bytes.
 
+`Face.glyphs().outline` is the defensive one-shot outline API: it revalidates
+borrowed table checksums so post-parse source mutation fails explicitly. For
+trusted immutable bytes and repeated atlas/path construction,
+`Face.glyphs().session()` returns a lightweight borrowed `GlyphSession` that
+reuses the whole-face grammar/checksum proof established by `Face.parse`. The
+face and its source bytes must outlive the session and must remain unchanged;
+returned outlines remain allocator-owned exactly like one-shot output.
+
 `cangjie.font.container.decodeAlloc` always returns owned bytes, including a
 copy for plain SFNT/TTC input. Its size limit applies to the decoded output and
 therefore bounds WOFF expansion and DFONT-to-SFNT/TTC reconstruction.

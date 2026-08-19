@@ -249,6 +249,7 @@ test "public facade uses domain names without legacy aliases" {
     );
     inline for (.{
         cangjie.font.Glyphs,
+        cangjie.font.GlyphSession,
         cangjie.font.Metrics,
         cangjie.font.Names,
         cangjie.font.Variations,

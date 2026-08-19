@@ -616,9 +616,10 @@ therefore mirrors with `vertical_rl` versus `vertical_lr`. Both values affect
 final layout/interaction geometry but not min/max-content intrinsic inline
 sizes.
 
-Paragraph alignment is also inline-axis aware. Vertical `.start`, `.center`,
-and `.end` place each column at top, center, or bottom of its post-indent
-`max_width` region. Every soft column resolves independently; hard-break
+Paragraph alignment is also inline-axis aware. With top-to-bottom flow,
+vertical `.start`, `.center`, and `.end` place each column at top, center, or
+bottom of its post-indent `max_width` region; bottom-to-top flow mirrors
+start/end to bottom/top. Every soft column resolves independently; hard-break
 segments reset indentation before alignment. Overfull and unbounded columns
 remain at logical start rather than moving backward. Columns containing active
 absolute tab rulers are pinned to `.start`, matching horizontal tab-ruler
@@ -663,13 +664,14 @@ objects removed by `max_lines` neither render nor request placement. Optional
 resolver exclusions participate in vertical LR/RL reflow through the same static
 rectangle pipeline as caller-authored exclusions.
 
-This is intentionally not described as full vertical reflow. Until the
-remaining line-breaking subsystems are converted to explicit inline/block
-axes, vertical paragraph validation rejects an explicit bottom-to-top
-`direction = rtl` request and physical left/right alignment.
-Retained whole-paragraph
-layout and intrinsic inline-size measurement are supported and restore the
-pristine vertical shaping snapshot between calls. Returning a concrete
+This is intentionally not described as full vertical reflow. Bottom-to-top
+`direction = rtl` is supported as the UAX #9 base direction and logical
+inline-start/end policy while final glyphs remain in physical top-to-bottom
+order. Physical left/right paragraph alignment remains rejected because it
+names block-axis geometry rather than inline alignment.
+Retained whole-paragraph layout and intrinsic inline-size measurement are
+supported and restore the pristine vertical shaping snapshot between calls.
+Returning a concrete
 `UnsupportedVerticalParagraphOptions` error is part of this boundary: an
 unsupported request must never fall through the horizontal x-axis machinery
 and produce plausible but false geometry.
@@ -1273,13 +1275,13 @@ paragraph resolution supplies levels to each final line/column, where L1/L2
 produces the local visual order. Mixed LTR/RTL text, embeddings, overrides, and
 isolates therefore reorder independently when a width change creates different
 boundaries without losing paragraph-wide explicit state. Horizontal lines map
-that order to x; vertical paragraphs with `direction = ltr` map it to
-positive-down y while RL/LR continues to select only column progression.
+that order to x; vertical paragraphs map it to physical positive-down y while
+RL/LR continues to select only column progression. A bottom-to-top base
+therefore reverses logical ownership and start/end alignment without
+introducing negative advances into wrapping, rendering, or caret geometry.
 Font-run ownership, styled glyph metadata, tabs, inline objects, ellipsis,
 retained reflow, hit testing, owned TextGeometry, and renderer commands follow
-the same permutation. Explicit `direction = rtl` remains reserved for
-bottom-to-top vertical inline progression and is rejected until that geometry
-exists.
+the same permutation.
 
 `ParagraphOptions.exclusions` adds platform-neutral rectangular float/exclusion
 geometry. Each wrapped visual line subtracts vertically intersecting rectangles

@@ -26,11 +26,11 @@ pub const TextAlign = enum {
     /// unbounded layouts, and lines without safe opportunities retain their
     /// natural width.
     justify,
-    /// Align to logical inline start: left/right horizontally and top in the
-    /// currently supported top-to-bottom vertical paragraph flow.
+    /// Align to logical inline start: left/right horizontally and top/bottom
+    /// for top-to-bottom/bottom-to-top vertical paragraph flow.
     start,
-    /// Align to logical inline end: right/left horizontally and bottom in the
-    /// currently supported top-to-bottom vertical paragraph flow.
+    /// Align to logical inline end: right/left horizontally and bottom/top
+    /// for top-to-bottom/bottom-to-top vertical paragraph flow.
     end,
 };
 

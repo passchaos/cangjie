@@ -126,23 +126,23 @@ pub const Options = struct {
     line_break_strategy: paragraph_types.LineBreakStrategy = .greedy,
     /// Inline-axis alignment.
     ///
-    /// Vertical paragraphs support `.start`, `.center`, and `.end` as
-    /// top/center/bottom, plus `.justify` for generic inline-axis space/CJK
-    /// expansion. Physical `.left`/`.right` remain horizontal-only.
+    /// Vertical paragraphs support direction-aware `.start` and `.end`,
+    /// `.center`, and `.justify` for generic inline-axis space/CJK expansion.
+    /// Physical `.left`/`.right` remain horizontal-only.
     alignment: paragraph_types.TextAlign = .start,
     line_height: ?f32 = null,
     /// Paragraph base/inline direction.
     ///
-    /// In vertical paragraphs `.ltr` means the currently supported
-    /// top-to-bottom inline progression; UAX #9 still resolves strong RTL
+    /// In vertical paragraphs `.ltr` selects a top-to-bottom inline base and
+    /// `.rtl` selects bottom-to-top. UAX #9 still resolves strong directional
     /// source, explicit embeddings/overrides, and isolates inside each final
-    /// column. `.rtl` requests bottom-to-top inline progression and remains
-    /// unsupported by vertical paragraph geometry.
+    /// column; final glyph arrays remain in physical top-to-bottom order.
     direction: pipeline_types.TextDirection = .ltr,
     /// Physical writing mode shared by shaping and final paragraph geometry.
     ///
-    /// The vertical paragraph contract wraps top-to-bottom columns against
-    /// `max_width` as their inline-size/height measure. Global and ranged
+    /// The vertical paragraph contract wraps against `max_width` as the
+    /// column inline-size/height measure; `direction` selects which physical
+    /// edge is logical inline start. Global and ranged
     /// `wrap_mode`, `word_break`, and `overflow_wrap` tailor safe UAX #14
     /// opportunities; emergency modes use grapheme boundaries that remain
     /// safe for shaped-output reuse. `white_space_collapse` applies along the
@@ -327,9 +327,7 @@ pub fn shapeOptions(options: Options) shaping_plan.ShapeOptions {
 /// axis-conversion task instead of allowing a newly added paragraph option to
 /// become an accidental vertical no-op.
 fn validateVerticalForText(_: []const u8, options: Options) !void {
-    if (options.direction != .ltr or
-        !verticalAlignmentSupported(options.alignment))
-    {
+    if (!verticalAlignmentSupported(options.alignment)) {
         return error.UnsupportedVerticalParagraphOptions;
     }
 }
@@ -457,6 +455,11 @@ test "vertical paragraph validation admits only implemented columns" {
     try validateForText("AA", .{
         .max_width = 100,
         .writing_mode = .vertical_rl,
+    });
+    try validateForText("אב", .{
+        .max_width = 100,
+        .direction = .rtl,
+        .writing_mode = .vertical_lr,
     });
     try validateForText("AA", .{
         .max_width = 100,

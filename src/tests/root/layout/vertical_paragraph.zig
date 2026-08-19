@@ -8,6 +8,7 @@ test {
     _ = @import("vertical_paragraph/bidi.zig");
     _ = @import("vertical_paragraph/bidi_integration.zig");
     _ = @import("vertical_paragraph/bidi_atoms.zig");
+    _ = @import("vertical_paragraph/bottom_to_top.zig");
     _ = @import("vertical_paragraph/styled.zig");
     _ = @import("vertical_paragraph/wrapping.zig");
     _ = @import("vertical_paragraph/wrapping_policy.zig");

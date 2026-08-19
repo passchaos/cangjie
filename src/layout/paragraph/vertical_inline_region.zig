@@ -66,7 +66,13 @@ pub fn resolve(
         };
     }
     const normalized_indent = @max(0, natural_indent);
-    const container_y = normalized_indent;
+    // A bottom-to-top first-line indent reserves space at the physical bottom
+    // of the container. Keep regions expressed as top-origin y/height, so only
+    // their start changes; wrapping continues to consume positive measures.
+    const container_y = if (options.direction == .ltr)
+        normalized_indent
+    else
+        0;
     const container_size = if (wrapping_enabled and
         options.max_width > 0 and
         std.math.isFinite(options.max_width))
@@ -132,7 +138,7 @@ pub fn start(
     if (visual_index < options.line_regions.len) {
         return options.line_regions[visual_index].y;
     }
-    return natural_indent;
+    return if (options.direction == .ltr) natural_indent else 0;
 }
 
 pub fn available(
@@ -162,6 +168,7 @@ pub fn origin(
             line.region_inline_size,
             inline_size,
             line.resolved_alignment orelse options.alignment,
+            options.direction,
         );
     }
     return vertical_inline_alignment.origin(
@@ -169,5 +176,6 @@ pub fn origin(
         line.indent,
         inline_size,
         line.resolved_alignment orelse options.alignment,
+        options.direction,
     );
 }

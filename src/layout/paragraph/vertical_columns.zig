@@ -397,6 +397,7 @@ fn appendColumnAssumeCapacity(
         region_inline_size,
         inline_size,
         resolved_alignment,
+        options.direction,
     );
     buffer.lines.appendAssumeCapacity(.{
         .glyph_start = glyph_start,

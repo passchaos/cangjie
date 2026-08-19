@@ -105,19 +105,26 @@ test "vertical no-wrap paragraph exposes physical column geometry" {
         0.001,
     );
 
-    try std.testing.expectError(
-        error.UnsupportedVerticalParagraphOptions,
-        TextShaper.layoutParagraphUtf8(
-            FontCascade.init(&.{&font}),
-            &buffer,
-            "AA",
-            20,
-            .{
-                .max_width = 100,
-                .wrap_mode = .no_wrap,
-                .writing_mode = .vertical_rl,
-                .direction = .rtl,
-            },
-        ),
+    const bottom_to_top = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&.{&font}),
+        &buffer,
+        "AA",
+        20,
+        .{
+            .max_width = 100,
+            .wrap_mode = .no_wrap,
+            .writing_mode = .vertical_rl,
+            .text_orientation = .upright,
+            .direction = .rtl,
+        },
     );
+    // The RTL paragraph aligns its occupied column to the physical bottom.
+    // Strong L text remains an LTR run inside that base direction.
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 60),
+        bottom_to_top.lines[0].y,
+        0.001,
+    );
+    try std.testing.expectEqual(@as(usize, 0), bottom_to_top.hitTest(10, 64).cluster);
+    try std.testing.expectEqual(@as(usize, 1), bottom_to_top.hitTest(10, 84).cluster);
 }

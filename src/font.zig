@@ -332,6 +332,7 @@ pub const ResolvedSvgGlyphDocument = svg_mod.ResolvedDocument;
 // Preserve the established public type identities while their implementation
 // and table grammar live in the focused embedded-bitmap module.
 pub const BitmapGlyphPng = bitmap_mod.GlyphPng;
+pub const BitmapGlyphMask = bitmap_mod.GlyphMask;
 pub const BitmapGlyphInfo = bitmap_mod.GlyphInfo;
 pub const BitmapStrikeSource = bitmap_mod.StrikeSource;
 pub const BitmapStrikeInfo = bitmap_mod.StrikeInfo;
@@ -4568,6 +4569,7 @@ pub const Font = struct {
                 .source = source,
                 .ppem = strike.ppem,
                 .ppi = strike.ppi,
+                .bit_depth = strike.bit_depth,
                 .start_glyph = strike.start_glyph,
                 .end_glyph = strike.end_glyph,
             });
@@ -4726,6 +4728,35 @@ pub const Font = struct {
             try sfnt.checksum.validate(self.data, ebdt);
             try validateCblcCbdtTables(self.data, eblc, ebdt, self.glyph_count);
             if (try bitmap_mod.cblc.glyphPng(self.data, bitmapTable(eblc), bitmapTable(ebdt), self.glyph_count, glyph_id, size_px, .eblc_ebdt)) |png| return png;
+        }
+        return null;
+    }
+
+    /// Return raw 1/2/4/8-bpp EBDT/CBDT coverage from the preferred strike.
+    /// The payload borrows this face's source bytes; `decodeAlloc` expands it
+    /// to one 0...255 coverage byte per pixel.
+    pub fn bitmapGlyphMask(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+        size_px: f32,
+    ) FontError!?BitmapGlyphMask {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try bitmap_mod.validateRequestSize(size_px);
+        if (self.cblc != null and self.cbdt != null) {
+            const cblc = self.cblc.?;
+            const cbdt = self.cbdt.?;
+            try sfnt.checksum.validate(self.data, cblc);
+            try sfnt.checksum.validate(self.data, cbdt);
+            try validateCblcCbdtTables(self.data, cblc, cbdt, self.glyph_count);
+            if (try bitmap_mod.cblc.glyphMask(self.data, bitmapTable(cblc), bitmapTable(cbdt), self.glyph_count, glyph_id, size_px, .cblc_cbdt)) |mask| return mask;
+        }
+        if (self.eblc != null and self.ebdt != null) {
+            const eblc = self.eblc.?;
+            const ebdt = self.ebdt.?;
+            try sfnt.checksum.validate(self.data, eblc);
+            try sfnt.checksum.validate(self.data, ebdt);
+            try validateCblcCbdtTables(self.data, eblc, ebdt, self.glyph_count);
+            if (try bitmap_mod.cblc.glyphMask(self.data, bitmapTable(eblc), bitmapTable(ebdt), self.glyph_count, glyph_id, size_px, .eblc_ebdt)) |mask| return mask;
         }
         return null;
     }

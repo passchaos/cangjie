@@ -206,6 +206,7 @@ pub const KernTableDialect = @import("../../font.zig").KernTableDialect;
 pub const GlyphMetrics = layout_cache.GlyphMetrics;
 pub const MissingGlyphDiagnostic = @import("../../shaping/diagnostics/types.zig").MissingGlyphDiagnostic;
 pub const BitmapGlyphPng = @import("../../font.zig").BitmapGlyphPng;
+pub const BitmapGlyphMask = @import("../../font.zig").BitmapGlyphMask;
 pub const BitmapGlyphInfo = @import("../../font.zig").BitmapGlyphInfo;
 pub const BitmapStrikeInfo = @import("../../font.zig").BitmapStrikeInfo;
 pub const BitmapStrikeSource = @import("../../font.zig").BitmapStrikeSource;

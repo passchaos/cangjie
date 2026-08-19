@@ -4,6 +4,85 @@ const std = @import("std");
 const composite = @import("composite.zig");
 const Rgba = @import("targets.zig").Rgba;
 
+pub fn blendScaledMask8(
+    target: []Rgba,
+    target_width: u32,
+    target_height: u32,
+    source: []const u8,
+    source_width: usize,
+    source_height: usize,
+    left: f32,
+    top: f32,
+    scale: f32,
+) void {
+    std.debug.assert(source.len == source_width * source_height);
+    std.debug.assert(target.len >= @as(usize, target_width) * target_height);
+    if (source_width == 0 or source_height == 0 or scale <= 0) return;
+    const right = left + @as(f32, @floatFromInt(source_width)) * scale;
+    const bottom = top + @as(f32, @floatFromInt(source_height)) * scale;
+    if (!std.math.isFinite(left) or !std.math.isFinite(top) or
+        !std.math.isFinite(right) or !std.math.isFinite(bottom)) return;
+    const start_x_f = @max(@floor(left), 0.0);
+    const start_y_f = @max(@floor(top), 0.0);
+    const end_x_f = @min(@ceil(right), @as(f32, @floatFromInt(target_width)));
+    const end_y_f = @min(@ceil(bottom), @as(f32, @floatFromInt(target_height)));
+    if (end_x_f <= start_x_f or end_y_f <= start_y_f) return;
+    const start_x: usize = @intFromFloat(start_x_f);
+    const start_y: usize = @intFromFloat(start_y_f);
+    const end_x: usize = @intFromFloat(end_x_f);
+    const end_y: usize = @intFromFloat(end_y_f);
+    const inverse_scale = 1.0 / scale;
+    for (start_y..end_y) |destination_y| {
+        const source_y =
+            ((@as(f32, @floatFromInt(destination_y)) + 0.5 - top) *
+                inverse_scale) - 0.5;
+        const y0_float = @floor(source_y);
+        const y_fraction = source_y - y0_float;
+        const y0: i32 = @intFromFloat(y0_float);
+        for (start_x..end_x) |destination_x| {
+            const source_x =
+                ((@as(f32, @floatFromInt(destination_x)) + 0.5 - left) *
+                    inverse_scale) - 0.5;
+            const x0_float = @floor(source_x);
+            const x_fraction = source_x - x0_float;
+            const x0: i32 = @intFromFloat(x0_float);
+            const top_coverage = lerpPremultipliedByte(
+                mask8At(source, source_width, source_height, x0, y0),
+                mask8At(source, source_width, source_height, x0 + 1, y0),
+                x_fraction,
+            );
+            const bottom_coverage = lerpPremultipliedByte(
+                mask8At(source, source_width, source_height, x0, y0 + 1),
+                mask8At(source, source_width, source_height, x0 + 1, y0 + 1),
+                x_fraction,
+            );
+            const coverage = lerpPremultipliedByte(
+                top_coverage,
+                bottom_coverage,
+                y_fraction,
+            );
+            composite.blendPixel(
+                &target[destination_y * target_width + destination_x],
+                .{ .r = coverage, .g = coverage, .b = coverage, .a = coverage },
+            );
+        }
+    }
+}
+
+fn mask8At(
+    source: []const u8,
+    width: usize,
+    height: usize,
+    x: i32,
+    y: i32,
+) u8 {
+    if (x < 0 or y < 0) return 0;
+    const ux: usize = @intCast(x);
+    const uy: usize = @intCast(y);
+    if (ux >= width or uy >= height) return 0;
+    return source[uy * width + ux];
+}
+
 pub fn blendScaledRgba8(
     target: []Rgba,
     target_width: u32,

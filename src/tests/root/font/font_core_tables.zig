@@ -480,6 +480,9 @@ test "parses EBDT EBLC bitmap glyph metadata" {
     const bitmap_info = (try font.bitmapGlyphInfo(glyph_id, 12)) orelse return error.MissingBitmapGlyph;
     try std.testing.expectEqual(BitmapStrikeSource.eblc_ebdt, bitmap_info.source);
     try std.testing.expectEqual(@as(?u16, 1), bitmap_info.image_format);
+    try std.testing.expectEqual(@as(?u8, 1), bitmap_info.bit_depth);
+    try std.testing.expect(bitmap_info.row_byte_aligned);
+    try std.testing.expectEqual(@as(?u16, 9), bitmap_info.advance);
     try std.testing.expectEqual(@as(i16, 1), bitmap_info.origin_offset_x);
     try std.testing.expectEqual(@as(i16, 9), bitmap_info.origin_offset_y);
     try std.testing.expectEqual(@as(u32, 8), bitmap_info.width);
@@ -487,6 +490,18 @@ test "parses EBDT EBLC bitmap glyph metadata" {
     try std.testing.expect(!bitmap_info.is_png);
     try std.testing.expectEqual(@as(usize, 1), bitmap_info.data_length);
     try std.testing.expect((try font.bitmapGlyphPng(glyph_id, 12)) == null);
+    const mask = (try font.bitmapGlyphMask(glyph_id, 12)) orelse
+        return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(BitmapStrikeSource.eblc_ebdt, mask.source);
+    try std.testing.expectEqual(@as(u8, 1), mask.bit_depth);
+    try std.testing.expect(mask.row_byte_aligned);
+    const coverage = try mask.decodeAlloc(allocator);
+    defer allocator.free(coverage);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 255, 0, 255, 0, 0, 0, 0, 0 },
+        coverage,
+    );
     try std.testing.expectEqual(@as(?u16, 12), try font.bestBitmapStrikePpem(12));
 }
 

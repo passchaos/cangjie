@@ -1179,6 +1179,10 @@ pub const Rasterizer = struct {
                 try self.renderEmbeddedPng(target, bitmap, font_size, x, baseline_y);
                 return;
             }
+            if (try font.bitmapGlyphMask(glyph_id, font_size)) |bitmap| {
+                try self.renderEmbeddedMask(target, bitmap, font_size, x, baseline_y);
+                return;
+            }
             // Bitmap-only emoji fonts often leave spacing/control glyphs out of
             // their strikes. Such a glyph is intentionally empty; there is no
             // vector table to use as a monochrome fallback.
@@ -1271,6 +1275,34 @@ pub const Rasterizer = struct {
             rgba,
             @intCast(bitmap.width),
             @intCast(bitmap.height),
+            left,
+            top,
+            strike_scale,
+        );
+    }
+
+    fn renderEmbeddedMask(
+        self: *Rasterizer,
+        target: *ColorRenderTarget,
+        bitmap: font_mod.BitmapGlyphMask,
+        font_size: f32,
+        x: f32,
+        baseline_y: f32,
+    ) !void {
+        if (bitmap.ppem == 0) return error.BadSfnt;
+        const pixels = try bitmap.decodeAlloc(self.allocator);
+        defer self.allocator.free(pixels);
+        const strike_scale = font_size / @as(f32, @floatFromInt(bitmap.ppem));
+        if (!std.math.isFinite(strike_scale) or strike_scale <= 0) return error.InvalidBitmapSize;
+        const left = x + @as(f32, @floatFromInt(bitmap.origin_offset_x)) * strike_scale;
+        const top = baseline_y - @as(f32, @floatFromInt(bitmap.origin_offset_y)) * strike_scale;
+        bitmap_raster.blendScaledMask8(
+            target.pixels,
+            target.width,
+            target.height,
+            pixels,
+            bitmap.width,
+            bitmap.height,
             left,
             top,
             strike_scale,

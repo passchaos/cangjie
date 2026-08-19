@@ -552,6 +552,7 @@ test "color inspection exposes table-level palette and asset metadata" {
     defer allocator.free(strikes);
     try std.testing.expectEqual(@as(usize, 0), strikes.len);
     try std.testing.expect((try color.bestBitmapPpem(16)) == null);
+    try std.testing.expect((try color.bitmapMask(1, 16)) == null);
 }
 
 test "incremental font transfer inspection and patch parsers are public" {

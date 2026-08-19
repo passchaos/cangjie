@@ -128,6 +128,14 @@ pub const View = struct {
     ) font.FontError!?u16 {
         return self.implementation().bestBitmapStrikePpem(size_px);
     }
+
+    pub fn bitmapMask(
+        self: View,
+        glyph_id: glyph.GlyphId,
+        size_px: f32,
+    ) font.FontError!?font.BitmapGlyphMask {
+        return self.implementation().bitmapGlyphMask(glyph_id, size_px);
+    }
 };
 
 pub fn inspect(face: *const face_mod.Face) View {

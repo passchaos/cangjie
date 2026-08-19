@@ -76,4 +76,12 @@ pub const View = struct {
     ) font_mod.FontError!?font_mod.BitmapGlyphInfo {
         return self.implementation.bitmapGlyphInfo(glyph_id, size_px);
     }
+
+    pub fn bitmapMask(
+        self: View,
+        glyph_id: glyph_mod.GlyphId,
+        size_px: f32,
+    ) font_mod.FontError!?font_mod.BitmapGlyphMask {
+        return self.implementation.bitmapGlyphMask(glyph_id, size_px);
+    }
 };

@@ -76,6 +76,28 @@ test "renders CBDT format 19 with shared CBLC metrics" {
     try std.testing.expectEqual(@as(u8, 0), target.at(5, 20).a);
 }
 
+test "renders raw EBDT mask coverage at bitmap bearings" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("../../../test_font.zig")
+        .buildEbdtBitmapTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const glyph_id = try font.glyphIndex('A');
+
+    var target = try ColorRenderTarget.init(allocator, 24, 24);
+    defer target.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    try rasterizer.renderColorGlyph(&target, &font, glyph_id, 12, 3, 12, 0);
+
+    // Bearing (1, 9) puts the 8x1 mask at (4, 3). The authored bits are
+    // 10100000 and render as white premultiplied coverage.
+    try std.testing.expectEqual(Rgba{ .r = 255, .g = 255, .b = 255, .a = 255 }, target.at(4, 3));
+    try std.testing.expectEqual(@as(u8, 0), target.at(5, 3).a);
+    try std.testing.expectEqual(Rgba{ .r = 255, .g = 255, .b = 255, .a = 255 }, target.at(6, 3));
+    try std.testing.expectEqual(@as(u8, 0), target.at(7, 3).a);
+}
+
 test "selects a larger CBDT strike before upscaling a smaller image when available" {
     const allocator = std.testing.allocator;
     const io = std.Io.Threaded.global_single_threaded.io();

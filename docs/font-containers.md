@@ -88,6 +88,11 @@ fixed transformed-glyf WOFF2 fixture, and optional installed real fonts.
 Current real-font probes include HarfBuzz's retained `DFONT.dfont`, MathJax
 WOFF1, Annapurna SIL WOFF1/WOFF2, and a variable General Sans WOFF2.
 
+Embedded bitmap coverage includes sbix PNG, CBDT PNG formats 17/18/19, and
+raw EBDT/CBDT formats 1/2/5/6/7. Raw strikes expose borrowed 1/2/4/8-bpp
+mask payloads with row-alignment metadata and bounded 8-bit coverage decoding;
+the CPU renderer and draw-list atlas surface consume them as alpha masks.
+
 ## Performance Scope
 
 Container decoding is a load-time cost, not a shaping hot path. Representative

@@ -12,6 +12,7 @@ pub const Palette = font.PaletteInfo;
 pub const SvgDocument = font.SvgGlyphDocument;
 pub const ResolvedSvgDocument = font.ResolvedSvgGlyphDocument;
 pub const BitmapPng = font.BitmapGlyphPng;
+pub const BitmapMask = font.BitmapGlyphMask;
 pub const BitmapGlyph = font.BitmapGlyphInfo;
 pub const BitmapStrike = font.BitmapStrikeInfo;
 pub const BitmapStrikeSource = font.BitmapStrikeSource;

@@ -273,6 +273,30 @@ test "render bridge emits embedded PNG color atlas metadata" {
     try std.testing.expectEqual(bitmap, command.paint.embedded_png);
 }
 
+test "render bridge emits raw EBDT coverage as an alpha atlas request" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildEbdtBitmapTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try font_mod.Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const font_mod.Font{&font};
+    const cascade = font_fallback.Cascade.init(&fonts);
+    var layout_buffer = context_output.Buffer.init(allocator);
+    defer layout_buffer.deinit();
+    const paragraph = try shaping_orchestrator.TextShaper.layoutParagraphUtf8(
+        cascade,
+        &layout_buffer,
+        "A",
+        12,
+        .{ .max_width = 100 },
+    );
+
+    var draw_list = try buildGlyphDrawList(allocator, paragraph, .{});
+    defer draw_list.deinit();
+    try std.testing.expectEqual(@as(usize, 1), draw_list.atlas_requests.len);
+    try std.testing.expectEqual(GlyphAtlasContent.alpha_mask, draw_list.atlas_requests[0].content);
+}
+
 test "render bridge resolves sbix dupe records before atlas emission" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildSbixDupePngTtf(allocator);

@@ -15,6 +15,7 @@ pub fn validate(
     data: []const u8,
     data_table: types.Table,
     location: GlyphLocation,
+    bit_depth: u8,
     glyph_count: u16,
 ) types.Error!void {
     if (location.offset > data_table.length or
@@ -32,10 +33,11 @@ pub fn validate(
     const start = data_table.offset + location.offset;
     const image = data[start .. start + location.length];
     switch (location.image_format) {
-        1 => return try validateBitmapPayload(image, 5, true),
-        2 => return try validateBitmapPayload(image, 5, false),
-        6 => return try validateBitmapPayload(image, 8, true),
-        7 => return try validateBitmapPayload(image, 8, false),
+        1 => return try validateBitmapPayload(image, 5, bit_depth, true, null),
+        2 => return try validateBitmapPayload(image, 5, bit_depth, false, null),
+        5 => return try validateBitmapPayload(image, 0, bit_depth, false, location.shared_metrics),
+        6 => return try validateBitmapPayload(image, 8, bit_depth, true, null),
+        7 => return try validateBitmapPayload(image, 8, bit_depth, false, null),
         8 => return try validateCompoundPayload(image, 5, glyph_count),
         9 => return try validateCompoundPayload(image, 8, glyph_count),
         17 => return try validateEmbeddedDataPayload(image, 5),
@@ -62,6 +64,7 @@ pub fn glyphInfo(
     const image = data[start .. start + location.length];
     const metrics_len: usize = switch (location.image_format) {
         1, 2, 17 => 5,
+        5 => 0,
         6, 7, 18 => 8,
         19 => 0,
         else => return null,
@@ -77,12 +80,13 @@ pub fn glyphInfo(
     }
     const metrics = switch (location.image_format) {
         1, 2, 17 => types.readSmallMetrics(image, 0) catch unreachable,
+        5 => location.shared_metrics orelse return error.BadSfnt,
         6, 7, 18 => types.readBigMetrics(image, 0) catch unreachable,
         19 => location.shared_metrics orelse return error.BadSfnt,
         else => unreachable,
     };
     const payload = switch (location.image_format) {
-        1, 2, 6, 7 => image[metrics_len..],
+        1, 2, 5, 6, 7 => image[metrics_len..],
         17, 18, 19 => payload: {
             const data_len = try bin.readU32At(image, metrics_len);
             if (data_len > image.len - metrics_len - 4) return error.BadSfnt;
@@ -105,6 +109,10 @@ pub fn glyphInfo(
         .width = dimensions.width,
         .height = dimensions.height,
         .image_format = location.image_format,
+        .bit_depth = selected_strike.bit_depth,
+        .row_byte_aligned = location.image_format == 1 or
+            location.image_format == 6,
+        .advance = metrics.advance,
         .data_offset = @intFromPtr(payload.ptr) - @intFromPtr(data.ptr),
         .data_length = payload.len,
         .is_png = is_png,
@@ -157,22 +165,85 @@ pub fn glyphPng(
     );
 }
 
+/// Return one raw monochrome embedded bitmap payload.
+///
+/// The selected strike owns bit depth, while image format determines whether
+/// rows are byte-aligned. Metrics are excluded from the borrowed `data` slice.
+pub fn glyphMask(
+    data: []const u8,
+    data_table: types.Table,
+    selected_strike: Strike,
+    location: GlyphLocation,
+    source: types.StrikeSource,
+) types.Error!?types.GlyphMask {
+    if (selected_strike.bit_depth != 1 and
+        selected_strike.bit_depth != 2 and
+        selected_strike.bit_depth != 4 and
+        selected_strike.bit_depth != 8)
+    {
+        return null;
+    }
+    const metrics_len: usize = switch (location.image_format) {
+        1, 2 => 5,
+        5 => 0,
+        6, 7 => 8,
+        else => return null,
+    };
+    if (location.offset > data_table.length or
+        location.length > data_table.length - location.offset)
+    {
+        return error.BadSfnt;
+    }
+    const image_start = data_table.offset + location.offset;
+    const image = data[image_start .. image_start + location.length];
+    if (image.len < metrics_len) return error.BadSfnt;
+    const metrics = switch (location.image_format) {
+        1, 2 => try types.readSmallMetrics(image, 0),
+        5 => location.shared_metrics orelse return error.BadSfnt,
+        6, 7 => try types.readBigMetrics(image, 0),
+        else => unreachable,
+    };
+    const payload = image[metrics_len..];
+    return .{
+        .source = source,
+        .ppem = selected_strike.ppem,
+        .ppi = selected_strike.ppi,
+        .origin_offset_x = metrics.bearing_x,
+        .origin_offset_y = metrics.bearing_y,
+        .width = metrics.width,
+        .height = metrics.height,
+        .bit_depth = selected_strike.bit_depth,
+        .row_byte_aligned = location.image_format == 1 or
+            location.image_format == 6,
+        .data = payload,
+    };
+}
+
 fn validateBitmapPayload(
     data: []const u8,
     metrics_len: usize,
+    bit_depth: u8,
     byte_aligned_rows: bool,
+    shared_metrics: ?types.Metrics,
 ) types.Error!void {
     if (data.len < metrics_len) return error.BadSfnt;
+    if (bit_depth != 1 and bit_depth != 2 and bit_depth != 4 and
+        bit_depth != 8 and bit_depth != 32)
+    {
+        return error.BadSfnt;
+    }
 
     const metrics = switch (metrics_len) {
+        0 => shared_metrics orelse return error.BadSfnt,
         5 => try types.readSmallMetrics(data, 0),
         8 => try types.readBigMetrics(data, 0),
         else => unreachable,
     };
+    const row_bits = @as(usize, metrics.width) * bit_depth;
     const bitmap_len = if (byte_aligned_rows)
-        @as(usize, metrics.height) * ((@as(usize, metrics.width) + 7) / 8)
+        @as(usize, metrics.height) * ((row_bits + 7) / 8)
     else
-        (@as(usize, metrics.height) * @as(usize, metrics.width) + 7) / 8;
+        (@as(usize, metrics.height) * row_bits + 7) / 8;
     if (bitmap_len > data.len - metrics_len) return error.BadSfnt;
 }
 
@@ -233,5 +304,5 @@ test "CBDT format 19 requires shared index-subtable metrics" {
     // the location-level metrics contract, before full PNG validation.
     var missing = valid;
     missing.shared_metrics = null;
-    try std.testing.expectError(error.BadSfnt, validate(&data, cbdt, missing, 1));
+    try std.testing.expectError(error.BadSfnt, validate(&data, cbdt, missing, 32, 1));
 }

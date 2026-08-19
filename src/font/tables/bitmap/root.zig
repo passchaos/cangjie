@@ -13,6 +13,7 @@ pub const types = @import("types.zig");
 pub const Error = types.Error;
 pub const Table = types.Table;
 pub const GlyphPng = types.GlyphPng;
+pub const GlyphMask = types.GlyphMask;
 pub const GlyphInfo = types.GlyphInfo;
 pub const StrikeSource = types.StrikeSource;
 pub const StrikeInfo = types.StrikeInfo;

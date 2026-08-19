@@ -21,8 +21,8 @@ pub const GlyphRenderMode = enum {
 ///
 /// Outline and COLR layer requests produce one-channel coverage. Embedded PNG
 /// glyphs already contain color and alpha, so consumers must allocate and cache
-/// them separately as premultiplied RGBA instead of interpreting their bytes as
-/// an alpha mask.
+/// them separately as premultiplied RGBA. Raw EBDT/CBDT masks retain the
+/// ordinary alpha-mask contract.
 pub const GlyphAtlasContent = enum {
     alpha_mask,
     premultiplied_rgba,
@@ -420,8 +420,9 @@ const BridgeBuilder = struct {
             else
                 null;
             const embedded_png = if (color_index) |index| self.color_glyphs.items[index].embedded_png else null;
+            const embedded_mask = try font.bitmapGlyphMask(glyph.glyph_id, run.font_size);
             const atlas_content: GlyphAtlasContent = if (embedded_png != null) .premultiplied_rgba else .alpha_mask;
-            const atlas_index: ?usize = if (font.hasOutlineData() or embedded_png != null)
+            const atlas_index: ?usize = if (font.hasOutlineData() or embedded_png != null or embedded_mask != null)
                 try self.atlasRequestIndex(.{
                     .font = run.font,
                     .glyph_id = glyph.glyph_id,

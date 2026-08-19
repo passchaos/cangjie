@@ -665,9 +665,9 @@ not yet moved to the shared inline/block-axis model.
 This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
 axes, vertical paragraph validation rejects an explicit bottom-to-top
-`direction = rtl` request, justification, exclusions/line regions (including
-resolver responses that introduce an exclusion), optical punctuation, and the
-resumable breaker. Retained whole-paragraph
+`direction = rtl` request, exclusions (including resolver responses that
+introduce one), physical left/right alignment, and the resumable breaker.
+Retained whole-paragraph
 layout and intrinsic inline-size measurement are supported and restore the
 pristine vertical shaping snapshot between calls. Returning a concrete
 `UnsupportedVerticalParagraphOptions` or
@@ -1343,14 +1343,18 @@ This follows Parley's per-line ordering model while keeping standalone shaping
 APIs in their existing HarfBuzz-compatible visual buffer order.
 
 `ParagraphOptions.line_regions` provides an explicit paragraph-space
-`x/y/width` for a prefix of final visual lines. Entry `i` owns visual line `i`
-across hard-break segments; it overrides that line's natural max-width,
-first-line indent, and rectangular exclusions while preserving ordinary UAX
-breaking, tabs, justification, bidi, objects, and output ownership. Because y
-coordinates are explicit, lines may jump to another page or return to the top
-of a new column instead of remaining block-axis monotone. Paragraph and owned
-text-geometry hit testing consequently select the nearest two-dimensional line
-region rather than assuming source-order y values always increase.
+`x/y/width` for a prefix of final visual fragments. Entry `i` owns visual
+fragment `i` across hard-break segments. Horizontally, x/width remain the
+contiguous line fragment while y is its block position. Vertically, x is the
+column's physical block origin and y/width are its positive-down inline origin
+and available height; font/object metrics still determine physical column
+width. Explicit regions override natural max inline size, first-line indent,
+and rectangular exclusions while preserving ordinary UAX breaking, balanced
+selection, tabs, justification, bidi, objects, and output ownership. Because
+physical origins are explicit, lines/columns may jump between pages or custom
+containers instead of remaining block-axis monotone. `ParagraphLine` retains
+both block geometry and `region_inline_start/region_inline_size`, so paragraph
+and owned TextGeometry hit testing select the nearest two-dimensional region.
 
 `cangjie.paragraph.LineRegionResolver` is the concrete replay protocol for
 pagination, columns, and other caller-owned containers. `begin` snapshots base
@@ -1361,8 +1365,8 @@ range; `submit` adds one finite positive-width region and advances the
 generation. Stale passes and requests are rejected. When `next` returns
 `.complete`, `resolvedOptions` contains the final resolver-owned region slice.
 The protocol embeds no callback or opaque state and works with retained and
-styled layout; each replay restores immutable shaping before rebuilding final
-presentation.
+styled horizontal or vertical layout; each replay restores immutable shaping
+before rebuilding final presentation.
 
 Font fallback is selected per extended grapheme/shaping cluster rather than per
 scalar. The first cascade font covering every visible scalar owns the complete

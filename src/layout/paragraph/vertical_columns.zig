@@ -22,6 +22,7 @@ const vertical_advances = @import("vertical_advances.zig");
 const vertical_block_metrics = @import("vertical_block_metrics.zig");
 const vertical_ellipsis = @import("vertical_ellipsis.zig");
 const vertical_inline_alignment = @import("vertical_inline_alignment.zig");
+const vertical_inline_region = @import("vertical_inline_region.zig");
 const vertical_wrap = @import("vertical_wrap.zig");
 const vertical_wrap_policy = @import("vertical_wrap/policy.zig");
 const vertical_tabs = @import("vertical_wrap/tabs.zig");
@@ -223,12 +224,14 @@ pub fn build(
             range.byte_end,
             range.inline_indent,
             inline_size,
+            range.visual_index,
             justificationTarget(
                 buffer.glyphs.items[range.glyph_start..range.glyph_end],
                 ranges,
                 range_index,
                 range.inline_indent,
                 inline_size,
+                range.visual_index,
                 options,
             ),
         );
@@ -267,8 +270,7 @@ pub fn build(
     placeColumns(
         buffer.lines.items,
         ranges[0..visible_count],
-        options.writing_mode,
-        options.paragraph_spacing,
+        options,
     );
 }
 
@@ -304,11 +306,15 @@ pub fn refreshAfterTerminalWidthChange(
     lines: []@import("../types/paragraph.zig").ParagraphLine,
     writing_mode: @import("../../shaping/pipeline/types.zig").WritingMode,
     previous_terminal_width: f32,
+    explicit_region_count: usize,
 ) void {
     if (writing_mode != .vertical_rl or lines.len < 2) return;
     const delta = lines[lines.len - 1].width - previous_terminal_width;
     if (delta == 0) return;
-    for (lines[0 .. lines.len - 1]) |*line| {
+    for (lines[0 .. lines.len - 1], 0..) |*line, line_index| {
+        // Caller-authored block origins are absolute and must not inherit a
+        // width change from a later synthetic ellipsis column.
+        if (line_index < explicit_region_count) continue;
         line.x += delta;
         line.region_x += delta;
     }
@@ -352,6 +358,7 @@ fn appendColumnAssumeCapacity(
     byte_end: usize,
     inline_indent: f32,
     inline_size: f32,
+    visual_index: usize,
     justification_target: ?f32,
 ) void {
     const block_metrics = vertical_block_metrics.resolve(
@@ -371,9 +378,19 @@ fn appendColumnAssumeCapacity(
         @import("../types/paragraph.zig").TextAlign.start
     else
         options.alignment;
-    const inline_origin = vertical_inline_alignment.origin(
-        options.max_width,
+    const region_inline_start = vertical_inline_region.start(
+        options,
+        visual_index,
         inline_indent,
+    );
+    const region_inline_size = vertical_inline_region.available(
+        options,
+        visual_index,
+        inline_indent,
+    );
+    const inline_origin = vertical_inline_alignment.originInRegion(
+        region_inline_start,
+        region_inline_size,
         inline_size,
         resolved_alignment,
     );
@@ -387,8 +404,13 @@ fn appendColumnAssumeCapacity(
         .x = 0,
         .y = inline_origin,
         .indent = inline_indent,
-        .region_x = 0,
+        .region_x = if (visual_index < options.line_regions.len)
+            options.line_regions[visual_index].x
+        else
+            0,
         .region_width = block_size,
+        .region_inline_start = region_inline_start,
+        .region_inline_size = region_inline_size,
         .resolved_alignment = resolved_alignment,
         .width = block_size,
         .justification_target = justification_target,
@@ -408,31 +430,45 @@ fn justificationTarget(
     range_index: usize,
     inline_indent: f32,
     inline_size: f32,
+    visual_index: usize,
     options: paragraph_options.Options,
 ) ?f32 {
     if (options.alignment != .justify or
         range_index + 1 >= ranges.len or
         ranges[range_index + 1].starts_segment or
         vertical_tabs.contains(glyphs) or
-        options.max_width <= 0 or
-        !@import("std").math.isFinite(options.max_width))
+        (visual_index >= options.line_regions.len and
+            (options.max_width <= 0 or
+                !@import("std").math.isFinite(options.max_width))))
     {
         return null;
     }
-    return @max(inline_size, options.max_width - @max(0, inline_indent));
+    return @max(
+        inline_size,
+        vertical_inline_region.available(
+            options,
+            visual_index,
+            inline_indent,
+        ),
+    );
 }
 
 fn placeColumns(
     lines: anytype,
     ranges: []const vertical_wrap.Range,
-    writing_mode: @import("../../shaping/pipeline/types.zig").WritingMode,
-    paragraph_spacing: f32,
+    options: paragraph_options.Options,
 ) void {
-    if (writing_mode == .vertical_lr) {
+    if (options.writing_mode == .vertical_lr) {
         var x: f32 = 0;
         for (lines, ranges, 0..) |*line, range, index| {
             if (index != 0 and range.starts_segment) {
-                x += paragraph_spacing;
+                x += options.paragraph_spacing;
+            }
+            if (range.visual_index < options.line_regions.len) {
+                line.x = options.line_regions[range.visual_index].x;
+                line.region_x = line.x;
+                x = line.x + line.width;
+                continue;
             }
             line.x = x;
             line.region_x = x;
@@ -444,14 +480,20 @@ fn placeColumns(
     var total_width: f32 = 0;
     for (lines, ranges, 0..) |line, range, index| {
         if (index != 0 and range.starts_segment) {
-            total_width += paragraph_spacing;
+            total_width += options.paragraph_spacing;
         }
         total_width += line.width;
     }
     var right = total_width;
     for (lines, ranges, 0..) |*line, range, index| {
         if (index != 0 and range.starts_segment) {
-            right -= paragraph_spacing;
+            right -= options.paragraph_spacing;
+        }
+        if (range.visual_index < options.line_regions.len) {
+            line.x = options.line_regions[range.visual_index].x;
+            line.region_x = line.x;
+            right = line.x;
+            continue;
         }
         right -= line.width;
         line.x = right;

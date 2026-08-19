@@ -14,8 +14,18 @@ pub fn origin(
         return indent;
     }
     const available = @max(0, max_inline_size - indent);
+    return originInRegion(indent, available, inline_size, alignment);
+}
+
+pub fn originInRegion(
+    inline_start: f32,
+    available: f32,
+    inline_size: f32,
+    alignment: TextAlign,
+) f32 {
+    if (!std.math.isFinite(available)) return inline_start;
     const slack = @max(0, available - inline_size);
-    return indent + switch (alignment) {
+    return inline_start + switch (alignment) {
         .start, .justify => 0,
         .center => slack / 2,
         .end => slack,

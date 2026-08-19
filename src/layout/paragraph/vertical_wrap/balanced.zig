@@ -17,6 +17,7 @@ const policy = @import("policy.zig");
 const run_types = @import("../../types/runs.zig");
 const shared = @import("shared.zig");
 const unicode = @import("../../../unicode.zig");
+const vertical_inline_region = @import("../vertical_inline_region.zig");
 
 const cost_epsilon: f64 = 0.000001;
 const width_epsilon: f32 = 0.001;
@@ -110,6 +111,7 @@ pub fn apply(
             boundaries.items,
             greedy.len,
             greedy[0].inline_indent,
+            greedy[0].visual_index,
         );
         if (selected) |path| {
             defer allocator.free(path);
@@ -137,6 +139,7 @@ fn solve(
     boundaries: []const graph.Boundary,
     column_count: usize,
     first_indent: f32,
+    visual_base: usize,
 ) !?[]usize {
     if (boundaries.len < 3 or column_count < 2) return null;
     var states = std.ArrayList(State).empty;
@@ -155,8 +158,13 @@ fn solve(
         if (state.columns >= column_count) continue;
         const start = boundaries[state.boundary_index].next_glyph_start;
         const remaining = column_count - state.columns;
-        const indent = if (state.columns == 0) first_indent else 0;
-        const limit = @max(0, options.max_width - indent);
+        const natural_indent = if (state.columns == 0) first_indent else 0;
+        const limit = vertical_inline_region.limit(
+            options,
+            visual_base + state.columns,
+            natural_indent,
+            true,
+        );
         const regular_fit = hasFittingRegular(
             glyphs,
             prefix,
@@ -329,11 +337,9 @@ fn appendSolution(
                 greedy[greedy.len - 1].byte_end
             else
                 boundary.byte_end,
-            .inline_indent = if (column_index == 0)
-                greedy[0].inline_indent
-            else
-                0,
+            .inline_indent = greedy[column_index].inline_indent,
             .starts_segment = column_index == 0,
+            .visual_index = greedy[column_index].visual_index,
             .hyphen = boundary.hyphen,
         });
         previous_index = boundary_index;

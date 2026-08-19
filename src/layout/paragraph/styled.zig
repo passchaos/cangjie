@@ -372,6 +372,7 @@ const Driver = struct {
                     self.buffer.lines.items,
                     resolved_options.writing_mode,
                     previous_terminal_width,
+                    resolved_options.line_regions.len,
                 );
             }
             // The vertical builder has already completed every admitted

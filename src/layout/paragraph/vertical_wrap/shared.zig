@@ -13,6 +13,9 @@ pub const Range = struct {
     /// Whether this column begins a source paragraph segment. Physical column
     /// placement uses this to insert block-axis paragraph spacing.
     starts_segment: bool = false,
+    /// Final visual column index used to resolve caller-supplied inline
+    /// regions after balanced wrapping has chosen its source boundaries.
+    visual_index: usize = 0,
     /// Source U+00AD selected as a visible terminal glyph for this column.
     ///
     /// Shaping may retain it as an invisible output or omit the

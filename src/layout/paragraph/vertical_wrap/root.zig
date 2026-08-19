@@ -16,6 +16,7 @@ const policy = @import("policy.zig");
 const run_types = @import("../../types/runs.zig");
 const shared = @import("shared.zig");
 const unicode = @import("../../../unicode.zig");
+const vertical_inline_region = @import("../vertical_inline_region.zig");
 
 pub const Range = shared.Range;
 pub const intrinsicWidths = intrinsic.measure;
@@ -69,6 +70,7 @@ pub fn build(
             effective_breaks.items,
             options,
             wrapping_enabled,
+            output.items.len,
             segment_start,
             index,
             segment_byte_start,
@@ -91,6 +93,7 @@ pub fn build(
         effective_breaks.items,
         options,
         wrapping_enabled,
+        output.items.len,
         segment_start,
         glyphs.len,
         segment_byte_start,
@@ -123,28 +126,30 @@ fn appendSegment(
     breaks: []const line_break_opportunity.Opportunity,
     options: paragraph_options.Options,
     wrapping_enabled: bool,
+    visual_base: usize,
     segment_start: usize,
     segment_end: usize,
     segment_byte_start: usize,
     segment_byte_end: usize,
 ) !void {
     if (segment_start >= segment_end) {
+        const natural_indent = @max(0, options.first_line_indent);
         try output.append(allocator, .{
             .glyph_start = segment_start,
             .glyph_end = segment_start,
             .byte_start = segment_byte_start,
             .byte_end = segment_byte_end,
-            .inline_indent = @max(0, options.first_line_indent),
+            .inline_indent = vertical_inline_region.indent(
+                options,
+                visual_base,
+                natural_indent,
+            ),
             .starts_segment = true,
+            .visual_index = visual_base,
         });
         return;
     }
 
-    const max_inline_size = if (options.max_width > 0 and
-        std.math.isFinite(options.max_width))
-        options.max_width
-    else
-        std.math.inf(f32);
     const first_indent = @max(0, options.first_line_indent);
     var first_column = true;
     const limit = if (wrapping_enabled and
@@ -153,14 +158,19 @@ fn appendSegment(
         @max(0, options.max_width - first_indent)
     else
         std.math.inf(f32);
-    if (!std.math.isFinite(limit)) {
+    if (!std.math.isFinite(limit) and visual_base >= options.line_regions.len) {
         try output.append(allocator, .{
             .glyph_start = segment_start,
             .glyph_end = segment_end,
             .byte_start = segment_byte_start,
             .byte_end = segment_byte_end,
-            .inline_indent = first_indent,
+            .inline_indent = vertical_inline_region.indent(
+                options,
+                visual_base,
+                first_indent,
+            ),
             .starts_segment = true,
+            .visual_index = visual_base,
         });
         return;
     }
@@ -197,11 +207,19 @@ fn appendSegment(
     var byte_start = segment_byte_start;
     var consecutive_hyphenated_columns: usize = 0;
     while (glyph_start < segment_end) {
-        const column_indent = if (first_column) first_indent else 0;
-        const column_limit = if (wrapping_enabled)
-            @max(0, max_inline_size - column_indent)
-        else
-            std.math.inf(f32);
+        const visual_index = output.items.len;
+        const natural_indent = if (first_column) first_indent else 0;
+        const column_indent = vertical_inline_region.indent(
+            options,
+            visual_index,
+            natural_indent,
+        );
+        const column_limit = vertical_inline_region.limit(
+            options,
+            visual_index,
+            natural_indent,
+            wrapping_enabled,
+        );
         if (measure.occupiedInlineSize(
             glyphs,
             prefix,
@@ -216,6 +234,7 @@ fn appendSegment(
                 .byte_end = segment_byte_end,
                 .inline_indent = column_indent,
                 .starts_segment = first_column,
+                .visual_index = visual_index,
                 .hyphen = null,
             });
             return;
@@ -279,6 +298,7 @@ fn appendSegment(
             .byte_end = selected.byte_end,
             .inline_indent = column_indent,
             .starts_segment = first_column,
+            .visual_index = visual_index,
             .hyphen = selected.hyphen,
         });
         glyph_start = selected.next_glyph_start;

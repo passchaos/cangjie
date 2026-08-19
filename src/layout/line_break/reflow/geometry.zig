@@ -168,6 +168,8 @@ pub fn appendLine(
         .indent = region.indent,
         .region_x = region.x,
         .region_width = region.width,
+        .region_inline_start = region.x,
+        .region_inline_size = region.width,
         .resolved_alignment = alignment,
         .width = width,
         .justification_target = justification_target,

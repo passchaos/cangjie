@@ -11,8 +11,14 @@ const options_mod = @import("options.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 
 pub const Region = struct {
+    /// Physical block-axis start: x for vertical paragraphs and the ordinary
+    /// horizontal fragment start otherwise.
     x: f32,
+    /// Physical inline-axis start. This is y for both current writing-mode
+    /// families because vertical inline progression is positive-down.
     y: f32,
+    /// Available inline measure: physical width horizontally and height
+    /// vertically. The column's block width remains font/object-derived.
     width: f32,
 };
 
@@ -106,10 +112,15 @@ pub const Resolver = struct {
             layout.lines[0..@min(layout.lines.len, self.regions.items.len)],
             self.regions.items,
         ) |line, region| {
-            if (!sameFloat(line.region_x, region.x) or
-                !sameFloat(line.y, region.y) or
-                !sameFloat(line.region_width, region.width))
-            {
+            const matches = if (layout.writing_mode.isVertical())
+                sameFloat(line.region_x, region.x) and
+                    sameFloat(line.region_inline_start, region.y) and
+                    sameFloat(line.region_inline_size, region.width)
+            else
+                sameFloat(line.region_x, region.x) and
+                    sameFloat(line.y, region.y) and
+                    sameFloat(line.region_width, region.width);
+            if (!matches) {
                 return error.InvalidLineRegionLayout;
             }
         }
@@ -124,8 +135,14 @@ pub const Resolver = struct {
             .token = self.next_token,
             .line_index = line_index,
             .natural_x = line.region_x,
-            .natural_y = line.y,
-            .natural_width = line.region_width,
+            .natural_y = if (layout.writing_mode.isVertical())
+                line.region_inline_start
+            else
+                line.y,
+            .natural_width = if (layout.writing_mode.isVertical())
+                line.region_inline_size
+            else
+                line.region_width,
             .line_height = line.height,
             .byte_start = line.byte_start,
             .byte_len = line.byte_len,

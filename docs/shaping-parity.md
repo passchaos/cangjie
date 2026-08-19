@@ -2274,6 +2274,12 @@ shaping-performance superiority.
   columns retain natural size. Greedy and balanced selection, retained/styled
   restoration, bidi, interaction/TextGeometry, renderer pens, punctuation
   processing, and RL/LR placement consume the same expanded advances.
+  Caller-selected `line_regions` now map x to the vertical block origin and
+  y/width to positive-down inline origin/height. Greedy and balanced wrapping
+  use each region's measure, explicit regions bypass first-column indentation,
+  RL/LR placement honors supplied x, and retained resolver replay, styled
+  metadata, TextGeometry, renderer pens, alignment, justification, optical
+  punctuation, and ellipsis consume the retained region geometry.
   Line-end East Asian punctuation can now hang along the positive-down inline
   axis. Greedy/emergency/balanced fitting use occupied height; final
   column-local bidi assigns bottom-edge `hang_end`, then top/center/bottom
@@ -2292,8 +2298,8 @@ shaping-performance superiority.
   resolver replay; retained/styled layout, intrinsic sizing, draw output, and
   line-limit visibility keep those bounds outside flow metrics. Bottom-to-top
   inline progression, physical left/right alignment, exclusions (including
-  resolver responses that introduce one), and incremental
-  breaking are rejected explicitly until they are migrated to the shared
+  resolver responses that introduce one), and incremental breaking are
+  rejected explicitly until they are migrated to the shared
   inline/block-axis model; this is not yet full vertical paragraph parity.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`

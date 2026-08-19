@@ -14,7 +14,7 @@ const positioning_policy =
 const run_types = @import("../types/runs.zig");
 const paragraph_options = @import("options.zig");
 const vertical_block_metrics = @import("vertical_block_metrics.zig");
-const vertical_inline_alignment = @import("vertical_inline_alignment.zig");
+const vertical_inline_region = @import("vertical_inline_region.zig");
 const vertical_tabs = @import("vertical_wrap/tabs.zig");
 const white_space = @import("white_space.zig");
 
@@ -108,8 +108,10 @@ pub fn materialize(
     ) * scale;
     const ellipsis_advance =
         dot_advance * @as(f32, @floatFromInt(synthetic_count));
-    const inline_limit = if (options.max_width > 0 and
-        std.math.isFinite(options.max_width))
+    const inline_limit = if (line.region_inline_size > 0 or
+        std.math.isInf(line.region_inline_size))
+        line.region_inline_size
+    else if (options.max_width > 0 and std.math.isFinite(options.max_width))
         @max(0, options.max_width - line.indent)
     else
         std.math.inf(f32);
@@ -201,11 +203,10 @@ pub fn materialize(
         options,
         default_metrics,
     );
-    line.y = vertical_inline_alignment.origin(
-        options.max_width,
-        line.indent,
+    line.y = vertical_inline_region.origin(
+        line.*,
+        options,
         line.height,
-        line.resolved_alignment orelse options.alignment,
     );
     return synthetic_count;
 }

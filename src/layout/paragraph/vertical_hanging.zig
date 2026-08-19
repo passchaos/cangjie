@@ -7,7 +7,7 @@
 
 const punctuation_hanging = @import("../punctuation/hanging.zig");
 const paragraph_options = @import("options.zig");
-const vertical_inline_alignment = @import("vertical_inline_alignment.zig");
+const vertical_inline_region = @import("vertical_inline_region.zig");
 
 pub fn apply(
     buffer: anytype,
@@ -25,11 +25,10 @@ pub fn apply(
             options.punctuation.end_hanging_fraction,
         );
         line.height = @max(0, full_height - line.hang_end);
-        line.y = vertical_inline_alignment.origin(
-            options.max_width,
-            line.indent,
+        line.y = vertical_inline_region.origin(
+            line.*,
+            options,
             line.height,
-            line.resolved_alignment orelse options.alignment,
         );
     }
 }

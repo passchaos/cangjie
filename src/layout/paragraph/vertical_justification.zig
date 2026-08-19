@@ -8,7 +8,7 @@
 
 const inline_justification = @import("../justification/inline.zig");
 const paragraph_options = @import("options.zig");
-const vertical_inline_alignment = @import("vertical_inline_alignment.zig");
+const vertical_inline_region = @import("vertical_inline_region.zig");
 
 pub fn apply(
     buffer: anytype,
@@ -27,11 +27,10 @@ pub fn apply(
             target,
             options.writing_mode,
         );
-        line.y = vertical_inline_alignment.origin(
-            options.max_width,
-            line.indent,
+        line.y = vertical_inline_region.origin(
+            line.*,
+            options,
             line.height,
-            line.resolved_alignment orelse options.alignment,
         );
         line.justification_target = null;
     }

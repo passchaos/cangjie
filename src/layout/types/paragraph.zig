@@ -170,9 +170,18 @@ pub const ParagraphLine = struct {
     /// First-line or paragraph-segment inline indentation reserved before
     /// alignment: physical x horizontally and positive-down y vertically.
     indent: f32 = 0,
-    /// Physical x and measure of the selected contiguous line fragment.
+    /// Physical block origin and measure of the selected line/column. Vertical
+    /// explicit regions may author `region_x`; `region_width` remains the
+    /// resolved font/object block width.
     region_x: f32 = 0,
     region_width: f32 = 0,
+    /// Inline-axis origin and available measure of the selected fragment.
+    ///
+    /// Horizontal reflow mirrors `region_x/region_width`; vertical explicit
+    /// column regions use physical y and height. Zero size is a compatibility
+    /// sentinel for manually constructed records.
+    region_inline_start: f32 = 0,
+    region_inline_size: f32 = 0,
     /// Final alignment selected for this line's inline axis.
     ///
     /// Horizontal reflow resolves paragraph `.start`/`.end` to left/right and
@@ -505,26 +514,32 @@ pub const ParagraphLayout = struct {
         var best_index: usize = 0;
         var best_distance = std.math.inf(f32);
         for (self.lines, 0..) |line, index| {
-            const left = if (line.region_width > 0 or
-                std.math.isInf(line.region_width))
-                line.region_x
+            const has_block_region = line.region_width > 0 or
+                std.math.isInf(line.region_width);
+            const has_inline_region = line.region_inline_size > 0 or
+                std.math.isInf(line.region_inline_size);
+            const left = if (has_block_region) line.region_x else line.x;
+            const width = if (has_block_region) line.region_width else line.width;
+            const top = if (self.writing_mode.isVertical() and
+                has_inline_region)
+                line.region_inline_start
             else
-                line.x;
-            const width = if (line.region_width > 0 or
-                std.math.isInf(line.region_width))
-                line.region_width
+                line.y;
+            const height = if (self.writing_mode.isVertical() and
+                has_inline_region)
+                line.region_inline_size
             else
-                line.width;
+                line.height;
             const right = left + width;
-            const bottom = line.y + line.height;
+            const bottom = top + height;
             const dx = if (x < left)
                 left - x
             else if (x > right)
                 x - right
             else
                 0;
-            const dy = if (y < line.y)
-                line.y - y
+            const dy = if (y < top)
+                top - y
             else if (y > bottom)
                 y - bottom
             else

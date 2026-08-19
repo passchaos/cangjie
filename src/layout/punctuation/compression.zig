@@ -108,7 +108,11 @@ pub fn apply(buffer: anytype, options: anytype) !void {
         const glyph_end = line.glyph_start + line.glyph_len;
         const glyphs = buffer.glyphs.items[line.glyph_start..glyph_end];
         const available = if (options.writing_mode.isVertical())
-            @max(0, max_width - line.indent)
+            if (line.region_inline_size > 0 or
+                std.math.isInf(line.region_inline_size))
+                line.region_inline_size
+            else
+                @max(0, max_width - line.indent)
         else
             regions.stored(line, max_width).width;
         const hanging_amount = logicalHangingAmount(

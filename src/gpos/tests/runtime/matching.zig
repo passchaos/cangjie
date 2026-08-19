@@ -42,6 +42,21 @@ test "mark filtering set membership uses sorted GDEF coverage order" {
     try std.testing.expect(!runtime.matching.glyphInMarkFilteringSet(&set, 256));
 }
 
+test "pure mark filtering flag keeps bases and selects only set marks" {
+    var classes = [_]u16{0} ** 10;
+    classes[5] = 3;
+    classes[7] = 3;
+    const sets = [_][]const u16{&.{5}};
+    const options = runtime.Options{
+        .glyph_classes = &classes,
+        .mark_filtering_sets = &sets,
+        .active_mark_filtering_set = 0,
+    };
+    try std.testing.expect(!runtime.matching.lookupIgnoresGlyph(0x0010, options, 2));
+    try std.testing.expect(!runtime.matching.lookupIgnoresGlyph(0x0010, options, 5));
+    try std.testing.expect(runtime.matching.lookupIgnoresGlyph(0x0010, options, 7));
+}
+
 test "source metadata controls default-ignorable visibility" {
     const sources = [_]usize{ 0, 1, 2 };
     const codepoints = [_]u21{ 'A', 0x034f, 'B' };

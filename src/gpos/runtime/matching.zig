@@ -20,6 +20,13 @@ pub inline fn lookupIgnoresGlyph(
     else
         0;
     if (lookup_flag == 0x0008) return class == 3;
+    if (lookup_flag == 0x0010) {
+        if (class != 3) return false;
+        const set_index = run.active_mark_filtering_set orelse return true;
+        const sets = run.mark_filtering_sets orelse return true;
+        if (set_index >= sets.len) return true;
+        return !glyphInMarkFilteringSet(sets[set_index], glyph);
+    }
     return lookupIgnoresGlyphComplex(lookup_flag, run, glyph, class);
 }
 

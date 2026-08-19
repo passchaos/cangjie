@@ -1289,6 +1289,14 @@ Japanese controls remained at `24,296 ns` and `49,249 ns`, within their
 preceding ranges. Cangjie still trails the same Parley Arabic row by about
 `24.4%`; the other two script leads remain intact.
 
+The common GDEF flag `UseMarkFilteringSet` (`0x0010`) now has a direct
+lookup-filter path: ordinary bases are immediately visible, while marks perform
+only the selected sorted-set membership test. Noto Kufi uses this exact flag on
+all active filtered GSUB/GPOS lookups, so the generic high-byte/ignore-class
+dispatcher was pure overhead. The Arabic fixed-CPU-30 median fell to
+`76,083 ns`, about `13.0%` above Parley; Latin and Japanese controls measured
+`23,931 ns` and `49,270 ns`, with all checksums and output counts unchanged.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

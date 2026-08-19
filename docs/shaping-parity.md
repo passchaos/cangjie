@@ -2971,3 +2971,16 @@ shaping-performance superiority.
   exact collision-safe hits. This prevents an opt-in cache from growing without
   bound while preserving its first-repeat hit behavior and the default-off
   performance policy.
+
+- GSUB's mutation-aware run-digest cache now stores one unfiltered glyph
+  superset per mutation epoch instead of separate summaries for every lookup
+  flag and source-feature scope. These digests are used only as necessary-
+  condition rejection filters: lookup/source filtering can remove candidates
+  but cannot introduce a glyph absent from the superset, so false positives
+  remain safe while false negatives remain impossible. Fixed-CPU-30 B/A/A/B
+  comparisons against `321044b` reduced NotoSansDevanagari `hi-words` medians
+  from `1603.990`/`1564.477` to `1520.574`/`1496.665 ns/glyph`, about `4.9%`
+  overall. The same matrix improved Roboto `en-words` by about `5.1%`,
+  SourceSerifVariable `en-words` by about `4.5%`, Amiri `fa-words` by about
+  `6.4%`, and Amiri `fa-thelittleprince` by about `2.0%`. All A/B checksums
+  were identical.

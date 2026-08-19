@@ -12,34 +12,22 @@ const GlyphId = @import("../../../glyph.zig").GlyphId;
 const table = @import("../../table/root.zig");
 
 const exact_scan_threshold = 64;
-const max_cache_entries = 16;
-
 pub const Error = table.coverage.Error;
 pub const Options = filtering.Options;
 pub const View = table.View;
 
-/// Per-run summaries keyed by every option that changes glyph visibility.
+/// Per-run unfiltered superset summary used only for necessary-condition
+/// rejection. Lookup flags and source feature masks can remove candidates,
+/// never add a glyph that is absent from this digest, so one summary per
+/// mutation epoch is sufficient and avoids rescanning long runs for each
+/// feature stage. False positives remain authoritative exact-matcher work.
 pub const Cache = struct {
-    const Entry = struct {
-        lookup_flag: u16,
-        active_mark_filtering_set: ?u16,
-        active_source_feature: ?u32,
-        active_source_feature_mask: u32,
-        digest: GlyphDigest,
-    };
-
-    entries: [max_cache_entries]Entry = undefined,
-    len: usize = 0,
+    cached: GlyphDigest = undefined,
+    valid: bool = false,
     generation: usize = 0,
 
     pub fn init() Cache {
-        // `digestForRun` only reads entries below `len`, and every such entry
-        // is assigned before `len` advances. Avoid clearing the digest array
-        // for every shaping run.
-        var cache: Cache = undefined;
-        cache.len = 0;
-        cache.generation = 0;
-        return cache;
+        return .{};
     }
 
     pub fn digestForRun(
@@ -48,40 +36,23 @@ pub const Cache = struct {
         lookup_flag: u16,
         run: Options,
     ) GlyphDigest {
+        _ = lookup_flag;
         const generation = if (run.glyph_mutation_generation) |value|
             value.*
         else
             0;
         if (generation != self.generation) {
-            // Cardinality-changing substitutions make incremental maintenance
-            // error-prone. The small cache is cheaper and safer to drop whole.
-            self.len = 0;
+            // Cardinality-changing substitutions may introduce glyphs not in
+            // the prior superset, so start a new epoch rather than risking a
+            // false-negative rejection.
+            self.valid = false;
             self.generation = generation;
         }
-
-        for (self.entries[0..self.len]) |entry| {
-            if (entry.lookup_flag == lookup_flag and
-                entry.active_mark_filtering_set ==
-                    run.active_mark_filtering_set and
-                entry.active_source_feature == run.active_source_feature and
-                entry.active_source_feature_mask ==
-                    run.active_source_feature_mask)
-            {
-                return entry.digest;
-            }
-        }
-
-        const result = digest(glyphs, lookup_flag, run);
-        if (self.len < self.entries.len) {
-            self.entries[self.len] = .{
-                .lookup_flag = lookup_flag,
-                .active_mark_filtering_set = run.active_mark_filtering_set,
-                .active_source_feature = run.active_source_feature,
-                .active_source_feature_mask = run.active_source_feature_mask,
-                .digest = result,
-            };
-            self.len += 1;
-        }
+        if (self.valid) return self.cached;
+        var result = GlyphDigest.empty();
+        for (glyphs) |glyph| result.add(glyph);
+        self.cached = result;
+        self.valid = true;
         return result;
     }
 };

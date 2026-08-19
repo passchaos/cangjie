@@ -47,21 +47,23 @@ test "run digest cache keys source scope and lookup visibility" {
         .active_source_feature = source_features[0],
     });
     try std.testing.expect(liga.mayHave(3));
-    try std.testing.expect(!liga.mayHave(5));
+    try std.testing.expect(liga.mayHave(5));
 
     const calt = cache.digestForRun(&glyphs, 0, .{
         .glyph_source_indices = &sources,
         .source_features = &source_features,
         .active_source_feature = source_features[1],
     });
-    try std.testing.expect(!calt.mayHave(3));
+    // Cached prefilters are conservative supersets: feature and lookup
+    // filtering may leave false positives, but never hide an exact match.
+    try std.testing.expect(calt.mayHave(3));
     try std.testing.expect(calt.mayHave(5));
 
     const ignore_marks = cache.digestForRun(&glyphs, 0x0008, .{
         .glyph_classes = &glyph_classes,
     });
     try std.testing.expect(ignore_marks.mayHave(3));
-    try std.testing.expect(!ignore_marks.mayHave(5));
+    try std.testing.expect(ignore_marks.mayHave(5));
 }
 
 test "coverage prefilter preserves short exact and long digest paths" {

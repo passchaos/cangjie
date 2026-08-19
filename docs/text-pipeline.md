@@ -1280,6 +1280,15 @@ Cangjie versus `67,321 ns` for Parley on Arabic (about `26.4%` slower),
 source length, glyph count, and line count across engines. Arabic remains the
 only deficit in this default-style three-script matrix.
 
+GPOS lookup sidecars now own both MarkMarkPos coverages, extending the existing
+MarkBasePos coverage acceleration. Noto Kufi's final four active lookups are
+MarkMarkPos and otherwise reparsed and searched both coverages for every
+candidate glyph. The fixed-CPU-30 Arabic median moved from `85,092 ns` to
+`83,744 ns` with the same checksum, 144 glyphs, and five lines. Latin and
+Japanese controls remained at `24,296 ns` and `49,249 ns`, within their
+preceding ranges. Cangjie still trails the same Parley Arabic row by about
+`24.4%`; the other two script leads remain intact.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

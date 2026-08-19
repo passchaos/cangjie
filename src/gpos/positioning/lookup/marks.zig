@@ -18,14 +18,7 @@ pub const MarkToLigature = struct {
     ligature_array_offset: usize,
 };
 
-pub const MarkToMark = struct {
-    subtable_offset: usize,
-    mark_1_coverage_offset: usize,
-    mark_2_coverage_offset: usize,
-    class_count: u16,
-    mark_1_array_offset: usize,
-    mark_2_array_offset: usize,
-};
+pub const MarkToMark = accelerator.model.MarkToMarkSubtable;
 
 pub fn parseMarkToBase(
     view: View,

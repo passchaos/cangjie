@@ -228,6 +228,24 @@ pub noinline fn collect(
                 );
             },
             6 => if (runtime_matching.runMayHaveMarkAttachments(glyphs, run)) {
+                if (runtime_dispatch.acceleratorWithCoverage(lookup_index, run)) |accelerator_value| {
+                    if (subtable_index < accelerator_value.mark_to_mark_subtables.len) {
+                        const parsed = accelerator_value.mark_to_mark_subtables[subtable_index];
+                        for (0..glyphs.len) |glyph_index| {
+                            _ = try marks.mark.collectAtParsed(
+                                view,
+                                parsed,
+                                glyphs,
+                                glyph_index,
+                                adjustments,
+                                allocator,
+                                lookup_flag,
+                                run,
+                            );
+                        }
+                        continue;
+                    }
+                }
                 try marks.mark.collect(
                     view,
                     subtable_offset,

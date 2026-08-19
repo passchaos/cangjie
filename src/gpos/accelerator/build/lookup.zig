@@ -142,6 +142,13 @@ pub fn one(
     );
     @memset(mark_bases, .{});
 
+    const mark_marks = if (lookup_type == 6)
+        try allocator.alloc(model.MarkToMarkSubtable, subtable_count)
+    else
+        try allocator.alloc(model.MarkToMarkSubtable, 0);
+    errdefer model.deinitMarkToMarkSubtables(mark_marks, allocator);
+    @memset(mark_marks, .{});
+
     const cursive = if (lookup_type == 3)
         try allocator.alloc(
             model.CursivePositionSubtable,
@@ -231,6 +238,13 @@ pub fn one(
                 allocator,
             );
         }
+        if (mark_marks.len != 0) {
+            mark_marks[subtable_index] = try buildMarkMark(
+                view,
+                subtable_offset,
+                allocator,
+            );
+        }
         if (cursive.len != 0) {
             cursive[subtable_index] = try buildCursive(
                 view,
@@ -269,6 +283,7 @@ pub fn one(
     result.pair_pos_extension = extension_type == 2;
     result.cursive_subtables = cursive;
     result.mark_to_base_subtables = mark_bases;
+    result.mark_to_mark_subtables = mark_marks;
 
     if (coverage_pairs.items.len != 0) {
         result.coverage_groups =
@@ -347,6 +362,27 @@ fn buildMarkBase(
     parsed.base_coverage = try coverage.Owned.build(
         view,
         parsed.base_coverage_offset,
+        allocator,
+    );
+    return parsed;
+}
+
+fn buildMarkMark(
+    view: View,
+    subtable_offset: usize,
+    allocator: std.mem.Allocator,
+) (Error || std.mem.Allocator.Error)!model.MarkToMarkSubtable {
+    var parsed =
+        try positioning.lookup.marks.parseMarkToMark(view, subtable_offset);
+    errdefer if (parsed.mark_1_coverage) |owned| owned.deinit(allocator);
+    parsed.mark_1_coverage = try coverage.Owned.build(
+        view,
+        parsed.mark_1_coverage_offset,
+        allocator,
+    );
+    parsed.mark_2_coverage = try coverage.Owned.build(
+        view,
+        parsed.mark_2_coverage_offset,
         allocator,
     );
     return parsed;

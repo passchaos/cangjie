@@ -32,6 +32,7 @@ pub const Lookup = struct {
     pair_pos_extension: bool = false,
     cursive_subtables: []const CursivePositionSubtable = &.{},
     mark_to_base_subtables: []const MarkToBaseSubtable = &.{},
+    mark_to_mark_subtables: []const MarkToMarkSubtable = &.{},
     chaining_coverage_only: bool = false,
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
     chaining_groups: []const glyph_groups.Group = &.{},
@@ -101,6 +102,17 @@ pub const MarkToBaseSubtable = struct {
     base_coverage: ?coverage.Owned = null,
 };
 
+pub const MarkToMarkSubtable = struct {
+    subtable_offset: usize = 0,
+    mark_1_coverage_offset: usize = 0,
+    mark_2_coverage_offset: usize = 0,
+    class_count: u16 = 0,
+    mark_1_array_offset: usize = 0,
+    mark_2_array_offset: usize = 0,
+    mark_1_coverage: ?coverage.Owned = null,
+    mark_2_coverage: ?coverage.Owned = null,
+};
+
 pub const ChainingCoverageSubtable = struct {
     pub const max_fast_records = 4;
 
@@ -164,6 +176,7 @@ pub fn deinitLookupContents(
         allocator.free(lookup.pair_pos_class_matrix);
         deinitCursiveSubtables(lookup.cursive_subtables, allocator);
         deinitMarkToBaseSubtables(lookup.mark_to_base_subtables, allocator);
+        deinitMarkToMarkSubtables(lookup.mark_to_mark_subtables, allocator);
         glyph_groups.deinitGroups(lookup.chaining_groups, allocator);
         allocator.free(lookup.chaining_group_slots);
         deinitChainingCoverageSubtables(lookup.chaining_subtables, allocator);
@@ -188,6 +201,17 @@ pub fn deinitMarkToBaseSubtables(
     for (subtables) |subtable| {
         if (subtable.mark_coverage) |owned| owned.deinit(allocator);
         if (subtable.base_coverage) |owned| owned.deinit(allocator);
+    }
+    allocator.free(subtables);
+}
+
+pub fn deinitMarkToMarkSubtables(
+    subtables: []const MarkToMarkSubtable,
+    allocator: std.mem.Allocator,
+) void {
+    for (subtables) |subtable| {
+        if (subtable.mark_1_coverage) |owned| owned.deinit(allocator);
+        if (subtable.mark_2_coverage) |owned| owned.deinit(allocator);
     }
     allocator.free(subtables);
 }

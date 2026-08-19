@@ -1,6 +1,7 @@
 //! MarkMarkPos execution.
 
 const std = @import("std");
+const accelerator = @import("../../../accelerator/root.zig");
 const GlyphId = @import("../../../../glyph.zig").GlyphId;
 const matching = @import("../../matching.zig");
 const options = @import("../../options.zig");
@@ -16,6 +17,29 @@ pub const Error =
 pub const Options = options.Options;
 pub const Parsed = positioning.lookup.marks.MarkToMark;
 pub const View = table.View;
+
+pub fn build(
+    view: View,
+    subtable_offset: usize,
+    allocator: std.mem.Allocator,
+) (Error || std.mem.Allocator.Error)!Parsed {
+    var parsed = try positioning.lookup.marks.parseMarkToMark(
+        view,
+        subtable_offset,
+    );
+    errdefer if (parsed.mark_1_coverage) |owned| owned.deinit(allocator);
+    parsed.mark_1_coverage = try accelerator.coverage.Owned.build(
+        view,
+        parsed.mark_1_coverage_offset,
+        allocator,
+    );
+    parsed.mark_2_coverage = try accelerator.coverage.Owned.build(
+        view,
+        parsed.mark_2_coverage_offset,
+        allocator,
+    );
+    return parsed;
+}
 
 pub fn collect(
     view: View,
@@ -67,7 +91,7 @@ pub fn collectAt(
     );
 }
 
-fn collectAtParsed(
+pub fn collectAtParsed(
     view: View,
     parsed: Parsed,
     glyphs: []const GlyphId,
@@ -82,11 +106,14 @@ fn collectAtParsed(
     if (matching.lookupIgnoresGlyph(lookup_flag, run, glyph)) return false;
     if (parsed.class_count == 0 or glyphs.len < 2) return false;
 
-    const mark_1_index = try table.coverage.index(
-        view,
-        parsed.mark_1_coverage_offset,
-        glyph,
-    ) orelse return false;
+    const mark_1_index = if (parsed.mark_1_coverage) |coverage|
+        coverage.index(glyph) orelse return false
+    else
+        try table.coverage.index(
+            view,
+            parsed.mark_1_coverage_offset,
+            glyph,
+        ) orelse return false;
     const mark_2_position = try search.previousUnignoredCoveredGlyph(
         view,
         parsed.mark_2_coverage_offset,
@@ -104,11 +131,14 @@ fn collectAtParsed(
         lookup_flag,
         run,
     )) return false;
-    const mark_2_index = try table.coverage.index(
-        view,
-        parsed.mark_2_coverage_offset,
-        glyphs[mark_2_position],
-    ) orelse return false;
+    const mark_2_index = if (parsed.mark_2_coverage) |coverage|
+        coverage.index(glyphs[mark_2_position]) orelse return false
+    else
+        try table.coverage.index(
+            view,
+            parsed.mark_2_coverage_offset,
+            glyphs[mark_2_position],
+        ) orelse return false;
     const mark_1_record =
         parsed.mark_1_array_offset + 2 + mark_1_index * 4;
     const mark_class = try view.readU16(mark_1_record);

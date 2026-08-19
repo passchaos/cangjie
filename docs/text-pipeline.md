@@ -1296,6 +1296,10 @@ all active filtered GSUB/GPOS lookups, so the generic high-byte/ignore-class
 dispatcher was pure overhead. The Arabic fixed-CPU-30 median fell to
 `76,083 ns`, about `13.0%` above Parley; Latin and Japanese controls measured
 `23,931 ns` and `49,270 ns`, with all checksums and output counts unchanged.
+MarkMarkPos backward search now consumes the same owned second-mark coverage
+as its target lookup instead of reparsing the borrowed Coverage table for each
+candidate. The Arabic median reduced further to `75,414 ns`, about `12.0%`
+above the retained Parley row, with identical output checksum and counts.
 
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another

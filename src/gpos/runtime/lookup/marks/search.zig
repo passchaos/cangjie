@@ -44,6 +44,37 @@ pub fn previousUnignoredCoveredGlyph(
     return null;
 }
 
+pub fn previousUnignoredCoveredGlyphParsed(
+    view: View,
+    coverage_offset: usize,
+    coverage: ?accelerator.coverage.Owned,
+    glyphs: []const GlyphId,
+    mark_index: usize,
+    lookup_flag: u16,
+    run: Options,
+) Error!?usize {
+    var glyph_index = mark_index;
+    while (glyph_index > 0) {
+        glyph_index -= 1;
+        if (matching.matchSkipsGlyph(
+            lookup_flag,
+            run,
+            glyphs,
+            glyph_index,
+        )) continue;
+        const covered = if (coverage) |owned|
+            owned.index(glyphs[glyph_index]) != null
+        else
+            try table.coverage.index(
+                view,
+                coverage_offset,
+                glyphs[glyph_index],
+            ) != null;
+        return if (covered) glyph_index else null;
+    }
+    return null;
+}
+
 pub fn markGlyph(
     view: View,
     mark_coverage_offset: usize,

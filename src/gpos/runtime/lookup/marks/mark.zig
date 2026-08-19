@@ -114,9 +114,10 @@ pub fn collectAtParsed(
             parsed.mark_1_coverage_offset,
             glyph,
         ) orelse return false;
-    const mark_2_position = try search.previousUnignoredCoveredGlyph(
+    const mark_2_position = try search.previousUnignoredCoveredGlyphParsed(
         view,
         parsed.mark_2_coverage_offset,
+        parsed.mark_2_coverage,
         glyphs,
         mark_1_position,
         lookup_flag,

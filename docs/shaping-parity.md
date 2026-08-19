@@ -2287,6 +2287,11 @@ shaping-performance superiority.
   Indentation, explicit-region precedence, retained/styled restoration,
   TextGeometry, and renderer origins are covered. Vertical-rl exclusion
   traversal remains explicit rejection.
+  `ShapedParagraph.breakLines` now commits one vertical column per caller
+  advance. Per-column regions and max-height retry the same source boundary
+  transactionally, partial layouts expose only committed columns, checkpoints
+  restore cursor/regions/glyph mutations, and final bidi, optical punctuation,
+  run pens, and inline objects execute once through retained presentation.
   Line-end East Asian punctuation can now hang along the positive-down inline
   axis. Greedy/emergency/balanced fitting use occupied height; final
   column-local bidi assigns bottom-edge `hang_end`, then top/center/bottom
@@ -2304,8 +2309,8 @@ shaping-performance superiority.
   presentation-only geometry directly and through placement-only concrete
   resolver replay; retained/styled layout, intrinsic sizing, draw output, and
   line-limit visibility keep those bounds outside flow metrics. Bottom-to-top
-  inline progression, physical left/right alignment, vertical-rl exclusions,
-  and incremental breaking are
+  inline progression, physical left/right alignment, and vertical-rl
+  exclusions are
   rejected explicitly until they are migrated to the shared
   inline/block-axis model; this is not yet full vertical paragraph parity.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,

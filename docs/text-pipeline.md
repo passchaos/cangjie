@@ -665,13 +665,12 @@ rectangle pipeline as caller-authored exclusions.
 This is intentionally not described as full vertical reflow. Until the
 remaining line-breaking subsystems are converted to explicit inline/block
 axes, vertical paragraph validation rejects an explicit bottom-to-top
-`direction = rtl` request, exclusions in vertical-rl, physical left/right
-alignment, and the resumable breaker.
+`direction = rtl` request, exclusions in vertical-rl, and physical left/right
+alignment.
 Retained whole-paragraph
 layout and intrinsic inline-size measurement are supported and restore the
 pristine vertical shaping snapshot between calls. Returning a concrete
-`UnsupportedVerticalParagraphOptions` or
-`UnsupportedVerticalParagraphBreaker` error is part of this boundary: an
+`UnsupportedVerticalParagraphOptions` error is part of this boundary: an
 unsupported request must never fall through the horizontal x-axis machinery
 and produce plausible but false geometry.
 
@@ -817,22 +816,26 @@ rejects direction, script, language, feature, or variation changes because
 those options require reshaping.
 
 `ShapedParagraph.breakLines` exposes the retained greedy breaker as a concrete
-resumable owner. `Breaker.advance` commits at most one logical visual line and
-may receive an `x/y/width` region for exactly that line. A caller can therefore
-paginate or fill columns without replaying lines already accepted. Supplying a
-per-line `max_height` runs that attempted line transactionally: an oversized
-line returns `.height_exceeded` with its required height and source range, and
-the cursor and output remain at the preceding line.
+resumable owner. `Breaker.advance` commits at most one logical visual line or
+vertical column and may receive an `x/y/width` region for exactly that
+fragment. A caller can therefore paginate or fill containers without reshaping
+accepted source. Horizontal reflow keeps its zero-copy forward state machine;
+vertical retries rebuild from a breaker-owned pristine glyph/run snapshot, then
+expose only the already committed column prefix. Supplying `max_height` runs
+that attempted fragment transactionally: an oversized result returns
+`.height_exceeded` with required physical height and source range, while the
+cursor and output remain at the preceding fragment.
 
 `Breaker.save` creates an explicitly owned checkpoint containing the logical
 cursor plus the mutable reflow transaction. `restore` can then retry the same
 source line at another position or measure; forward-only callers do not pay
 that copy cost. The breaker rejects stale checkpoints and detects reuse of its
 borrowed `ReflowBuffer`. Lines remain in logical source order while breaking.
-After the cursor reaches the end, JSTF/Kashida/font expansion, ordinary
-justification, punctuation processing, per-line bidi, run offsets, and inline
-objects execute once through the same final-presentation sequence used by
-ordinary retained `layout`.
+After the cursor reaches the end, writing-mode-appropriate justification,
+punctuation processing, per-fragment bidi, run offsets, and inline objects
+execute once through the same final-presentation sequence used by ordinary
+retained `layout`; horizontal lines additionally retain JSTF/Kashida/font-axis
+expansion.
 
 The resumable API intentionally accepts `.greedy` only. Balanced breaking
 optimizes a complete hard-break segment and therefore still uses ordinary
@@ -840,10 +843,6 @@ whole-paragraph retained layout. Styled one-shot layout likewise remains on
 its existing complete pipeline until it has a width-independent attributed
 owner whose glyph-parallel metadata can participate in checkpoints; neither
 case silently falls back to replay while claiming to be incremental.
-The current hard-break vertical column path also rejects `breakLines`: its
-region and `max_height` protocol still names horizontal line-box geometry,
-while whole-layout retained vertical reflow is already available through
-`ShapedParagraph.layout`.
 
 `ParagraphOptions.line_break_strategy` independently selects greedy or
 balanced soft-boundary policy. Both horizontal lines and vertical columns first

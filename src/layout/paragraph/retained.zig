@@ -162,7 +162,7 @@ pub const ShapedParagraph = struct {
         return reflow.buffer.paragraphLayout(options.writing_mode);
     }
 
-    /// Start caller-driven, resumable greedy line breaking.
+    /// Start caller-driven, resumable greedy line/column breaking.
     ///
     /// The returned breaker borrows this paragraph and `reflow`; both must
     /// outlive it and neither may be reused until the breaker is deinitialized.
@@ -172,13 +172,6 @@ pub const ShapedParagraph = struct {
         options: paragraph_options.Options,
     ) !breaker.Breaker {
         try self.validateLayoutOptions(options);
-        if (options.writing_mode.isVertical()) {
-            // The resumable protocol is explicitly line/region/height based
-            // and its checkpoints still describe horizontal greedy reflow.
-            // Direct and retained whole-layout calls cover hard-break vertical
-            // columns; do not expose a fake horizontal-region breaker.
-            return error.UnsupportedVerticalParagraphBreaker;
-        }
         if (options.line_break_strategy != .greedy) {
             return error.ResumableBreakerRequiresGreedyStrategy;
         }

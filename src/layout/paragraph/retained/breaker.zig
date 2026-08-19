@@ -1,9 +1,12 @@
 //! Resumable greedy line breaking over a retained shaped paragraph.
 //!
 //! The breaker borrows immutable paragraph analysis and one `ReflowBuffer`.
-//! It owns only width-dependent analysis tailoring, caller-supplied line
-//! regions, and its logical cursor. Final justification, bidi, punctuation,
-//! and object placement run exactly once when all lines have been committed.
+//! It owns width-dependent analysis tailoring, caller-supplied line/column
+//! regions, and its logical cursor. Horizontal lines retain their zero-copy
+//! forward state machine. Vertical columns transactionally rebuild from a
+//! private pristine snapshot when a caller changes the next region, then expose
+//! only the committed prefix. Final justification, bidi, punctuation, and
+//! object placement run exactly once when all fragments have been committed.
 
 const std = @import("std");
 
@@ -23,15 +26,16 @@ const line_regions = @import("../line_regions.zig");
 const paragraph_options = @import("../options.zig");
 const presentation = @import("presentation.zig");
 const reshape = @import("../reshape.zig");
+const vertical_columns = @import("../vertical_columns.zig");
 
-/// Per-line geometry supplied while advancing a retained breaker.
+/// Per-fragment geometry supplied while advancing a retained breaker.
 pub const Input = struct {
     /// Replace or append the explicit region for the next visual line.
     ///
     /// Null preserves a region already present in the initial paragraph
     /// options and otherwise uses the natural indent/exclusion container.
     region: ?line_regions.Region = null,
-    /// Maximum permitted height for the next line.
+    /// Maximum permitted physical height for the next line/column.
     ///
     /// When the selected line exceeds this value the breaker rolls back the
     /// attempted line and returns `.height_exceeded`. The caller can then move
@@ -50,8 +54,8 @@ pub const HeightExceeded = struct {
 };
 
 pub const Step = union(enum) {
-    /// One logical line was committed. The record is a value snapshot; final
-    /// presentation may later adjust its geometry and glyph/run indexes.
+    /// One logical line/column was committed. The record is a value snapshot;
+    /// final presentation may later adjust its geometry and glyph/run indexes.
     line: paragraph_types.ParagraphLine,
     /// The attempted line exceeded `Input.max_height` and was not committed.
     height_exceeded: HeightExceeded,
@@ -67,12 +71,14 @@ pub const Checkpoint = struct {
     allocator: std.mem.Allocator,
     buffer_identity: usize,
     session_generation: u64,
-    greedy: paragraph_reflow.GreedyState.Checkpoint,
+    greedy: ?paragraph_reflow.GreedyState.Checkpoint,
     glyphs: []glyph_position.GlyphPosition,
     runs: []run_types.CascadeRun,
     variation_coords: []f32,
     lines: []paragraph_types.ParagraphLine,
     regions: []line_regions.Region,
+    committed_columns: usize,
+    vertical_complete_ready: bool,
 
     pub fn deinit(self: *Checkpoint) void {
         self.allocator.free(self.regions);
@@ -80,7 +86,7 @@ pub const Checkpoint = struct {
         self.allocator.free(self.variation_coords);
         self.allocator.free(self.runs);
         self.allocator.free(self.glyphs);
-        self.greedy.deinit(self.allocator);
+        if (self.greedy) |*greedy| greedy.deinit(self.allocator);
         self.* = undefined;
     }
 };
@@ -120,6 +126,11 @@ pub const Breaker = struct {
     font_size: f32,
     regions: std.ArrayList(line_regions.Region) = .empty,
     greedy: paragraph_reflow.GreedyState,
+    vertical_glyphs: []glyph_position.GlyphPosition = &.{},
+    vertical_runs: []run_types.CascadeRun = &.{},
+    vertical_variation_coords: []f32 = &.{},
+    committed_columns: usize = 0,
+    vertical_complete_ready: bool = false,
     finished: bool = false,
     failed: bool = false,
 
@@ -150,21 +161,39 @@ pub const Breaker = struct {
             init.options.line_regions,
         );
         self.refreshOptions();
-        try paragraph_reflow.beginGreedy(
-            &self.greedy,
-            self.buffer,
-            self.text,
-            self.options,
-            self.default_metrics,
-            self.grapheme_clusters,
-            self.line_breaks,
-            self.word_break_dictionary,
-            self.hyphenation_dictionary,
-        );
+        if (self.options.writing_mode.isVertical()) {
+            self.vertical_glyphs = try self.allocator.dupe(
+                glyph_position.GlyphPosition,
+                self.buffer.glyphs.items,
+            );
+            self.vertical_runs = try self.allocator.dupe(
+                run_types.CascadeRun,
+                self.buffer.runs.items,
+            );
+            self.vertical_variation_coords = try self.allocator.dupe(
+                f32,
+                self.buffer.variation_coords.items,
+            );
+        } else {
+            try paragraph_reflow.beginGreedy(
+                &self.greedy,
+                self.buffer,
+                self.text,
+                self.options,
+                self.default_metrics,
+                self.grapheme_clusters,
+                self.line_breaks,
+                self.word_break_dictionary,
+                self.hyphenation_dictionary,
+            );
+        }
         return self;
     }
 
     pub fn deinit(self: *Breaker) void {
+        self.allocator.free(self.vertical_variation_coords);
+        self.allocator.free(self.vertical_runs);
+        self.allocator.free(self.vertical_glyphs);
         self.greedy.deinit();
         self.regions.deinit(self.allocator);
         self.* = undefined;
@@ -175,6 +204,9 @@ pub const Breaker = struct {
         try self.validateSession();
         if (self.finished) return error.ParagraphBreakerComplete;
         if (self.failed) return error.ParagraphBreakerFailed;
+        if (self.options.writing_mode.isVertical()) {
+            return self.advanceVertical(input);
+        }
         if (self.greedy.complete) return try self.finish();
 
         if (input.max_height) |height| {
@@ -263,8 +295,14 @@ pub const Breaker = struct {
         try self.validateSession();
         if (self.finished) return error.ParagraphBreakerComplete;
         if (self.failed) return error.ParagraphBreakerFailed;
-        var greedy_checkpoint = try self.greedy.save();
-        errdefer greedy_checkpoint.deinit(self.allocator);
+        var greedy_checkpoint: ?paragraph_reflow.GreedyState.Checkpoint =
+            if (self.options.writing_mode.isVertical())
+                null
+            else
+                try self.greedy.save();
+        errdefer if (greedy_checkpoint) |*checkpoint| {
+            checkpoint.deinit(self.allocator);
+        };
         const glyphs = try self.allocator.dupe(
             glyph_position.GlyphPosition,
             self.buffer.glyphs.items,
@@ -299,6 +337,8 @@ pub const Breaker = struct {
             .variation_coords = coords,
             .lines = lines,
             .regions = region_copy,
+            .committed_columns = self.committed_columns,
+            .vertical_complete_ready = self.vertical_complete_ready,
         };
     }
 
@@ -332,7 +372,9 @@ pub const Breaker = struct {
             self.allocator,
             checkpoint.regions.len,
         );
-        try self.greedy.restore(checkpoint.greedy);
+        if (checkpoint.greedy) |greedy| {
+            try self.greedy.restore(greedy);
+        }
 
         replaceList(
             glyph_position.GlyphPosition,
@@ -353,6 +395,8 @@ pub const Breaker = struct {
         replaceList(line_regions.Region, &self.regions, checkpoint.regions);
         self.buffer.inline_objects.clearRetainingCapacity();
         self.refreshOptions();
+        self.committed_columns = checkpoint.committed_columns;
+        self.vertical_complete_ready = checkpoint.vertical_complete_ready;
         self.failed = false;
     }
 
@@ -366,6 +410,14 @@ pub const Breaker = struct {
         try self.validateSession();
         if (self.finished) return error.ParagraphBreakerComplete;
         if (self.failed) return error.ParagraphBreakerFailed;
+        if (self.options.writing_mode.isVertical() and
+            self.buffer.lines.items.len > self.committed_columns)
+        {
+            const all_lines = self.buffer.lines.items;
+            self.buffer.lines.items = all_lines[0..self.committed_columns];
+            defer self.buffer.lines.items = all_lines;
+            return self.buffer.paragraphLayout(self.options.writing_mode);
+        }
         return self.buffer.paragraphLayout(self.options.writing_mode);
     }
 
@@ -392,6 +444,121 @@ pub const Breaker = struct {
                 self.options.writing_mode,
             ),
         };
+    }
+
+    fn advanceVertical(self: *Breaker, input: Input) !Step {
+        if (self.vertical_complete_ready) return self.finish();
+        try self.validateInput(input);
+        try self.updateRegion(input.region, self.committed_columns);
+
+        var rollback: ?Checkpoint =
+            if (input.max_height != null) try self.save() else null;
+        defer if (rollback) |*checkpoint| checkpoint.deinit();
+        self.rebuildVertical() catch |err| {
+            if (rollback) |*checkpoint| {
+                self.restore(checkpoint) catch {
+                    self.failed = true;
+                };
+            } else {
+                self.failed = true;
+            }
+            return err;
+        };
+        if (self.committed_columns >= self.buffer.lines.items.len) {
+            if (self.committed_columns == 0) {
+                self.vertical_complete_ready = true;
+                return self.finish();
+            }
+            self.failed = true;
+            return error.InvalidParagraphBreakerState;
+        }
+
+        const line = self.buffer.lines.items[self.committed_columns];
+        if (input.max_height) |limit| {
+            if (line.height > limit) {
+                const exceeded = HeightExceeded{
+                    .line_index = self.committed_columns,
+                    .required_height = line.height,
+                    .byte_start = line.byte_start,
+                    .byte_len = line.byte_len,
+                    .region_x = line.region_x,
+                    .region_y = line.region_inline_start,
+                    .region_width = line.region_inline_size,
+                };
+                try self.restore(&rollback.?);
+                return .{ .height_exceeded = exceeded };
+            }
+        }
+
+        self.committed_columns += 1;
+        if (self.committed_columns == self.buffer.lines.items.len) {
+            self.vertical_complete_ready = true;
+        }
+        return .{ .line = line };
+    }
+
+    fn rebuildVertical(self: *Breaker) !void {
+        try self.buffer.glyphs.ensureTotalCapacity(
+            self.allocator,
+            self.vertical_glyphs.len,
+        );
+        try self.buffer.runs.ensureTotalCapacity(
+            self.allocator,
+            self.vertical_runs.len,
+        );
+        try self.buffer.variation_coords.ensureTotalCapacity(
+            self.allocator,
+            self.vertical_variation_coords.len,
+        );
+        replaceList(
+            glyph_position.GlyphPosition,
+            &self.buffer.glyphs,
+            self.vertical_glyphs,
+        );
+        replaceList(run_types.CascadeRun, &self.buffer.runs, self.vertical_runs);
+        replaceList(
+            f32,
+            &self.buffer.variation_coords,
+            self.vertical_variation_coords,
+        );
+        self.buffer.lines.clearRetainingCapacity();
+        self.buffer.inline_objects.clearRetainingCapacity();
+        try vertical_columns.build(
+            self.buffer,
+            self.text,
+            self.options,
+            self.default_metrics,
+            self.grapheme_clusters,
+            self.line_breaks,
+            self.word_break_dictionary,
+            self.hyphenation_dictionary,
+            self.recipe(),
+        );
+    }
+
+    fn validateInput(_: *Breaker, input: Input) !void {
+        if (input.max_height) |height| {
+            if (!std.math.isFinite(height) or height <= 0) {
+                return error.InvalidParagraphBreakerInput;
+            }
+        }
+    }
+
+    fn updateRegion(
+        self: *Breaker,
+        region: ?line_regions.Region,
+        line_index: usize,
+    ) !void {
+        const value = region orelse return;
+        try line_regions.validate(&.{value});
+        if (line_index < self.regions.items.len) {
+            self.regions.items[line_index] = value;
+        } else if (line_index == self.regions.items.len) {
+            try self.regions.append(self.allocator, value);
+        } else {
+            return error.InvalidParagraphBreakerState;
+        }
+        self.refreshOptions();
     }
 
     fn recipe(self: *const Breaker) reshape.Uniform {

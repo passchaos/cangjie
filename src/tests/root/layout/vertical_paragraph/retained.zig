@@ -62,15 +62,23 @@ test "retained vertical paragraph reflows without mutating its snapshot" {
     });
     try std.testing.expectApproxEqAbs(@as(f32, 40), widths.min, 0.001);
     try std.testing.expectApproxEqAbs(widths.min, widths.max, 0.001);
-    try std.testing.expectError(
-        error.UnsupportedVerticalParagraphBreaker,
-        shaped.breakLines(&reflow, .{
-            .max_width = 100,
-            .wrap_mode = .no_wrap,
-            .writing_mode = .vertical_rl,
-            .text_orientation = .upright,
-        }),
-    );
+    var breaker = try shaped.breakLines(&reflow, .{
+        .max_width = 100,
+        .wrap_mode = .no_wrap,
+        .writing_mode = .vertical_rl,
+        .text_orientation = .upright,
+    });
+    defer breaker.deinit();
+    const committed = switch (try breaker.advance(.{})) {
+        .line => |line| line,
+        else => return error.ExpectedVerticalColumn,
+    };
+    try std.testing.expectEqual(@as(usize, 2), committed.glyph_len);
+    const completed = switch (try breaker.advance(.{})) {
+        .complete => |result| result,
+        else => return error.ExpectedVerticalCompletion,
+    };
+    try std.testing.expectApproxEqAbs(@as(f32, 40), completed.height, 0.001);
 }
 
 test "retained hard-break columns switch RL and LR without reshaping" {

@@ -1,0 +1,422 @@
+{
+  "reference": {
+    "repository": "https://github.com/googlefonts/fontations",
+    "commit": "bb6f87166aa8bac93ff9df5ea67d58b7091b3e2a",
+    "read_fonts_version": "0.42.2",
+    "skrifa_version": "0.45.2",
+    "excluded_read_fonts_helper_modules": [
+      "aat",
+      "bitmap",
+      "layout",
+      "variations"
+    ]
+  },
+  "tables": [
+    {
+      "tag": "ankr",
+      "artifact": "src/opentype/ankr.zig",
+      "test": "src/tests/root/font/math_aat_variation_tables.zig",
+      "upstream_modules": [
+        "ankr"
+      ]
+    },
+    {
+      "tag": "avar",
+      "artifact": "src/font/tables/variations/avar.zig",
+      "test": "src/tests/root/font/math_aat_variation_tables.zig",
+      "upstream_modules": [
+        "avar"
+      ]
+    },
+    {
+      "tag": "BASE",
+      "artifact": "src/opentype/base.zig",
+      "test": "src/tests/root/font/math_aat_variation_tables.zig",
+      "upstream_modules": [
+        "base"
+      ]
+    },
+    {
+      "tag": "CBDT/CBLC",
+      "artifact": "src/font/tables/bitmap/cblc/root.zig",
+      "test": "src/tests/root/font/bitmap_and_cmap_tables.zig",
+      "upstream_modules": [
+        "cbdt",
+        "cblc"
+      ]
+    },
+    {
+      "tag": "CFF ",
+      "artifact": "src/cff.zig",
+      "test": "src/font/tests/cff.zig",
+      "upstream_modules": [
+        "cff"
+      ]
+    },
+    {
+      "tag": "CFF2",
+      "artifact": "src/opentype/cff2.zig",
+      "test": "src/tests/root/font/font_variations.zig",
+      "upstream_modules": [
+        "cff2"
+      ]
+    },
+    {
+      "tag": "cmap",
+      "artifact": "src/font/tables/cmap/root.zig",
+      "test": "src/tests/root/font/bitmap_and_cmap_tables.zig",
+      "upstream_modules": [
+        "cmap"
+      ]
+    },
+    {
+      "tag": "COLR/CPAL",
+      "artifact": "src/font/tables/color/root.zig",
+      "test": "src/tests/root/render/color_paints.zig",
+      "upstream_modules": [
+        "colr",
+        "cpal"
+      ]
+    },
+    {
+      "tag": "cvar",
+      "artifact": "src/opentype/cvar.zig",
+      "test": "src/tests/root/font/math_aat_variation_tables.zig",
+      "upstream_modules": [
+        "cvar"
+      ]
+    },
+    {
+      "tag": "DSIG",
+      "artifact": "src/font.zig",
+      "test": "src/tests/root/font/font_metadata_tables.zig",
+      "upstream_modules": [
+        "dsig"
+      ]
+    },
+    {
+      "tag": "EBDT/EBLC",
+      "artifact": "src/font/tables/bitmap/root.zig",
+      "test": "src/tests/root/font/bitmap_and_cmap_tables.zig",
+      "upstream_modules": [
+        "ebdt",
+        "eblc"
+      ]
+    },
+    {
+      "tag": "feat",
+      "artifact": "src/opentype/feat.zig",
+      "test": "src/tests/root/font/math_aat_variation_tables.zig",
+      "upstream_modules": [
+        "feat"
+      ]
+    },
+    {
+      "tag": "fvar",
+      "artifact": "src/font/tables/variations/fvar/root.zig",
+      "test": "src/tests/root/font/font_variations.zig",
+      "upstream_modules": [
+        "fvar"
+      ]
+    },
+    {
+      "tag": "gasp",
+      "artifact": "src/opentype/gasp.zig",
+      "test": "src/tests/root/font/font_metadata_tables.zig",
+      "upstream_modules": [
+        "gasp"
+      ]
+    },
+    {
+      "tag": "GDEF",
+      "artifact": "src/font/tables/layout/gdef/root.zig",
+      "test": "src/tests/root/font/containers_and_caches.zig",
+      "upstream_modules": [
+        "gdef"
+      ]
+    },
+    {
+      "tag": "glyf/loca",
+      "artifact": "src/font/tables/truetype/glyf/root.zig",
+      "test": "src/tests/root/font/font_variations.zig",
+      "upstream_modules": [
+        "glyf",
+        "loca"
+      ]
+    },
+    {
+      "tag": "GPOS",
+      "artifact": "src/gpos.zig",
+      "test": "src/gpos/tests/positioning/root.zig",
+      "upstream_modules": [
+        "gpos"
+      ]
+    },
+    {
+      "tag": "GSUB",
+      "artifact": "src/gsub.zig",
+      "test": "src/gsub/tests/execution/root.zig",
+      "upstream_modules": [
+        "gsub"
+      ]
+    },
+    {
+      "tag": "gvar",
+      "artifact": "src/opentype/gvar.zig",
+      "test": "src/tests/root/font/font_variations.zig",
+      "upstream_modules": [
+        "gvar"
+      ]
+    },
+    {
+      "tag": "hdmx",
+      "artifact": "src/font.zig",
+      "test": "src/tests/root/font/font_metadata_tables.zig",
+      "upstream_modules": [
+        "hdmx"
+      ]
+    },
+    {
+      "tag": "head/maxp",
+      "artifact": "src/font/tables/core/root.zig",
+      "test": "src/font/tests/core/maxp.zig",
+      "upstream_modules": [
+        "head",
+        "maxp"
+      ]
+    },
+    {
+      "tag": "hhea/hmtx",
+      "artifact": "src/font/tables/metrics/root.zig",
+      "test": "src/tests/root/font/font_metadata_tables.zig",
+      "upstream_modules": [
+        "hhea",
+        "hmtx"
+      ]
+    },
+    {
+      "tag": "HVAR",
+      "artifact": "src/opentype/metric_variation.zig",
+      "test": "src/tests/root/font/math_aat_variation_tables.zig",
+      "upstream_modules": [
+        "hvar"
+      ]
+    },
+    {
+      "tag": "IFT /IFTX",
+      "artifact": "src/opentype/ift.zig",
+      "test": "src/tests/root/font/font_core_tables.zig",
+      "upstream_modules": [
+        "ift"
+      ]
+    },
+    {
+      "tag": "kern",
+      "artifact": "src/font/tables/kerning/kern/root.zig",
+      "test": "src/tests/root/font/containers_and_caches.zig",
+      "upstream_modules": [
+        "kern"
+      ]
+    },
+    {
+      "tag": "kerx",
+      "artifact": "src/opentype/kerx.zig",
+      "test": "src/tests/root/font/math_aat_variation_tables.zig",
+      "upstream_modules": [
+        "kerx"
+      ]
+    },
+    {
+      "tag": "ltag",
+      "artifact": "src/opentype/ltag.zig",
+      "test": "src/tests/root/font/font_metadata_tables.zig",
+      "upstream_modules": [
+        "ltag"
+      ]
+    },
+    {
+      "tag": "meta",
+      "artifact": "src/opentype/meta.zig",
+      "test": "src/tests/root/font/font_metadata_tables.zig",
+      "upstream_modules": [
+        "meta"
+      ]
+    },
+    {
+      "tag": "morx",
+      "artifact": "src/opentype/morx.zig",
+      "test": "src/tests/root/font/math_aat_variation_tables.zig",
+      "upstream_modules": [
+        "morx"
+      ]
+    },
+    {
+      "tag": "MVAR",
+      "artifact": "src/opentype/mvar.zig",
+      "test": "src/tests/root/font/math_aat_variation_tables.zig",
+      "upstream_modules": [
+        "mvar"
+      ]
+    },
+    {
+      "tag": "name",
+      "artifact": "src/opentype/name.zig",
+      "test": "src/tests/root/font/font_metadata_tables.zig",
+      "upstream_modules": [
+        "name"
+      ]
+    },
+    {
+      "tag": "OS/2",
+      "artifact": "src/font/tables/metadata/os2.zig",
+      "test": "src/tests/root/font/font_metadata_tables.zig",
+      "upstream_modules": [
+        "os2"
+      ]
+    },
+    {
+      "tag": "post",
+      "artifact": "src/font/tables/metadata/post/root.zig",
+      "test": "src/tests/root/font/font_metadata_tables.zig",
+      "upstream_modules": [
+        "post"
+      ]
+    },
+    {
+      "tag": "sbix",
+      "artifact": "src/font/tables/bitmap/sbix.zig",
+      "test": "src/tests/root/font/bitmap_and_cmap_tables.zig",
+      "upstream_modules": [
+        "sbix"
+      ]
+    },
+    {
+      "tag": "STAT",
+      "artifact": "src/font/tables/variations/stat/root.zig",
+      "test": "src/tests/root/font/font_variations.zig",
+      "upstream_modules": [
+        "stat"
+      ]
+    },
+    {
+      "tag": "SVG ",
+      "artifact": "src/font/tables/svg/root.zig",
+      "test": "src/font/tables/svg/tests/root.zig",
+      "upstream_modules": [
+        "svg"
+      ]
+    },
+    {
+      "tag": "trak",
+      "artifact": "src/opentype/trak.zig",
+      "test": "src/tests/root/font/math_aat_variation_tables.zig",
+      "upstream_modules": [
+        "trak"
+      ]
+    },
+    {
+      "tag": "VARC",
+      "artifact": "src/opentype/varc.zig",
+      "test": "src/tests/root/font/font_variations.zig",
+      "upstream_modules": [
+        "varc"
+      ]
+    },
+    {
+      "tag": "vhea/vmtx",
+      "artifact": "src/font/tables/metrics/root.zig",
+      "test": "src/tests/root/font/font_variations.zig",
+      "upstream_modules": [
+        "vhea",
+        "vmtx"
+      ]
+    },
+    {
+      "tag": "VORG",
+      "artifact": "src/font.zig",
+      "test": "src/tests/root/font/font_variations.zig",
+      "upstream_modules": [
+        "vorg"
+      ]
+    },
+    {
+      "tag": "VVAR",
+      "artifact": "src/opentype/metric_variation.zig",
+      "test": "src/tests/root/font/math_aat_variation_tables.zig",
+      "upstream_modules": [
+        "vvar"
+      ]
+    }
+  ],
+  "skrifa": [
+    {
+      "capability": "attributes",
+      "artifact": "src/font/face/root.zig",
+      "test": "src/tests/root/public_api.zig",
+      "upstream_apis": [
+        "MetadataProvider::attributes"
+      ]
+    },
+    {
+      "capability": "axes and named instances",
+      "artifact": "src/font/face/views/variations.zig",
+      "test": "src/tests/root/font/font_variations.zig",
+      "upstream_apis": [
+        "MetadataProvider::axes",
+        "MetadataProvider::named_instances"
+      ]
+    },
+    {
+      "capability": "localized strings and glyph names",
+      "artifact": "src/font/face/views/names.zig",
+      "test": "src/tests/root/public_api.zig",
+      "upstream_apis": [
+        "MetadataProvider::localized_strings",
+        "MetadataProvider::glyph_names"
+      ]
+    },
+    {
+      "capability": "global and glyph metrics",
+      "artifact": "src/font/face/views/metrics.zig",
+      "test": "src/tests/root/public_api.zig",
+      "upstream_apis": [
+        "MetadataProvider::metrics",
+        "MetadataProvider::glyph_metrics"
+      ]
+    },
+    {
+      "capability": "charmap and variation selectors",
+      "artifact": "src/font/face/views/glyphs.zig",
+      "test": "src/tests/root/font/bitmap_and_cmap_tables.zig",
+      "upstream_apis": [
+        "MetadataProvider::charmap"
+      ]
+    },
+    {
+      "capability": "glyf, CFF, CFF2 and VARC outlines",
+      "artifact": "src/font/face/views/glyphs.zig",
+      "test": "src/tests/root/font/font_variations.zig",
+      "upstream_apis": [
+        "MetadataProvider::outline_glyphs"
+      ]
+    },
+    {
+      "capability": "COLR, SVG and bitmap color glyphs",
+      "artifact": "src/font/face/views/color.zig",
+      "test": "src/tests/root/render/color_paints.zig",
+      "upstream_apis": [
+        "MetadataProvider::color_glyphs",
+        "MetadataProvider::color_palettes",
+        "MetadataProvider::bitmap_strikes"
+      ]
+    },
+    {
+      "capability": "embedded TrueType hinting",
+      "artifact": "src/font/hinting/root.zig",
+      "test": "tests/hinting_freetype_test.zig",
+      "upstream_apis": [
+        "outline::HintingInstance"
+      ]
+    }
+  ]
+}

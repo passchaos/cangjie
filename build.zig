@@ -2454,6 +2454,15 @@ const retained_inline_cangjie_expected_gates = [_]struct {
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const fontations_coverage_step = b.step(
+        "fontations-coverage",
+        "Verify Fontations table and high-level capability evidence",
+    );
+    const fontations_coverage_cmd = b.addSystemCommand(&.{
+        "python3",
+        "tools/verify_fontations_coverage.py",
+    });
+    fontations_coverage_step.dependOn(&fontations_coverage_cmd.step);
     const enable_harfbuzz = b.option(bool, "enable-harfbuzz", "Build shape-bench with the HarfBuzz reference engine") orelse false;
     const harfbuzz_prefix = b.option([]const u8, "harfbuzz-prefix", "Prefix containing HarfBuzz include/ and lib/");
     const harfbuzz_include_dir = b.option([]const u8, "harfbuzz-include-dir", "Directory containing hb.h and hb-ot.h");

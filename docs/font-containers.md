@@ -96,3 +96,16 @@ ms for a 38 KiB variable General Sans WOFF2, including reconstruction and
 parse. Already-decoded SFNT copy-and-parse was substantially cheaper. These
 figures establish practical startup cost only; they are not a claim of
 load-time superiority over FreeType or Fontations.
+
+## Fontations Coverage Gate
+
+`docs/fontations-coverage.json` maps every public top-level table family in
+Fontations `read-fonts` 0.42.2, plus eight grouped Skrifa 0.45.2 capability
+families covering `MetadataProvider` and embedded TrueType hinting, to a
+concrete Cangjie implementation file and a live test artifact.
+`zig build fontations-coverage` verifies that every pinned upstream module and
+API is mapped exactly once, the referenced files remain live, and every test
+artifact still declares Zig tests. This is an inventory and evidence-maintenance
+gate, not proof of per-table semantic parity or superiority; those stronger
+claims require reference differential tests and same-host performance
+measurements.

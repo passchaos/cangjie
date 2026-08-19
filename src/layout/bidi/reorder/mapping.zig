@@ -16,9 +16,21 @@ pub fn buildClusterIndex(
     allocator: std.mem.Allocator,
     glyphs: []const GlyphPosition,
 ) ![]ClusterEntry {
-    const entries = try allocator.alloc(ClusterEntry, glyphs.len);
+    var entries = std.ArrayList(ClusterEntry).empty;
+    errdefer entries.deinit(allocator);
+    try buildClusterIndexInto(allocator, &entries, glyphs);
+    return try entries.toOwnedSlice(allocator);
+}
+
+pub fn buildClusterIndexInto(
+    allocator: std.mem.Allocator,
+    entries: *std.ArrayList(ClusterEntry),
+    glyphs: []const GlyphPosition,
+) !void {
+    entries.clearRetainingCapacity();
+    try entries.resize(allocator, glyphs.len);
     var monotone = true;
-    for (glyphs, entries, 0..) |glyph, *entry, glyph_index| {
+    for (glyphs, entries.items, 0..) |glyph, *entry, glyph_index| {
         // A generated hyphen is logically inserted at a source boundary and
         // intentionally keeps that boundary as its public caret cluster. For
         // bidi permutation only, attach it to the preceding source atom: LTR
@@ -34,16 +46,15 @@ pub fn buildClusterIndex(
             .glyph_index = glyph_index,
         };
         if (glyph_index != 0 and
-            visual_cluster < entries[glyph_index - 1].cluster)
+            visual_cluster < entries.items[glyph_index - 1].cluster)
         {
             monotone = false;
         }
     }
     // Common shaping preserves monotone clusters, making this already sorted.
     // Script reordering needs the stable cluster/index tie-break below.
-    if (monotone) return entries;
-    std.sort.heap(ClusterEntry, entries, {}, entryLessThan);
-    return entries;
+    if (monotone) return;
+    std.sort.heap(ClusterEntry, entries.items, {}, entryLessThan);
 }
 
 pub fn appendItem(

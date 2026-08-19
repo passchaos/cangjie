@@ -9,17 +9,34 @@ pub fn buildGlyphRunIndices(
     runs: anytype,
     glyph_count: usize,
 ) ![]usize {
-    const indices = try allocator.alloc(usize, glyph_count);
+    var indices = std.ArrayList(usize).empty;
+    errdefer indices.deinit(allocator);
+    try buildGlyphRunIndicesInto(
+        allocator,
+        &indices,
+        runs,
+        glyph_count,
+    );
+    return try indices.toOwnedSlice(allocator);
+}
+
+pub fn buildGlyphRunIndicesInto(
+    allocator: std.mem.Allocator,
+    indices: *std.ArrayList(usize),
+    font_runs: anytype,
+    glyph_count: usize,
+) !void {
+    indices.clearRetainingCapacity();
+    try indices.resize(allocator, glyph_count);
     // Synthetic inline objects and future non-font atoms deliberately remain
     // unowned. A sentinel prevents bidi permutation from borrowing the nearest
     // font and later exposing a fake `.notdef` render request.
-    @memset(indices, no_run);
-    for (runs, 0..) |run, run_index| {
+    @memset(indices.items, no_run);
+    for (font_runs, 0..) |run, run_index| {
         const end = @min(glyph_count, run.glyph_start + run.glyph_len);
         if (run.glyph_start >= end) continue;
-        @memset(indices[run.glyph_start..end], run_index);
+        @memset(indices.items[run.glyph_start..end], run_index);
     }
-    return indices;
 }
 
 pub fn rebuild(

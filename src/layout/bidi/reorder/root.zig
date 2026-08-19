@@ -209,35 +209,23 @@ pub fn applyLines(buffer: anytype, text: []const u8, rtl: bool) !void {
     );
     defer paragraph.deinit();
 
-    const old_runs = try buffer.allocator.dupe(
-        @TypeOf(buffer.runs.items[0]),
-        buffer.runs.items,
-    );
-    defer buffer.allocator.free(old_runs);
-    const old_glyphs = try buffer.allocator.dupe(
-        GlyphPosition,
-        buffer.glyphs.items,
-    );
-    defer buffer.allocator.free(old_glyphs);
-    const glyph_run_indices = try runs.buildGlyphRunIndices(
+    const scratch = &buffer.bidi_reorder_scratch;
+    try scratch.begin(
         buffer.allocator,
-        old_runs,
-        old_glyphs.len,
+        &buffer.runs,
+        &buffer.glyphs,
     );
-    defer buffer.allocator.free(glyph_run_indices);
-    const glyph_cluster_index = try mapping.buildClusterIndex(
-        buffer.allocator,
-        old_glyphs,
-    );
-    defer buffer.allocator.free(glyph_cluster_index);
-    const seen = try buffer.allocator.alloc(bool, old_glyphs.len);
-    defer buffer.allocator.free(seen);
-    @memset(seen, false);
-
-    var visual_glyphs = std.ArrayList(GlyphPosition).empty;
-    defer visual_glyphs.deinit(buffer.allocator);
-    var visual_run_indices = std.ArrayList(usize).empty;
-    defer visual_run_indices.deinit(buffer.allocator);
+    var transaction_open = true;
+    errdefer if (transaction_open) {
+        scratch.rollback(&buffer.runs, &buffer.glyphs);
+    };
+    const old_runs = scratch.old_runs.items;
+    const old_glyphs = scratch.old_glyphs.items;
+    const glyph_run_indices = scratch.glyph_run_indices.items;
+    const glyph_cluster_index = scratch.glyph_cluster_index.items;
+    const seen = scratch.seen.items;
+    const visual_glyphs = &buffer.glyphs;
+    const visual_run_indices = &scratch.visual_run_indices;
 
     for (buffer.lines.items) |*line| {
         const visual_start = visual_glyphs.items.len;
@@ -269,23 +257,19 @@ pub fn applyLines(buffer: anytype, text: []const u8, rtl: bool) !void {
                 break;
             }
             const retained = retained_x9[0..retained_x9_count];
-            const visual_order = try paragraph.visualOrderRetaining(
+            try paragraph.visualOrderAndLevelsRetaining(
                 buffer.allocator,
                 scalar_start,
                 scalar_end,
                 retained,
+                &scratch.line_levels,
+                &scratch.visual_order,
             );
-            defer buffer.allocator.free(visual_order);
-            const line_levels = try paragraph.lineLevelsRetaining(
-                buffer.allocator,
-                scalar_start,
-                scalar_end,
-                retained,
-            );
-            defer buffer.allocator.free(line_levels);
-            for (visual_order) |scalar_index| {
+            for (scratch.visual_order.items) |scalar_index| {
                 const scalar = paragraph.scalars[scalar_index];
-                const level = line_levels[scalar_index - scalar_start];
+                const level = scratch.line_levels.items[
+                    scalar_index - scalar_start
+                ];
                 try mapping.appendItem(
                     buffer.allocator,
                     old_glyphs,
@@ -308,8 +292,8 @@ pub fn applyLines(buffer: anytype, text: []const u8, rtl: bool) !void {
                             scalar.codepoint,
                         .direction = if (level & 1 != 0) .rtl else .ltr,
                     },
-                    &visual_glyphs,
-                    &visual_run_indices,
+                    visual_glyphs,
+                    visual_run_indices,
                 );
             }
         }
@@ -324,8 +308,8 @@ pub fn applyLines(buffer: anytype, text: []const u8, rtl: bool) !void {
             seen,
             old_line_start,
             old_line_end,
-            &visual_glyphs,
-            &visual_run_indices,
+            visual_glyphs,
+            visual_run_indices,
         );
         line.glyph_start = visual_start;
         line.glyph_len = visual_glyphs.items.len - visual_start;
@@ -341,15 +325,13 @@ pub fn applyLines(buffer: anytype, text: []const u8, rtl: bool) !void {
         seen,
         0,
         old_glyphs.len,
-        &visual_glyphs,
-        &visual_run_indices,
+        visual_glyphs,
+        visual_run_indices,
     );
     if (visual_glyphs.items.len != old_glyphs.len) {
         return error.InvalidBidiMap;
     }
 
-    buffer.glyphs.clearRetainingCapacity();
-    try buffer.glyphs.appendSlice(buffer.allocator, visual_glyphs.items);
     try runs.rebuild(buffer, old_runs, visual_run_indices.items);
     for (buffer.lines.items) |*line| {
         const range = runs.range(
@@ -361,4 +343,5 @@ pub fn applyLines(buffer: anytype, text: []const u8, rtl: bool) !void {
         line.run_len = range.len;
     }
     runs.recomputeOffsets(buffer);
+    transaction_open = false;
 }

@@ -83,30 +83,51 @@ pub const Paragraph = struct {
         scalar_end: usize,
         retained: []const usize,
     ) ![]u8 {
+        var result = std.ArrayList(u8).empty;
+        errdefer result.deinit(allocator);
+        try self.fillLineLevelsRetaining(
+            allocator,
+            scalar_start,
+            scalar_end,
+            retained,
+            &result,
+        );
+        return try result.toOwnedSlice(allocator);
+    }
+
+    fn fillLineLevelsRetaining(
+        self: Paragraph,
+        allocator: std.mem.Allocator,
+        scalar_start: usize,
+        scalar_end: usize,
+        retained: []const usize,
+        result: *std.ArrayList(u8),
+    ) !void {
         if (scalar_start > scalar_end or scalar_end > self.levels.len) {
             return error.InvalidScalarRange;
         }
-        const result = try allocator.dupe(
-            u8,
+        result.clearRetainingCapacity();
+        try result.appendSlice(
+            allocator,
             self.levels[scalar_start..scalar_end],
         );
-        errdefer allocator.free(result);
         resetLineLevels(
             self.classes[scalar_start..scalar_end],
-            result,
+            result.items,
             self.base_level,
         );
         for (retained) |scalar_index| {
             if (scalar_index < scalar_start or scalar_index >= scalar_end) {
                 return error.InvalidScalarRange;
             }
-            if (result[scalar_index - scalar_start] != resolver.removed_level) {
+            if (result.items[scalar_index - scalar_start] !=
+                resolver.removed_level)
+            {
                 continue;
             }
-            result[scalar_index - scalar_start] =
+            result.items[scalar_index - scalar_start] =
                 self.inheritedLevel(scalar_index);
         }
-        return result;
     }
 
     /// Returns scalar indexes in L2 visual order for one resolved line.
@@ -131,30 +152,57 @@ pub const Paragraph = struct {
         scalar_end: usize,
         retained: []const usize,
     ) ![]usize {
-        const levels = try self.lineLevelsRetaining(
+        var levels = std.ArrayList(u8).empty;
+        defer levels.deinit(allocator);
+        var order = std.ArrayList(usize).empty;
+        errdefer order.deinit(allocator);
+        try self.visualOrderAndLevelsRetaining(
             allocator,
             scalar_start,
             scalar_end,
             retained,
+            &levels,
+            &order,
         );
-        defer allocator.free(levels);
+        return try order.toOwnedSlice(allocator);
+    }
+
+    /// Compute L1 levels and L2 order together into caller-owned storage.
+    ///
+    /// Both results derive from exactly the same adjusted levels. Paragraph
+    /// layout needs both for direction/mirroring, so exposing the transaction
+    /// avoids applying L1 twice and allocating two arrays for every line.
+    pub fn visualOrderAndLevelsRetaining(
+        self: Paragraph,
+        allocator: std.mem.Allocator,
+        scalar_start: usize,
+        scalar_end: usize,
+        retained: []const usize,
+        levels: *std.ArrayList(u8),
+        order: *std.ArrayList(usize),
+    ) !void {
+        try self.fillLineLevelsRetaining(
+            allocator,
+            scalar_start,
+            scalar_end,
+            retained,
+            levels,
+        );
         var retained_count: usize = 0;
-        for (levels) |level| retained_count += @intFromBool(
+        for (levels.items) |level| retained_count += @intFromBool(
             level != resolver.removed_level,
         );
-        const order = try allocator.alloc(usize, retained_count);
-        var output_index: usize = 0;
-        for (levels, 0..) |level, index| {
+        order.clearRetainingCapacity();
+        try order.ensureTotalCapacity(allocator, retained_count);
+        for (levels.items, 0..) |level, index| {
             if (level == resolver.removed_level) continue;
-            order[output_index] = scalar_start + index;
-            output_index += 1;
+            order.appendAssumeCapacity(scalar_start + index);
         }
         reorderVisual(
-            order,
-            levels,
+            order.items,
+            levels.items,
             scalar_start,
         );
-        return order;
     }
 
     pub fn fullVisualOrder(
@@ -355,4 +403,46 @@ test "paragraph levels reorder each line independently" {
         &.{ 0, 1, 2, 3, 6, 5, 4, 7, 8, 9, 10 },
         order,
     );
+}
+
+test "combined line transaction matches separate levels and order" {
+    var paragraph = try resolve(
+        std.testing.allocator,
+        "abc \u{202e}(12)\u{202c} \u{00ad}אבג",
+        .ltr,
+    );
+    defer paragraph.deinit();
+    const retained_scalar = paragraph.scalarIndexForByte(
+        std.mem.indexOf(u8, "abc \u{202e}(12)\u{202c} \u{00ad}אבג", "\u{00ad}").?,
+    ).?;
+    const retained = [_]usize{retained_scalar};
+    const expected_levels = try paragraph.lineLevelsRetaining(
+        std.testing.allocator,
+        0,
+        paragraph.scalars.len,
+        &retained,
+    );
+    defer std.testing.allocator.free(expected_levels);
+    const expected_order = try paragraph.visualOrderRetaining(
+        std.testing.allocator,
+        0,
+        paragraph.scalars.len,
+        &retained,
+    );
+    defer std.testing.allocator.free(expected_order);
+
+    var levels = std.ArrayList(u8).empty;
+    defer levels.deinit(std.testing.allocator);
+    var order = std.ArrayList(usize).empty;
+    defer order.deinit(std.testing.allocator);
+    try paragraph.visualOrderAndLevelsRetaining(
+        std.testing.allocator,
+        0,
+        paragraph.scalars.len,
+        &retained,
+        &levels,
+        &order,
+    );
+    try std.testing.expectEqualSlices(u8, expected_levels, levels.items);
+    try std.testing.expectEqualSlices(usize, expected_order, order.items);
 }

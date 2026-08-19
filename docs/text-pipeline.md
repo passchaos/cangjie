@@ -1308,6 +1308,24 @@ Cangjie matrix measured `75,539`/`75,551 ns` versus `68,314`/`66,560 ns`.
 Direction resolution therefore leaves a stable Arabic deficit of roughly
 `11--13.5%`; it is no longer hidden outside the Cangjie timing boundary.
 
+Line-local bidi now retains its glyph/run snapshot, ownership map, cluster
+index, seen bitmap, visual run indexes, L1 levels, and L2 order in the reusable
+layout buffer. The glyph and run list owners are swapped for the transaction
+rather than copied, with rollback restoring the original owners on every error,
+and L1/L2 are derived together instead of allocating and resetting levels
+twice per line. A fixed-CPU-30 B/A/A/B matrix over the locally installed
+Noto Kufi Arabic and Parley sample (the first line is 200 UTF-8 bytes, 109
+glyphs, five 180-unit lines on this font version) kept checksum
+`14abc73c3502cccb`. Complete layout measured `37,789`/`37,872 ns` before and
+`37,859`/`37,329 ns` after, within noise because shaping still dominates;
+retained reflow improved from `11,167`/`11,811 ns` to `10,682`/`10,733 ns`,
+about 7--9.6%. Matching Latin and Japanese one-shot controls stayed within
+their preceding ranges. On this current local-font row Cangjie also measured
+`36,370`/`36,352 ns` versus Parley's `48,080`/`48,124 ns`; this replaces no
+historical row because both the output count and installed font build differ
+from the earlier 144-glyph evidence. It is a narrow same-artifact result, not
+an overall Parley claim.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

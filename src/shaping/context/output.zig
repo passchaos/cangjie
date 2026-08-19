@@ -8,6 +8,7 @@ const std = @import("std");
 
 const Font = @import("../../font.zig").Font;
 const glyph_position = @import("../../layout/glyph_position.zig");
+const bidi_reorder_scratch = @import("../../layout/bidi/reorder/scratch.zig");
 const inline_object = @import("../../layout/inline_object/root.zig");
 const paragraph_types = @import("../../layout/types/paragraph.zig");
 const run_types = @import("../../layout/types/runs.zig");
@@ -32,12 +33,15 @@ pub const Buffer = struct {
     gpos_table_proof_cache: ?*cache.GposTableProofCache = null,
     lookup_selection_cache: ?*cache.LookupSelectionCache = null,
     shape_scratch: scratch.ShapeScratch = .{},
+    /// Glyph-parallel transaction storage retained across paragraph layouts.
+    bidi_reorder_scratch: bidi_reorder_scratch.Scratch = .{},
 
     pub fn init(allocator: std.mem.Allocator) Buffer {
         return .{ .allocator = allocator };
     }
 
     pub fn deinit(self: *Buffer) void {
+        self.bidi_reorder_scratch.deinit(self.allocator);
         self.shape_scratch.deinit(self.allocator);
         self.script_runs.deinit(self.allocator);
         self.inline_objects.deinit(self.allocator);

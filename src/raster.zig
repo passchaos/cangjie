@@ -4102,6 +4102,45 @@ test "prepared glyph rendering matches direct rendering and is reusable" {
     }
 }
 
+test "prepared difference rows preserve overlapping non-zero contours" {
+    const allocator = std.testing.allocator;
+    var outline = glyph_mod.GlyphOutline.init(allocator, 1, .{
+        .x_min = 0,
+        .y_min = 0,
+        .x_max = 800,
+        .y_max = 300,
+    }, 800, 0);
+    defer outline.deinit();
+    for ([_]f32{ 100, 300 }) |left| {
+        try outline.commands.append(allocator, .{
+            .move_to = .{ .x = left, .y = 100 },
+        });
+        try outline.commands.append(allocator, .{
+            .line_to = .{ .x = left + 400, .y = 100 },
+        });
+        try outline.commands.append(allocator, .{
+            .line_to = .{ .x = left + 400, .y = 250 },
+        });
+        try outline.commands.append(allocator, .{
+            .line_to = .{ .x = left, .y = 250 },
+        });
+        try outline.commands.append(allocator, .close);
+    }
+
+    var direct = try RenderTarget.init(allocator, 20, 28);
+    defer direct.deinit();
+    var cached = try RenderTarget.init(allocator, 20, 28);
+    defer cached.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    rasterizer.samples_per_axis = 4;
+    rasterizer.embolden_small_glyphs = false;
+    var prepared = try rasterizer.prepareGlyph(&outline, 0, 24, 20, 1000);
+    defer prepared.deinit();
+    try rasterizer.renderGlyph(&direct, &outline, 0, 24, 20, 1000);
+    try rasterizer.renderPreparedGlyph(&cached, &prepared);
+    try std.testing.expectEqualSlices(u8, direct.pixels, cached.pixels);
+}
+
 test "prepared glyph preserves small-size embolden policy" {
     const allocator = std.testing.allocator;
     var outline = glyph_mod.GlyphOutline.init(allocator, 1, .{ .x_min = 0, .y_min = 0, .x_max = 700, .y_max = 700 }, 800, 0);

@@ -3017,3 +3017,19 @@ shaping-performance superiority.
   instructions/branches and `0.45%` in cycles. All checksums were unchanged,
   and the complete HarfBuzz/HarfRust parity umbrella passes, including the
   10,000-line Hindi corpus at `b01a5388ce792b49`.
+- Prepared 4x4 raster rows now accumulate full-pixel interiors as signed range
+  differences and resolve them during the already-required blend walk. Exact
+  sample-center tests remain at both span boundaries, while 1x1, 2x2, and
+  nonstandard sampling densities stay on the compact legacy prepared scanner.
+  Direct/prepared byte parity passes for every retained sampling density,
+  repeated calls, overlapping non-zero contours, empty outlines, and small-size
+  emboldening. Fixed-CPU-30 B/A/A/B 21-sample medians for Roboto 64 px
+  prepared rendering improved `A` from `10,724`/`10,768` to
+  `9,179`/`9,189 ns` (about `14.5%`), `g` from `11,698`/`11,717` to
+  `10,118`/`10,151 ns` (about `13.4%`), and `é` from
+  `8,146`/`8,101` to `7,014`/`7,028 ns` (about `13.6%`). Retired
+  instructions fell `17.1%`, `16.5%`, and `16.9%`, respectively. The lower
+  density control checksums stayed identical on their unchanged implementation.
+  Prepared rendering now beats Cangjie's repeated direct scanner on the same
+  rows by about `14%` for `A`, `31%` for `g`, and `31%` for `é`, but still
+  does not close the larger FreeType raster gap.

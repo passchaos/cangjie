@@ -360,6 +360,107 @@ test "concrete face views cover the normal application workflow" {
     try std.testing.expectEqual(&face, run.font);
 }
 
+test "localized names match the Fontations names-only reference fixture" {
+    const allocator = std.testing.allocator;
+    const upstream = @embedFile("../data/fontations_names_only.ttf");
+    // The 200-byte upstream fixture intentionally contains only `name`, so
+    // reuse its exact table bytes inside a minimal outline-bearing SFNT that
+    // satisfies Face's stronger whole-font contract.
+    const table_count = std.mem.readInt(u16, upstream[4..6], .big);
+    var name_offset: usize = 0;
+    var name_length: usize = 0;
+    for (0..table_count) |index| {
+        const record_offset = 12 + index * 16;
+        if (!std.mem.eql(u8, upstream[record_offset..][0..4], "name")) continue;
+        name_offset = std.mem.readInt(u32, upstream[record_offset + 8 ..][0..4], .big);
+        name_length = std.mem.readInt(u32, upstream[record_offset + 12 ..][0..4], .big);
+        break;
+    }
+    try std.testing.expect(name_length != 0);
+    try std.testing.expect(name_offset <= upstream.len);
+    try std.testing.expect(name_length <= upstream.len - name_offset);
+    const bytes = try test_font.buildTtfWithNameTable(
+        allocator,
+        upstream[name_offset .. name_offset + name_length],
+    );
+    defer allocator.free(bytes);
+
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    const names = face.names();
+    const localized = try names.localized(allocator, .subfamily);
+    defer allocator.free(localized);
+    try std.testing.expectEqual(@as(usize, 6), localized.len);
+
+    const expected_languages = [_][]const u8{
+        "en", "ar-SA", "el-GR", "pl-PL", "eu-ES", "zh-Hans",
+    };
+    const expected_values = [_][]const u8{
+        "Regular",
+        "عادي",
+        "Κανονικά",
+        "Normalny",
+        "Arrunta",
+        "正常",
+    };
+    var language_buffer: [32]u8 = undefined;
+    var value_buffer: [64]u8 = undefined;
+    for (localized, expected_languages, expected_values) |value, language, text| {
+        try std.testing.expectEqualStrings(
+            language,
+            (try value.languageUtf8(&language_buffer)).?,
+        );
+        try std.testing.expectEqualStrings(text, try value.decodeUtf8(&value_buffer));
+    }
+
+    const english = (try names.englishOrFirst(
+        allocator,
+        .subfamily,
+    )).?;
+    try std.testing.expectEqualStrings("en", (try english.languageUtf8(&language_buffer)).?);
+    try std.testing.expectEqualStrings("Regular", try english.decodeUtf8(&value_buffer));
+
+    const family = try names.localized(allocator, .family);
+    defer allocator.free(family);
+    try std.testing.expectEqual(@as(usize, 1), family.len);
+    try std.testing.expectEqualStrings("en-US", (try family[0].languageUtf8(&language_buffer)).?);
+    try std.testing.expectEqualStrings("NameTest", try family[0].decodeUtf8(&value_buffer));
+
+    // Put the en-US family record in the same name-ID set as the earlier Mac
+    // English record. The higher-level selector must prefer en-US regardless
+    // of canonical record order, exactly as Skrifa's english_or_first does.
+    const priority_name = try allocator.dupe(
+        u8,
+        upstream[name_offset .. name_offset + name_length],
+    );
+    defer allocator.free(priority_name);
+    const record_count = std.mem.readInt(u16, priority_name[2..4], .big);
+    var changed = false;
+    for (0..record_count) |index| {
+        const record_offset = 6 + index * 12;
+        const name_id = std.mem.readInt(u16, priority_name[record_offset + 6 ..][0..2], .big);
+        if (name_id != @intFromEnum(cangjie.font.NameId.family)) continue;
+        std.mem.writeInt(
+            u16,
+            priority_name[record_offset + 6 ..][0..2],
+            @intFromEnum(cangjie.font.NameId.subfamily),
+            .big,
+        );
+        changed = true;
+    }
+    try std.testing.expect(changed);
+    const priority_bytes = try test_font.buildTtfWithNameTable(allocator, priority_name);
+    defer allocator.free(priority_bytes);
+    var priority_face = try cangjie.font.Face.parse(allocator, priority_bytes);
+    defer priority_face.deinit();
+    const preferred = (try priority_face.names().englishOrFirst(
+        allocator,
+        .subfamily,
+    )).?;
+    try std.testing.expectEqualStrings("en-US", (try preferred.languageUtf8(&language_buffer)).?);
+    try std.testing.expectEqualStrings("NameTest", try preferred.decodeUtf8(&value_buffer));
+}
+
 test "core font inspection is reachable through the public metadata domain" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalTtf(allocator);

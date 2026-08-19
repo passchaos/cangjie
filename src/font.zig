@@ -291,6 +291,7 @@ pub const NameId = name_mod.NameId;
 pub const NameEncoding = name_mod.Encoding;
 pub const NameLanguageTagInfo = name_mod.LanguageTagInfo;
 pub const NameRecordInfo = name_mod.RecordInfo;
+pub const LocalizedName = name_mod.LocalizedString;
 
 pub const StyleAttributes = os2_mod.Style;
 pub const Os2Info = os2_mod.Info;
@@ -3483,6 +3484,23 @@ pub const Font = struct {
         const name = self.name orelse return null;
         try sfnt.checksum.validate(self.data, name);
         return try readNameString(self.data, name, @intFromEnum(name_id), out);
+    }
+
+    /// Enumerate every localized string for `name_id` in canonical table
+    /// order. The array is caller-owned and each payload borrows this Font.
+    pub fn localizedNames(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        name_id: NameId,
+    ) FontError![]LocalizedName {
+        const name = self.name orelse return try allocator.alloc(LocalizedName, 0);
+        try sfnt.checksum.validate(self.data, name);
+        return try name_mod.localizedStrings(
+            allocator,
+            self.data,
+            nameTableView(name),
+            @intFromEnum(name_id),
+        );
     }
 
     /// Enumerate raw SFNT name records in canonical table order.

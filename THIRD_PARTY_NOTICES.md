@@ -26,3 +26,18 @@ separate Fontations checkout.
 - Project: <https://github.com/googlefonts/fontations>
 - Copyright: 2019 Fontations Developers
 - License: Apache License 2.0; see `licenses/Apache-2.0.txt`
+
+## Fontations Name Test Font
+
+`src/tests/data/fontations_names_only.ttf` is copied verbatim from Fontations
+`font-test-data` at commit `bb6f87166aa8bac93ff9df5ea67d58b7091b3e2a`.
+Its SHA-256 is
+`5b6607d13ec365ca5d706c7032bde1e80727fa219a51bc49fa6c9a0e80634a24`.
+It provides the authoritative multilingual records for the Skrifa localized
+string differential test. The legacy numeric-language mapping in
+`src/font/tables/metadata/name_languages.zig` is likewise derived from
+Skrifa's Apache-licensed `src/string.rs` at that commit.
+
+- Project: <https://github.com/googlefonts/fontations>
+- Copyright: 2019 Fontations Developers
+- License: Apache License 2.0; see `licenses/Apache-2.0.txt`

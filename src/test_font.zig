@@ -530,6 +530,35 @@ pub fn buildNameLanguageTagTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try nameLanguageTagTtfTables(allocator));
 }
 
+/// Wrap a caller-supplied `name` table in the repository's minimal valid TTF.
+/// This keeps name API tests focused without checking in a second full font.
+pub fn buildTtfWithNameTable(
+    allocator: std.mem.Allocator,
+    name_table: []const u8,
+) ![]u8 {
+    const base = try minimalTtfTables(allocator);
+    const tables = allocator.alloc(Table, base.len + 1) catch |err| {
+        for (base) |table| allocator.free(table.data);
+        allocator.free(base);
+        return err;
+    };
+    @memcpy(tables[0..base.len], base);
+    allocator.free(base);
+    var initialized = base.len;
+    var owns_tables = true;
+    errdefer if (owns_tables) {
+        for (tables[0..initialized]) |table| allocator.free(table.data);
+        allocator.free(tables);
+    };
+    tables[base.len] = .{
+        .tag = "name",
+        .data = try allocator.dupe(u8, name_table),
+    };
+    initialized += 1;
+    owns_tables = false; // buildSfnt takes ownership of the complete array.
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
 pub fn buildNamedTtfWithStyle(allocator: std.mem.Allocator, family: []const u8, subfamily: []const u8, full_name: []const u8, weight: u16, width: u16, italic: bool, bold: bool) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try styledTtfTables(allocator, family, subfamily, full_name, weight, width, italic, bold));
 }

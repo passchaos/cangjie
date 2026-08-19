@@ -50,11 +50,16 @@ fn main() {
             (checksum, glyphs, lines) = result;
         }
         let start = Instant::now();
-        let mut batch_checksum = 0u64;
+        let mut batch_checksum = 0xcbf29ce484222325u64;
         for _ in 0..iterations {
             let result = run_once(&mut font_cx, &mut layout_cx, text, &family_name, width);
-            assert_eq!(result, (checksum, glyphs, lines), "unstable layout output");
-            batch_checksum = mix(batch_checksum, result.0);
+            assert_eq!(
+                (result.1, result.2),
+                (glyphs, lines),
+                "unstable layout shape"
+            );
+            batch_checksum = bytes(batch_checksum, &result.1.to_le_bytes());
+            batch_checksum = bytes(batch_checksum, &result.2.to_le_bytes());
         }
         values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
         black_box(batch_checksum);
@@ -114,8 +119,4 @@ fn bytes(mut hash: u64, value: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash
-}
-
-fn mix(seed: u64, value: u64) -> u64 {
-    bytes(seed ^ 0xcbf29ce484222325, &value.to_le_bytes())
 }

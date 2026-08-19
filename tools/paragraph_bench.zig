@@ -77,7 +77,7 @@ pub fn main(init: std.process.Init) !void {
             glyph_count = layout.glyphs.len;
             line_count = layout.lines.len;
         }
-        var batch_checksum: u64 = 0;
+        var batch_checksum = std.hash.Wyhash.init(0);
         const start = std.Io.Clock.now(.awake, init.io).nanoseconds;
         for (0..iterations) |_| {
             const layout = try benchmarkOnce(
@@ -92,12 +92,12 @@ pub fn main(init: std.process.Init) !void {
             if (layout.glyphs.len != glyph_count or layout.lines.len != line_count) {
                 return error.UnstableOutput;
             }
-            const current_checksum = layoutChecksum(layout);
-            if (current_checksum != checksum) return error.UnstableOutput;
-            batch_checksum = mix(batch_checksum, current_checksum);
+            batch_checksum.update(std.mem.asBytes(&layout.width));
+            batch_checksum.update(std.mem.asBytes(&layout.height));
+            std.mem.doNotOptimizeAway(layout.glyphs.ptr);
         }
         sample.* = std.Io.Clock.now(.awake, init.io).nanoseconds - start;
-        std.mem.doNotOptimizeAway(batch_checksum);
+        std.mem.doNotOptimizeAway(batch_checksum.final());
     }
     std.mem.sort(i128, samples, {}, std.sort.asc(i128));
     const median = @as(f64, @floatFromInt(samples[samples.len / 2])) /
@@ -163,10 +163,6 @@ fn bytes(initial: u64, value: []const u8) u64 {
         hash *%= 0x100000001b3;
     }
     return hash;
-}
-
-fn mix(seed: u64, value: u64) u64 {
-    return bytes(seed ^ 0xcbf29ce484222325, std.mem.asBytes(&value));
 }
 
 fn firstLine(text: []const u8) []const u8 {

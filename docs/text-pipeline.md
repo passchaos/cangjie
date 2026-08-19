@@ -1253,6 +1253,15 @@ fell from roughly `103,000 ns` to `98,362 ns`; the same run measured Latin at
 `29,656` and `60,876 ns` retained rows. Output checksums, glyph counts, and line
 counts remained identical for all three scripts.
 
+The cross-engine timing loop validates the complete geometry checksum during
+warmup, then consumes only constant-size layout summary fields inside the
+measured iterations. Rehashing every glyph had previously charged Cangjie
+about 4.5% of its Arabic sample while Parley's iterator exposed a differently
+shaped record stream. With the symmetric constant-size consumer, the retained
+Arabic 180-unit medians are approximately `93,779 ns` for Cangjie and
+`66,725 ns` for Parley. Cangjie still trails by about `40.5%`, so correcting
+the harness narrows but does not erase the real Arabic deficit.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

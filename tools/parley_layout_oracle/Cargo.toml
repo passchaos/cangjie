@@ -1,0 +1,8 @@
+[package]
+name = "parley-layout-oracle"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+parley = { path = "../../../../Work/parley/parley", default-features = false, features = ["std"] }

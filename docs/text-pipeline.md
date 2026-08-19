@@ -1193,6 +1193,27 @@ history, IME, clipboard, and viewport state. This keeps the font/text stack
 independent of any particular widget framework and avoids a second editor model
 beside the application's native one.
 
+End-to-end paragraph construction now has an explicit cross-library benchmark
+boundary. `zig build paragraph-bench -Doptimize=ReleaseFast -- FONT TEXT N S`
+reuses one parsed face and shaping engine while measuring complete shaping,
+200-unit line breaking, and start alignment. The standalone
+`tools/parley_layout_oracle` runner performs Parley's matching default-style
+`RangedBuilder::build`, `break_all_lines`, and `align` sequence with one
+reused `FontContext`/`LayoutContext`. Both consume the first line of the same
+UTF-8 file, use the same explicit font at 16 units, verify stable glyph/line
+counts and deterministic per-engine geometry checksums, and report sample
+medians. Checksums intentionally are not compared byte-for-byte because the
+engines expose different coordinate record shapes; equal source length, 105
+glyphs, and five lines establish the comparable Roboto Latin output boundary.
+
+On fixed CPU 30, a serial Cangjie/Parley/Parley/Cangjie run over the first
+109-byte paragraph of Parley's own Latin sample, with 1,000 iterations and 31
+samples per process, measured Cangjie medians of `29,706` and `29,656 ns` and
+Parley medians of `47,383` and `46,798 ns`. Cangjie was about `1.59x` faster
+at this newly retained default Latin paragraph boundary. This is one controlled
+workload, not evidence of overall Parley superiority; Arabic, Japanese, styled,
+spacing, justification, and longer paragraph matrices remain required.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

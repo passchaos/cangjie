@@ -2575,6 +2575,25 @@ pub fn build(b: *std.Build) void {
         reflow_bench_cmd.addArgs(args);
     }
 
+    const paragraph_bench_exe = b.addExecutable(.{
+        .name = "cangjie-paragraph-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/paragraph_bench.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "cangjie", .module = mod },
+            },
+        }),
+    });
+    const paragraph_bench_step = b.step(
+        "paragraph-bench",
+        "Benchmark end-to-end paragraph construction for Parley comparison",
+    );
+    const paragraph_bench_cmd = b.addRunArtifact(paragraph_bench_exe);
+    paragraph_bench_step.dependOn(&paragraph_bench_cmd.step);
+    if (b.args) |args| paragraph_bench_cmd.addArgs(args);
+
     const freetype_c = b.addTranslateC(.{
         .root_source_file = b.path("tools/glyph_bench/freetype.h"),
         .target = target,
@@ -3512,6 +3531,11 @@ pub fn build(b: *std.Build) void {
     }
 
     const bench_smoke_step = b.step("bench-smoke", "Run quick TSV smoke checks for benchmark tools");
+    const paragraph_bench_smoke_cmd = b.addRunArtifact(paragraph_bench_exe);
+    paragraph_bench_smoke_cmd.addArg("builtin:minimal");
+    paragraph_bench_smoke_cmd.addFileArg(b.path("tests/data/spaces-horizontal.txt"));
+    paragraph_bench_smoke_cmd.addArgs(&.{ "1", "1" });
+    bench_smoke_step.dependOn(&paragraph_bench_smoke_cmd.step);
     const shape_bench_smoke_cmd = b.addRunArtifact(shape_bench_exe);
     shape_bench_smoke_cmd.addArgs(&.{
         "--engine",     "cangjie",

@@ -271,6 +271,11 @@ const retained_inline_harfbuzz_parity_gates = [_]struct {
     bot: bool = false,
 }{
     .{
+        .font_hash = "65d1b9099cfb3191931d8d6112d7a03d979d579f",
+        .text = "\u{00b2}\u{0b95}",
+        .direction = "ltr",
+    },
+    .{
         .font_hash = "932ad5132c2761297c74e9976fe25b08e5ffa10b",
         .text = "ড় ঢ় ড় ঢ়",
         .direction = "ltr",
@@ -1845,6 +1850,11 @@ const retained_inline_harfrust_parity_gates = [_]struct {
     bot: bool = false,
     font_ext: []const u8 = "ttf",
 }{
+    .{
+        .font_hash = "65d1b9099cfb3191931d8d6112d7a03d979d579f",
+        .text = "\u{00b2}\u{0b95}",
+        .direction = "ltr",
+    },
     .{
         .font_hash = "NotoSansCJK-VF.abc",
         .font_ext = "otf",

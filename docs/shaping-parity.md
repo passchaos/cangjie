@@ -2444,6 +2444,12 @@ shaping-performance superiority.
   `ta + pulli` pre-half form before a non-Tamil following glyph. The Tamil
   `pa,pa,pulli` row for `e2b17207c4b7ad78d843e1b0c4d00b09398a1137.ttf` is
   retained too, covering same-script consonant-plus-pulli output ordering. The
+  remaining Tamil `indic-syllable.tests` row for
+  `65d1b9099cfb3191931d8d6112d7a03d979d579f.ttf` is retained against both
+  references as well: the out-of-script superscript-two control remains a
+  separate cluster before U+0B95 instead of being absorbed into the following
+  Tamil syllable. Together these gates now represent all 15 deterministic rows
+  in the upstream `indic-syllable.tests` file. The
   Tamil `indic-feature-order.tests` row for
   `190a621e48d4af1fffd8144bd41d2027e9a32fbf.ttf` is retained with `ss03`
   enabled, covering explicit feature overrides before dependent-vowel output.

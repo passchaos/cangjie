@@ -562,7 +562,7 @@ pub fn run(input: Input) !void {
 
     const position_start = shape_profile_mod.now(shape_profile, profile_io);
     const position_sort_start = shape_profile_mod.now(shape_profile, profile_io);
-    std.sort.heap(gpos.Adjustment, gpos_adjustments.items, {}, position_adjustments.lessThan);
+    position_adjustments.sortIfNeeded(gpos_adjustments.items);
     if (shape_profile) |p| p.position_sort_ns += shape_profile_mod.elapsed(position_sort_start, profile_io);
     const has_gpos_attachments = position_attachments.hasGpos(gpos_adjustments.items);
     const kerx_adjustments = &scratch.kerx_adjustments;

@@ -3231,3 +3231,11 @@ shaping-performance superiority.
   five-repeat counters reduced instructions by about `16.7%`, `13.0%`, and
   `13.5%`, branches by `11.8%`, `8.7%`, and `9.8%`, and cycles by roughly
   `12.7%`, `10.4%`, and `11.7%`, respectively.
+- Sparse GPOS adjustment output now checks for its common nondecreasing index
+  order before invoking heap sort. The isolated noinline helper preserves the
+  segment hot frame and falls back to the exact old sort at the first inversion.
+  On fixed CPU 30, five-repeat counters reduced Roboto `react-dom` instructions
+  by about `6.25%`, branches by `3.11%`, and cycles by roughly `8.4%`; Roboto
+  `en-words` improved by about `2.6%`, `1.6%`, and `8.7%`, respectively. Amiri
+  long text and Devanagari retired work stayed within `0.05%`, with cycles noisy
+  but approximately neutral. All four corpus checksums were unchanged.

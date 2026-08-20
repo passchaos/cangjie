@@ -56,13 +56,38 @@ pub const DigestCache = struct {
         }
         return digest;
     }
+
+    /// Prime the common unfiltered digest once per run.
+    ///
+    /// Most GPOS lookups use LookupFlag zero. Building this entry up front
+    /// turns their repeated linear cache search into an immediate slot-zero
+    /// hit while preserving lazy construction for rare filtered variants.
+    pub fn primeUnfiltered(
+        self: *DigestCache,
+        glyphs: []const GlyphId,
+    ) void {
+        if (self.len != 0) return;
+        self.entries[0] = .{
+            .lookup_flag = 0,
+            .active_mark_filtering_set = null,
+            .digest = rawDigest(glyphs),
+        };
+        self.len = 1;
+    }
 };
+
+fn rawDigest(glyphs: []const GlyphId) GlyphDigest {
+    var digest = GlyphDigest.empty();
+    for (glyphs) |glyph| digest.add(glyph);
+    return digest;
+}
 
 pub fn runDigest(
     glyphs: []const GlyphId,
     lookup_flag: u16,
     run: Options,
 ) GlyphDigest {
+    if (lookup_flag == 0) return rawDigest(glyphs);
     var digest = GlyphDigest.empty();
     for (glyphs) |glyph| {
         if (matching.lookupIgnoresGlyph(lookup_flag, run, glyph)) continue;

@@ -44,6 +44,28 @@ test "digest cache keys mark filtering state" {
     try std.testing.expect(second.mayHave(7));
 }
 
+test "primed unfiltered digest stays separate from filtered variants" {
+    var classes = [_]u16{0} ** 8;
+    classes[6] = 3;
+    const glyphs = [_]u16{ 5, 6, 7 };
+    var cache = prefilter.DigestCache.init();
+    cache.primeUnfiltered(&glyphs);
+
+    const unfiltered = cache.get(&glyphs, 0, .{});
+    try std.testing.expect(unfiltered.mayHave(5));
+    try std.testing.expect(unfiltered.mayHave(6));
+    try std.testing.expect(unfiltered.mayHave(7));
+
+    const filtered = cache.get(
+        &glyphs,
+        0x0008,
+        .{ .glyph_classes = &classes },
+    );
+    try std.testing.expect(filtered.mayHave(5));
+    try std.testing.expect(!filtered.mayHave(6));
+    try std.testing.expect(filtered.mayHave(7));
+}
+
 test "exact coverage groups reject digest false positives" {
     const groups = [_]accelerator.glyph_groups.Group{
         .{ .glyph = 20, .subtable_indices = &.{0} },

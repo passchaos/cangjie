@@ -3046,6 +3046,18 @@ shaping-performance superiority.
   `0.85%` in five-repeat counters, with branch misses down `0.24%`.
   Roboto and Amiri word/long-text controls improved in the interleaved probe,
   and all checksums were unchanged.
+- GPOS now primes the unfiltered per-run coverage digest before lookup
+  traversal. LookupFlag-zero is the common path, so every such lookup receives
+  an immediate slot-zero cache hit instead of making the first matching lookup
+  build the digest lazily after searching an empty cache; filtered variants
+  remain keyed and built independently. Fixed-CPU-30 B/A/A/B 11-sample
+  medians reduced NotoSansDevanagari `hi-words` from
+  `1390.712/1387.722` to `1378.098/1379.724 ns/glyph`, about `0.74%`.
+  Five-repeat counters reduced retired instructions and cycles by `0.10%`
+  and `0.35%`; branches changed by `+0.01%`. Roboto and Amiri counters
+  also reduced retired instructions/cycles, while SourceSerif's instruction
+  count improved but its cycle sample regressed, so no broader Latin claim is
+  made. All corpus checksums were unchanged.
 - Prepared 4x4 raster rows now accumulate full-pixel interiors as signed range
   differences and resolve them during the already-required blend walk. Exact
   sample-center tests remain at both span boundaries, while 1x1, 2x2, and

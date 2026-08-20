@@ -732,6 +732,7 @@ pub const Font = struct {
     selected_cmap_subtable: ?CmapSubtable,
     selected_cmap_groups: []cmap_mod.SequentialGroup,
     selected_cmap_group_buckets: []cmap_mod.GroupBucket,
+    selected_cmap_ascii: [128]glyph_mod.GlyphId,
     owned_tables: []TableRecord,
     allocator: std.mem.Allocator,
 
@@ -1116,6 +1117,18 @@ pub const Font = struct {
             selected_cmap_groups,
         );
         errdefer allocator.free(selected_cmap_group_buckets);
+        var selected_cmap_ascii = [_]glyph_mod.GlyphId{0} ** 128;
+        if (selected_cmap_subtable) |subtable| {
+            if (!cmap_mod.isMacintoshRoman(subtable)) {
+                for (&selected_cmap_ascii, 0..) |*glyph_id, codepoint| {
+                    glyph_id.* = try cmap_mod.glyphValidated(
+                        data,
+                        subtable,
+                        @intCast(codepoint),
+                    );
+                }
+            }
+        }
 
         return .{
             .data = data,
@@ -1189,6 +1202,7 @@ pub const Font = struct {
             .selected_cmap_subtable = selected_cmap_subtable,
             .selected_cmap_groups = selected_cmap_groups,
             .selected_cmap_group_buckets = selected_cmap_group_buckets,
+            .selected_cmap_ascii = selected_cmap_ascii,
             .owned_tables = records,
             .allocator = allocator,
         };
@@ -2705,6 +2719,9 @@ pub const Font = struct {
         codepoint: u21,
     ) FontError!glyph_mod.GlyphId {
         try cmap_mod.validatePublicScalar(codepoint);
+        if (codepoint < self.selected_cmap_ascii.len) {
+            return self.selected_cmap_ascii[codepoint];
+        }
         const chosen = self.selectedCmapSubtable() orelse
             return error.UnsupportedCmap;
         if (cmap_mod.isMacintoshRoman(chosen)) {

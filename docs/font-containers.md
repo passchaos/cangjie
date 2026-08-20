@@ -150,6 +150,13 @@ also measured `36.48 ns` with metrics/outline controls unchanged. These rows
 now favor Cangjie, but they remain narrow repeated-lookup evidence rather than
 an overall Fontations performance claim.
 
+The immutable face also retains the selected cmap's complete ASCII mapping,
+which is only 256 bytes per face and avoids even format dispatch for common UI
+text. Roboto U+0041 fell from `271.29/270.28 ns` on the pre-sidecar binary to
+`17.67/17.45 ns`; a fresh cross-engine run measured Cangjie at `17.61/11.84
+ns` versus Skrifa at `36.29/36.38 ns`. Supplementary format-12, metrics, and
+outline controls remain on their separate proven paths.
+
 `docs/fontations-coverage.json` maps every public top-level table family in
 Fontations `read-fonts` 0.42.2, plus eight grouped Skrifa 0.45.2 capability
 families covering `MetadataProvider` and embedded TrueType hinting, to a

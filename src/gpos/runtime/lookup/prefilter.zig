@@ -9,24 +9,14 @@ const options = @import("../options.zig");
 pub const Group = accelerator.glyph_groups.Group;
 pub const Options = options.Options;
 
-const max_digest_cache_entries = 16;
-
 pub const DigestCache = struct {
-    const Entry = struct {
-        lookup_flag: u16,
-        active_mark_filtering_set: ?u16,
-        digest: GlyphDigest,
-    };
-
-    entries: [max_digest_cache_entries]Entry = undefined,
-    len: usize = 0,
+    digest: GlyphDigest = undefined,
+    valid: bool = false,
 
     pub fn init() DigestCache {
-        // Entries become readable only after `get` fully assigns them and
-        // increments `len`; avoid clearing inactive storage for short runs.
-        var cache: DigestCache = undefined;
-        cache.len = 0;
-        return cache;
+        // The digest becomes readable only after `get` or `primeUnfiltered`
+        // assigns it and flips `valid`; avoid clearing the 64-bit payload.
+        return .{};
     }
 
     pub fn get(
@@ -35,26 +25,13 @@ pub const DigestCache = struct {
         lookup_flag: u16,
         run: Options,
     ) GlyphDigest {
-        const active_mark_filtering_set = run.active_mark_filtering_set;
-        for (self.entries[0..self.len]) |entry| {
-            if (entry.lookup_flag == lookup_flag and
-                entry.active_mark_filtering_set ==
-                    active_mark_filtering_set)
-            {
-                return entry.digest;
-            }
+        _ = lookup_flag;
+        _ = run;
+        if (!self.valid) {
+            self.digest = rawDigest(glyphs);
+            self.valid = true;
         }
-
-        const digest = runDigest(glyphs, lookup_flag, run);
-        if (self.len < self.entries.len) {
-            self.entries[self.len] = .{
-                .lookup_flag = lookup_flag,
-                .active_mark_filtering_set = active_mark_filtering_set,
-                .digest = digest,
-            };
-            self.len += 1;
-        }
-        return digest;
+        return self.digest;
     }
 
     /// Prime the common unfiltered digest once per run.
@@ -66,13 +43,9 @@ pub const DigestCache = struct {
         self: *DigestCache,
         glyphs: []const GlyphId,
     ) void {
-        if (self.len != 0) return;
-        self.entries[0] = .{
-            .lookup_flag = 0,
-            .active_mark_filtering_set = null,
-            .digest = rawDigest(glyphs),
-        };
-        self.len = 1;
+        if (self.valid) return;
+        self.digest = rawDigest(glyphs);
+        self.valid = true;
     }
 };
 

@@ -17,7 +17,7 @@ test "run digest excludes lookup-flag ignored glyphs" {
     try std.testing.expect(digest.mayHave(7));
 }
 
-test "digest cache keys mark filtering state" {
+test "digest cache is an unfiltered superset across filtering states" {
     const sets = [_][]const u16{ &.{5}, &.{7} };
     var cache = prefilter.DigestCache.init();
     const first = cache.get(
@@ -39,12 +39,12 @@ test "digest cache keys mark filtering state" {
         },
     );
     try std.testing.expect(first.mayHave(5));
-    try std.testing.expect(!first.mayHave(7));
-    try std.testing.expect(!second.mayHave(5));
+    try std.testing.expect(first.mayHave(7));
+    try std.testing.expect(second.mayHave(5));
     try std.testing.expect(second.mayHave(7));
 }
 
-test "primed unfiltered digest stays separate from filtered variants" {
+test "primed unfiltered digest remains a filtered superset" {
     var classes = [_]u16{0} ** 8;
     classes[6] = 3;
     const glyphs = [_]u16{ 5, 6, 7 };
@@ -62,7 +62,7 @@ test "primed unfiltered digest stays separate from filtered variants" {
         .{ .glyph_classes = &classes },
     );
     try std.testing.expect(filtered.mayHave(5));
-    try std.testing.expect(!filtered.mayHave(6));
+    try std.testing.expect(filtered.mayHave(6));
     try std.testing.expect(filtered.mayHave(7));
 }
 

@@ -3080,6 +3080,16 @@ shaping-performance superiority.
   Amiri long text improved about `1.0%` in cycles/instructions and `0.6%`
   in branches. Interleaved medians improved for the target and controls despite
   substantial host outliers, and all checksums were unchanged.
+- GPOS coverage prefiltering now caches one unfiltered glyph superset for the
+  immutable post-GSUB run instead of rebuilding separate digests for each
+  LookupFlag/mark-filtering state. Filtering can only remove candidates, so
+  this remains a necessary-condition rejector with safe false positives and no
+  false negatives. Fixed-CPU-30 five-repeat counters reduced Devanagari
+  `hi-words` retired instructions by `3.09%`, branches by `3.58%`,
+  cycles by `1.99%`, and branch misses by `6.65%`. Roboto and SourceSerif
+  retired work improved about `0.17%/0.16%` with cycles within `+0.2/0.6%`;
+  Amiri long text improved about `1.7%` in instructions, `1.8%` in
+  branches, and `0.9%` in cycles. All checksums were unchanged.
 - Prepared 4x4 raster rows now accumulate full-pixel interiors as signed range
   differences and resolve them during the already-required blend walk. Exact
   sample-center tests remain at both span boundaries, while 1x1, 2x2, and

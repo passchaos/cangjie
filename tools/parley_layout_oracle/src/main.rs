@@ -21,6 +21,8 @@ fn main() {
         .unwrap_or(200.0);
     assert!(width.is_finite() && width > 0.0);
     let direction = args.next().unwrap_or_else(|| "auto".to_owned());
+    let style = args.next().unwrap_or_else(|| "default".to_owned());
+    assert!(args.next().is_none(), "unexpected argument");
     let text_file = fs::read_to_string(text_path).unwrap();
     let text = text_file.lines().next().unwrap_or("");
     let font_data = fs::read(font_path).unwrap();
@@ -50,6 +52,7 @@ fn main() {
                 &family_name,
                 width,
                 &direction,
+                &style,
             );
             assert!(
                 checksum == 0 || checksum == result.0,
@@ -67,6 +70,7 @@ fn main() {
                 &family_name,
                 width,
                 &direction,
+                &style,
             );
             assert_eq!(
                 (result.1, result.2),
@@ -82,7 +86,7 @@ fn main() {
     values.sort_by(f64::total_cmp);
     let median = values[values.len() / 2];
     println!(
-        "engine=parley\tdirection={direction}\ttext_bytes={}\twidth={width:.3}\titerations={}\tsamples={}\tmedian_ns_per_iter={median:.3}\tglyphs={glyphs}\tlines={lines}\tchecksum={checksum:016x}",
+        "engine=parley\tdirection={direction}\tstyle={style}\ttext_bytes={}\twidth={width:.3}\titerations={}\tsamples={}\tmedian_ns_per_iter={median:.3}\tglyphs={glyphs}\tlines={lines}\tchecksum={checksum:016x}",
         text.len(),
         iterations,
         samples
@@ -96,10 +100,19 @@ fn run_once(
     family_name: &str,
     width: f32,
     direction: &str,
+    style: &str,
 ) -> (u64, usize, usize) {
     let mut builder = layout_cx.ranged_builder(font_cx, text, 1.0, true);
     builder.push_default(FontFamily::named(family_name));
     builder.push_default(StyleProperty::FontSize(16.0));
+    match style {
+        "default" => {}
+        "spacing" => {
+            builder.push_default(StyleProperty::LetterSpacing(0.75));
+            builder.push_default(StyleProperty::WordSpacing(2.0));
+        }
+        _ => panic!("style must be default or spacing"),
+    }
     builder.set_base_direction(match direction {
         "auto" => BaseDirection::Auto,
         "ltr" => BaseDirection::Ltr,

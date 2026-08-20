@@ -16,7 +16,9 @@ pub fn main(init: std.process.Init) !void {
     const width = if (args.next()) |value| try parseFinitePositiveFloat(value) else 200.0;
     const phase = if (args.next()) |value| try parsePhase(value) else Phase.layout;
     const direction = if (args.next()) |value| try parseDirection(value) else Direction.auto;
+    const style = if (args.next()) |value| try parseStyle(value) else Style.default;
     if (args.next() != null) return usage();
+    if (phase == .reflow and style != .default) return error.InvalidArguments;
 
     const font_bytes: []u8 = if (std.mem.eql(u8, font_path, "builtin:minimal"))
         try cangjie.testing.test_font.buildMinimalTtf(allocator)
@@ -70,6 +72,7 @@ pub fn main(init: std.process.Init) !void {
                 text,
                 width,
                 direction,
+                style,
                 if (retained) |*paragraph| paragraph else null,
                 &reflow,
             );
@@ -89,6 +92,7 @@ pub fn main(init: std.process.Init) !void {
                 text,
                 width,
                 direction,
+                style,
                 if (retained) |*paragraph| paragraph else null,
                 &reflow,
             );
@@ -106,14 +110,15 @@ pub fn main(init: std.process.Init) !void {
     const median = @as(f64, @floatFromInt(samples[samples.len / 2])) /
         @as(f64, @floatFromInt(iterations));
     std.debug.print(
-        "engine=cangjie\tphase={s}\tdirection={s}\ttext_bytes={d}\twidth={d:.3}\titerations={d}\tsamples={d}\t" ++
+        "engine=cangjie\tphase={s}\tdirection={s}\tstyle={s}\ttext_bytes={d}\twidth={d:.3}\titerations={d}\tsamples={d}\t" ++
             "median_ns_per_iter={d:.3}\tglyphs={d}\tlines={d}\tchecksum={x:0>16}\n",
-        .{ @tagName(phase), @tagName(direction), text.len, width, iterations, sample_count, median, glyph_count, line_count, checksum },
+        .{ @tagName(phase), @tagName(direction), @tagName(style), text.len, width, iterations, sample_count, median, glyph_count, line_count, checksum },
     );
 }
 
 const Phase = enum { layout, reflow };
 const Direction = enum { auto, ltr, rtl };
+const Style = enum { default, spacing };
 
 fn benchmarkOnce(
     phase: Phase,
@@ -122,6 +127,7 @@ fn benchmarkOnce(
     text: []const u8,
     width: f32,
     direction: Direction,
+    style: Style,
     retained: ?*const cangjie.paragraph.Shaped,
     reflow: *cangjie.paragraph.ReflowBuffer,
 ) !cangjie.paragraph.Layout {
@@ -132,6 +138,7 @@ fn benchmarkOnce(
             text,
             width,
             try resolvedDirection(direction, text),
+            style,
         ),
         .reflow => retained.?.layout(reflow, .{
             .max_width = width,
@@ -146,7 +153,24 @@ fn layoutOnce(
     text: []const u8,
     width: f32,
     direction: cangjie.shaping.Direction,
+    style: Style,
 ) !cangjie.paragraph.Layout {
+    if (style == .spacing) {
+        const spans = [_]cangjie.paragraph.StyledSpan{.{
+            .byte_start = 0,
+            .byte_len = text.len,
+            .style_index = 1,
+            .font_size = 16,
+            .letter_spacing = 0.75,
+            .word_spacing = 2.0,
+        }};
+        return (try engine.layoutStyled(cascade, .{
+            .text = text,
+            .default_font_size = 16,
+            .spans = &spans,
+            .options = .{ .max_width = width, .direction = direction },
+        })).layout;
+    }
     return engine.layout(cascade, .{
         .text = text,
         .font_size = 16,
@@ -210,6 +234,12 @@ fn parseDirection(value: []const u8) !Direction {
     return error.InvalidArguments;
 }
 
+fn parseStyle(value: []const u8) !Style {
+    if (std.mem.eql(u8, value, "default")) return .default;
+    if (std.mem.eql(u8, value, "spacing")) return .spacing;
+    return error.InvalidArguments;
+}
+
 fn resolvedDirection(
     direction: Direction,
     text: []const u8,
@@ -226,7 +256,7 @@ fn resolvedDirection(
 
 fn usage() error{InvalidArguments} {
     std.debug.print(
-        "usage: paragraph-bench FONT TEXT ITERATIONS SAMPLES [WIDTH] [layout|reflow] [auto|ltr|rtl]\n",
+        "usage: paragraph-bench FONT TEXT ITERATIONS SAMPLES [WIDTH] [layout|reflow] [auto|ltr|rtl] [default|spacing]\n",
         .{},
     );
     return error.InvalidArguments;

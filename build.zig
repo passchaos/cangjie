@@ -3548,6 +3548,14 @@ pub fn build(b: *std.Build) void {
     });
     bench_smoke_step.dependOn(&shape_bench_smoke_cmd.step);
 
+    const paragraph_spacing_smoke_cmd = b.addRunArtifact(paragraph_bench_exe);
+    paragraph_spacing_smoke_cmd.addArg("builtin:minimal");
+    paragraph_spacing_smoke_cmd.addFileArg(b.path("tests/data/spaces-horizontal.txt"));
+    paragraph_spacing_smoke_cmd.addArgs(&.{
+        "1", "1", "200", "layout", "ltr", "spacing",
+    });
+    bench_smoke_step.dependOn(&paragraph_spacing_smoke_cmd.step);
+
     const glyph_outline_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
     glyph_outline_smoke_cmd.addArgs(&.{
         "--mode",       "outline",

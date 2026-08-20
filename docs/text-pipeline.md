@@ -1326,6 +1326,18 @@ historical row because both the output count and installed font build differ
 from the earlier 144-glyph evidence. It is a narrow same-artifact result, not
 an overall Parley claim.
 
+The paragraph benchmark pair now also exposes a symmetric `spacing` style:
+both runners apply 0.75 units of letter spacing and 2.0 units of word spacing
+to the complete 16-unit paragraph before breaking at width 200. On Parley's
+109-byte Latin sample both produce 105 glyphs and five lines with stable
+per-engine checksums. A fixed-CPU-30 Cangjie/Parley/Parley/Cangjie 11-sample
+probe measured Cangjie at `2.107/2.077 ms` and Parley at
+`117.1/113.0 µs` per layout. This closes a missing styled/spacing benchmark
+coverage item but exposes a roughly 18x Cangjie deficit: Cangjie's current
+`layoutStyled` path performs unified style metadata and paragraph work that
+the default path avoids. It is therefore a concrete optimization target, not
+evidence of Parley-relative superiority.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

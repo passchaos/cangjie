@@ -96,6 +96,7 @@ pub const Options = struct {
     iterations: usize = 10_000,
     warmup: usize = 1_000,
     samples: usize = 1,
+    dirty_rect: bool = false,
     variation_coord_buf: [max_variation_coords]f32 = undefined,
     variation_coord_count: usize = 0,
 
@@ -167,6 +168,8 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.samples = try parsePositiveUsize(args[i]);
+        } else if (std.mem.eql(u8, arg, "--dirty-rect")) {
+            options.dirty_rect = true;
         } else if (std.mem.eql(u8, arg, "--variation") or std.mem.eql(u8, arg, "--variations")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -236,6 +239,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --iterations N       measured iterations, default 10000
         \\  --warmup N           unmeasured warmup iterations, default 1000
         \\  --samples N          independent measured samples, default 1
+        \\  --dirty-rect         clear and hash only the clipped glyph rectangle
         \\  --variation CSV      normalized variation coordinates, e.g. 0.5,-0.25
         \\
         \\examples:
@@ -257,4 +261,9 @@ test "parse codepoint accepts documented decimal and hexadecimal forms" {
 test "parse codepoint rejects non-scalar values" {
     try std.testing.expectError(error.InvalidArguments, parseCodepoint("U+D800"));
     try std.testing.expectError(error.InvalidArguments, parseCodepoint("U+110000"));
+}
+
+test "parse accepts dirty rectangle benchmark mode" {
+    const options = try parse(&.{ "glyph-bench", "--mode", "raster-prepared", "--dirty-rect" });
+    try std.testing.expect(options.dirty_rect);
 }

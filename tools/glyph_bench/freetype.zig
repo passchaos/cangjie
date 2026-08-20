@@ -3,6 +3,7 @@ const ft = @import("freetype");
 
 const options_mod = @import("options.zig");
 const report = @import("report.zig");
+const dirty_rect = @import("dirty_rect.zig");
 
 const FreeTypeFace = struct {
     library: ft.FT_Library,
@@ -17,7 +18,7 @@ const FreeTypeFace = struct {
         var face: ft.FT_Face = null;
         if (ft.FT_New_Memory_Face(library, @ptrCast(font_bytes.ptr), @intCast(font_bytes.len), 0, &face) != 0) return error.FreeTypeFailed;
         errdefer _ = ft.FT_Done_Face(face);
-        if (options.mode == .raster) {
+        if (options.mode == .raster or options.mode == .raster_reuse) {
             if (ft.FT_Set_Pixel_Sizes(face, 0, @intFromFloat(@round(options.font_size))) != 0) return error.FreeTypeFailed;
         }
 
@@ -46,6 +47,10 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
     defer ft_face.deinit();
 
     const glyph_id = resolveGlyphId(ft_face.face, options);
+    if (options.dirty_rect) {
+        if (options.mode != .raster_reuse) return error.InvalidArguments;
+        return runDirty(io, allocator, ft_face.face, glyph_id, options);
+    }
     var empty_target_pixels: [0]u8 = .{};
     const target_pixels: []u8 = if (options.mode == .raster or
         options.mode == .raster_reuse)
@@ -84,7 +89,73 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
         .elapsed_ns = elapsed,
         .checksum = checksum,
         .samples = try samples.toOwnedSlice(allocator),
+        .dirty_pixels = 0,
     };
+}
+
+fn runDirty(io: std.Io, allocator: std.mem.Allocator, face: ft.FT_Face, glyph_id: ft.FT_UInt, options: options_mod.Options) !report.Result {
+    const pixels = try allocator.alloc(u8, @as(usize, options.target_size) * options.target_size);
+    defer allocator.free(pixels);
+    @memset(pixels, 0);
+    const flags: ft.FT_Int32 = ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP;
+    if (ft.FT_Load_Glyph(face, glyph_id, flags) != 0) return error.FreeTypeFailed;
+    blitBitmap(face.*.glyph, options, pixels);
+    const bounds = dirty_rect.nonZeroBounds(pixels, options.target_size);
+    const dirty_pixels = if (bounds) |value| value.pixelCount() else 0;
+    if (options.warmup != 0) {
+        var ignored: u64 = 0;
+        try runDirtyIterations(face, glyph_id, options, options.warmup, pixels, bounds, &ignored);
+    }
+    var samples = std.ArrayList(report.Sample).empty;
+    errdefer samples.deinit(allocator);
+    var elapsed: i128 = 0;
+    var checksum: u64 = 0;
+    for (0..options.samples) |sample_index| {
+        var sample_checksum: u64 = 0;
+        const start = std.Io.Clock.now(.awake, io).nanoseconds;
+        try runDirtyIterations(face, glyph_id, options, options.iterations, pixels, bounds, &sample_checksum);
+        const duration = std.Io.Clock.now(.awake, io).nanoseconds - start;
+        elapsed += duration;
+        checksum = updateChecksum(checksum, sample_checksum);
+        try samples.append(allocator, .{ .index = sample_index, .elapsed_ns = duration, .iterations = options.iterations, .checksum = sample_checksum });
+    }
+    return .{ .elapsed_ns = elapsed, .checksum = checksum, .samples = try samples.toOwnedSlice(allocator), .dirty_pixels = dirty_pixels };
+}
+
+fn runDirtyIterations(face: ft.FT_Face, glyph_id: ft.FT_UInt, options: options_mod.Options, iterations: usize, pixels: []u8, bounds: ?dirty_rect.Bounds, checksum: *u64) !void {
+    const flags: ft.FT_Int32 = ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP;
+    var i: usize = 0;
+    while (i < iterations) : (i += 1) {
+        dirty_rect.clear(pixels, options.target_size, bounds);
+        if (ft.FT_Load_Glyph(face, glyph_id, flags) != 0) return error.FreeTypeFailed;
+        blitBitmap(face.*.glyph, options, pixels);
+        checksum.* = updateChecksum(checksum.*, dirty_rect.checksum(pixels, options.target_size, bounds));
+    }
+}
+
+fn blitBitmap(slot: ft.FT_GlyphSlot, options: options_mod.Options, target_pixels: []u8) void {
+    if (slot == null) return;
+    const glyph = slot.*;
+    const bitmap = glyph.bitmap;
+    const width: usize = @intCast(bitmap.width);
+    const rows: usize = @intCast(bitmap.rows);
+    const pitch_abs: usize = @intCast(if (bitmap.pitch < 0) -bitmap.pitch else bitmap.pitch);
+    if (bitmap.buffer == null or width == 0 or rows == 0 or pitch_abs == 0) return;
+    const target_size: i32 = @intCast(options.target_size);
+    const baseline_y: i32 = @intFromFloat(@round(options.font_size));
+    const origin_y: i32 = baseline_y - glyph.bitmap_top;
+    const buffer: [*]const u8 = @ptrCast(bitmap.buffer);
+    for (0..rows) |row| {
+        const y = origin_y + @as(i32, @intCast(row));
+        if (y < 0 or y >= target_size) continue;
+        const src = if (bitmap.pitch >= 0) row * pitch_abs else (rows - 1 - row) * pitch_abs;
+        for (0..@min(width, pitch_abs)) |col| {
+            const x = glyph.bitmap_left + @as(i32, @intCast(col));
+            if (x < 0 or x >= target_size) continue;
+            const index = @as(usize, @intCast(y)) * options.target_size + @as(usize, @intCast(x));
+            target_pixels[index] = @max(target_pixels[index], buffer[src + col]);
+        }
+    }
 }
 
 fn resolveGlyphId(face: ft.FT_Face, options: options_mod.Options) ft.FT_UInt {
@@ -143,34 +214,7 @@ fn outlineChecksum(slot: ft.FT_GlyphSlot) u64 {
 
 fn rasterTargetChecksum(slot: ft.FT_GlyphSlot, options: options_mod.Options, target_pixels: []u8) u64 {
     @memset(target_pixels, 0);
-    if (slot == null) return std.hash.Wyhash.hash(0, target_pixels);
-    const glyph = slot.*;
-    const bitmap = glyph.bitmap;
-    const width: usize = @intCast(bitmap.width);
-    const rows: usize = @intCast(bitmap.rows);
-    const pitch_abs: usize = @intCast(if (bitmap.pitch < 0) -bitmap.pitch else bitmap.pitch);
-    if (bitmap.buffer == null or width == 0 or rows == 0 or pitch_abs == 0) return std.hash.Wyhash.hash(0, target_pixels);
-
-    const target_size_i32: i32 = @intCast(options.target_size);
-    const baseline_y: i32 = @intFromFloat(@round(options.font_size));
-    const origin_x: i32 = glyph.bitmap_left;
-    const origin_y: i32 = baseline_y - glyph.bitmap_top;
-    const buffer: [*]const u8 = @ptrCast(bitmap.buffer);
-
-    for (0..rows) |row| {
-        const dst_y = origin_y + @as(i32, @intCast(row));
-        if (dst_y < 0 or dst_y >= target_size_i32) continue;
-        const src_offset = if (bitmap.pitch >= 0) row * pitch_abs else (rows - 1 - row) * pitch_abs;
-        var col: usize = 0;
-        while (col < width and col < pitch_abs) : (col += 1) {
-            const dst_x = origin_x + @as(i32, @intCast(col));
-            if (dst_x < 0 or dst_x >= target_size_i32) continue;
-            const coverage = buffer[src_offset + col];
-            const dst_index = @as(usize, @intCast(dst_y)) * options.target_size + @as(usize, @intCast(dst_x));
-            target_pixels[dst_index] = @max(target_pixels[dst_index], coverage);
-        }
-    }
-
+    blitBitmap(slot, options, target_pixels);
     return std.hash.Wyhash.hash(0, target_pixels);
 }
 

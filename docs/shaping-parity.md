@@ -3080,3 +3080,25 @@ shaping-performance superiority.
   retired instructions fell about `15.6%`, `6.6%`, and `14.2%`, respectively.
   Checksums, clipping behavior, and the retained lower-density controls remain
   unchanged.
+- `glyph-bench --dirty-rect` now exposes a public repeated-render boundary
+  with matched dirty-target work: both engines reuse their face and target,
+  then clear, draw, and hash only the previously discovered clipped glyph
+  rectangle. Cangjie also reuses its immutable prepared geometry/coverage;
+  FreeType still performs `FT_Load_Glyph(FT_LOAD_RENDER)` because its reusable
+  face API does not expose an equivalent prepared-coverage object. Fixed CPU 30
+  with 20,000 iterations and 21 samples measured Cangjie/FreeType medians of
+  about `2,622/4,433 ns` for Roboto `A`, `2,115/5,578 ns` for `g`, and
+  `1,781/5,214 ns` for `é`: Cangjie leads by about `1.69x`, `2.64x`, and
+  `2.93x`. The reported dirty rectangles are comparable (`1840/1886`,
+  `1421/1421`, and `1421/1470` pixels); per-engine checksums remain stable.
+  Five-repeat `perf stat` runs on the same fixed CPU retired about
+  `615M/1,506M`, `662M/1,901M`, and `555M/1,780M` instructions and
+  `177M/397M`, `195M/501M`, and `165M/475M` cycles for
+  Cangjie/FreeType, respectively. Branches were about `92M/229M`,
+  `102M/294M`, and `85M/277M`; branch misses stayed below `0.22%` of
+  branches for both engines. These counters corroborate the wall-time result
+  rather than attributing it only to frequency or scheduling noise.
+  This is a public-pipeline win under those stated reuse contracts, not an
+  equal-work microbenchmark or a claim that Cangjie's one-shot scan converter
+  or antialiasing algorithm is universally faster. A client-side cached
+  FreeType bitmap would define a different, upload/blit-only boundary.

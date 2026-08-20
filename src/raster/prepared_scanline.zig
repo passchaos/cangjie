@@ -210,8 +210,13 @@ noinline fn fillDifference4(allocator: std.mem.Allocator, target: Target, prepar
         var y = bounds.min_y;
         while (y <= bounds.max_y) : (y += 1) {
             const source_y: usize = @intCast(y - prepared.coverage.min_y);
-            var x = bounds.min_x;
-            while (x <= bounds.max_x) : (x += 1) {
+            const cached_row = prepared.coverage.rows[source_y];
+            if (cached_row.start > cached_row.end) continue;
+            const row_min_x = prepared.coverage.min_x + @as(i32, @intCast(cached_row.start));
+            const row_max_x = prepared.coverage.min_x + @as(i32, @intCast(cached_row.end));
+            var x = @max(bounds.min_x, row_min_x);
+            const end_x = @min(bounds.max_x, row_max_x);
+            while (x <= end_x) : (x += 1) {
                 const count = prepared.coverage.pixels[source_y * width + @as(usize, @intCast(x - prepared.coverage.min_x))];
                 if (count != 0) scanline.blendUnchecked(target, x, y, lut[count]);
             }

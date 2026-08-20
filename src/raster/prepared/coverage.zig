@@ -5,15 +5,25 @@ const scanline = @import("../scanline.zig");
 
 pub const Cache = struct {
     pixels: []u8 = &.{},
+    rows: []Row = &.{},
     min_x: i32 = 0,
     min_y: i32 = 0,
     width: u32 = 0,
     height: u32 = 0,
 
     pub fn deinit(self: *Cache, allocator: std.mem.Allocator) void {
-        if (self.pixels.len != 0) allocator.free(self.pixels);
+        if (self.pixels.len != 0) {
+            allocator.free(self.pixels);
+            allocator.free(self.rows);
+        }
         self.* = undefined;
     }
+};
+
+pub const Row = struct {
+    /// Inclusive x indexes relative to `Cache.min_x`. Empty rows use start > end.
+    start: u32 = 1,
+    end: u32 = 0,
 };
 
 pub fn build(allocator: std.mem.Allocator, bounds: ?scanline.Bounds, rows: anytype, points: []const scanline.WindingIntersection, min_sample_y: i32) !Cache {
@@ -28,6 +38,8 @@ pub fn build(allocator: std.mem.Allocator, bounds: ?scanline.Bounds, rows: anyty
     const pixels = try allocator.alloc(u8, width * height);
     errdefer allocator.free(pixels);
     @memset(pixels, 0);
+    const cached_rows = try allocator.alloc(Row, height);
+    errdefer allocator.free(cached_rows);
     const differences = try allocator.alloc(i16, width + 1);
     defer allocator.free(differences);
     @memset(differences, 0);
@@ -60,7 +72,10 @@ pub fn build(allocator: std.mem.Allocator, bounds: ?scanline.Bounds, rows: anyty
                 previous = current;
             }
         }
-        if (!dirty) continue;
+        if (!dirty) {
+            cached_rows[row_index] = .{};
+            continue;
+        }
         var running: i16 = 0;
         var x = dirty_min;
         while (x <= dirty_max) : (x += 1) {
@@ -71,8 +86,19 @@ pub fn build(allocator: std.mem.Allocator, bounds: ?scanline.Bounds, rows: anyty
         const first: usize = @intCast(dirty_min - geometry.min_x);
         const after: usize = @intCast(dirty_max - geometry.min_x + 1);
         @memset(differences[first .. after + 1], 0);
+        cached_rows[row_index] = .{
+            .start = @intCast(dirty_min - geometry.min_x),
+            .end = @intCast(dirty_max - geometry.min_x),
+        };
     }
-    return .{ .pixels = pixels, .min_x = geometry.min_x, .min_y = geometry.min_y, .width = @intCast(width), .height = @intCast(height) };
+    return .{
+        .pixels = pixels,
+        .rows = cached_rows,
+        .min_x = geometry.min_x,
+        .min_y = geometry.min_y,
+        .width = @intCast(width),
+        .height = @intCast(height),
+    };
 }
 
 fn addSpan(differences: []i16, min_x: i32, max_x: i32, start_f: f32, end_f: f32) ?[2]i32 {

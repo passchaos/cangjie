@@ -3072,3 +3072,11 @@ shaping-performance superiority.
   checksums remain identical; the 1x1 counter control is cycle-neutral, and
   the 2x2/3x3 wall-time controls stayed within noise or improved. FreeType's
   reused raster still remains ahead of this boundary.
+- The dense prepared coverage cache now records each row's inclusive non-zero
+  x range. Target clipping intersects that range before the blend walk, so
+  empty exterior pixels are never loaded. Fixed-CPU-30 comparisons against the
+  first coverage-cache state reduced Roboto `A` from about `4.65` to `4.00
+  µs`, `g` from `4.49` to `4.15 µs`, and `é` from `4.40` to `3.84 µs`;
+  retired instructions fell about `15.6%`, `6.6%`, and `14.2%`, respectively.
+  Checksums, clipping behavior, and the retained lower-density controls remain
+  unchanged.

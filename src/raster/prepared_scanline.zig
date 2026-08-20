@@ -1,6 +1,8 @@
 const std = @import("std");
 const scanline = @import("scanline.zig");
 const RowAccumulator = @import("prepared/row_accumulator.zig").RowAccumulator;
+const CoverageCache = @import("prepared/coverage.zig").Cache;
+const coverage_cache = @import("prepared/coverage.zig");
 const shaping_sections = @import("../shaping_sections.zig");
 
 // Prepared scan conversion intentionally lives beside, rather than inside,
@@ -37,6 +39,7 @@ pub const PreparedFill = struct {
     sample_intersections: []const WindingIntersection,
     sample_min_y: i32,
     owns_sample_cache: bool,
+    coverage: CoverageCache,
 
     pub fn deinit(self: *PreparedFill) void {
         self.allocator.free(@constCast(self.lines));
@@ -44,6 +47,7 @@ pub const PreparedFill = struct {
             self.allocator.free(@constCast(self.sample_rows));
             self.allocator.free(@constCast(self.sample_intersections));
         }
+        self.coverage.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -65,6 +69,11 @@ pub fn prepare(allocator: std.mem.Allocator, lines: []const Line) !PreparedFill 
     const owned = try allocator.realloc(storage, lines_prepared.len);
     errdefer allocator.free(owned);
     const samples = try prepareSampleRows(allocator, owned, raw_bounds);
+    errdefer if (samples.owned) {
+        allocator.free(samples.rows);
+        allocator.free(samples.intersections);
+    };
+    const coverage = try coverage_cache.build(allocator, raw_bounds, samples.rows, samples.intersections, samples.min_y);
     return .{
         .allocator = allocator,
         .lines = owned,
@@ -73,6 +82,7 @@ pub fn prepare(allocator: std.mem.Allocator, lines: []const Line) !PreparedFill 
         .sample_intersections = samples.intersections,
         .sample_min_y = samples.min_y,
         .owns_sample_cache = samples.owned,
+        .coverage = coverage,
     };
 }
 
@@ -194,6 +204,20 @@ pub fn fill(
 
 noinline fn fillDifference4(allocator: std.mem.Allocator, target: Target, prepared: *const PreparedFill, fill_rule: FillRule, samples_per_axis: u8) linksection(shaping_sections.isolated_hotpaths) !void {
     const bounds = preparedBoundsForTarget(target, prepared.raw_bounds) orelse return;
+    if (fill_rule == .non_zero and prepared.coverage.pixels.len != 0) {
+        const lut = scanline.coverageLutForSampleCount(16).?;
+        const width: usize = prepared.coverage.width;
+        var y = bounds.min_y;
+        while (y <= bounds.max_y) : (y += 1) {
+            const source_y: usize = @intCast(y - prepared.coverage.min_y);
+            var x = bounds.min_x;
+            while (x <= bounds.max_x) : (x += 1) {
+                const count = prepared.coverage.pixels[source_y * width + @as(usize, @intCast(x - prepared.coverage.min_x))];
+                if (count != 0) scanline.blendUnchecked(target, x, y, lut[count]);
+            }
+        }
+        return;
+    }
     const prepared_lines = prepared.lines;
     if (prepared_lines.len < 2) return;
     const min_x = bounds.min_x;

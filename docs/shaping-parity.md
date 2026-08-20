@@ -3059,3 +3059,16 @@ shaping-performance superiority.
   instructions by about `15.7%`, `18.3%`, and `12.9%`, and cycles by about
   `18.4%`, `18.3%`, and `14.7%`, respectively. All target checksums and the
   retained direct/prepared 1/2/3/4-density differential are unchanged.
+- Prepared non-zero geometry now resolves those cached 4x4 intersections into
+  a target-independent byte coverage rectangle during `prepare`. Repeated
+  draws clip and blend that rectangle directly; even-odd fills, other sample
+  densities, pathological coordinate spans, and coverage over 16 MiB retain
+  the bounded scanners. Fixed-CPU-30 B/A/A/B 21-sample medians reduced Roboto
+  `A` from about `8,243`/`8,239` to `4,660`/`4,664 ns` (about `43.4%`),
+  `g` from `9,100`/`9,157` to `4,565`/`4,560 ns` (about `50.0%`), and `é`
+  from `6,986`/`6,990` to `4,402`/`4,396 ns` (about `37.0%`). Counters
+  reduced retired instructions by about `46.4%`, `53.7%`, and `40.5%`, and
+  cycles by about `44.4%`, `50.2%`, and `36.7%`, respectively. All target
+  checksums remain identical; the 1x1 counter control is cycle-neutral, and
+  the 2x2/3x3 wall-time controls stayed within noise or improved. FreeType's
+  reused raster still remains ahead of this boundary.

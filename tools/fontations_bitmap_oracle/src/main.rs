@@ -35,9 +35,46 @@ fn main() {
         "variations" => variations(&font, &mut args),
         "palettes" => palettes(&font, &mut args),
         "strikes" => strikes(&font, &mut args),
+        "color-glyph" => color_glyph(&font, glyph_id, &mut args),
         "charmap" => charmap(&font, glyph_id, &mut args),
         _ => fail("unsupported mode"),
     }
+}
+
+fn color_glyph(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {
+    let (iterations, samples) = repeated_args(args);
+    let gid = GlyphId::new(glyph_id);
+    let mut values = Vec::with_capacity(samples);
+    let mut checksum = 0_u64;
+    for _ in 0..samples {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let collection = font.color_glyphs();
+            let v1 = collection
+                .get_with_format(gid, skrifa::color::ColorGlyphFormat::ColrV1)
+                .is_some();
+            let v0 = collection
+                .get_with_format(gid, skrifa::color::ColorGlyphFormat::ColrV0)
+                .is_some();
+            checksum = checksum
+                .wrapping_add(u64::from(v1))
+                .wrapping_add(u64::from(v0) << 1);
+            black_box(collection.get(gid));
+        }
+        values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
+    }
+    values.sort_by(f64::total_cmp);
+    let collection = font.color_glyphs();
+    println!(
+        "engine=skrifa\tmode=color-glyph\titerations={iterations}\tsamples={samples}\tmedian_ns_per_iter={:.3}\tv1={}\tv0={}\tchecksum={checksum:016x}",
+        values[values.len() / 2],
+        collection
+            .get_with_format(gid, skrifa::color::ColorGlyphFormat::ColrV1)
+            .is_some(),
+        collection
+            .get_with_format(gid, skrifa::color::ColorGlyphFormat::ColrV0)
+            .is_some(),
+    );
 }
 
 fn strikes(font: &FontRef<'_>, args: &mut impl Iterator<Item = String>) {

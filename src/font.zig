@@ -357,6 +357,14 @@ pub const StatAxisValueCoordinate = stat_mod.AxisValueCoordinate;
 
 pub const ColorLayer = colr_v0_mod.Layer;
 
+pub const ColorGlyphSource = enum { colr_v0, colr_v1 };
+
+pub const ColorGlyphSummary = struct {
+    source: ?ColorGlyphSource,
+    item_count: usize,
+    checksum: u64,
+};
+
 // Preserve the established public color metadata surface while CPAL parsing
 // lives in the focused modern color-table module.
 pub const PaletteColor = cpal_mod.Color;
@@ -4634,6 +4642,64 @@ pub const Font = struct {
         return result;
     }
 
+    fn colorGlyphSummaryForImmutableFace(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+    ) FontError!ColorGlyphSummary {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const colr = self.colr orelse return .{
+            .source = null,
+            .item_count = 0,
+            .checksum = 0,
+        };
+        const version = try bin.readU16At(self.data, colr.offset);
+        if (version == 1 and colr.length >= 34) {
+            if (try colr_bases.read(self.data, colrV1Table(colr))) |bases| {
+                if (try colr_bases.paintOffsetForGlyph(
+                    self.data,
+                    colrV1Table(colr),
+                    bases,
+                    glyph_id,
+                )) |paint_offset| {
+                    return .{
+                        .source = .colr_v1,
+                        .item_count = 1,
+                        .checksum = @as(u64, @intFromEnum(ColorGlyphSource.colr_v1)) +
+                            glyph_id + paint_offset - colr.offset,
+                    };
+                }
+            }
+        }
+        if (version == 0) {
+            const layout = try colr_v0_mod.validateGlyphs(
+                self.data,
+                colrV0Table(colr),
+                self.glyph_count,
+            );
+            for (0..layout.base_count) |index| {
+                const record = colr.offset + layout.base_offset + index * 6;
+                if (try bin.readU16At(self.data, record) != glyph_id) continue;
+                const first_layer = try bin.readU16At(self.data, record + 2);
+                const layer_count = try bin.readU16At(self.data, record + 4);
+                var checksum: u64 = @intFromEnum(ColorGlyphSource.colr_v0);
+                checksum +%= glyph_id;
+                checksum +%= layer_count;
+                for (0..layer_count) |layer_index| {
+                    const layer_record = colr.offset + layout.layer_offset +
+                        (@as(usize, first_layer) + layer_index) * 4;
+                    checksum +%= try bin.readU16At(self.data, layer_record);
+                    checksum +%= try bin.readU16At(self.data, layer_record + 2);
+                }
+                return .{
+                    .source = .colr_v0,
+                    .item_count = layer_count,
+                    .checksum = checksum,
+                };
+            }
+        }
+        return .{ .source = null, .item_count = 0, .checksum = 0 };
+    }
+
     pub fn paletteColor(self: *const Font, palette_index: u16, color_index: u16) FontError!?PaletteColor {
         const cpal = self.cpal orelse return null;
         // CPAL v1 label arrays borrow name IDs from the same caller-owned SFNT
@@ -6859,6 +6925,7 @@ pub const immutable_face_backend = struct {
     pub const paletteSummary = Font.paletteSummaryForImmutableFace;
     pub const bitmapStrikes = Font.bitmapStrikesForImmutableFace;
     pub const bitmapStrikeSummary = Font.bitmapStrikeSummaryForImmutableFace;
+    pub const colorGlyphSummary = Font.colorGlyphSummaryForImmutableFace;
     pub const horizontalHeaderInfo = struct {
         fn read(font: *const Font) FontError!MetricHeaderInfo {
             const hhea = font.hhea orelse return error.MissingTable;

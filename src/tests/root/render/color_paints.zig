@@ -139,6 +139,47 @@ test "reads COLR v1 PaintSolid metadata" {
     try std.testing.expect(try font.colorPaintAtCoords(0, &.{}) == null);
 }
 
+test "Face color glyph summary follows COLRv1 then COLRv0 priority" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const Face = @import("../../../font/face/root.zig").Face;
+
+    const v0_bytes = try test_font.buildColorTtf(allocator);
+    defer allocator.free(v0_bytes);
+    var v0 = try Face.parse(allocator, v0_bytes);
+    defer v0.deinit();
+    const v0_summary = try v0.color().glyphSummary(1);
+    try std.testing.expectEqual(
+        @import("../../../font.zig").ColorGlyphSource.colr_v0,
+        v0_summary.source.?,
+    );
+    try std.testing.expectEqual(@as(usize, 2), v0_summary.item_count);
+
+    const v1_bytes = try test_font.buildColorV1Ttf(allocator);
+    defer allocator.free(v1_bytes);
+    var v1 = try Face.parse(allocator, v1_bytes);
+    defer v1.deinit();
+    const v1_summary = try v1.color().glyphSummary(1);
+    try std.testing.expectEqual(
+        @import("../../../font.zig").ColorGlyphSource.colr_v1,
+        v1_summary.source.?,
+    );
+    try std.testing.expectEqual(@as(usize, 1), v1_summary.item_count);
+
+    const colr_offset = try tableOffset(v0_bytes, "COLR");
+    // Layer-record palette byte is still structurally safe for the immutable
+    // parsed lookup, while the low-level checksum boundary observes mutation.
+    v0_bytes[colr_offset + 23] ^= 1;
+    try std.testing.expectError(
+        error.BadSfnt,
+        v0.implementation.colorLayers(allocator, 1),
+    );
+    try std.testing.expectEqual(
+        @import("../../../font.zig").ColorGlyphSource.colr_v0,
+        (try v0.color().glyphSummary(1)).source.?,
+    );
+}
+
 test "renders COLR v1 PaintSolid glyph into an RGBA target" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

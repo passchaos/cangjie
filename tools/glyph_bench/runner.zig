@@ -177,12 +177,28 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, g
         .variations => try runVariationsIterations(allocator, font, iterations, checksum),
         .palettes => try runPalettesIterations(font, iterations, checksum),
         .strikes => try runStrikesIterations(font, iterations, checksum),
+        .color_glyph => try runColorGlyphIterations(font, glyph_id, iterations, checksum),
         .bitmap => try runBitmapIterations(font, glyph_id, options, iterations, checksum),
         .outline => try runOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
         .outline_session => try runOutlineSessionIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster => try runRasterIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_reuse => try runRasterReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_prepared => try runRasterPreparedIterations(allocator, font, glyph_id, options, iterations, checksum),
+    }
+}
+
+fn runColorGlyphIterations(
+    font: *const cangjie.font.Face,
+    glyph_id: cangjie.font.GlyphId,
+    iterations: usize,
+    checksum: *u64,
+) !void {
+    for (0..iterations) |_| {
+        const value = try font.color().glyphSummary(glyph_id);
+        checksum.* +%= switch (value.source orelse continue) {
+            .colr_v1 => 1,
+            .colr_v0 => 2,
+        };
     }
 }
 

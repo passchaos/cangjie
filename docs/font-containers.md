@@ -278,6 +278,16 @@ owned CPAL APIs retain post-parse checksum/name-reference validation, while
 the immutable Face view reuses structural parse proof. This is narrow CPAL
 metadata evidence, not an overall Fontations performance claim.
 
+The Face color view also exposes Skrifa's preferred color-glyph source lookup:
+COLRv1 is selected first and COLRv0 is the fallback. Retained v0-only and
+v1-only fixtures match Skrifa's source-presence checksums `2` and `1`.
+Fixed-CPU-30 Cangjie/Skrifa/Skrifa/Cangjie medians were
+`53.63/111.87/112.04/47.86 ns` for v0 and
+`40.40/141.13/131.81/37.38 ns` for v1. The summary also retains layer/paint
+content for Cangjie diagnostics; low-level COLR graph methods remain
+mutation-aware. This is narrow source-selection evidence, not an overall
+Fontations performance claim.
+
 The Face color view now exposes Skrifa-equivalent embedded bitmap strike
 collections as well, using the same `sbix → CBDT → EBDT` source priority. A
 non-allocating summary covers format, strike count, and each strike's ppem; on

@@ -17,6 +17,17 @@ pub const View = struct {
         return self.implementation.colorLayers(allocator, glyph_id);
     }
 
+    /// Return the preferred COLRv1/COLRv0 representation and compact content.
+    pub fn glyphSummary(
+        self: View,
+        glyph_id: glyph_mod.GlyphId,
+    ) font_mod.FontError!font_mod.ColorGlyphSummary {
+        return font_mod.immutable_face_backend.colorGlyphSummary(
+            self.implementation,
+            glyph_id,
+        );
+    }
+
     pub fn paletteColor(
         self: View,
         palette_index: u16,

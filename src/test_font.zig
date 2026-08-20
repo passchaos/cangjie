@@ -697,6 +697,19 @@ pub fn writeAttributeFixtures(
         .sub_path = "strikes.ttf",
         .data = bitmap,
     });
+
+    const color_v0 = try buildColorTtf(allocator);
+    defer allocator.free(color_v0);
+    try directory.writeFile(io, .{
+        .sub_path = "color-glyph-v0.ttf",
+        .data = color_v0,
+    });
+    const color_v1 = try buildColorV1Ttf(allocator);
+    defer allocator.free(color_v1);
+    try directory.writeFile(io, .{
+        .sub_path = "color-glyph-v1.ttf",
+        .data = color_v1,
+    });
 }
 
 fn embeddedSfntTable(bytes: []const u8, tag: *const [4]u8) ![]const u8 {

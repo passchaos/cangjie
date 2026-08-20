@@ -174,12 +174,26 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, g
         .family_name => try runFamilyNameIterations(allocator, font, iterations, checksum),
         .glyph_name => try runGlyphNameIterations(font, glyph_id, iterations, checksum),
         .attributes => try runAttributesIterations(font, iterations, checksum),
+        .variations => try runVariationsIterations(allocator, font, iterations, checksum),
         .bitmap => try runBitmapIterations(font, glyph_id, options, iterations, checksum),
         .outline => try runOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
         .outline_session => try runOutlineSessionIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster => try runRasterIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_reuse => try runRasterReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_prepared => try runRasterPreparedIterations(allocator, font, glyph_id, options, iterations, checksum),
+    }
+}
+
+fn runVariationsIterations(
+    allocator: std.mem.Allocator,
+    font: *const cangjie.font.Face,
+    iterations: usize,
+    checksum: *u64,
+) !void {
+    for (0..iterations) |_| {
+        _ = allocator;
+        const value = try font.variations().summary();
+        checksum.* +%= value.checksum;
     }
 }
 

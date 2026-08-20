@@ -255,3 +255,14 @@ reduces Cangjie to `8.57/11.80 ns` and `20.69/18.52 ns`, respectively, versus
 fresh Skrifa controls at `67.78` and `104.61 ns`. Low-level attribute reads still detect
 post-parse checksum mutations. These are narrow repeated classification
 lookups, not an overall Fontations performance claim.
+
+Variation axes and named instances now have a combined, non-allocating Face
+summary boundary as well. The retained two-axis/two-instance fixture yields
+the same complete field checksum `000000038fe9e2f0` in Cangjie and Skrifa,
+including tags, indexes, NameIDs, flags, design-space ranges, optional
+PostScript NameIDs, and instance coordinates. Fixed-CPU-30
+Cangjie/Skrifa/Skrifa/Cangjie medians over one million reads were
+`127.34/318.91/438.69/127.07 ns`. The ordinary `axes` and `instances` Face
+methods also reuse parse-time fvar proof, while their low-level `Font`
+counterparts retain checksum/name-reference revalidation. This is narrow
+variation-metadata evidence, not an overall Fontations performance claim.

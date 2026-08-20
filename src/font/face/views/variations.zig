@@ -12,7 +12,10 @@ pub const View = struct {
         self: View,
         allocator: std.mem.Allocator,
     ) font_mod.FontError![]font_mod.VariationAxis {
-        return self.implementation.variationAxes(allocator);
+        return font_mod.immutable_face_backend.variationAxes(
+            self.implementation,
+            allocator,
+        );
     }
 
     pub fn normalize(
@@ -20,7 +23,8 @@ pub const View = struct {
         allocator: std.mem.Allocator,
         coordinates: []const font_mod.VariationCoordinate,
     ) font_mod.FontError![]f32 {
-        return self.implementation.normalizedVariationCoordinates(
+        return font_mod.immutable_face_backend.normalizedVariationCoordinates(
+            self.implementation,
             allocator,
             coordinates,
         );
@@ -31,7 +35,8 @@ pub const View = struct {
         axis_index: usize,
         normalized: f32,
     ) font_mod.FontError!f32 {
-        return self.implementation.mapVariationCoordinate(
+        return font_mod.immutable_face_backend.mapVariationCoordinate(
+            self.implementation,
             axis_index,
             normalized,
         );
@@ -41,7 +46,10 @@ pub const View = struct {
         self: View,
         allocator: std.mem.Allocator,
     ) font_mod.FontError![]font_mod.VariationInstance {
-        return self.implementation.variationInstances(allocator);
+        return font_mod.immutable_face_backend.variationInstances(
+            self.implementation,
+            allocator,
+        );
     }
 
     pub fn freeInstances(
@@ -52,6 +60,13 @@ pub const View = struct {
         self.implementation.freeVariationInstances(
             allocator,
             instances_value,
+        );
+    }
+
+    /// Summarize axes and named instances without materializing owned arrays.
+    pub fn summary(self: View) font_mod.FontError!font_mod.VariationSummary {
+        return font_mod.immutable_face_backend.variationSummary(
+            self.implementation,
         );
     }
 };

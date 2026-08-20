@@ -345,6 +345,12 @@ pub const VariationSequenceKind = cmap_variation.SequenceKind;
 
 pub const VariationInstance = fvar_mod.Instance;
 
+pub const VariationSummary = struct {
+    axis_count: usize,
+    instance_count: usize,
+    checksum: u64,
+};
+
 pub const StatDesignAxis = stat_mod.DesignAxis;
 pub const StatAxisValue = stat_mod.AxisValue;
 pub const StatAxisValueCoordinate = stat_mod.AxisValueCoordinate;
@@ -4395,6 +4401,14 @@ pub const Font = struct {
         return try fvar_mod.readAxes(allocator, self.data, fvar);
     }
 
+    fn variationAxesForImmutableFace(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+    ) FontError![]VariationAxis {
+        const fvar = self.fvar orelse return try allocator.alloc(VariationAxis, 0);
+        return try fvar_mod.readAxes(allocator, self.data, fvar);
+    }
+
     pub fn mapVariationCoordinate(self: *const Font, axis_index: usize, normalized: f32) FontError!f32 {
         // This remains a public normalized-coordinate contract even when the
         // face has no avar table and mapping is therefore the identity.
@@ -4402,6 +4416,22 @@ pub const Font = struct {
         const avar = self.avar orelse return normalized;
         try sfnt.checksum.validate(self.data, avar);
         if (self.fvar) |fvar| try sfnt.checksum.validate(self.data, fvar);
+        return try avar_mod.map(
+            self.data,
+            avar,
+            self.fvar,
+            axis_index,
+            normalized,
+        );
+    }
+
+    fn mapVariationCoordinateForImmutableFace(
+        self: *const Font,
+        axis_index: usize,
+        normalized: f32,
+    ) FontError!f32 {
+        try validateNormalizedVariationCoordinate(normalized);
+        const avar = self.avar orelse return normalized;
         return try avar_mod.map(
             self.data,
             avar,
@@ -4431,6 +4461,31 @@ pub const Font = struct {
         return normalized;
     }
 
+    fn normalizedVariationCoordinatesForImmutableFace(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        coordinates: []const VariationCoordinate,
+    ) FontError![]f32 {
+        const axes = try self.variationAxesForImmutableFace(allocator);
+        defer allocator.free(axes);
+        try fvar_mod.validateCoordinates(axes, coordinates);
+
+        const normalized = try allocator.alloc(f32, axes.len);
+        errdefer allocator.free(normalized);
+        for (axes, 0..) |axis, index| {
+            const user_value = fvar_mod.coordinateValueForAxis(
+                axis,
+                coordinates,
+            ) orelse axis.default_value;
+            const mapped = try self.mapVariationCoordinateForImmutableFace(
+                index,
+                axis.normalize(user_value),
+            );
+            normalized[index] = fvar_mod.quantizeNormalized(mapped);
+        }
+        return normalized;
+    }
+
     pub fn variationInstances(self: *const Font, allocator: std.mem.Allocator) FontError![]VariationInstance {
         const fvar = self.fvar orelse return try allocator.alloc(VariationInstance, 0);
         try sfnt.checksum.validate(self.data, fvar);
@@ -4440,6 +4495,34 @@ pub const Font = struct {
             try fvar_mod.validateNameReferences(self.data, fvar, &name_index);
         }
         return try fvar_mod.readInstances(allocator, self.data, fvar);
+    }
+
+    fn variationInstancesForImmutableFace(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+    ) FontError![]VariationInstance {
+        const fvar = self.fvar orelse return try allocator.alloc(VariationInstance, 0);
+        // Skrifa exposes structurally valid instances even when optional name
+        // records are absent. Face.parse already proved the complete fvar
+        // grammar; the low-level method above retains strict mutation-aware
+        // name-reference validation for callers that require it.
+        return try fvar_mod.readInstances(allocator, self.data, fvar);
+    }
+
+    fn variationSummaryForImmutableFace(
+        self: *const Font,
+    ) FontError!VariationSummary {
+        const fvar = self.fvar orelse return .{
+            .axis_count = 0,
+            .instance_count = 0,
+            .checksum = 0,
+        };
+        const layout = try fvar_mod.info(self.data, fvar);
+        return .{
+            .axis_count = layout.axis_count,
+            .instance_count = layout.instance_count,
+            .checksum = try fvar_mod.summarize(self.data, fvar),
+        };
     }
 
     pub fn freeVariationInstances(_: *const Font, allocator: std.mem.Allocator, instances: []VariationInstance) void {
@@ -6534,6 +6617,12 @@ pub const immutable_face_backend = struct {
             return @as(f32, @floatFromInt(raw)) / 65536.0;
         }
     }.read;
+    pub const variationAxes = Font.variationAxesForImmutableFace;
+    pub const normalizedVariationCoordinates =
+        Font.normalizedVariationCoordinatesForImmutableFace;
+    pub const mapVariationCoordinate = Font.mapVariationCoordinateForImmutableFace;
+    pub const variationInstances = Font.variationInstancesForImmutableFace;
+    pub const variationSummary = Font.variationSummaryForImmutableFace;
     pub const horizontalHeaderInfo = struct {
         fn read(font: *const Font) FontError!MetricHeaderInfo {
             const hhea = font.hhea orelse return error.MissingTable;

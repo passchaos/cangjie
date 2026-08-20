@@ -676,6 +676,13 @@ pub fn writeAttributeFixtures(
         .sub_path = "attributes-os2.ttf",
         .data = os2,
     });
+
+    const variation = try buildVariableTtf(allocator);
+    defer allocator.free(variation);
+    try directory.writeFile(io, .{
+        .sub_path = "variations.ttf",
+        .data = variation,
+    });
 }
 
 fn embeddedSfntTable(bytes: []const u8, tag: *const [4]u8) ![]const u8 {

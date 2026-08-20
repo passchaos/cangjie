@@ -19,6 +19,7 @@ pub const instanceOffset = table.instanceOffset;
 pub const readAxes = read.axes;
 pub const readInstances = read.instances;
 pub const freeInstances = read.freeInstances;
+pub const summarize = read.summarize;
 
 pub const validateNameReferences = names.validateAll;
 pub const validateAxisNameReferences = names.validateAxes;

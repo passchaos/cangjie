@@ -30,6 +30,7 @@ pub const Mode = enum {
     family_name,
     glyph_name,
     attributes,
+    variations,
     bitmap,
     outline,
     outline_session,
@@ -44,6 +45,7 @@ pub const Mode = enum {
         if (std.mem.eql(u8, name, "family-name")) return .family_name;
         if (std.mem.eql(u8, name, "glyph-name")) return .glyph_name;
         if (std.mem.eql(u8, name, "attributes")) return .attributes;
+        if (std.mem.eql(u8, name, "variations")) return .variations;
         if (std.mem.eql(u8, name, "bitmap")) return .bitmap;
         if (std.mem.eql(u8, name, "outline")) return .outline;
         if (std.mem.eql(u8, name, "outline-session")) return .outline_session;
@@ -61,6 +63,7 @@ pub const Mode = enum {
             .family_name => "family-name",
             .glyph_name => "glyph-name",
             .attributes => "attributes",
+            .variations => "variations",
             .bitmap => "bitmap",
             .outline => "outline",
             .outline_session => "outline-session",
@@ -210,6 +213,7 @@ pub fn parse(args: []const []const u8) !Options {
         (options.mode == .outline_session or
             options.mode == .glyph_name or
             options.mode == .attributes or
+            options.mode == .variations or
             options.mode == .raster_prepared)) return error.InvalidArguments;
     return options;
 }
@@ -313,4 +317,9 @@ test "parse accepts glyph name benchmark mode" {
 test "parse accepts attributes benchmark mode" {
     const options = try parse(&.{ "glyph-bench", "--mode", "attributes" });
     try std.testing.expectEqual(Mode.attributes, options.mode);
+}
+
+test "parse accepts variations benchmark mode" {
+    const options = try parse(&.{ "glyph-bench", "--mode", "variations" });
+    try std.testing.expectEqual(Mode.variations, options.mode);
 }

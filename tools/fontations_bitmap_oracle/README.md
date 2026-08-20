@@ -43,8 +43,10 @@ Repeated English-or-first family names use `family-name 0 ITERATIONS SAMPLES`.
 Resolved post/CFF/synthesized glyph names use
 `glyph-name GLYPH_ID ITERATIONS SAMPLES`.
 Repeated default-instance classification uses `attributes 0 ITERATIONS SAMPLES`.
+Axis and named-instance enumeration uses `variations 0 ITERATIONS SAMPLES`.
 The matching fixtures can be generated in the current directory with
 `zig build glyph-name-fixtures`; it writes `post.ttf`, `cff.otf`, and
 `synthesized.ttf`, each with the comparable glyph at id 1, plus complete
 `attributes-head.ttf` and `attributes-os2.ttf` wrappers around the exact
-Fontations reference tables.
+Fontations reference tables, plus a complete two-axis/two-instance
+`variations.ttf` differential fixture.

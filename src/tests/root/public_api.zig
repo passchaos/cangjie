@@ -856,6 +856,37 @@ test "normal metric view resolves MVAR deltas" {
     );
 }
 
+test "variation summary matches axes and named instances" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildVariableTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+
+    const summary = try face.variations().summary();
+    try std.testing.expectEqual(@as(usize, 2), summary.axis_count);
+    try std.testing.expectEqual(@as(usize, 2), summary.instance_count);
+    try std.testing.expectEqual(@as(u64, 0x38fe9e2f0), summary.checksum);
+
+    const axes = try face.variations().axes(allocator);
+    defer allocator.free(axes);
+    try std.testing.expectEqualStrings("wght", &axes[0].tag);
+    try std.testing.expectEqual(@as(f32, 100), axes[0].min_value);
+    const instances = try face.variations().instances(allocator);
+    defer face.variations().freeInstances(allocator, instances);
+    try std.testing.expectEqual(@as(u16, 258), instances[0].subfamily_name_id);
+
+    // Face enumeration reuses immutable fvar proof, while the low-level API
+    // still rejects caller mutation at its public boundary.
+    const fvar_offset = try sfntTableOffset(bytes, "fvar");
+    bytes[fvar_offset + 32] ^= 1;
+    try std.testing.expectError(
+        error.BadSfnt,
+        face.implementation.variationAxes(allocator),
+    );
+    try std.testing.expectEqual(@as(usize, 2), (try face.variations().summary()).axis_count);
+}
+
 test "global metrics match Skrifa reference fixtures" {
     const allocator = std.testing.allocator;
     const simple_upstream = @embedFile("../data/fontations_simple_glyf.ttf");

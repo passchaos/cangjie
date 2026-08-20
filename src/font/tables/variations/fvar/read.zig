@@ -89,6 +89,51 @@ pub fn freeInstances(
     allocator.free(values);
 }
 
+pub fn summarize(
+    data: []const u8,
+    record: sfnt.Record,
+) Error!u64 {
+    const layout = try table.info(data, record);
+    var checksum: u64 = layout.axis_count;
+    for (0..layout.axis_count) |index| {
+        const offset = table.axisOffset(record, layout, index);
+        const tag = try bin.readTagAt(data, offset);
+        checksum +%= std.mem.readInt(u32, &tag, .big);
+        checksum +%= index;
+        checksum +%= try bin.readU16At(data, offset + 18);
+        checksum +%= @intFromBool(
+            (try bin.readU16At(data, offset + 16) & 1) != 0,
+        );
+        checksum +%= @as(u32, @bitCast(fixed16_16ToF32(
+            try bin.readI32At(data, offset + 4),
+        )));
+        checksum +%= @as(u32, @bitCast(fixed16_16ToF32(
+            try bin.readI32At(data, offset + 8),
+        )));
+        checksum +%= @as(u32, @bitCast(fixed16_16ToF32(
+            try bin.readI32At(data, offset + 12),
+        )));
+    }
+    checksum +%= layout.instance_count;
+    for (0..layout.instance_count) |instance_index| {
+        const offset = table.instanceOffset(record, layout, instance_index);
+        checksum +%= try bin.readU16At(data, offset);
+        if (layout.has_postscript_name_id) {
+            const name_id = try bin.readU16At(
+                data,
+                offset + layout.postscript_name_id_offset,
+            );
+            checksum +%= if (name_id == 0xffff) 0 else name_id;
+        }
+        for (0..layout.axis_count) |axis_index| {
+            checksum +%= @as(u32, @bitCast(fixed16_16ToF32(
+                try bin.readI32At(data, offset + 4 + axis_index * 4),
+            )));
+        }
+    }
+    return checksum;
+}
+
 fn freeInitialized(
     allocator: std.mem.Allocator,
     values: []types.Instance,

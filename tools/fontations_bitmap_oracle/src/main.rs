@@ -32,9 +32,62 @@ fn main() {
         "family-name" => family_name(&font, &mut args),
         "glyph-name" => glyph_name(&font, glyph_id, &mut args),
         "attributes" => attributes(&font, &mut args),
+        "variations" => variations(&font, &mut args),
         "charmap" => charmap(&font, glyph_id, &mut args),
         _ => fail("unsupported mode"),
     }
+}
+
+fn variations(font: &FontRef<'_>, args: &mut impl Iterator<Item = String>) {
+    let (iterations, samples) = repeated_args(args);
+    let mut values = Vec::with_capacity(samples);
+    let mut checksum = 0_u64;
+    for _ in 0..samples {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let axes = font.axes();
+            let instances = font.named_instances();
+            checksum = checksum.wrapping_add(axes.len() as u64);
+            for axis in axes.iter() {
+                checksum = checksum
+                    .wrapping_add(u64::from(
+                        axis.tag()
+                            .to_be_bytes()
+                            .iter()
+                            .fold(0_u32, |v, b| (v << 8) | u32::from(*b)),
+                    ))
+                    .wrapping_add(axis.index() as u64)
+                    .wrapping_add(u64::from(axis.name_id().to_u16()))
+                    .wrapping_add(u64::from(axis.is_hidden()))
+                    .wrapping_add(u64::from(axis.min_value().to_bits()))
+                    .wrapping_add(u64::from(axis.default_value().to_bits()))
+                    .wrapping_add(u64::from(axis.max_value().to_bits()));
+            }
+            checksum = checksum.wrapping_add(instances.len() as u64);
+            for instance in instances.iter() {
+                checksum = checksum
+                    .wrapping_add(u64::from(instance.subfamily_name_id().to_u16()))
+                    .wrapping_add(u64::from(
+                        instance
+                            .postscript_name_id()
+                            .map(|id| id.to_u16())
+                            .unwrap_or_default(),
+                    ));
+                for coord in instance.user_coords() {
+                    checksum = checksum.wrapping_add(u64::from(coord.to_bits()));
+                }
+            }
+            black_box((axes, instances));
+        }
+        values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
+    }
+    values.sort_by(f64::total_cmp);
+    println!(
+        "engine=skrifa\tmode=variations\titerations={iterations}\tsamples={samples}\tmedian_ns_per_iter={:.3}\taxes={}\tinstances={}\tchecksum={checksum:016x}",
+        values[values.len() / 2],
+        font.axes().len(),
+        font.named_instances().len(),
+    );
 }
 
 fn attributes(font: &FontRef<'_>, args: &mut impl Iterator<Item = String>) {

@@ -90,6 +90,7 @@ pub fn init(
         .cmap_subtables = &.{},
         .selected_cmap_subtable = null,
         .selected_cmap_groups = &.{},
+        .selected_cmap_group_buckets = &.{},
         .owned_tables = &.{},
         .allocator = std.testing.allocator,
     };

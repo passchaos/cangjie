@@ -731,6 +731,7 @@ pub const Font = struct {
     cmap_subtables: []CmapSubtable,
     selected_cmap_subtable: ?CmapSubtable,
     selected_cmap_groups: []cmap_mod.SequentialGroup,
+    selected_cmap_group_buckets: []cmap_mod.GroupBucket,
     owned_tables: []TableRecord,
     allocator: std.mem.Allocator,
 
@@ -1110,6 +1111,11 @@ pub const Font = struct {
         else
             try allocator.alloc(cmap_mod.SequentialGroup, 0);
         errdefer allocator.free(selected_cmap_groups);
+        const selected_cmap_group_buckets = try cmap_mod.buildGroupBuckets(
+            allocator,
+            selected_cmap_groups,
+        );
+        errdefer allocator.free(selected_cmap_group_buckets);
 
         return .{
             .data = data,
@@ -1182,6 +1188,7 @@ pub const Font = struct {
             .cmap_subtables = cmap_subtables,
             .selected_cmap_subtable = selected_cmap_subtable,
             .selected_cmap_groups = selected_cmap_groups,
+            .selected_cmap_group_buckets = selected_cmap_group_buckets,
             .owned_tables = records,
             .allocator = allocator,
         };
@@ -1190,6 +1197,7 @@ pub const Font = struct {
     pub fn deinit(self: *Font) void {
         if (self.cff_parsed) |*parsed| parsed.deinit();
         self.allocator.free(self.selected_cmap_groups);
+        self.allocator.free(self.selected_cmap_group_buckets);
         self.allocator.free(self.cmap_subtables);
         self.allocator.free(self.owned_tables);
         self.* = undefined;
@@ -2704,7 +2712,11 @@ pub const Font = struct {
         }
         if (self.selected_cmap_groups.len != 0) {
             return cmap_mod.glyphFromGroups(
-                self.selected_cmap_groups,
+                cmap_mod.bucketGroups(
+                    self.selected_cmap_groups,
+                    self.selected_cmap_group_buckets,
+                    codepoint,
+                ),
                 codepoint,
                 chosen.format == 13,
             );

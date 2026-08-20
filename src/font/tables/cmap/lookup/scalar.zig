@@ -13,6 +13,42 @@ pub const SequentialGroup = struct {
     start_glyph: u32,
 };
 
+pub const GroupBucket = struct {
+    start: u16,
+    end: u16,
+};
+pub const group_bucket_shift = 12;
+pub const group_bucket_count = (0x110000 +
+    ((1 << group_bucket_shift) - 1)) >> group_bucket_shift;
+
+pub fn buildGroupBuckets(
+    allocator: std.mem.Allocator,
+    groups: []const SequentialGroup,
+) std.mem.Allocator.Error![]GroupBucket {
+    const buckets = try allocator.alloc(GroupBucket, group_bucket_count);
+    var start: usize = 0;
+    for (buckets, 0..) |*bucket, bucket_index| {
+        const first: u32 = @intCast(bucket_index << group_bucket_shift);
+        const last = first + ((1 << group_bucket_shift) - 1);
+        while (start < groups.len and groups[start].end < first) start += 1;
+        var end = start;
+        while (end < groups.len and groups[end].start <= last) end += 1;
+        bucket.* = .{ .start = @intCast(start), .end = @intCast(end) };
+    }
+    return buckets;
+}
+
+pub fn bucketGroups(
+    groups: []const SequentialGroup,
+    buckets: []const GroupBucket,
+    codepoint: u21,
+) []const SequentialGroup {
+    const index = @as(usize, codepoint) >> group_bucket_shift;
+    if (index >= buckets.len) return &.{};
+    const bucket = buckets[index];
+    return groups[bucket.start..bucket.end];
+}
+
 /// Decode validated format 8/12/13 groups for immutable repeated lookup.
 pub fn decodeGroups(
     allocator: std.mem.Allocator,

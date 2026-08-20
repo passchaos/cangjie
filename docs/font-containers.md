@@ -143,8 +143,12 @@ control likewise measured Cangjie at `53.49/57.44 ns` versus Skrifa at
 `31.58/29.47 ns`. Cangjie now also decodes the selected immutable format
 8/12/13 group array once at face parse time; the same supplementary-plane row
 fell further to `44.01/44.05 ns`, preserving exact format-12/13 mapping tests.
-This remaining gap is recorded explicitly rather than hidden behind the broader
-table-coverage manifest.
+Parse-time 4 KiB scalar buckets then bound each immutable group search to the
+small subset intersecting one Unicode page. That reduced the same format-12 row
+to `27.25/27.28 ns` versus Skrifa's fresh `44.57/44.63 ns`; Roboto U+0041
+also measured `36.48 ns` with metrics/outline controls unchanged. These rows
+now favor Cangjie, but they remain narrow repeated-lookup evidence rather than
+an overall Fontations performance claim.
 
 `docs/fontations-coverage.json` maps every public top-level table family in
 Fontations `read-fonts` 0.42.2, plus eight grouped Skrifa 0.45.2 capability

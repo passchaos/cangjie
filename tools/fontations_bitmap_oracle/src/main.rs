@@ -34,9 +34,43 @@ fn main() {
         "attributes" => attributes(&font, &mut args),
         "variations" => variations(&font, &mut args),
         "palettes" => palettes(&font, &mut args),
+        "strikes" => strikes(&font, &mut args),
         "charmap" => charmap(&font, glyph_id, &mut args),
         _ => fail("unsupported mode"),
     }
+}
+
+fn strikes(font: &FontRef<'_>, args: &mut impl Iterator<Item = String>) {
+    let (iterations, samples) = repeated_args(args);
+    let mut values = Vec::with_capacity(samples);
+    let mut checksum = 0_u64;
+    for _ in 0..samples {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let strikes = font.bitmap_strikes();
+            checksum = checksum
+                .wrapping_add(match strikes.format() {
+                    None => 0,
+                    Some(skrifa::bitmap::BitmapFormat::Sbix) => 0,
+                    Some(skrifa::bitmap::BitmapFormat::Cbdt) => 1,
+                    Some(skrifa::bitmap::BitmapFormat::Ebdt) => 2,
+                })
+                .wrapping_add(strikes.len() as u64);
+            for strike in strikes.iter() {
+                checksum = checksum.wrapping_add(u64::from(strike.ppem().to_bits()));
+            }
+            black_box(strikes);
+        }
+        values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
+    }
+    values.sort_by(f64::total_cmp);
+    let strikes = font.bitmap_strikes();
+    println!(
+        "engine=skrifa\tmode=strikes\titerations={iterations}\tsamples={samples}\tmedian_ns_per_iter={:.3}\tformat={:?}\tstrikes={}\tchecksum={checksum:016x}",
+        values[values.len() / 2],
+        strikes.format(),
+        strikes.len(),
+    );
 }
 
 fn palettes(font: &FontRef<'_>, args: &mut impl Iterator<Item = String>) {

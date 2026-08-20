@@ -99,6 +99,24 @@ pub const View = struct {
         return self.implementation.bitmapGlyphPng(glyph_id, size_px);
     }
 
+    pub fn bitmapStrikes(
+        self: View,
+        allocator: std.mem.Allocator,
+    ) font_mod.FontError![]font_mod.BitmapStrikeInfo {
+        return font_mod.immutable_face_backend.bitmapStrikes(
+            self.implementation,
+            allocator,
+        );
+    }
+
+    pub fn bitmapStrikeSummary(
+        self: View,
+    ) font_mod.FontError!font_mod.BitmapStrikeSummary {
+        return font_mod.immutable_face_backend.bitmapStrikeSummary(
+            self.implementation,
+        );
+    }
+
     pub fn bitmapInfo(
         self: View,
         glyph_id: glyph_mod.GlyphId,

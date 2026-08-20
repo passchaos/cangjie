@@ -32,6 +32,7 @@ pub const Mode = enum {
     attributes,
     variations,
     palettes,
+    strikes,
     bitmap,
     outline,
     outline_session,
@@ -48,6 +49,7 @@ pub const Mode = enum {
         if (std.mem.eql(u8, name, "attributes")) return .attributes;
         if (std.mem.eql(u8, name, "variations")) return .variations;
         if (std.mem.eql(u8, name, "palettes")) return .palettes;
+        if (std.mem.eql(u8, name, "strikes")) return .strikes;
         if (std.mem.eql(u8, name, "bitmap")) return .bitmap;
         if (std.mem.eql(u8, name, "outline")) return .outline;
         if (std.mem.eql(u8, name, "outline-session")) return .outline_session;
@@ -67,6 +69,7 @@ pub const Mode = enum {
             .attributes => "attributes",
             .variations => "variations",
             .palettes => "palettes",
+            .strikes => "strikes",
             .bitmap => "bitmap",
             .outline => "outline",
             .outline_session => "outline-session",
@@ -218,6 +221,7 @@ pub fn parse(args: []const []const u8) !Options {
             options.mode == .attributes or
             options.mode == .variations or
             options.mode == .palettes or
+            options.mode == .strikes or
             options.mode == .raster_prepared)) return error.InvalidArguments;
     return options;
 }
@@ -331,4 +335,9 @@ test "parse accepts variations benchmark mode" {
 test "parse accepts palettes benchmark mode" {
     const options = try parse(&.{ "glyph-bench", "--mode", "palettes" });
     try std.testing.expectEqual(Mode.palettes, options.mode);
+}
+
+test "parse accepts strikes benchmark mode" {
+    const options = try parse(&.{ "glyph-bench", "--mode", "strikes" });
+    try std.testing.expectEqual(Mode.strikes, options.mode);
 }

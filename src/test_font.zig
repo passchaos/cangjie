@@ -690,6 +690,13 @@ pub fn writeAttributeFixtures(
         .sub_path = "palettes.ttf",
         .data = color,
     });
+
+    const bitmap = try buildCbdtBgraTtf(allocator);
+    defer allocator.free(bitmap);
+    try directory.writeFile(io, .{
+        .sub_path = "strikes.ttf",
+        .data = bitmap,
+    });
 }
 
 fn embeddedSfntTable(bytes: []const u8, tag: *const [4]u8) ![]const u8 {

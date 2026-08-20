@@ -388,6 +388,12 @@ pub const BitmapGlyphInfo = bitmap_mod.GlyphInfo;
 pub const BitmapStrikeSource = bitmap_mod.StrikeSource;
 pub const BitmapStrikeInfo = bitmap_mod.StrikeInfo;
 
+pub const BitmapStrikeSummary = struct {
+    source: ?BitmapStrikeSource,
+    strike_count: usize,
+    checksum: u64,
+};
+
 pub const GlyphClass = gdef_mod.GlyphClass;
 pub const LigatureCaret = gdef_mod.LigatureCaret;
 pub const AttachmentPoint = gdef_mod.AttachmentPoint;
@@ -5300,6 +5306,139 @@ pub const Font = struct {
         return try strikes.toOwnedSlice(allocator);
     }
 
+    fn bitmapStrikesForImmutableFace(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+    ) FontError![]BitmapStrikeInfo {
+        var strikes = std.ArrayList(BitmapStrikeInfo).empty;
+        errdefer strikes.deinit(allocator);
+        if (self.sbix) |sbix| {
+            const count = try bitmap_mod.sbix.strikeCount(
+                self.data,
+                bitmapTable(sbix),
+            );
+            try strikes.ensureUnusedCapacity(allocator, count);
+            for (0..count) |index| {
+                const strike = try bitmap_mod.sbix.strike(
+                    self.data,
+                    bitmapTable(sbix),
+                    self.glyph_count,
+                    index,
+                );
+                strikes.appendAssumeCapacity(.{
+                    .source = .sbix,
+                    .ppem = strike.ppem,
+                    .ppi = strike.ppi,
+                    .start_glyph = 0,
+                    .end_glyph = if (self.glyph_count == 0) 0 else self.glyph_count - 1,
+                });
+            }
+            return strikes.toOwnedSlice(allocator);
+        }
+        if (self.cblc != null and self.cbdt != null) {
+            try self.appendBitmapStrikesParsed(
+                allocator,
+                &strikes,
+                self.cblc.?,
+                .cblc_cbdt,
+            );
+            return strikes.toOwnedSlice(allocator);
+        }
+        if (self.eblc != null and self.ebdt != null) {
+            try self.appendBitmapStrikesParsed(
+                allocator,
+                &strikes,
+                self.eblc.?,
+                .eblc_ebdt,
+            );
+        }
+        return strikes.toOwnedSlice(allocator);
+    }
+
+    fn appendBitmapStrikesParsed(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        strikes: *std.ArrayList(BitmapStrikeInfo),
+        table: TableRecord,
+        source: BitmapStrikeSource,
+    ) FontError!void {
+        const count = try bitmap_mod.cblc.strikeCount(
+            self.data,
+            bitmapTable(table),
+        );
+        try strikes.ensureUnusedCapacity(allocator, count);
+        for (0..count) |index| {
+            const strike = try bitmap_mod.cblc.strike(
+                self.data,
+                bitmapTable(table),
+                self.glyph_count,
+                index,
+            );
+            strikes.appendAssumeCapacity(.{
+                .source = source,
+                .ppem = strike.ppem,
+                .ppem_x = strike.ppem_x,
+                .ppi = strike.ppi,
+                .bit_depth = strike.bit_depth,
+                .flags = strike.flags,
+                .start_glyph = strike.start_glyph,
+                .end_glyph = strike.end_glyph,
+            });
+        }
+    }
+
+    fn bitmapStrikeSummaryForImmutableFace(self: *const Font) FontError!BitmapStrikeSummary {
+        var source: ?BitmapStrikeSource = null;
+        var table: ?TableRecord = null;
+        var is_sbix = false;
+        if (self.sbix) |value| {
+            source = .sbix;
+            table = value;
+            is_sbix = true;
+        } else if (self.cblc != null and self.cbdt != null) {
+            source = .cblc_cbdt;
+            table = self.cblc.?;
+        } else if (self.eblc != null and self.ebdt != null) {
+            source = .eblc_ebdt;
+            table = self.eblc.?;
+        }
+        const record = table orelse return .{
+            .source = null,
+            .strike_count = 0,
+            .checksum = 0,
+        };
+        const count = if (is_sbix)
+            try bitmap_mod.sbix.strikeCount(self.data, bitmapTable(record))
+        else
+            try bitmap_mod.cblc.strikeCount(self.data, bitmapTable(record));
+        var checksum: u64 = @intFromEnum(source.?);
+        checksum +%= count;
+        for (0..count) |index| {
+            if (is_sbix) {
+                const strike = try bitmap_mod.sbix.strike(
+                    self.data,
+                    bitmapTable(record),
+                    self.glyph_count,
+                    index,
+                );
+                checksum +%= @as(u32, @bitCast(@as(f32, @floatFromInt(
+                    strike.ppem,
+                ))));
+            } else {
+                const strike = try bitmap_mod.cblc.strike(
+                    self.data,
+                    bitmapTable(record),
+                    self.glyph_count,
+                    index,
+                );
+                checksum +%= @as(u32, @bitCast(@as(f32, @floatFromInt(
+                    strike.ppem,
+                ))));
+            }
+        }
+        return .{ .source = source, .strike_count = count, .checksum = checksum };
+    }
+
     pub fn bestBitmapStrikePpem(self: *const Font, size_px: f32) FontError!?u16 {
         try bitmap_mod.validateRequestSize(size_px);
         var best_ppem: ?u16 = null;
@@ -6718,6 +6857,8 @@ pub const immutable_face_backend = struct {
     pub const colorPalettes = Font.colorPalettesForImmutableFace;
     pub const paletteColors = Font.paletteColorsForImmutableFace;
     pub const paletteSummary = Font.paletteSummaryForImmutableFace;
+    pub const bitmapStrikes = Font.bitmapStrikesForImmutableFace;
+    pub const bitmapStrikeSummary = Font.bitmapStrikeSummaryForImmutableFace;
     pub const horizontalHeaderInfo = struct {
         fn read(font: *const Font) FontError!MetricHeaderInfo {
             const hhea = font.hhea orelse return error.MissingTable;

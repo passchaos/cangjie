@@ -45,6 +45,7 @@ Resolved post/CFF/synthesized glyph names use
 Repeated default-instance classification uses `attributes 0 ITERATIONS SAMPLES`.
 Axis and named-instance enumeration uses `variations 0 ITERATIONS SAMPLES`.
 Color-palette enumeration uses `palettes 0 ITERATIONS SAMPLES`.
+Bitmap-strike enumeration uses `strikes 0 ITERATIONS SAMPLES`.
 The matching fixtures can be generated in the current directory with
 `zig build glyph-name-fixtures`; it writes `post.ttf`, `cff.otf`, and
 `synthesized.ttf`, each with the comparable glyph at id 1, plus complete
@@ -52,3 +53,4 @@ The matching fixtures can be generated in the current directory with
 Fontations reference tables, plus a complete two-axis/two-instance
 `variations.ttf` differential fixture.
 The generator also writes `palettes.ttf` for CPAL collection parity.
+It writes `strikes.ttf` for embedded bitmap collection parity as well.

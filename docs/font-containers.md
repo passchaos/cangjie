@@ -277,3 +277,13 @@ Cangjie/Skrifa/Skrifa/Cangjie medians over one million reads were
 owned CPAL APIs retain post-parse checksum/name-reference validation, while
 the immutable Face view reuses structural parse proof. This is narrow CPAL
 metadata evidence, not an overall Fontations performance claim.
+
+The Face color view now exposes Skrifa-equivalent embedded bitmap strike
+collections as well, using the same `sbix → CBDT → EBDT` source priority. A
+non-allocating summary covers format, strike count, and each strike's ppem; on
+the retained CBDT fixture both engines produce `0000000041800002`. Fixed-CPU-30
+Cangjie/Skrifa/Skrifa/Cangjie medians over one million reads were
+`13.60/270.89/229.46/26.60 ns`. Owned strike enumeration is also available;
+low-level bitmap APIs retain complete post-parse location/data validation,
+while immutable Face reads reuse the parse proof. This is narrow strike
+metadata evidence, not an overall Fontations performance claim.

@@ -74,6 +74,34 @@ test "CBLC public bitmap APIs revalidate borrowed CBDT payloads" {
     );
 }
 
+test "immutable Face enumerates and summarizes bitmap strikes" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCbdtBgraTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try @import("../../face/root.zig").Face.parse(allocator, bytes);
+    defer face.deinit();
+
+    const strikes = try face.color().bitmapStrikes(allocator);
+    defer allocator.free(strikes);
+    try std.testing.expectEqual(@as(usize, 1), strikes.len);
+    try std.testing.expectEqual(font_mod.BitmapStrikeSource.cblc_cbdt, strikes[0].source);
+    try std.testing.expectEqual(@as(u16, 16), strikes[0].ppem);
+    const summary = try face.color().bitmapStrikeSummary();
+    try std.testing.expectEqual(@as(usize, 1), summary.strike_count);
+    try std.testing.expectEqual(@as(u64, 0x41800002), summary.checksum);
+
+    const cbdt_offset = try sfnt_fixture.tableOffset(bytes, "CBDT");
+    sfnt_fixture.writeU32(bytes, cbdt_offset + 9, 0xffff_ffff);
+    try std.testing.expectError(
+        error.BadSfnt,
+        face.implementation.bitmapStrikes(allocator),
+    );
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        (try face.color().bitmapStrikeSummary()).strike_count,
+    );
+}
+
 test "CBDT embedded PNG payloads require a valid PNG datastream" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildCbdtPngTtf(allocator);

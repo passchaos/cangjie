@@ -1371,6 +1371,22 @@ therefore remains about `30.5%` slower than Parley on this Arabic spacing row
 while retaining about a `1.47x` Latin lead; this narrows but does not close the
 active paragraph-performance gap.
 
+Styled intrinsic sizing and final line selection previously decoded the same
+text into grapheme clusters and UAX #14 opportunities independently. The
+intrinsic pass now lends its width-independent analysis to reflow, which still
+applies the paragraph and attributed-range wrapping policy before selecting
+lines. On the fixed-CPU-30 Arabic spacing row, `perf stat -r 5` reduced retired
+instructions from `1.114B` to `1.059B` and branches from `187.7M` to `179.8M`
+per 1,000 layouts; cycles fell from `398.9M` to `350.1M`, although wall-clock
+samples remained frequency-sensitive. An additional 2,000-iteration
+Cangjie-candidate/base/base/candidate matrix measured `306.04/251.21 µs` for
+the shared analysis and `324.33/366.48 µs` before it, with checksum
+`fb80f404e4d69aff`, 144 glyphs, and six lines unchanged. The Latin spacing
+control improved from `116.56/115.22 µs` to `100.53/106.45 µs`, preserving
+checksum `024ab925eca26b11`, 105 glyphs, and five lines. A focused regression
+also exercises shared analysis under `break-all` plus `anywhere` emergency
+wrapping so policy tailoring cannot be bypassed.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

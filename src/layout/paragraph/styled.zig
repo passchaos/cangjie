@@ -324,8 +324,13 @@ const Driver = struct {
                 self.cascade.fonts[0],
                 self.default_font_size,
             ),
-            null,
-            null,
+            // Intrinsic widths and line selection consume the same
+            // width-independent UAX #29/#14 analysis. Passing it through
+            // avoids decoding the paragraph and rebuilding opportunities a
+            // second time; reflow still tailors this neutral base for any
+            // paragraph- or span-level wrapping policy below.
+            intrinsic_graphemes,
+            intrinsic_breaks,
             self.options.word_break_dictionary,
             self.options.hyphenation.dictionary,
             recipe,

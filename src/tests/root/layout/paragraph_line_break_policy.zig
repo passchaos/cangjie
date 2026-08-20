@@ -392,6 +392,50 @@ test "styled wrapping overrides merge with paragraph policy ranges" {
     try std.testing.expectEqual(@as(usize, 5), layout.lines[0].byte_len);
 }
 
+test "styled layout shares intrinsic analysis with emergency wrapping" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    var styled = StyledParagraphBuffer.init(allocator);
+    defer styled.deinit();
+    const text = "AAAA AAA";
+    const spans = [_]StyledParagraphSpan{.{
+        .byte_start = 0,
+        .byte_len = text.len,
+        .style_index = 3,
+        .font_size = 20,
+    }};
+
+    const layout = try TextShaper.layoutStyledParagraphUtf8(
+        FontCascade.init(&.{&font}),
+        &buffer,
+        &styled,
+        text,
+        20,
+        &spans,
+        .{
+            .max_width = 17,
+            .word_break = .break_all,
+            .overflow_wrap = .anywhere,
+        },
+    );
+
+    try std.testing.expect(layout.lines.len > 1);
+    try std.testing.expectEqual(layout.glyphs.len, styled.glyphMetadata().len);
+    for (styled.glyphMetadata()) |metadata| {
+        try std.testing.expectEqual(@as(u32, 3), metadata.style_index);
+    }
+    const widths = styled.contentWidths().?;
+    try std.testing.expect(widths.min < widths.max);
+}
+
 test "line-break policy ranges reject overlap and invalid UTF-8 boundaries" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildLastResortCmapTtfWithKern(

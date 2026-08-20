@@ -157,6 +157,14 @@ text. Roboto U+0041 fell from `271.29/270.28 ns` on the pre-sidecar binary to
 ns` versus Skrifa at `36.29/36.38 ns`. Supplementary format-12, metrics, and
 outline controls remain on their separate proven paths.
 
+Repeated bitmap strike selection is covered as well. On the generated 2x1
+premultiplied-BGRA CBDT fixture, Skrifa measured `170.96/260.50 ns`; Cangjie
+initially measured `370.15/278.11 ns` because its public color view repeated
+whole-table checksums and CBLC/CBDT structural validation. The immutable Face
+view now reuses the parse proof while the low-level mutation-aware methods keep
+their defensive checks. Post-fix Cangjie measured `106.51/134.83 ns`, with the
+same 8-byte `9703b39ed959628c` payload contract and existing bitmap tests.
+
 `docs/fontations-coverage.json` maps every public top-level table family in
 Fontations `read-fonts` 0.42.2, plus eight grouped Skrifa 0.45.2 capability
 families covering `MetadataProvider` and embedded TrueType hinting, to a

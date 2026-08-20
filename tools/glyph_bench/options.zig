@@ -26,6 +26,7 @@ pub const Engine = enum {
 pub const Mode = enum {
     charmap,
     metrics,
+    bitmap,
     outline,
     outline_session,
     raster,
@@ -35,6 +36,7 @@ pub const Mode = enum {
     pub fn fromName(name: []const u8) ?Mode {
         if (std.mem.eql(u8, name, "charmap")) return .charmap;
         if (std.mem.eql(u8, name, "metrics")) return .metrics;
+        if (std.mem.eql(u8, name, "bitmap")) return .bitmap;
         if (std.mem.eql(u8, name, "outline")) return .outline;
         if (std.mem.eql(u8, name, "outline-session")) return .outline_session;
         if (std.mem.eql(u8, name, "raster")) return .raster;
@@ -47,6 +49,7 @@ pub const Mode = enum {
         return switch (self) {
             .charmap => "charmap",
             .metrics => "metrics",
+            .bitmap => "bitmap",
             .outline => "outline",
             .outline_session => "outline-session",
             .raster => "raster",
@@ -60,11 +63,13 @@ pub const BuiltinFont = enum {
     minimal,
     gvar_compound,
     cff2_variation,
+    cbdt_bgra,
 
     pub fn fromName(name: []const u8) ?BuiltinFont {
         if (std.mem.eql(u8, name, "minimal")) return .minimal;
         if (std.mem.eql(u8, name, "gvar-compound")) return .gvar_compound;
         if (std.mem.eql(u8, name, "cff2-variation")) return .cff2_variation;
+        if (std.mem.eql(u8, name, "cbdt-bgra")) return .cbdt_bgra;
         return null;
     }
 
@@ -73,6 +78,7 @@ pub const BuiltinFont = enum {
             .minimal => "builtin:minimal",
             .gvar_compound => "builtin:gvar-compound",
             .cff2_variation => "builtin:cff2-variation",
+            .cbdt_bgra => "builtin:cbdt-bgra",
         };
     }
 };

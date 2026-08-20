@@ -90,7 +90,11 @@ pub const View = struct {
         glyph_id: glyph_mod.GlyphId,
         size_px: f32,
     ) font_mod.FontError!?font_mod.BitmapGlyphData {
-        return self.implementation.bitmapGlyphData(glyph_id, size_px);
+        return font_mod.immutable_face_backend.bitmapGlyphData(
+            self.implementation,
+            glyph_id,
+            size_px,
+        );
     }
 
     pub fn compoundBitmapAlloc(

@@ -24,11 +24,37 @@ fn main() {
     let font = FontRef::new(&bytes).unwrap_or_else(|_| fail("cannot parse font"));
     match mode.as_str() {
         "bitmap" => bitmap(&font, glyph_id, &mut args),
+        "bitmap-bench" => bitmap_bench(&font, glyph_id, &mut args),
         "outline" => outline(&font, glyph_id, &mut args),
         "metrics" => metrics(&font, glyph_id, &mut args),
         "charmap" => charmap(&font, glyph_id, &mut args),
-        _ => fail("mode must be bitmap, outline, metrics, or charmap"),
+        _ => fail("unsupported mode"),
     }
+}
+
+fn bitmap_bench(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {
+    let size: f32 = args
+        .next()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| fail("invalid size"));
+    let (iterations, samples) = repeated_args(args);
+    let strikes = font.bitmap_strikes();
+    let gid = GlyphId::new(glyph_id);
+    let mut values = Vec::with_capacity(samples);
+    let mut checksum = 0_u64;
+    for _ in 0..samples {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let glyph = strikes
+                .glyph_for_size(Size::new(size), gid)
+                .unwrap_or_else(|| fail("missing bitmap glyph"));
+            checksum = checksum.wrapping_add(u64::from(glyph.width) + u64::from(glyph.height));
+            black_box(glyph.data);
+        }
+        values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
+    }
+    values.sort_by(f64::total_cmp);
+    println!("engine=skrifa\tmode=bitmap-bench\titerations={iterations}\tsamples={samples}\tmedian_ns_per_iter={:.3}\tchecksum={checksum:016x}", values[values.len()/2]);
 }
 
 fn repeated_args(args: &mut impl Iterator<Item = String>) -> (usize, usize) {

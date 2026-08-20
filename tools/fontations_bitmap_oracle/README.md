@@ -36,3 +36,5 @@ cargo run --release --manifest-path tools/fontations_bitmap_oracle/Cargo.toml --
 cargo run --release --manifest-path tools/fontations_bitmap_oracle/Cargo.toml -- \
   /path/to/font.ttf charmap CODEPOINT 1000000 31
 ```
+
+Repeated strike selection uses `bitmap-bench GLYPH_ID SIZE ITERATIONS SAMPLES`.

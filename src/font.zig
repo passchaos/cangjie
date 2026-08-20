@@ -5223,6 +5223,38 @@ pub const Font = struct {
         return null;
     }
 
+    fn bitmapGlyphDataForImmutableFace(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+        size_px: f32,
+    ) FontError!?BitmapGlyphData {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try bitmap_mod.validateRequestSize(size_px);
+        if (self.cblc != null and self.cbdt != null) {
+            return bitmap_mod.cblc.glyphData(
+                self.data,
+                bitmapTable(self.cblc.?),
+                bitmapTable(self.cbdt.?),
+                self.glyph_count,
+                glyph_id,
+                size_px,
+                .cblc_cbdt,
+            );
+        }
+        if (self.eblc != null and self.ebdt != null) {
+            return bitmap_mod.cblc.glyphData(
+                self.data,
+                bitmapTable(self.eblc.?),
+                bitmapTable(self.ebdt.?),
+                self.glyph_count,
+                glyph_id,
+                size_px,
+                .eblc_ebdt,
+            );
+        }
+        return self.bitmapGlyphData(glyph_id, size_px);
+    }
+
     /// Flatten a compound EBDT/CBDT glyph from the preferred strike.
     ///
     /// Formats 8/9 reference other glyphs in the same strike and therefore
@@ -6292,6 +6324,7 @@ pub const immutable_face_backend = struct {
             return font.horizontalMetricsForReadMode(glyph_id, .parsed);
         }
     }.read;
+    pub const bitmapGlyphData = Font.bitmapGlyphDataForImmutableFace;
 };
 
 fn validateCff2Table(data: []const u8, cff2: TableRecord) FontError!void {

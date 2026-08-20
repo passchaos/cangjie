@@ -13,6 +13,7 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
         .minimal => try cangjie.testing.test_font.buildMinimalTtf(allocator),
         .gvar_compound => try cangjie.testing.test_font.buildGvarCompoundTtf(allocator),
         .cff2_variation => try cangjie.testing.test_font.buildCff2VariationOtf(allocator),
+        .cbdt_bgra => try cangjie.testing.test_font.buildCbdtBgraTtf(allocator),
     };
 }
 
@@ -107,6 +108,7 @@ fn runPreparedDirtyIterations(rasterizer: *cangjie.render.Rasterizer, target: *c
 
 fn resolveGlyphId(font: *const cangjie.font.Face, options: options_mod.Options) !cangjie.font.GlyphId {
     if (options.glyph_id) |glyph_id| return glyph_id;
+    if (options.builtin_font == .cbdt_bgra) return 1;
     if (options.font_path == null and options.builtin_font == .gvar_compound) return 2;
     return try font.glyphs().index(options.codepoint);
 }
@@ -115,11 +117,30 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, g
     switch (options.mode) {
         .charmap => try runCharmapIterations(font, options, iterations, checksum),
         .metrics => try runMetricsIterations(font, glyph_id, iterations, checksum),
+        .bitmap => try runBitmapIterations(font, glyph_id, options, iterations, checksum),
         .outline => try runOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
         .outline_session => try runOutlineSessionIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster => try runRasterIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_reuse => try runRasterReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_prepared => try runRasterPreparedIterations(allocator, font, glyph_id, options, iterations, checksum),
+    }
+}
+
+fn runBitmapIterations(
+    font: *const cangjie.font.Face,
+    glyph_id: cangjie.font.GlyphId,
+    options: options_mod.Options,
+    iterations: usize,
+    checksum: *u64,
+) !void {
+    for (0..iterations) |_| {
+        const data = (try font.color().bitmapData(
+            glyph_id,
+            options.font_size,
+        )) orelse return error.InvalidArguments;
+        checksum.* +%= switch (data) {
+            inline else => |glyph| glyph.width + glyph.height + glyph.data.len,
+        };
     }
 }
 

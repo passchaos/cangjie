@@ -80,7 +80,7 @@ pub const Face = struct {
 
     /// Return classification attributes for the default font instance.
     pub fn attributes(self: *const Face) font_mod.FontError!Attributes {
-        return attributes_mod.read(&self.implementation);
+        return attributes_mod.readImmutableFace(&self.implementation);
     }
 
     pub fn glyphs(self: *const Face) Glyphs {

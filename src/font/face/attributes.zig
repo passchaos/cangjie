@@ -82,22 +82,62 @@ pub const Attributes = struct {
 /// inspection methods so borrowed source mutations still fail atomically.
 pub fn read(font: *const font_mod.Font) font_mod.FontError!Attributes {
     if (try font.os2Info()) |os2| {
-        const style: Style = if ((os2.selection & 0x0001) != 0)
-            .italic
-        else if ((os2.selection & 0x0200) != 0)
-            .{ .oblique = if (try font.postInfo()) |post| post.italic_angle else null }
+        const angle = if ((os2.selection & 0x0200) != 0)
+            if (try font.postInfo()) |post| post.italic_angle else null
         else
-            .normal;
-        return .{
-            .stretch = Stretch.fromWidthClass(os2.width_class),
-            .style = style,
-            .weight = .{ .value = @floatFromInt(os2.weight_class) },
-        };
+            null;
+        return attributesFromOs2(
+            os2.weight_class,
+            os2.width_class,
+            os2.selection,
+            angle,
+        );
     }
+    return attributesFromMacStyle((try font.headInfo()).mac_style);
+}
 
-    const head = try font.headInfo();
+pub fn readImmutableFace(
+    font: *const font_mod.Font,
+) font_mod.FontError!Attributes {
+    // Attributes need only three OS/2 style fields and the optional post
+    // angle. Parse-time validation has already proved both tables for the
+    // immutable Face contract, so avoid materializing their much larger
+    // public inspection records on every classification lookup.
+    if (try font_mod.immutable_face_backend.os2Style(font)) |os2| {
+        const angle = if (os2.oblique)
+            try font_mod.immutable_face_backend.postItalicAngle(font)
+        else
+            null;
+        const selection = @as(u16, @intFromBool(os2.italic)) |
+            (@as(u16, @intFromBool(os2.oblique)) << 9);
+        return attributesFromOs2(os2.weight, os2.width, selection, angle);
+    }
+    return attributesFromMacStyle(
+        try font_mod.immutable_face_backend.headMacStyle(font),
+    );
+}
+
+fn attributesFromOs2(
+    weight: u16,
+    width: u16,
+    selection: u16,
+    oblique_angle: ?f32,
+) Attributes {
     return .{
-        .style = if ((head.mac_style & 0x0002) != 0) .italic else .normal,
-        .weight = if ((head.mac_style & 0x0001) != 0) .bold else .normal,
+        .stretch = Stretch.fromWidthClass(width),
+        .style = if ((selection & 0x0001) != 0)
+            .italic
+        else if ((selection & 0x0200) != 0)
+            .{ .oblique = oblique_angle }
+        else
+            .normal,
+        .weight = .{ .value = @floatFromInt(weight) },
+    };
+}
+
+fn attributesFromMacStyle(mac_style: u16) Attributes {
+    return .{
+        .style = if ((mac_style & 0x0002) != 0) .italic else .normal,
+        .weight = if ((mac_style & 0x0001) != 0) .bold else .normal,
     };
 }

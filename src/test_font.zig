@@ -637,6 +637,62 @@ pub fn buildTtfWithGlobalMetricValues(
     });
 }
 
+/// Write complete SFNT wrappers around the exact Fontations attribute tables.
+pub fn writeAttributeFixtures(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    directory: std.Io.Dir,
+) !void {
+    const fallback_upstream = @embedFile("tests/data/fontations_cmap12_font1.ttf");
+    const fallback_head = try allocator.dupe(
+        u8,
+        try embeddedSfntTable(fallback_upstream, "head"),
+    );
+    defer allocator.free(fallback_head);
+    @memset(fallback_head[8..12], 0);
+    const fallback = try buildTtfWithMetadataTables(allocator, &.{
+        .{ .tag = "head".*, .data = fallback_head },
+    });
+    defer allocator.free(fallback);
+    try directory.writeFile(io, .{
+        .sub_path = "attributes-head.ttf",
+        .data = fallback,
+    });
+
+    const os2_upstream = @embedFile("tests/data/fontations_cmap14_font1.ttf");
+    const os2_head = try allocator.dupe(
+        u8,
+        try embeddedSfntTable(os2_upstream, "head"),
+    );
+    defer allocator.free(os2_head);
+    @memset(os2_head[8..12], 0);
+    const os2 = try buildTtfWithMetadataTables(allocator, &.{
+        .{ .tag = "head".*, .data = os2_head },
+        .{ .tag = "OS/2".*, .data = try embeddedSfntTable(os2_upstream, "OS/2") },
+        .{ .tag = "post".*, .data = try embeddedSfntTable(os2_upstream, "post") },
+    });
+    defer allocator.free(os2);
+    try directory.writeFile(io, .{
+        .sub_path = "attributes-os2.ttf",
+        .data = os2,
+    });
+}
+
+fn embeddedSfntTable(bytes: []const u8, tag: *const [4]u8) ![]const u8 {
+    if (bytes.len < 12) return error.BadSfnt;
+    const table_count = std.mem.readInt(u16, bytes[4..6], .big);
+    for (0..table_count) |index| {
+        const record = 12 + index * 16;
+        if (record > bytes.len or bytes.len - record < 16) return error.BadSfnt;
+        if (!std.mem.eql(u8, bytes[record..][0..4], tag)) continue;
+        const offset: usize = std.mem.readInt(u32, bytes[record + 8 ..][0..4], .big);
+        const length: usize = std.mem.readInt(u32, bytes[record + 12 ..][0..4], .big);
+        if (offset > bytes.len or length > bytes.len - offset) return error.BadSfnt;
+        return bytes[offset .. offset + length];
+    }
+    return error.MissingTable;
+}
+
 pub const MetadataTable = struct {
     tag: [4]u8,
     data: []const u8,

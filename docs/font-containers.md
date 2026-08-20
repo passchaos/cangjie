@@ -242,3 +242,16 @@ samples) measured Cangjie at `45.19/45.59 ns` versus Skrifa at
 `161.07/149.64 ns` for CFF; and `49.43/34.27 ns` versus
 `107.31/107.34 ns` for synthesis. These are narrow repeated-name lookup
 results, not an overall Fontations performance claim.
+
+Skrifa's default-instance `attributes()` boundary is covered independently as
+well. Complete wrappers around its own cmap12 head-fallback and cmap14
+OS/2+post fixtures produce identical classification fields and per-read sums:
+normal/italic/700 with `0000000083af0001`, and
+0.875/oblique(-14)/800 with `0000000145080002`. The original mutation-aware
+Face path measured `141.24/142.49 ns` for head fallback and
+`250.30/188.00 ns` for OS/2 versus Skrifa at `65.83` and `67.48 ns`. Reusing
+the immutable Face parse proof and decoding only the required style fields
+reduces Cangjie to `8.57/11.80 ns` and `20.69/18.52 ns`, respectively, versus
+fresh Skrifa controls at `67.78` and `104.61 ns`. Low-level attribute reads still detect
+post-parse checksum mutations. These are narrow repeated classification
+lookups, not an overall Fontations performance claim.

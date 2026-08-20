@@ -7,4 +7,9 @@ pub fn main(init: std.process.Init) !void {
         init.gpa,
         std.Io.Dir.cwd(),
     );
+    try test_font.writeAttributeFixtures(
+        init.io,
+        init.gpa,
+        std.Io.Dir.cwd(),
+    );
 }

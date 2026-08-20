@@ -6503,6 +6503,37 @@ pub const immutable_face_backend = struct {
             return head_mod.info(font.data, font.head);
         }
     }.read;
+    pub const headMacStyle = struct {
+        fn read(font: *const Font) FontError!u16 {
+            return bin.readU16At(font.data, font.head.offset + 44);
+        }
+    }.read;
+    pub const os2Style = struct {
+        const Value = struct {
+            weight: u16,
+            width: u16,
+            italic: bool,
+            oblique: bool,
+        };
+
+        fn read(font: *const Font) FontError!?Value {
+            const os2 = font.os2 orelse return null;
+            const selection = try bin.readU16At(font.data, os2.offset + 62);
+            return .{
+                .weight = try bin.readU16At(font.data, os2.offset + 4),
+                .width = try bin.readU16At(font.data, os2.offset + 6),
+                .italic = (selection & 0x0001) != 0,
+                .oblique = (selection & 0x0200) != 0,
+            };
+        }
+    }.read;
+    pub const postItalicAngle = struct {
+        fn read(font: *const Font) FontError!?f32 {
+            const post = font.post orelse return null;
+            const raw = try bin.readI32At(font.data, post.offset + 4);
+            return @as(f32, @floatFromInt(raw)) / 65536.0;
+        }
+    }.read;
     pub const horizontalHeaderInfo = struct {
         fn read(font: *const Font) FontError!MetricHeaderInfo {
             const hhea = font.hhea orelse return error.MissingTable;

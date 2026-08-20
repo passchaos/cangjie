@@ -31,9 +31,45 @@ fn main() {
         "global-metrics" => global_metrics(&font, &mut args),
         "family-name" => family_name(&font, &mut args),
         "glyph-name" => glyph_name(&font, glyph_id, &mut args),
+        "attributes" => attributes(&font, &mut args),
         "charmap" => charmap(&font, glyph_id, &mut args),
         _ => fail("unsupported mode"),
     }
+}
+
+fn attributes(font: &FontRef<'_>, args: &mut impl Iterator<Item = String>) {
+    let (iterations, samples) = repeated_args(args);
+    let mut values = Vec::with_capacity(samples);
+    let mut checksum = 0_u64;
+    for _ in 0..samples {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let value = font.attributes();
+            checksum = checksum
+                .wrapping_add(u64::from(value.stretch.ratio().to_bits()))
+                .wrapping_add(u64::from(value.weight.value().to_bits()))
+                .wrapping_add(match value.style {
+                    skrifa::attribute::Style::Normal => 0,
+                    skrifa::attribute::Style::Italic => 1,
+                    skrifa::attribute::Style::Oblique(angle) => 2_u64.wrapping_add(
+                        angle
+                            .map(|item| u64::from(item.to_bits()))
+                            .unwrap_or_default(),
+                    ),
+                });
+            black_box(value);
+        }
+        values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
+    }
+    values.sort_by(f64::total_cmp);
+    let value = font.attributes();
+    println!(
+        "engine=skrifa\tmode=attributes\titerations={iterations}\tsamples={samples}\tmedian_ns_per_iter={:.3}\tstretch={}\tstyle={:?}\tweight={}\tchecksum={checksum:016x}",
+        values[values.len() / 2],
+        value.stretch.ratio(),
+        value.style,
+        value.weight.value(),
+    );
 }
 
 fn glyph_name(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {

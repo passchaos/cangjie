@@ -29,6 +29,7 @@ pub const Mode = enum {
     global_metrics,
     family_name,
     glyph_name,
+    attributes,
     bitmap,
     outline,
     outline_session,
@@ -42,6 +43,7 @@ pub const Mode = enum {
         if (std.mem.eql(u8, name, "global-metrics")) return .global_metrics;
         if (std.mem.eql(u8, name, "family-name")) return .family_name;
         if (std.mem.eql(u8, name, "glyph-name")) return .glyph_name;
+        if (std.mem.eql(u8, name, "attributes")) return .attributes;
         if (std.mem.eql(u8, name, "bitmap")) return .bitmap;
         if (std.mem.eql(u8, name, "outline")) return .outline;
         if (std.mem.eql(u8, name, "outline-session")) return .outline_session;
@@ -58,6 +60,7 @@ pub const Mode = enum {
             .global_metrics => "global-metrics",
             .family_name => "family-name",
             .glyph_name => "glyph-name",
+            .attributes => "attributes",
             .bitmap => "bitmap",
             .outline => "outline",
             .outline_session => "outline-session",
@@ -206,6 +209,7 @@ pub fn parse(args: []const []const u8) !Options {
     if ((options.engine == .freetype or options.engine == .compare_freetype) and
         (options.mode == .outline_session or
             options.mode == .glyph_name or
+            options.mode == .attributes or
             options.mode == .raster_prepared)) return error.InvalidArguments;
     return options;
 }
@@ -245,11 +249,11 @@ fn parseVariationCoords(options: *Options, text: []const u8) !void {
 pub fn printUsage(args: []const []const u8) void {
     const exe = if (args.len > 0) args[0] else "glyph-bench";
     std.debug.print(
-        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode charmap|metrics|global-metrics|family-name|glyph-name|bitmap|outline|outline-session|raster|raster-reuse|raster-prepared] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation|cbdt-bgra] [--glyph-id n|--codepoint U+XXXX]
+        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode charmap|metrics|global-metrics|family-name|glyph-name|attributes|bitmap|outline|outline-session|raster|raster-reuse|raster-prepared] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation|cbdt-bgra] [--glyph-id n|--codepoint U+XXXX]
         \\
         \\options:
         \\  --engine NAME        cangjie, freetype, or compare-freetype; default cangjie
-        \\  --mode NAME          charmap, metrics, global-metrics, family-name, glyph-name, bitmap, outline, outline-session, raster, raster-reuse, or raster-prepared; default outline
+        \\  --mode NAME          charmap, metrics, global-metrics, family-name, glyph-name, attributes, bitmap, outline, outline-session, raster, raster-reuse, or raster-prepared; default outline
         \\  --format text|tsv    output format, default text
         \\  --font PATH          use a real font
         \\  --builtin NAME       use an in-repo fixture, default gvar-compound
@@ -304,4 +308,9 @@ test "parse accepts global metrics benchmark mode" {
 test "parse accepts glyph name benchmark mode" {
     const options = try parse(&.{ "glyph-bench", "--mode", "glyph-name" });
     try std.testing.expectEqual(Mode.glyph_name, options.mode);
+}
+
+test "parse accepts attributes benchmark mode" {
+    const options = try parse(&.{ "glyph-bench", "--mode", "attributes" });
+    try std.testing.expectEqual(Mode.attributes, options.mode);
 }

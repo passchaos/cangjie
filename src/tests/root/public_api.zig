@@ -669,6 +669,22 @@ test "face attributes match Skrifa's Fontations reference fixtures" {
         .oblique => |angle| try std.testing.expect(angle == null),
         else => return error.TestExpectedOblique,
     }
+
+    // `Face` explicitly promises immutable source bytes and reuses its parse
+    // proof; the low-level metadata path remains mutation-aware.
+    const os2_offset = try sfntTableOffset(os2_bytes, "OS/2");
+    os2_bytes[os2_offset + 30] +%= 1;
+    try std.testing.expectError(
+        error.BadSfnt,
+        @import("../../font/face/attributes.zig").read(
+            &os2.implementation,
+        ),
+    );
+    const immutable_attributes = try os2.attributes();
+    try std.testing.expectEqual(
+        cangjie.font.Stretch.semi_condensed,
+        immutable_attributes.stretch,
+    );
 }
 
 fn sfntTable(bytes: []const u8, tag: []const u8) ![]const u8 {

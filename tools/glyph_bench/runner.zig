@@ -173,12 +173,33 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, g
         .global_metrics => try runGlobalMetricsIterations(font, iterations, checksum),
         .family_name => try runFamilyNameIterations(allocator, font, iterations, checksum),
         .glyph_name => try runGlyphNameIterations(font, glyph_id, iterations, checksum),
+        .attributes => try runAttributesIterations(font, iterations, checksum),
         .bitmap => try runBitmapIterations(font, glyph_id, options, iterations, checksum),
         .outline => try runOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
         .outline_session => try runOutlineSessionIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster => try runRasterIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_reuse => try runRasterReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_prepared => try runRasterPreparedIterations(allocator, font, glyph_id, options, iterations, checksum),
+    }
+}
+
+fn runAttributesIterations(
+    font: *const cangjie.font.Face,
+    iterations: usize,
+    checksum: *u64,
+) !void {
+    for (0..iterations) |_| {
+        const value = try font.attributes();
+        checksum.* +%= @as(u32, @bitCast(value.stretch.ratio()));
+        checksum.* +%= @as(u32, @bitCast(value.weight.value));
+        checksum.* +%= switch (value.style) {
+            .normal => 0,
+            .italic => 1,
+            .oblique => |angle| 2 +% if (angle) |item|
+                @as(u32, @bitCast(item))
+            else
+                0,
+        };
     }
 }
 

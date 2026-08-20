@@ -61,7 +61,12 @@ fixture under `tests/data/use/`; it defaults to `~/Work` and accepts
 `shaping-corpus-parity-smoke` is also available for the retained Roboto
 `en-words`/`en-thelittleprince`, Amiri `fa-words`/`fa-thelittleprince`, and
 SourceSerifVariable `en-words`/`en-thelittleprince` corpus gates against both
-HarfBuzz and HarfRust. It also includes a Bengali HarfBuzz in-house shaping
+HarfBuzz and HarfRust. NotoNastaliqUrdu now retains the same two Persian
+corpora as cross-font Urdu/Nastaliq controls: `fa-words` produces 83,486
+glyphs over 10,000 lines with checksum `fc28919889b8942b`, while
+`fa-thelittleprince` produces 110,143 glyphs over 771 lines with checksum
+`9e460d90b9034d46`; both pass both references. The gate also includes a
+Bengali HarfBuzz in-house shaping
 subset that omits `hhea`/`hmtx` and `glyf`, exercising shape-only font parsing
 with HarfBuzz-compatible fallback advances, plus Arabic modifier-mark ordering
 fixtures with and without CGJ.

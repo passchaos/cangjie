@@ -27,9 +27,81 @@ fn main() {
         "bitmap-bench" => bitmap_bench(&font, glyph_id, &mut args),
         "outline" => outline(&font, glyph_id, &mut args),
         "metrics" => metrics(&font, glyph_id, &mut args),
+        "global-metrics" => global_metrics(&font, &mut args),
         "charmap" => charmap(&font, glyph_id, &mut args),
         _ => fail("unsupported mode"),
     }
+}
+
+fn global_metrics(font: &FontRef<'_>, args: &mut impl Iterator<Item = String>) {
+    let (iterations, samples) = repeated_args(args);
+    let mut values = Vec::with_capacity(samples);
+    let mut checksum = 0_u64;
+    for _ in 0..samples {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let metrics = font.metrics(Size::unscaled(), LocationRef::default());
+            checksum = checksum
+                .wrapping_add(u64::from(metrics.units_per_em))
+                .wrapping_add(u64::from(metrics.glyph_count))
+                .wrapping_add(u64::from(metrics.is_monospace))
+                .wrapping_add(u64::from(metrics.italic_angle.to_bits()))
+                .wrapping_add(u64::from(metrics.ascent.to_bits()))
+                .wrapping_add(u64::from(metrics.descent.to_bits()))
+                .wrapping_add(u64::from(metrics.leading.to_bits()))
+                .wrapping_add(option_bits(metrics.cap_height))
+                .wrapping_add(option_bits(metrics.x_height))
+                .wrapping_add(option_bits(metrics.average_width))
+                .wrapping_add(option_bits(metrics.max_width))
+                .wrapping_add(option_decoration_bits(metrics.underline))
+                .wrapping_add(option_decoration_bits(metrics.strikeout))
+                .wrapping_add(option_bounds_bits(metrics.bounds));
+        }
+        values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
+        black_box(checksum);
+    }
+    values.sort_by(f64::total_cmp);
+    let metrics = font.metrics(Size::unscaled(), LocationRef::default());
+    let bounds = metrics.bounds.unwrap_or_default();
+    println!(
+        "engine=skrifa\tmode=global-metrics\titerations={iterations}\tsamples={samples}\tmedian_ns_per_iter={:.3}\tupem={}\tglyphs={}\tascent={}\tdescent={}\tleading={}\tmonospace={}\titalic={}\tcap={}\txheight={}\taverage={}\tmax={}\tbounds={},{},{},{}\tchecksum={checksum:016x}",
+        values[values.len() / 2],
+        metrics.units_per_em,
+        metrics.glyph_count,
+        metrics.ascent,
+        metrics.descent,
+        metrics.leading,
+        metrics.is_monospace,
+        metrics.italic_angle,
+        metrics.cap_height.unwrap_or_default(),
+        metrics.x_height.unwrap_or_default(),
+        metrics.average_width.unwrap_or_default(),
+        metrics.max_width.unwrap_or_default(),
+        bounds.x_min, bounds.y_min, bounds.x_max, bounds.y_max,
+    );
+}
+
+fn option_bits(value: Option<f32>) -> u64 {
+    value
+        .map(|item| u64::from(item.to_bits()))
+        .unwrap_or_default()
+}
+
+fn option_decoration_bits(value: Option<skrifa::metrics::Decoration>) -> u64 {
+    value
+        .map(|item| u64::from(item.offset.to_bits()) + u64::from(item.thickness.to_bits()))
+        .unwrap_or_default()
+}
+
+fn option_bounds_bits(value: Option<skrifa::metrics::BoundingBox>) -> u64 {
+    value
+        .map(|item| {
+            u64::from(item.x_min.to_bits())
+                + u64::from(item.y_min.to_bits())
+                + u64::from(item.x_max.to_bits())
+                + u64::from(item.y_max.to_bits())
+        })
+        .unwrap_or_default()
 }
 
 fn bitmap_bench(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {

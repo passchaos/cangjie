@@ -26,6 +26,7 @@ pub const Engine = enum {
 pub const Mode = enum {
     charmap,
     metrics,
+    global_metrics,
     bitmap,
     outline,
     outline_session,
@@ -36,6 +37,7 @@ pub const Mode = enum {
     pub fn fromName(name: []const u8) ?Mode {
         if (std.mem.eql(u8, name, "charmap")) return .charmap;
         if (std.mem.eql(u8, name, "metrics")) return .metrics;
+        if (std.mem.eql(u8, name, "global-metrics")) return .global_metrics;
         if (std.mem.eql(u8, name, "bitmap")) return .bitmap;
         if (std.mem.eql(u8, name, "outline")) return .outline;
         if (std.mem.eql(u8, name, "outline-session")) return .outline_session;
@@ -49,6 +51,7 @@ pub const Mode = enum {
         return switch (self) {
             .charmap => "charmap",
             .metrics => "metrics",
+            .global_metrics => "global-metrics",
             .bitmap => "bitmap",
             .outline => "outline",
             .outline_session => "outline-session",
@@ -235,11 +238,11 @@ fn parseVariationCoords(options: *Options, text: []const u8) !void {
 pub fn printUsage(args: []const []const u8) void {
     const exe = if (args.len > 0) args[0] else "glyph-bench";
     std.debug.print(
-        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode outline|outline-session|raster|raster-reuse|raster-prepared] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation] [--glyph-id n|--codepoint U+XXXX]
+        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode charmap|metrics|global-metrics|bitmap|outline|outline-session|raster|raster-reuse|raster-prepared] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation|cbdt-bgra] [--glyph-id n|--codepoint U+XXXX]
         \\
         \\options:
         \\  --engine NAME        cangjie, freetype, or compare-freetype; default cangjie
-        \\  --mode NAME          outline, outline-session, raster, raster-reuse, or raster-prepared; default outline
+        \\  --mode NAME          charmap, metrics, global-metrics, bitmap, outline, outline-session, raster, raster-reuse, or raster-prepared; default outline
         \\  --format text|tsv    output format, default text
         \\  --font PATH          use a real font
         \\  --builtin NAME       use an in-repo fixture, default gvar-compound
@@ -284,4 +287,9 @@ test "parse accepts reused raster dirty rectangle mode" {
     const options = try parse(&.{ "glyph-bench", "--mode", "raster-reuse", "--dirty-rect" });
     try std.testing.expectEqual(Mode.raster_reuse, options.mode);
     try std.testing.expect(options.dirty_rect);
+}
+
+test "parse accepts global metrics benchmark mode" {
+    const options = try parse(&.{ "glyph-bench", "--mode", "global-metrics" });
+    try std.testing.expectEqual(Mode.global_metrics, options.mode);
 }

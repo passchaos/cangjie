@@ -12,7 +12,7 @@ pub const View = struct {
 
     /// Return unscaled design metrics (`null`) or metrics scaled to `size`.
     pub fn global(self: View, size: ?f32) font_mod.FontError!Global {
-        return global_metrics.read(self.implementation, size);
+        return global_metrics.readImmutableFace(self.implementation, size);
     }
 
     pub fn horizontal(

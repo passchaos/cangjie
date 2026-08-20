@@ -170,6 +170,7 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, g
     switch (options.mode) {
         .charmap => try runCharmapIterations(font, options, iterations, checksum),
         .metrics => try runMetricsIterations(font, glyph_id, iterations, checksum),
+        .global_metrics => try runGlobalMetricsIterations(font, iterations, checksum),
         .bitmap => try runBitmapIterations(font, glyph_id, options, iterations, checksum),
         .outline => try runOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
         .outline_session => try runOutlineSessionIterations(allocator, font, glyph_id, options, iterations, checksum),
@@ -177,6 +178,43 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, g
         .raster_reuse => try runRasterReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_prepared => try runRasterPreparedIterations(allocator, font, glyph_id, options, iterations, checksum),
     }
+}
+
+fn runGlobalMetricsIterations(
+    font: *const cangjie.font.Face,
+    iterations: usize,
+    checksum: *u64,
+) !void {
+    for (0..iterations) |_| {
+        const metrics = try font.metrics().global(null);
+        checksum.* +%= metrics.units_per_em;
+        checksum.* +%= metrics.glyph_count;
+        checksum.* +%= @intFromBool(metrics.is_monospace);
+        checksum.* +%= @as(u32, @bitCast(metrics.italic_angle));
+        checksum.* +%= @as(u32, @bitCast(metrics.ascent));
+        checksum.* +%= @as(u32, @bitCast(metrics.descent));
+        checksum.* +%= @as(u32, @bitCast(metrics.leading));
+        checksum.* +%= optionalFloatBits(metrics.cap_height);
+        checksum.* +%= optionalFloatBits(metrics.x_height);
+        checksum.* +%= optionalFloatBits(metrics.average_width);
+        checksum.* +%= optionalFloatBits(metrics.max_width);
+        if (metrics.underline) |value| {
+            checksum.* +%= @as(u32, @bitCast(value.offset));
+            checksum.* +%= @as(u32, @bitCast(value.thickness));
+        }
+        if (metrics.strikeout) |value| {
+            checksum.* +%= @as(u32, @bitCast(value.offset));
+            checksum.* +%= @as(u32, @bitCast(value.thickness));
+        }
+        checksum.* +%= @as(u32, @bitCast(metrics.bounds.x_min));
+        checksum.* +%= @as(u32, @bitCast(metrics.bounds.y_min));
+        checksum.* +%= @as(u32, @bitCast(metrics.bounds.x_max));
+        checksum.* +%= @as(u32, @bitCast(metrics.bounds.y_max));
+    }
+}
+
+fn optionalFloatBits(value: ?f32) u64 {
+    return if (value) |item| @as(u32, @bitCast(item)) else 0;
 }
 
 fn runBitmapIterations(

@@ -6314,6 +6314,41 @@ pub const raster_backend = struct {
 /// borrowed bytes. Keeping this separate from ordinary glyph APIs makes the
 /// skipped post-parse mutation checks visible at every call site.
 pub const immutable_face_backend = struct {
+    pub const headInfo = struct {
+        fn read(font: *const Font) FontError!FontHeaderInfo {
+            return head_mod.info(font.data, font.head);
+        }
+    }.read;
+    pub const horizontalHeaderInfo = struct {
+        fn read(font: *const Font) FontError!MetricHeaderInfo {
+            const hhea = font.hhea orelse return error.MissingTable;
+            return metric_tables.header.read(font.data, hhea);
+        }
+    }.read;
+    pub const os2Info = struct {
+        fn read(font: *const Font) FontError!?Os2Info {
+            const os2 = font.os2 orelse return null;
+            return try os2_mod.info(font.data, os2);
+        }
+    }.read;
+    pub const postInfo = struct {
+        fn read(font: *const Font) FontError!?PostInfo {
+            const post = font.post orelse return null;
+            return try post_mod.info(font.data, post);
+        }
+    }.read;
+    pub const decorationMetrics = struct {
+        fn read(font: *const Font) FontError!FontDecorationMetrics {
+            return presentation_metrics.decoration(
+                font.data,
+                font.post,
+                font.os2,
+                font.units_per_em,
+                font.ascender,
+                font.descender,
+            );
+        }
+    }.read;
     pub const glyphBounds = Font.glyphBoundsForImmutableFace;
     pub const glyphIndex = Font.glyphIndexForImmutableFace;
     pub const horizontalMetrics = struct {

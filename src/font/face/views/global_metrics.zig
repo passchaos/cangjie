@@ -24,14 +24,36 @@ pub const Metrics = struct {
 };
 
 pub fn read(font: *const font_mod.Font, size: ?f32) font_mod.FontError!Metrics {
-    const head = try font.headInfo();
+    return readForMode(font, size, .revalidate);
+}
+
+pub fn readImmutableFace(font: *const font_mod.Font, size: ?f32) font_mod.FontError!Metrics {
+    return readForMode(font, size, .parsed);
+}
+
+const ReadMode = enum { revalidate, parsed };
+
+fn readForMode(font: *const font_mod.Font, size: ?f32, mode: ReadMode) font_mod.FontError!Metrics {
+    const head = if (mode == .parsed)
+        try font_mod.immutable_face_backend.headInfo(font)
+    else
+        try font.headInfo();
     const scale = if (size) |value| blk: {
         if (!std.math.isFinite(value) or value < 0) return error.InvalidMetrics;
         break :blk value / @as(f32, @floatFromInt(head.units_per_em));
     } else 1.0;
-    const hhea = try font.horizontalHeaderInfo();
-    const os2 = try font.os2Info();
-    const post = try font.postInfo();
+    const hhea = if (mode == .parsed)
+        try font_mod.immutable_face_backend.horizontalHeaderInfo(font)
+    else
+        try font.horizontalHeaderInfo();
+    const os2 = if (mode == .parsed)
+        try font_mod.immutable_face_backend.os2Info(font)
+    else
+        try font.os2Info();
+    const post = if (mode == .parsed)
+        try font_mod.immutable_face_backend.postInfo(font)
+    else
+        try font.postInfo();
     var ascent = hhea.ascender;
     var descent = hhea.descender;
     var leading = hhea.line_gap;
@@ -52,7 +74,10 @@ pub fn read(font: *const font_mod.Font, size: ?f32) font_mod.FontError!Metrics {
             }
         }
     }
-    const decorations = try font.decorationMetrics();
+    const decorations = if (mode == .parsed)
+        try font_mod.immutable_face_backend.decorationMetrics(font)
+    else
+        try font.decorationMetrics();
     return .{
         .units_per_em = head.units_per_em,
         .glyph_count = font.glyph_count,

@@ -165,6 +165,17 @@ view now reuses the parse proof while the low-level mutation-aware methods keep
 their defensive checks. Post-fix Cangjie measured `106.51/134.83 ns`, with the
 same 8-byte `9703b39ed959628c` payload contract and existing bitmap tests.
 
+Skrifa's high-level global `Metrics` boundary is now covered independently of
+the table-family manifest. On Roboto, both engines return UPEM 2048, 3359
+glyphs, `1900/-500/0` ascent/descent/leading, cap height 1456, x-height 1082,
+average/max width `1161/4368`, and bounds `-1825,-555,4188,2163`; the complete
+field checksum is `00000005bc61651f`. Repeated immutable-Face reads initially
+measured Cangjie at `785.86/670.00 ns` versus Skrifa at `437.30/364.89 ns`
+because Cangjie revalidated head, hhea, OS/2, and post on every view call. The
+Face view now reuses its parse proof while mutation-aware `Font` APIs retain
+defensive validation. Post-fix Cangjie measured `142.18/130.17 ns`, preserving
+the same complete-field result.
+
 `docs/fontations-coverage.json` maps every public top-level table family in
 Fontations `read-fonts` 0.42.2, plus eight grouped Skrifa 0.45.2 capability
 families covering `MetadataProvider` and embedded TrueType hinting, to a

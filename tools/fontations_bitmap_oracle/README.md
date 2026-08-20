@@ -26,3 +26,13 @@ Skrifa comparisons:
 cargo run --release --manifest-path tools/fontations_bitmap_oracle/Cargo.toml -- \
   /path/to/font.ttf outline GLYPH_ID 10000 31
 ```
+
+Repeated unscaled glyph metrics and Unicode charmap lookups use the same final
+two arguments (`ITERATIONS SAMPLES`):
+
+```sh
+cargo run --release --manifest-path tools/fontations_bitmap_oracle/Cargo.toml -- \
+  /path/to/font.ttf metrics GLYPH_ID 1000000 31
+cargo run --release --manifest-path tools/fontations_bitmap_oracle/Cargo.toml -- \
+  /path/to/font.ttf charmap CODEPOINT 1000000 31
+```

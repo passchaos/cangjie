@@ -25,8 +25,66 @@ fn main() {
     match mode.as_str() {
         "bitmap" => bitmap(&font, glyph_id, &mut args),
         "outline" => outline(&font, glyph_id, &mut args),
-        _ => fail("mode must be bitmap or outline"),
+        "metrics" => metrics(&font, glyph_id, &mut args),
+        "charmap" => charmap(&font, glyph_id, &mut args),
+        _ => fail("mode must be bitmap, outline, metrics, or charmap"),
     }
+}
+
+fn repeated_args(args: &mut impl Iterator<Item = String>) -> (usize, usize) {
+    let iterations = args
+        .next()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| fail("invalid iterations"));
+    let samples = args
+        .next()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| fail("invalid samples"));
+    if iterations == 0 || samples == 0 || args.next().is_some() {
+        fail("invalid repeated arguments");
+    }
+    (iterations, samples)
+}
+
+fn metrics(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {
+    let (iterations, samples) = repeated_args(args);
+    let metrics = font.glyph_metrics(Size::unscaled(), LocationRef::default());
+    let gid = GlyphId::new(glyph_id);
+    let mut values = Vec::with_capacity(samples);
+    let mut checksum = 0_u64;
+    for _ in 0..samples {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let advance = metrics.advance_width(gid).unwrap_or_default();
+            let lsb = metrics.left_side_bearing(gid).unwrap_or_default();
+            checksum = checksum.wrapping_add(u64::from(advance.to_bits() ^ lsb.to_bits()));
+        }
+        values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
+        black_box(checksum);
+    }
+    values.sort_by(f64::total_cmp);
+    println!("engine=skrifa\tmode=metrics\titerations={iterations}\tsamples={samples}\tmedian_ns_per_iter={:.3}\tchecksum={checksum:016x}", values[values.len()/2]);
+}
+
+fn charmap(font: &FontRef<'_>, codepoint: u32, args: &mut impl Iterator<Item = String>) {
+    let (iterations, samples) = repeated_args(args);
+    let charmap = font.charmap();
+    let mut values = Vec::with_capacity(samples);
+    let mut checksum = 0_u64;
+    for _ in 0..samples {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let glyph = charmap
+                .map(codepoint)
+                .map(|g| g.to_u32())
+                .unwrap_or_default();
+            checksum = checksum.wrapping_add(u64::from(glyph));
+        }
+        values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
+        black_box(checksum);
+    }
+    values.sort_by(f64::total_cmp);
+    println!("engine=skrifa\tmode=charmap\titerations={iterations}\tsamples={samples}\tmedian_ns_per_iter={:.3}\tchecksum={checksum:016x}", values[values.len()/2]);
 }
 
 fn bitmap(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {
@@ -64,19 +122,7 @@ fn bitmap(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = Str
 }
 
 fn outline(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {
-    let iterations: usize = args
-        .next()
-        .unwrap_or_else(|| fail("missing iterations"))
-        .parse()
-        .unwrap_or_else(|_| fail("invalid iterations"));
-    let samples: usize = args
-        .next()
-        .unwrap_or_else(|| fail("missing samples"))
-        .parse()
-        .unwrap_or_else(|_| fail("invalid samples"));
-    if iterations == 0 || samples == 0 || args.next().is_some() {
-        fail("invalid outline arguments");
-    }
+    let (iterations, samples) = repeated_args(args);
     let glyph = font
         .outline_glyphs()
         .get(GlyphId::new(glyph_id))

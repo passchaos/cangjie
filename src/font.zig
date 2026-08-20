@@ -729,6 +729,7 @@ pub const Font = struct {
     cff_parsed: ?CffParsedInfo,
     cff2: ?TableRecord,
     cmap_subtables: []CmapSubtable,
+    selected_cmap_subtable: ?CmapSubtable,
     owned_tables: []TableRecord,
     allocator: std.mem.Allocator,
 
@@ -1093,6 +1094,16 @@ pub const Font = struct {
             glyph_count,
         );
         errdefer allocator.free(cmap_subtables);
+        var selected_cmap_subtable: ?CmapSubtable = null;
+        for (cmap_subtables) |subtable| {
+            if (!cmap_mod.supportsGlyphLookup(subtable.format)) continue;
+            if (selected_cmap_subtable == null or
+                cmap_mod.score(subtable) >
+                    cmap_mod.score(selected_cmap_subtable.?))
+            {
+                selected_cmap_subtable = subtable;
+            }
+        }
 
         return .{
             .data = data,
@@ -1163,6 +1174,7 @@ pub const Font = struct {
             .cff_parsed = cff_parsed,
             .cff2 = cff2,
             .cmap_subtables = cmap_subtables,
+            .selected_cmap_subtable = selected_cmap_subtable,
             .owned_tables = records,
             .allocator = allocator,
         };
@@ -2672,6 +2684,19 @@ pub const Font = struct {
         return try self.glyphIndexInSubtable(chosen, codepoint);
     }
 
+    fn glyphIndexForImmutableFace(
+        self: *const Font,
+        codepoint: u21,
+    ) FontError!glyph_mod.GlyphId {
+        try cmap_mod.validatePublicScalar(codepoint);
+        const chosen = self.selectedCmapSubtable() orelse
+            return error.UnsupportedCmap;
+        if (cmap_mod.isMacintoshRoman(chosen)) {
+            return self.glyphIndexInSubtable(chosen, codepoint);
+        }
+        return try cmap_mod.glyphValidated(self.data, chosen, codepoint);
+    }
+
     fn nextMappingAfter(self: *const Font, charmap: CharmapInfo, after: ?u21) FontError!?CharmapMapping {
         const subtable = try self.subtableForCharmap(charmap);
         if (!cmap_mod.supportsGlyphLookup(subtable.format)) {
@@ -2744,16 +2769,7 @@ pub const Font = struct {
     }
 
     fn selectedCmapSubtable(self: *const Font) ?CmapSubtable {
-        var best: ?CmapSubtable = null;
-        for (self.cmap_subtables) |subtable| {
-            if (!cmap_mod.supportsGlyphLookup(subtable.format)) continue;
-            if (best == null or
-                cmap_mod.score(subtable) > cmap_mod.score(best.?))
-            {
-                best = subtable;
-            }
-        }
-        return best;
+        return self.selected_cmap_subtable;
     }
 
     fn charmapInfoForSubtable(self: *const Font, subtable: CmapSubtable) FontError!CharmapInfo {
@@ -6223,6 +6239,15 @@ pub const raster_backend = struct {
 /// skipped post-parse mutation checks visible at every call site.
 pub const immutable_face_backend = struct {
     pub const glyphBounds = Font.glyphBoundsForImmutableFace;
+    pub const glyphIndex = Font.glyphIndexForImmutableFace;
+    pub const horizontalMetrics = struct {
+        fn read(
+            font: *const Font,
+            glyph_id: glyph_mod.GlyphId,
+        ) FontError!HorizontalMetricInfo {
+            return font.horizontalMetricsForReadMode(glyph_id, .parsed);
+        }
+    }.read;
 };
 
 fn validateCff2Table(data: []const u8, cff2: TableRecord) FontError!void {

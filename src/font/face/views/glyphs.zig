@@ -13,7 +13,10 @@ pub const View = struct {
         self: View,
         codepoint: u21,
     ) font_mod.FontError!glyph_mod.GlyphId {
-        return self.implementation.glyphIndex(codepoint);
+        return font_mod.immutable_face_backend.glyphIndex(
+            self.implementation,
+            codepoint,
+        );
     }
 
     pub fn indexForVariation(

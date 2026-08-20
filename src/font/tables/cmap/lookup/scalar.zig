@@ -34,6 +34,25 @@ pub fn glyph(
     };
 }
 
+/// Lookup after parse-time table grammar and format identity were proven.
+pub fn glyphValidated(
+    data: []const u8,
+    subtable: @import("../types.zig").Subtable,
+    codepoint: u21,
+) Error!GlyphId {
+    return switch (subtable.format) {
+        0 => format0(data, subtable.offset, codepoint),
+        2 => format2(data, subtable.offset, subtable.length, codepoint),
+        4 => format4(data, subtable.offset, codepoint),
+        6 => format6(data, subtable.offset, codepoint),
+        8 => format8(data, subtable.offset, subtable.length, codepoint),
+        10 => format10(data, subtable.offset, subtable.length, codepoint),
+        12 => format12(data, subtable.offset, subtable.length, codepoint),
+        13 => format13(data, subtable.offset, subtable.length, codepoint),
+        else => error.UnsupportedCmap,
+    };
+}
+
 fn format0(data: []const u8, offset: usize, codepoint: u21) Error!GlyphId {
     if (codepoint > 0xff) return 0;
     const length = try bin.readU16At(data, offset + 2);

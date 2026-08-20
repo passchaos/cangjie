@@ -19,7 +19,10 @@ pub const View = struct {
         self: View,
         glyph_id: glyph_mod.GlyphId,
     ) font_mod.FontError!font_mod.HorizontalMetricInfo {
-        return self.implementation.horizontalMetrics(glyph_id);
+        return font_mod.immutable_face_backend.horizontalMetrics(
+            self.implementation,
+            glyph_id,
+        );
     }
 
     pub fn horizontalAt(

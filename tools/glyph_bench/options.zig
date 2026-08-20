@@ -24,6 +24,8 @@ pub const Engine = enum {
 };
 
 pub const Mode = enum {
+    charmap,
+    metrics,
     outline,
     outline_session,
     raster,
@@ -31,6 +33,8 @@ pub const Mode = enum {
     raster_prepared,
 
     pub fn fromName(name: []const u8) ?Mode {
+        if (std.mem.eql(u8, name, "charmap")) return .charmap;
+        if (std.mem.eql(u8, name, "metrics")) return .metrics;
         if (std.mem.eql(u8, name, "outline")) return .outline;
         if (std.mem.eql(u8, name, "outline-session")) return .outline_session;
         if (std.mem.eql(u8, name, "raster")) return .raster;
@@ -41,6 +45,8 @@ pub const Mode = enum {
 
     pub fn label(self: Mode) []const u8 {
         return switch (self) {
+            .charmap => "charmap",
+            .metrics => "metrics",
             .outline => "outline",
             .outline_session => "outline-session",
             .raster => "raster",

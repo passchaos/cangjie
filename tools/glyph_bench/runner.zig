@@ -113,11 +113,37 @@ fn resolveGlyphId(font: *const cangjie.font.Face, options: options_mod.Options) 
 
 fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
     switch (options.mode) {
+        .charmap => try runCharmapIterations(font, options, iterations, checksum),
+        .metrics => try runMetricsIterations(font, glyph_id, iterations, checksum),
         .outline => try runOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
         .outline_session => try runOutlineSessionIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster => try runRasterIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_reuse => try runRasterReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_prepared => try runRasterPreparedIterations(allocator, font, glyph_id, options, iterations, checksum),
+    }
+}
+
+fn runCharmapIterations(
+    font: *const cangjie.font.Face,
+    options: options_mod.Options,
+    iterations: usize,
+    checksum: *u64,
+) !void {
+    for (0..iterations) |_| {
+        checksum.* +%= try font.glyphs().index(options.codepoint);
+    }
+}
+
+fn runMetricsIterations(
+    font: *const cangjie.font.Face,
+    glyph_id: cangjie.font.GlyphId,
+    iterations: usize,
+    checksum: *u64,
+) !void {
+    for (0..iterations) |_| {
+        const value = try font.metrics().horizontal(glyph_id);
+        checksum.* +%= (@as(u64, value.advance_width) << 16) |
+            @as(u16, @bitCast(value.left_side_bearing));
     }
 }
 

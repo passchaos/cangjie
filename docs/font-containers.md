@@ -130,6 +130,19 @@ engine, and the existing CFF/FreeType correctness gates remain authoritative
 for geometry parity. These are three unscaled outline workloads, not an
 overall Fontations performance claim.
 
+The oracle also covers repeated unscaled glyph metrics and nominal charmap
+lookups. On the same CPU, Roboto glyph metrics measured `8.88 ns` for Cangjie
+versus `26.62 ns` for Skrifa. Public `Face` views now explicitly reuse their
+documented immutable-byte parse proof for horizontal metrics and cmap reads;
+the mutation-aware low-level `Font` methods retain checksum revalidation.
+Caching the selected cmap at parse time and dispatching the proven format
+reduced Roboto U+0041 from `107.42/106.52 ns` to `70.48/60.56 ns`. Skrifa
+measured `35.96/35.95 ns`, so charmap remains a measured Fontations deficit
+despite the roughly `1.7x` Cangjie improvement. A supplementary-plane format-12
+control likewise measured Cangjie at `53.49/57.44 ns` versus Skrifa at
+`31.58/29.47 ns`. This remaining gap is recorded explicitly rather than
+hidden behind the broader table-coverage manifest.
+
 `docs/fontations-coverage.json` maps every public top-level table family in
 Fontations `read-fonts` 0.42.2, plus eight grouped Skrifa 0.45.2 capability
 families covering `MetadataProvider` and embedded TrueType hinting, to a

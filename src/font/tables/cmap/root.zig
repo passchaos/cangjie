@@ -34,5 +34,6 @@ pub const format14PayloadOffset = validation.format14.payloadOffset;
 pub const format14RecordsEnd = validation.format14.recordsEnd;
 
 pub const glyph = lookup.glyph;
+pub const glyphValidated = @import("lookup/scalar.zig").glyphValidated;
 pub const VariationResult = lookup.VariationResult;
 pub const variationGlyph = lookup.variationGlyph;

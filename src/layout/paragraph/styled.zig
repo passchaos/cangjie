@@ -506,8 +506,8 @@ const Driver = struct {
             self.text,
             options.direction,
         )) return;
-        var paragraph = try unicode.resolveBidiParagraph(
-            self.buffer.allocator,
+        const scratch = &self.buffer.bidi_reorder_scratch;
+        var paragraph = try scratch.resolveParagraph(
             self.text,
             if (options.direction == .rtl) .rtl else .ltr,
         );

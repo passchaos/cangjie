@@ -10,6 +10,8 @@ const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const run_types = @import("../../types/runs.zig");
 const mapping = @import("mapping.zig");
 const runs = @import("runs.zig");
+const bidi_paragraph = @import("../../../unicode/bidi/paragraph.zig");
+const unicode = @import("../../../unicode.zig");
 
 pub const Scratch = struct {
     old_runs: std.ArrayList(run_types.CascadeRun) = .empty,
@@ -20,8 +22,14 @@ pub const Scratch = struct {
     visual_run_indices: std.ArrayList(usize) = .empty,
     line_levels: std.ArrayList(u8) = .empty,
     visual_order: std.ArrayList(usize) = .empty,
+    bidi_storage: bidi_paragraph.Storage,
+
+    pub fn init(allocator: std.mem.Allocator) Scratch {
+        return .{ .bidi_storage = .init(allocator) };
+    }
 
     pub fn deinit(self: *Scratch, allocator: std.mem.Allocator) void {
+        self.bidi_storage.deinit();
         self.visual_order.deinit(allocator);
         self.line_levels.deinit(allocator);
         self.visual_run_indices.deinit(allocator);
@@ -30,7 +38,17 @@ pub const Scratch = struct {
         self.glyph_run_indices.deinit(allocator);
         self.old_glyphs.deinit(allocator);
         self.old_runs.deinit(allocator);
-        self.* = .{};
+        self.* = undefined;
+    }
+
+    /// Resolve UAX #9 while retaining all proportional storage in this owner.
+    /// The returned view is invalidated by the next call or by `deinit`.
+    pub fn resolveParagraph(
+        self: *Scratch,
+        text: []const u8,
+        base_direction: unicode.BidiBaseDirection,
+    ) !unicode.BidiParagraph {
+        return self.bidi_storage.resolve(text, base_direction);
     }
 
     /// Move the logical output aside and build its two permutation indexes.
@@ -102,7 +120,7 @@ pub const Scratch = struct {
 };
 
 test "reorder scratch retains capacity while replacing its snapshot" {
-    var scratch: Scratch = .{};
+    var scratch = Scratch.init(std.testing.allocator);
     defer scratch.deinit(std.testing.allocator);
     const glyphs = [_]GlyphPosition{
         .{ .glyph_id = 1, .codepoint = 'A', .cluster = 0, .x_advance = 1 },
@@ -132,7 +150,7 @@ test "reorder scratch retains capacity while replacing its snapshot" {
 }
 
 test "failed scratch preparation restores output ownership" {
-    var scratch: Scratch = .{};
+    var scratch = Scratch.init(std.testing.allocator);
     defer scratch.deinit(std.testing.allocator);
     const glyphs = [_]GlyphPosition{
         .{ .glyph_id = 1, .codepoint = 'A', .cluster = 0, .x_advance = 1 },

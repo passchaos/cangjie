@@ -1399,6 +1399,18 @@ from `1.0593B` to `1.0509B` and branches from `179.77M` to `177.83M`; cycles
 were neutral. The Latin spacing control had identical checksum/counts and no
 stable paired regression.
 
+The styled UAX #9 pass now retains its UTF-8 scalar/input arrays and resolver
+working sets in the layout buffer instead of allocating and freeing every
+proportional array on each paragraph. Resolution is still recomputed from the
+current bytes and base direction on every call; only capacity is reused, and
+the ordinary public resolver continues returning an independently owned
+snapshot. On the Arabic spacing row, five-repeat counters fell from `1.0508B`
+to `1.0455B` instructions, `341.5M` to `337.0M` cycles, `177.80M` to
+`177.16M` branches, and `1.032M` to `0.991M` branch misses per 1,000 layouts.
+The fixed-CPU-30 wall-clock B/A/A/B sample was frequency-skewed, while its
+checksums, 144 glyphs, and six lines remained identical; the matching Latin
+control stayed neutral at about `100 µs` with unchanged output.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

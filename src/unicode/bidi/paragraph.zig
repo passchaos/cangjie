@@ -23,14 +23,19 @@ pub const Scalar = struct {
 pub const Paragraph = struct {
     allocator: std.mem.Allocator,
     base_level: u8,
-    scalars: []Scalar,
-    classes: []Class,
-    levels: []u8,
+    scalars: []const Scalar,
+    classes: []const Class,
+    levels: []const u8,
+    owner: Owner = .allocator,
+
+    const Owner = enum { allocator, borrowed };
 
     pub fn deinit(self: *Paragraph) void {
-        self.allocator.free(self.levels);
-        self.allocator.free(self.classes);
-        self.allocator.free(self.scalars);
+        if (self.owner == .allocator) {
+            self.allocator.free(self.levels);
+            self.allocator.free(self.classes);
+            self.allocator.free(self.scalars);
+        }
         self.* = undefined;
     }
 
@@ -285,6 +290,92 @@ pub fn resolve(
     };
 }
 
+/// Resolve into caller-owned arrays and reusable UAX #9 scratch.
+///
+/// The returned paragraph borrows all three arrays and remains valid only
+/// until `scalars`, `inputs`, or `scratch` is reused. This is intended for
+/// layout transactions that consume the resolution synchronously; `resolve`
+/// above remains the owning public contract.
+fn resolveInto(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    base_direction: BaseDirection,
+    scalars: *std.ArrayList(Scalar),
+    inputs: *std.ArrayList(resolver.Input),
+    scratch: *resolver.Scratch,
+) !Paragraph {
+    if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
+
+    scalars.clearRetainingCapacity();
+    inputs.clearRetainingCapacity();
+    try scalars.ensureTotalCapacity(allocator, text.len);
+    try inputs.ensureTotalCapacity(allocator, text.len);
+    var cursor: usize = 0;
+    while (cursor < text.len) {
+        const start = cursor;
+        const codepoint = decodeValid(text, &cursor);
+        scalars.appendAssumeCapacity(.{
+            .codepoint = codepoint,
+            .byte_start = start,
+            .byte_len = @intCast(cursor - start),
+        });
+        inputs.appendAssumeCapacity(.{
+            .codepoint = codepoint,
+            .class = property_data.class(codepoint),
+        });
+    }
+
+    const base_level = try scratch.resolve(inputs.items, base_direction);
+    return .{
+        .allocator = allocator,
+        .base_level = base_level,
+        .scalars = scalars.items,
+        .classes = scratch.initialTypes(),
+        .levels = scratch.resolvedLevels(),
+        .owner = .borrowed,
+    };
+}
+
+/// Reusable ownership for synchronous paragraph resolution.
+///
+/// This remains internal to layout; the public `resolve` result owns an
+/// independent snapshot whose lifetime is not coupled to future resolutions.
+pub const Storage = struct {
+    allocator: std.mem.Allocator,
+    scalars: std.ArrayList(Scalar) = .empty,
+    inputs: std.ArrayList(resolver.Input) = .empty,
+    scratch: resolver.Scratch,
+
+    pub fn init(allocator: std.mem.Allocator) Storage {
+        return .{
+            .allocator = allocator,
+            .scratch = .init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Storage) void {
+        self.scratch.deinit();
+        self.inputs.deinit(self.allocator);
+        self.scalars.deinit(self.allocator);
+        self.* = undefined;
+    }
+
+    pub fn resolve(
+        self: *Storage,
+        text: []const u8,
+        base_direction: BaseDirection,
+    ) !Paragraph {
+        return resolveInto(
+            self.allocator,
+            text,
+            base_direction,
+            &self.scalars,
+            &self.inputs,
+            &self.scratch,
+        );
+    }
+};
+
 pub fn classForCodepoint(codepoint: u21) Class {
     return property_data.class(codepoint);
 }
@@ -403,6 +494,24 @@ test "paragraph levels reorder each line independently" {
         &.{ 0, 1, 2, 3, 6, 5, 4, 7, 8, 9, 10 },
         order,
     );
+}
+
+test "reusable paragraph resolution matches owning resolution" {
+    const text = "abc \u{2067}אבג 12\u{2069}";
+    var owned = try resolve(std.testing.allocator, text, .auto);
+    defer owned.deinit();
+    var storage = Storage.init(std.testing.allocator);
+    defer storage.deinit();
+    var borrowed = try storage.resolve(text, .auto);
+    defer borrowed.deinit();
+    try std.testing.expectEqual(Paragraph.Owner.borrowed, borrowed.owner);
+    try std.testing.expectEqual(owned.base_level, borrowed.base_level);
+    try std.testing.expectEqualSlices(Class, owned.classes, borrowed.classes);
+    try std.testing.expectEqualSlices(u8, owned.levels, borrowed.levels);
+    try std.testing.expectEqual(owned.scalars.len, borrowed.scalars.len);
+    for (owned.scalars, borrowed.scalars) |expected, actual| {
+        try std.testing.expectEqualDeep(expected, actual);
+    }
 }
 
 test "combined line transaction matches separate levels and order" {

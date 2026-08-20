@@ -36,10 +36,13 @@ pub const Buffer = struct {
     glyph_index_cache: ?*cache.GlyphIndexCache = null,
     shape_scratch: scratch.ShapeScratch = .{},
     /// Glyph-parallel transaction storage retained across paragraph layouts.
-    bidi_reorder_scratch: bidi_reorder_scratch.Scratch = .{},
+    bidi_reorder_scratch: bidi_reorder_scratch.Scratch,
 
     pub fn init(allocator: std.mem.Allocator) Buffer {
-        return .{ .allocator = allocator };
+        return .{
+            .allocator = allocator,
+            .bidi_reorder_scratch = .init(allocator),
+        };
     }
 
     pub fn deinit(self: *Buffer) void {

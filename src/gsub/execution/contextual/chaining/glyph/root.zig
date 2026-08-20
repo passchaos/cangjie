@@ -1,6 +1,7 @@
 //! ChainContextSubst format-1 glyph execution surface.
 
 const std = @import("std");
+const shaping_sections = @import("../../../../../shaping_sections.zig");
 const filtering = @import("../../../../runtime/filtering.zig");
 const Options = @import("../../../../runtime/options.zig").Options;
 const table = @import("../../../../table/root.zig");
@@ -42,7 +43,7 @@ pub fn subtable(
     }
 }
 
-pub fn at(
+pub noinline fn at(
     comptime Executor: type,
     view: View,
     subtable_offset: usize,
@@ -51,7 +52,7 @@ pub fn at(
     allocator: std.mem.Allocator,
     lookup_flag: u16,
     run: Options,
-) Error!model.ApplyResult {
+) linksection(shaping_sections.isolated_hotpaths) Error!model.ApplyResult {
     if (position >= glyphs.items.len or
         !filtering.sourceFeatureAllowsGlyph(run, position) or
         filtering.lookupIgnoresGlyph(
@@ -80,14 +81,16 @@ pub fn at(
     );
     if (set_relative == 0) return .{};
 
-    const matched = try matching.ruleSet(
+    var matched: matching.Match = undefined;
+    if (!try matching.ruleSet(
         view,
         subtable_offset + set_relative,
         glyphs.items,
         position,
         lookup_flag,
         run,
-    ) orelse return .{};
+        &matched,
+    )) return .{};
     return commit.apply(
         Executor,
         view,

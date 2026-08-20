@@ -56,7 +56,8 @@ pub fn ruleSet(
     position: usize,
     lookup_flag: u16,
     run: Options,
-) Error!?Match {
+    result: *Match,
+) Error!bool {
     const rule_count = try view.readU16(set_offset);
     for (0..rule_count) |rule_index| {
         const rule_offset = set_offset +
@@ -68,9 +69,10 @@ pub fn ruleSet(
             position,
             lookup_flag,
             run,
-        )) |result| return result;
+            result,
+        )) return true;
     }
-    return null;
+    return false;
 }
 
 fn rule(
@@ -80,9 +82,9 @@ fn rule(
     position: usize,
     lookup_flag: u16,
     run: Options,
-) Error!?Match {
+    result: *Match,
+) Error!bool {
     var cursor = rule_offset;
-    var result = Match{};
 
     result.backtrack_count = try view.readU16(cursor);
     cursor += 2;
@@ -97,19 +99,19 @@ fn rule(
         result.backtrackSliceMut(),
         true,
         position,
-    )) return null;
+    )) return false;
     if (!try glyphsMatch(
         view,
         glyphs,
         result.backtrackSlice(),
         cursor,
         0,
-    )) return null;
+    )) return false;
     cursor += result.backtrack_count * 2;
 
     result.input_count = try view.readU16(cursor);
     cursor += 2;
-    if (result.input_count == 0) return null;
+    if (result.input_count == 0) return false;
     if (result.input_count > max_region_glyphs) return error.UnsupportedGsub;
     if (!traversal.collectForward(
         glyphs,
@@ -119,14 +121,14 @@ fn rule(
         result.inputSliceMut(),
         false,
         position,
-    )) return null;
+    )) return false;
     if (!try glyphsMatch(
         view,
         glyphs,
         result.inputSlice(),
         cursor,
         1,
-    )) return null;
+    )) return false;
     cursor += (result.input_count - 1) * 2;
 
     result.lookahead_count = try view.readU16(cursor);
@@ -142,19 +144,19 @@ fn rule(
         result.lookaheadSliceMut(),
         true,
         position,
-    )) return null;
+    )) return false;
     if (!try glyphsMatch(
         view,
         glyphs,
         result.lookaheadSlice(),
         cursor,
         0,
-    )) return null;
+    )) return false;
     cursor += result.lookahead_count * 2;
 
     result.record_count = try view.readU16(cursor);
     result.records_offset = cursor + 2;
-    return result;
+    return true;
 }
 
 fn glyphsMatch(

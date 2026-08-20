@@ -3035,6 +3035,17 @@ shaping-performance superiority.
   Amiri long text instructions/branches stayed within `0.001%`. The complete
   test suite and shaping, corpus, and USE HarfBuzz/HarfRust parity umbrellas
   pass, including the 10,000-line Hindi checksum `b01a5388ce792b49`.
+- Chaining glyph-context matching now follows the same success-only output
+  contract instead of returning its three 64-index regions inside
+  `!?Match`. The fixed-position wrapper is kept out of line in the isolated
+  hot-path section, so its reduced result traffic cannot perturb unrelated
+  code layout. Against `7037c05`, a fixed-CPU-30 B/A/A/B 11-sample probe
+  reduced NotoSansDevanagari `hi-words` medians from
+  `1432.475/1418.528` to `1409.786/1395.402 ns/glyph`, about `1.61%`;
+  retired instructions, branches, and cycles fell `1.84%`, `0.98%`, and
+  `0.85%` in five-repeat counters, with branch misses down `0.24%`.
+  Roboto and Amiri word/long-text controls improved in the interleaved probe,
+  and all checksums were unchanged.
 - Prepared 4x4 raster rows now accumulate full-pixel interiors as signed range
   differences and resolve them during the already-required blend walk. Exact
   sample-center tests remain at both span boundaries, while 1x1, 2x2, and

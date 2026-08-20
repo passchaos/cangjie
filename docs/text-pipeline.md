@@ -1387,6 +1387,18 @@ checksum `024ab925eca26b11`, 105 glyphs, and five lines. A focused regression
 also exercises shared analysis under `break-all` plus `anywhere` emergency
 wrapping so policy tailoring cannot be bypassed.
 
+Prepared MarkBasePos and MarkMarkPos subtables now test their owned mark
+coverage before the broader LookupFlag mark-filtering set. A non-covered glyph
+cannot match that subtable regardless of visibility, so the reordered tests
+remove a second binary search for most glyphs while the borrowed-table path
+retains its validation and error order. On fixed CPU 30, an Arabic spacing
+B/A/A/B run moved from `280.85/282.27 µs` to `278.48/278.68 µs`, about a
+`1.1%` geometric-mean improvement, with checksum `fb80f404e4d69aff`, 144
+glyphs, and six lines unchanged. Five-repeat counters reduced instructions
+from `1.0593B` to `1.0509B` and branches from `179.77M` to `177.83M`; cycles
+were neutral. The Latin spacing control had identical checksum/counts and no
+stable paired regression.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

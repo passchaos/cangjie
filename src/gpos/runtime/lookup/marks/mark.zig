@@ -102,18 +102,26 @@ pub fn collectAtParsed(
     run: Options,
 ) (Error || std.mem.Allocator.Error)!bool {
     if (mark_1_position >= glyphs.len) return false;
-    const glyph = glyphs[mark_1_position];
-    if (matching.lookupIgnoresGlyph(lookup_flag, run, glyph)) return false;
     if (parsed.class_count == 0 or glyphs.len < 2) return false;
 
-    const mark_1_index = if (parsed.mark_1_coverage) |coverage|
-        coverage.index(glyph) orelse return false
-    else
-        try table.coverage.index(
+    const glyph = glyphs[mark_1_position];
+    const mark_1_index = if (parsed.mark_1_coverage) |coverage| accelerated: {
+        // Prepared coverages are already validated and owned. Rejecting the
+        // overwhelmingly common non-covered glyph before LookupFlag handling
+        // avoids a second mark-filtering-set binary search for every glyph in
+        // the run. Keep the borrowed-table path's historical validation/error
+        // order below for detached callers.
+        const index = coverage.index(glyph) orelse return false;
+        if (matching.lookupIgnoresGlyph(lookup_flag, run, glyph)) return false;
+        break :accelerated index;
+    } else unaccelerated: {
+        if (matching.lookupIgnoresGlyph(lookup_flag, run, glyph)) return false;
+        break :unaccelerated try table.coverage.index(
             view,
             parsed.mark_1_coverage_offset,
             glyph,
         ) orelse return false;
+    };
     const mark_2_position = try search.previousUnignoredCoveredGlyphParsed(
         view,
         parsed.mark_2_coverage_offset,

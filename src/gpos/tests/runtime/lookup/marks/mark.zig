@@ -106,6 +106,57 @@ test "MarkMarkPos skips lookup-flag ignored glyphs" {
     try std.testing.expectEqual(@as(i16, 70), mark.y_placement);
 }
 
+test "prepared MarkMarkPos rejects uncovered glyphs before mark filtering" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 46;
+    writeU16(&bytes, 0, 1);
+    writeU16(&bytes, 2, 12);
+    writeU16(&bytes, 4, 18);
+    writeU16(&bytes, 6, 1);
+    writeU16(&bytes, 8, 24);
+    writeU16(&bytes, 10, 36);
+    writeCoverage1(&bytes, 12, 22);
+    writeCoverage1(&bytes, 18, 21);
+    writeU16(&bytes, 24, 1);
+    writeU16(&bytes, 26, 0);
+    writeU16(&bytes, 28, 6);
+    writeAnchor1(&bytes, 30, 10, 15);
+    writeU16(&bytes, 36, 1);
+    writeU16(&bytes, 38, 4);
+    writeAnchor1(&bytes, 40, 100, 120);
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+    };
+    var parsed = try marks.mark.build(view, 0, allocator);
+    defer {
+        parsed.mark_2_coverage.?.deinit(allocator);
+        parsed.mark_1_coverage.?.deinit(allocator);
+    }
+    var adjustments = std.ArrayList(marks.mark.Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    // The invalid set index would make LookupFlag validation reject a covered
+    // mark. An uncovered glyph can be ruled out by the owned subtable coverage
+    // alone and must remain a quiet non-match.
+    try std.testing.expect(!try marks.mark.collectAtParsed(
+        view,
+        parsed,
+        &.{ 21, 23 },
+        1,
+        &adjustments,
+        allocator,
+        0x0010,
+        .{
+            .glyph_classes = &([_]u16{0} ** 24),
+            .active_mark_filtering_set = 1,
+            .mark_filtering_sets = &.{&.{22}},
+        },
+    ));
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
+}
+
 fn writeCoverage1(bytes: []u8, offset: usize, glyph: u16) void {
     writeU16(bytes, offset, 1);
     writeU16(bytes, offset + 2, 1);

@@ -143,18 +143,24 @@ pub fn collectAtParsed(
     search_state: ?*SearchState,
 ) (Error || std.mem.Allocator.Error)!bool {
     if (mark_position >= glyphs.len) return false;
-    const glyph = glyphs[mark_position];
-    if (matching.lookupIgnoresGlyph(lookup_flag, run, glyph)) return false;
     if (subtable.class_count == 0 or glyphs.len < 2) return false;
 
-    const mark_index = if (subtable.mark_coverage) |coverage|
-        coverage.index(glyph) orelse return false
-    else
-        try table.coverage.index(
+    const glyph = glyphs[mark_position];
+    const mark_index = if (subtable.mark_coverage) |coverage| accelerated: {
+        // The prepared coverage is validated and usually much narrower than
+        // the run. Test it before the potentially more expensive LookupFlag
+        // mark-filtering set, while preserving borrowed-table error ordering.
+        const index = coverage.index(glyph) orelse return false;
+        if (matching.lookupIgnoresGlyph(lookup_flag, run, glyph)) return false;
+        break :accelerated index;
+    } else unaccelerated: {
+        if (matching.lookupIgnoresGlyph(lookup_flag, run, glyph)) return false;
+        break :unaccelerated try table.coverage.index(
             view,
             subtable.mark_coverage_offset,
             glyph,
         ) orelse return false;
+    };
     const base_position = (if (search_state) |state|
         try previousBaseCached(
             view,

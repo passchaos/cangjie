@@ -108,9 +108,40 @@ pub const FontError = error{
     InvalidMarkGlyphSet,
     CompoundDepthExceeded,
     InvalidName,
+    NoSpaceLeft,
 } || cff_mod.CffError || gpos_mod.GposError || gsub_mod.GsubError || std.mem.Allocator.Error || error{EndOfStream};
 
 pub const FontFormat = core_tables.Format;
+
+pub const GlyphNameSource = enum {
+    post,
+    cff,
+    synthesized,
+};
+
+pub const ResolvedGlyphName = struct {
+    value: []const u8,
+    source: GlyphNameSource,
+    is_synthesized: bool,
+};
+
+fn synthesizeGlyphName(
+    glyph_id: glyph_mod.GlyphId,
+    out: []u8,
+    source: GlyphNameSource,
+) FontError!ResolvedGlyphName {
+    return .{
+        .value = std.fmt.bufPrint(out, "gid{d}", .{glyph_id}) catch
+            return error.NoSpaceLeft,
+        .source = source,
+        .is_synthesized = true,
+    };
+}
+
+fn isAscii(bytes: []const u8) bool {
+    for (bytes) |byte| if (!std.ascii.isAscii(byte)) return false;
+    return true;
+}
 
 pub const Cff2Info = cff2_mod.Info;
 pub const Cff2FontDictInfo = cff2_mod.FontDictInfo;
@@ -745,6 +776,11 @@ pub const Font = struct {
         fn shouldRevalidate(self: OutlineReadMode) bool {
             return self == .revalidate;
         }
+    };
+
+    const MetadataReadMode = enum {
+        revalidate,
+        parsed,
     };
 
     /// Parse the first face of a standalone SFNT or TrueType Collection.
@@ -3851,6 +3887,124 @@ pub const Font = struct {
         return try post_mod.glyphName(self.data, post, glyph_id);
     }
 
+    /// Resolve a displayable glyph name using post, CFF1, then `gidNNN`.
+    ///
+    /// This is intentionally separate from `glyphName`, whose nullable return
+    /// remains the raw `post` table contract. Borrowed post/CFF names do not use
+    /// `out`; synthesized names are written there and report `NoSpaceLeft` when
+    /// it cannot hold the complete decimal glyph id.
+    pub fn resolvedGlyphName(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+        out: []u8,
+    ) FontError![]const u8 {
+        return (try self.resolvedGlyphNameInfoForReadMode(
+            glyph_id,
+            out,
+            .revalidate,
+        )).value;
+    }
+
+    /// Resolve a glyph name and retain the selected source/fallback status.
+    pub fn resolvedGlyphNameInfo(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+        out: []u8,
+    ) FontError!ResolvedGlyphName {
+        return self.resolvedGlyphNameInfoForReadMode(
+            glyph_id,
+            out,
+            .revalidate,
+        );
+    }
+
+    fn resolvedGlyphNameInfoForReadMode(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+        out: []u8,
+        read_mode: MetadataReadMode,
+    ) FontError!ResolvedGlyphName {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        var source = GlyphNameSource.synthesized;
+        if (self.post) |post| {
+            if (read_mode == .revalidate) {
+                try sfnt.checksum.validate(self.data, post);
+                try post_mod.validate(self.data, post, self.glyph_count, .{
+                    .custom_name_validation = .structural_only,
+                });
+            }
+            const info = try post_mod.info(self.data, post);
+            if (info.format == 0x00010000 or info.format == 0x00020000) {
+                if (try post_mod.glyphName(self.data, post, glyph_id)) |name| {
+                    if (name.len != 0 and isAscii(name)) {
+                        return .{
+                            .value = name,
+                            .source = .post,
+                            .is_synthesized = false,
+                        };
+                    }
+                }
+                return try synthesizeGlyphName(glyph_id, out, .post);
+            }
+        }
+        if (self.cff) |cff| {
+            const data = self.data[cff.offset .. cff.offset + cff.length];
+            const parsed = if (read_mode == .revalidate) blk: {
+                try sfnt.checksum.validate(self.data, cff);
+                const info = try cff_mod.parseInfo(data);
+                if (info.charstrings_count != self.glyph_count) {
+                    return error.BadSfnt;
+                }
+                break :blk try cff_mod.prepare(data, info);
+            } else self.cff_parsed orelse return error.BadCff;
+            if (cff_mod.hasGlyphNameCharset(data, parsed)) {
+                source = .cff;
+                if (try cff_mod.glyphName(data, parsed, glyph_id)) |name| {
+                    // CFF strings are byte strings. Skrifa exposes only names
+                    // that form UTF-8 and caps its owned result at 63 bytes.
+                    if (std.unicode.utf8ValidateSlice(name)) {
+                        const truncated = name[0..@min(name.len, 63)];
+                        if (truncated.len != 0 and
+                            std.unicode.utf8ValidateSlice(truncated))
+                        {
+                            return .{
+                                .value = truncated,
+                                .source = .cff,
+                                .is_synthesized = false,
+                            };
+                        }
+                    }
+                }
+                return try synthesizeGlyphName(glyph_id, out, .cff);
+            }
+        }
+        return try synthesizeGlyphName(glyph_id, out, source);
+    }
+
+    fn resolvedGlyphNameForImmutableFace(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+        out: []u8,
+    ) FontError![]const u8 {
+        return (try self.resolvedGlyphNameInfoForReadMode(
+            glyph_id,
+            out,
+            .parsed,
+        )).value;
+    }
+
+    fn resolvedGlyphNameInfoForImmutableFace(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+        out: []u8,
+    ) FontError!ResolvedGlyphName {
+        return self.resolvedGlyphNameInfoForReadMode(
+            glyph_id,
+            out,
+            .parsed,
+        );
+    }
+
     pub fn decorationMetrics(self: *const Font) FontError!FontDecorationMetrics {
         if (self.post) |post| {
             try sfnt.checksum.validate(self.data, post);
@@ -6342,6 +6496,8 @@ pub const raster_backend = struct {
 pub const immutable_face_backend = struct {
     pub const localizedNames = Font.localizedNamesForImmutableFace;
     pub const englishOrFirstName = Font.englishOrFirstNameForImmutableFace;
+    pub const resolvedGlyphName = Font.resolvedGlyphNameForImmutableFace;
+    pub const resolvedGlyphNameInfo = Font.resolvedGlyphNameInfoForImmutableFace;
     pub const headInfo = struct {
         fn read(font: *const Font) FontError!FontHeaderInfo {
             return head_mod.info(font.data, font.head);

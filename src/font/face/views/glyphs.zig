@@ -118,6 +118,36 @@ pub const View = struct {
         return self.implementation.glyphName(glyph_id);
     }
 
+    /// Return a usable glyph name from post, CFF1, or `gidNNN` synthesis.
+    ///
+    /// Names borrowed from the face ignore `out`; synthesized names live in
+    /// `out` and remain valid until the caller reuses that storage. Use `name`
+    /// when the nullable, raw post-table result is specifically required.
+    pub fn resolvedName(
+        self: View,
+        glyph_id: glyph_mod.GlyphId,
+        out: []u8,
+    ) font_mod.FontError![]const u8 {
+        return font_mod.immutable_face_backend.resolvedGlyphName(
+            self.implementation,
+            glyph_id,
+            out,
+        );
+    }
+
+    /// Return the resolved name together with its chosen source.
+    pub fn resolvedNameInfo(
+        self: View,
+        glyph_id: glyph_mod.GlyphId,
+        out: []u8,
+    ) font_mod.FontError!font_mod.ResolvedGlyphName {
+        return font_mod.immutable_face_backend.resolvedGlyphNameInfo(
+            self.implementation,
+            glyph_id,
+            out,
+        );
+    }
+
     pub fn inClass(
         self: View,
         allocator: std.mem.Allocator,

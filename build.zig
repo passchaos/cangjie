@@ -3560,6 +3560,28 @@ pub fn build(b: *std.Build) void {
         glyph_bench_cmd.addArgs(args);
     }
 
+    const glyph_name_fixtures_exe = b.addExecutable(.{
+        .name = "cangjie-glyph-name-fixtures",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/glyph_name_fixtures/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "test_font", .module = b.createModule(.{
+                    .root_source_file = b.path("src/test_font.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                }) },
+            },
+        }),
+    });
+    const glyph_name_fixtures_step = b.step(
+        "glyph-name-fixtures",
+        "Write post/CFF/synthesized glyph-name reference fixtures",
+    );
+    const glyph_name_fixtures_cmd = b.addRunArtifact(glyph_name_fixtures_exe);
+    glyph_name_fixtures_step.dependOn(&glyph_name_fixtures_cmd.step);
+
     const bench_smoke_step = b.step("bench-smoke", "Run quick TSV smoke checks for benchmark tools");
     const paragraph_bench_smoke_cmd = b.addRunArtifact(paragraph_bench_exe);
     paragraph_bench_smoke_cmd.addArg("builtin:minimal");
@@ -3615,6 +3637,18 @@ pub fn build(b: *std.Build) void {
         "--samples",    "1",
     });
     bench_smoke_step.dependOn(&glyph_global_metrics_smoke_cmd.step);
+
+    const glyph_name_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
+    glyph_name_smoke_cmd.addArgs(&.{
+        "--mode",       "glyph-name",
+        "--format",     "tsv",
+        "--builtin",    "minimal",
+        "--glyph-id",   "1",
+        "--iterations", "1",
+        "--warmup",     "0",
+        "--samples",    "1",
+    });
+    bench_smoke_step.dependOn(&glyph_name_smoke_cmd.step);
 
     const glyph_freetype_outline_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
     glyph_freetype_outline_smoke_cmd.addArgs(&.{

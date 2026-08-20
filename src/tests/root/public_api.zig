@@ -363,6 +363,141 @@ test "concrete face views cover the normal application workflow" {
     try std.testing.expectEqual(&face, run.font);
 }
 
+test "resolved glyph names cover post CFF and synthesized sources" {
+    const allocator = std.testing.allocator;
+    var out: [16]u8 = undefined;
+
+    var post_table: [41]u8 = .{0} ** 41;
+    std.mem.writeInt(u32, post_table[0..4], 0x00020000, .big);
+    std.mem.writeInt(u16, post_table[32..34], 2, .big);
+    std.mem.writeInt(u16, post_table[34..36], 0, .big);
+    std.mem.writeInt(u16, post_table[36..38], 258, .big);
+    post_table[38] = 2;
+    @memcpy(post_table[39..41], "A1");
+    const post_bytes = try test_font.buildMinimalTtfWithPost(
+        allocator,
+        &post_table,
+    );
+    defer allocator.free(post_bytes);
+    var post_face = try cangjie.font.Face.parse(allocator, post_bytes);
+    defer post_face.deinit();
+    try std.testing.expectEqualStrings(
+        "A1",
+        try post_face.glyphs().resolvedName(1, &out),
+    );
+    const post_name = try post_face.glyphs().resolvedNameInfo(1, &out);
+    try std.testing.expectEqual(cangjie.font.GlyphNameSource.post, post_name.source);
+    try std.testing.expect(!post_name.is_synthesized);
+
+    var empty_post_table: [39]u8 = .{0} ** 39;
+    std.mem.writeInt(u32, empty_post_table[0..4], 0x00020000, .big);
+    std.mem.writeInt(u16, empty_post_table[32..34], 2, .big);
+    std.mem.writeInt(u16, empty_post_table[34..36], 0, .big);
+    std.mem.writeInt(u16, empty_post_table[36..38], 258, .big);
+    const empty_post_bytes = try test_font.buildMinimalTtfWithPost(
+        allocator,
+        &empty_post_table,
+    );
+    defer allocator.free(empty_post_bytes);
+    var empty_post_face = try cangjie.font.Face.parse(
+        allocator,
+        empty_post_bytes,
+    );
+    defer empty_post_face.deinit();
+    try std.testing.expectEqualStrings(
+        "gid1",
+        try empty_post_face.glyphs().resolvedName(1, &out),
+    );
+    const empty_post_name = try empty_post_face.glyphs().resolvedNameInfo(
+        1,
+        &out,
+    );
+    try std.testing.expectEqual(
+        cangjie.font.GlyphNameSource.post,
+        empty_post_name.source,
+    );
+    try std.testing.expect(empty_post_name.is_synthesized);
+
+    var no_name_post: [32]u8 = .{0} ** 32;
+    std.mem.writeInt(u32, no_name_post[0..4], 0x00030000, .big);
+    const no_name_post_bytes = try test_font.buildMinimalTtfWithPost(
+        allocator,
+        &no_name_post,
+    );
+    defer allocator.free(no_name_post_bytes);
+    var no_name_post_face = try cangjie.font.Face.parse(
+        allocator,
+        no_name_post_bytes,
+    );
+    defer no_name_post_face.deinit();
+    const no_name_post_value = try no_name_post_face.glyphs().resolvedNameInfo(
+        1,
+        &out,
+    );
+    try std.testing.expectEqual(
+        cangjie.font.GlyphNameSource.synthesized,
+        no_name_post_value.source,
+    );
+
+    const cff_bytes = try test_font.buildCffGlyphNamesOtf(allocator);
+    defer allocator.free(cff_bytes);
+    var cff_face = try cangjie.font.Face.parse(allocator, cff_bytes);
+    defer cff_face.deinit();
+    try std.testing.expectEqualStrings(
+        "customGlyph",
+        try cff_face.glyphs().resolvedName(1, &out),
+    );
+    const cff_name = try cff_face.glyphs().resolvedNameInfo(1, &out);
+    try std.testing.expectEqual(cangjie.font.GlyphNameSource.cff, cff_name.source);
+    try std.testing.expect(!cff_name.is_synthesized);
+
+    // Low-level Font metadata remains mutation-aware while the Face view
+    // deliberately reuses the immutable parse proof.
+    const cff_table_offset = try sfntTableOffset(cff_bytes, "CFF ");
+    const cff_table_length = try sfntTableLength(cff_bytes, "CFF ");
+    const cff_data = cff_bytes[cff_table_offset .. cff_table_offset + cff_table_length];
+    const custom_name_offset = std.mem.indexOf(u8, cff_data, "customGlyph") orelse
+        return error.InvalidFixture;
+    cff_bytes[cff_table_offset + custom_name_offset] = 'X';
+    try std.testing.expectError(
+        error.BadSfnt,
+        cff_face.implementation.resolvedGlyphName(1, &out),
+    );
+    try std.testing.expectEqualStrings(
+        "XustomGlyph",
+        try cff_face.glyphs().resolvedName(1, &out),
+    );
+
+    const synthesized_bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(synthesized_bytes);
+    var synthesized_face = try cangjie.font.Face.parse(
+        allocator,
+        synthesized_bytes,
+    );
+    defer synthesized_face.deinit();
+    try std.testing.expectEqualStrings(
+        "gid1",
+        try synthesized_face.glyphs().resolvedName(1, &out),
+    );
+    const synthesized_name = try synthesized_face.glyphs().resolvedNameInfo(
+        1,
+        &out,
+    );
+    try std.testing.expectEqual(
+        cangjie.font.GlyphNameSource.synthesized,
+        synthesized_name.source,
+    );
+    try std.testing.expect(synthesized_name.is_synthesized);
+    try std.testing.expectError(
+        error.NoSpaceLeft,
+        synthesized_face.glyphs().resolvedName(1, out[0..3]),
+    );
+    try std.testing.expectError(
+        error.InvalidGlyph,
+        synthesized_face.glyphs().resolvedName(2, &out),
+    );
+}
+
 test "localized names match the Fontations names-only reference fixture" {
     const allocator = std.testing.allocator;
     const upstream = @embedFile("../data/fontations_names_only.ttf");
@@ -551,6 +686,28 @@ fn sfntTable(bytes: []const u8, tag: []const u8) ![]const u8 {
         return bytes[offset .. offset + length];
     }
     return error.MissingTable;
+}
+
+fn sfntTableOffset(bytes: []const u8, tag: []const u8) !usize {
+    if (tag.len != 4 or bytes.len < 12) return error.InvalidFixture;
+    const table_count = std.mem.readInt(u16, bytes[4..6], .big);
+    for (0..table_count) |index| {
+        const record_offset = 12 + index * 16;
+        if (!std.mem.eql(u8, bytes[record_offset..][0..4], tag)) continue;
+        return std.mem.readInt(u32, bytes[record_offset + 8 ..][0..4], .big);
+    }
+    return error.InvalidFixture;
+}
+
+fn sfntTableLength(bytes: []const u8, tag: []const u8) !usize {
+    if (tag.len != 4 or bytes.len < 12) return error.InvalidFixture;
+    const table_count = std.mem.readInt(u16, bytes[4..6], .big);
+    for (0..table_count) |index| {
+        const record_offset = 12 + index * 16;
+        if (!std.mem.eql(u8, bytes[record_offset..][0..4], tag)) continue;
+        return std.mem.readInt(u32, bytes[record_offset + 12 ..][0..4], .big);
+    }
+    return error.InvalidFixture;
 }
 
 test "public rasterizer draws a positioned glyph from a parsed face" {

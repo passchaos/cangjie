@@ -172,12 +172,65 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, g
         .metrics => try runMetricsIterations(font, glyph_id, iterations, checksum),
         .global_metrics => try runGlobalMetricsIterations(font, iterations, checksum),
         .family_name => try runFamilyNameIterations(allocator, font, iterations, checksum),
+        .glyph_name => try runGlyphNameIterations(font, glyph_id, iterations, checksum),
         .bitmap => try runBitmapIterations(font, glyph_id, options, iterations, checksum),
         .outline => try runOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
         .outline_session => try runOutlineSessionIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster => try runRasterIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_reuse => try runRasterReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_prepared => try runRasterPreparedIterations(allocator, font, glyph_id, options, iterations, checksum),
+    }
+}
+
+fn runGlyphNameIterations(
+    font: *const cangjie.font.Face,
+    glyph_id: cangjie.font.GlyphId,
+    iterations: usize,
+    checksum: *u64,
+) !void {
+    var buffer: [16]u8 = undefined;
+    for (0..iterations) |_| {
+        const value = try font.glyphs().resolvedName(glyph_id, &buffer);
+        for (value) |byte| checksum.* = checksum.* *% 0x100000001b3 ^ byte;
+    }
+}
+
+test "glyph name benchmark hashes post CFF and synthesized values" {
+    const allocator = std.testing.allocator;
+    const Source = enum { post, cff, synthesized };
+    inline for ([_]Source{ .post, .cff, .synthesized }) |source| {
+        const bytes = switch (source) {
+            .post => blk: {
+                var post: [41]u8 = .{0} ** 41;
+                std.mem.writeInt(u32, post[0..4], 0x00020000, .big);
+                std.mem.writeInt(u16, post[32..34], 2, .big);
+                std.mem.writeInt(u16, post[34..36], 0, .big);
+                std.mem.writeInt(u16, post[36..38], 258, .big);
+                post[38] = 2;
+                @memcpy(post[39..41], "A1");
+                break :blk try cangjie.testing.test_font.buildMinimalTtfWithPost(
+                    allocator,
+                    &post,
+                );
+            },
+            .cff => try cangjie.testing.test_font.buildCffGlyphNamesOtf(allocator),
+            .synthesized => try cangjie.testing.test_font.buildMinimalTtf(allocator),
+        };
+        defer allocator.free(bytes);
+        var face = try cangjie.font.Face.parse(allocator, bytes);
+        defer face.deinit();
+        var checksum: u64 = 0;
+        try runGlyphNameIterations(&face, 1, 1, &checksum);
+        const expected = switch (source) {
+            .post => "A1",
+            .cff => "customGlyph",
+            .synthesized => "gid1",
+        };
+        var expected_checksum: u64 = 0;
+        for (expected) |byte| {
+            expected_checksum = expected_checksum *% 0x100000001b3 ^ byte;
+        }
+        try std.testing.expectEqual(expected_checksum, checksum);
     }
 }
 

@@ -30,9 +30,38 @@ fn main() {
         "metrics" => metrics(&font, glyph_id, &mut args),
         "global-metrics" => global_metrics(&font, &mut args),
         "family-name" => family_name(&font, &mut args),
+        "glyph-name" => glyph_name(&font, glyph_id, &mut args),
         "charmap" => charmap(&font, glyph_id, &mut args),
         _ => fail("unsupported mode"),
     }
+}
+
+fn glyph_name(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {
+    let (iterations, samples) = repeated_args(args);
+    let names = font.glyph_names();
+    let gid = GlyphId::new(glyph_id);
+    let mut values = Vec::with_capacity(samples);
+    let mut checksum = 0_u64;
+    for _ in 0..samples {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let value = names.get(gid).unwrap_or_else(|| fail("missing glyph name"));
+            for byte in value.as_bytes() {
+                checksum = checksum.wrapping_mul(0x100000001b3) ^ u64::from(*byte);
+            }
+            black_box(&value);
+        }
+        values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
+    }
+    values.sort_by(f64::total_cmp);
+    let value = names.get(gid).unwrap_or_else(|| fail("missing glyph name"));
+    println!(
+        "engine=skrifa\tmode=glyph-name\titerations={iterations}\tsamples={samples}\tmedian_ns_per_iter={:.3}\tvalue={:?}\tsource={:?}\tsynthesized={}\tchecksum={checksum:016x}",
+        values[values.len() / 2],
+        value.as_str(),
+        names.source(),
+        value.is_synthesized(),
+    );
 }
 
 fn family_name(font: &FontRef<'_>, args: &mut impl Iterator<Item = String>) {

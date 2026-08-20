@@ -166,7 +166,7 @@ fn resolveGlyphId(face: ft.FT_Face, options: options_mod.Options) ft.FT_UInt {
 
 fn runIterations(face: ft.FT_Face, glyph_id: ft.FT_UInt, options: options_mod.Options, iterations: usize, target_pixels: []u8, checksum: *u64) !void {
     const load_flags: ft.FT_Int32 = switch (options.mode) {
-        .charmap, .metrics, .global_metrics, .family_name, .bitmap => unreachable,
+        .charmap, .metrics, .global_metrics, .family_name, .glyph_name, .bitmap => unreachable,
         .outline => ft.FT_LOAD_NO_SCALE | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
         .outline_session => unreachable,
         .raster, .raster_reuse => ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
@@ -176,7 +176,7 @@ fn runIterations(face: ft.FT_Face, glyph_id: ft.FT_UInt, options: options_mod.Op
     while (i < iterations) : (i += 1) {
         if (ft.FT_Load_Glyph(face, glyph_id, load_flags) != 0) return error.FreeTypeFailed;
         checksum.* = updateChecksum(checksum.*, switch (options.mode) {
-            .charmap, .metrics, .global_metrics, .family_name, .bitmap => unreachable,
+            .charmap, .metrics, .global_metrics, .family_name, .glyph_name, .bitmap => unreachable,
             .outline => outlineChecksum(face.*.glyph),
             .raster, .raster_reuse => rasterTargetChecksum(face.*.glyph, options, target_pixels),
             .outline_session, .raster_prepared => unreachable,

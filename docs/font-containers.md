@@ -225,3 +225,20 @@ The immutable Face now selects directly from the parse-proven table without an
 intermediate allocation; mutation-aware `Font.localizedNames` keeps its
 defensive checksum/validation contract. Post-fix Cangjie measured `62.10/52.30
 ns` versus Skrifa at `299.07/174.54 ns`, with the selected UTF-8 value unchanged.
+
+The Face glyph view also matches Skrifa's resolved glyph-name policy: a
+name-bearing `post` table has first priority, non-CID CFF1 charsets resolve
+standard and custom SIDs through the CFF String INDEX, and absent, invalid, or
+empty names synthesize `gidNNN`. The existing nullable `name`/`Font.glyphName`
+API remains the raw mutation-aware `post` contract; `resolvedName` is the
+explicit total lookup. The local Skrifa oracle exposes the same `glyph-name`
+boundary for post, CFF, and synthesized differential/performance checks.
+On the retained gid-1 fixtures, Skrifa and Cangjie resolve identical values and
+single-lookup hashes: `A1`/`0000410000006e42`,
+`customGlyph`/`b6cad728a83bbe01`, and
+`gid1`/`7d8ee301fa817891`. Fixed-CPU A/B/B/A runs (one million lookups, 31
+samples) measured Cangjie at `45.19/45.59 ns` versus Skrifa at
+`153.49/151.47 ns` for post; `117.32/117.32 ns` versus
+`161.07/149.64 ns` for CFF; and `49.43/34.27 ns` versus
+`107.31/107.34 ns` for synthesis. These are narrow repeated-name lookup
+results, not an overall Fontations performance claim.

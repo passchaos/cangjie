@@ -1318,6 +1318,45 @@ pub fn buildMinimalOtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x4f54544f, try minimalOtfTables(allocator));
 }
 
+/// Build the minimal CFF1 face with an explicit custom charset and String
+/// INDEX. The second glyph uses SID 391, the first custom CFF string.
+pub fn buildCffGlyphNamesOtf(allocator: std.mem.Allocator) ![]u8 {
+    const tables = try minimalOtfTables(allocator);
+    for (tables) |*table| {
+        if (!std.mem.eql(u8, table.tag, "CFF ")) continue;
+        allocator.free(table.data);
+        table.data = try cffGlyphNamesTable(allocator);
+        break;
+    }
+    return buildSfnt(allocator, 0x4f54544f, tables);
+}
+
+/// Emit retained glyph-name fixtures for the local Skrifa differential tool.
+pub fn writeGlyphNameFixtures(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    directory: std.Io.Dir,
+) !void {
+    var post: [41]u8 = .{0} ** 41;
+    writeU32(&post, 0, 0x00020000);
+    writeU16(&post, 32, 2);
+    writeU16(&post, 34, 0);
+    writeU16(&post, 36, 258);
+    post[38] = 2;
+    @memcpy(post[39..41], "A1");
+    const post_font = try buildMinimalTtfWithPost(allocator, &post);
+    defer allocator.free(post_font);
+    try directory.writeFile(io, .{ .sub_path = "post.ttf", .data = post_font });
+
+    const cff_font = try buildCffGlyphNamesOtf(allocator);
+    defer allocator.free(cff_font);
+    try directory.writeFile(io, .{ .sub_path = "cff.otf", .data = cff_font });
+
+    const synthesized_font = try buildMinimalTtf(allocator);
+    defer allocator.free(synthesized_font);
+    try directory.writeFile(io, .{ .sub_path = "synthesized.ttf", .data = synthesized_font });
+}
+
 pub fn buildLayoutOnlyOtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x4f54544f, try layoutOnlyOtfTables(allocator));
 }
@@ -7680,6 +7719,38 @@ fn cffTable(allocator: std.mem.Allocator) ![]u8 {
 
     try prefix.appendSlice(allocator, private_dict.items);
     try prefix.appendSlice(allocator, local_subrs.items);
+    try prefix.appendSlice(allocator, charstrings.items);
+    return try prefix.toOwnedSlice(allocator);
+}
+
+fn cffGlyphNamesTable(allocator: std.mem.Allocator) ![]u8 {
+    var charstrings = std.ArrayList(u8).empty;
+    defer charstrings.deinit(allocator);
+    try appendIndex(allocator, &charstrings, &.{ &.{14}, &.{14} });
+
+    var charset_offset: usize = 0;
+    var charstrings_offset: usize = 0;
+    var prefix = std.ArrayList(u8).empty;
+    defer prefix.deinit(allocator);
+    while (true) {
+        prefix.clearRetainingCapacity();
+        try prefix.appendSlice(allocator, &.{ 1, 0, 4, 1 });
+        try appendIndex(allocator, &prefix, &.{"Test"});
+        var top_dict = std.ArrayList(u8).empty;
+        defer top_dict.deinit(allocator);
+        try appendDictInt(allocator, &top_dict, @intCast(charset_offset));
+        try top_dict.append(allocator, 15);
+        try appendDictInt(allocator, &top_dict, @intCast(charstrings_offset));
+        try top_dict.append(allocator, 17);
+        try appendIndex(allocator, &prefix, &.{top_dict.items});
+        try appendIndex(allocator, &prefix, &.{"customGlyph"});
+        try appendIndex(allocator, &prefix, &.{});
+        if (prefix.items.len == charset_offset and charset_offset + 3 == charstrings_offset) break;
+        charset_offset = prefix.items.len;
+        charstrings_offset = charset_offset + 3;
+    }
+    // Custom charset format 0: gid 0 is implicit and gid 1 maps to SID 391.
+    try prefix.appendSlice(allocator, &.{ 0, 0x01, 0x87 });
     try prefix.appendSlice(allocator, charstrings.items);
     return try prefix.toOwnedSlice(allocator);
 }

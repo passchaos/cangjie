@@ -1,6 +1,7 @@
 const std = @import("std");
 const glyph_mod = @import("glyph.zig");
 const type2_hint = @import("font/hinting/type2/root.zig");
+const standard_strings = @import("font/tables/cff/standard_strings.zig");
 
 /// CFF support covers the Compact Font Format structures needed for OpenType
 /// CFF outlines: INDEX tables, top/private dictionaries, subroutines, and Type2
@@ -20,6 +21,10 @@ pub const Info = struct {
     charstrings_count: u16,
     global_subrs_offset: usize,
     charset_offset: usize = 0,
+    charset_present: bool = false,
+    /// ROS changes the charset values from string identifiers to CIDs. Such a
+    /// charset remains valid for outlines, but cannot supply glyph names.
+    is_cid_keyed: bool = false,
     fd_array_offset: usize = 0,
     fd_select_offset: usize = 0,
     private_offset: usize = 0,
@@ -32,6 +37,7 @@ pub const Info = struct {
 
 pub const Parsed = struct {
     info: Info,
+    strings: Index,
     charstrings: Index,
     global_subrs: Index,
     local_subrs: ?Index,
@@ -119,6 +125,10 @@ pub fn parse(allocator: std.mem.Allocator, data: []const u8) CffError!Parsed {
 }
 
 pub fn prepare(data: []const u8, info: Info) CffError!Parsed {
+    const header_size: usize = if (data.len >= 3) data[2] else return error.BadCff;
+    const name_index = try readIndex(data, header_size);
+    const top_index = try readIndex(data, name_index.end);
+    const strings = try readIndex(data, top_index.end);
     const fd_array = if (info.fd_array_offset != 0) try readIndex(data, info.fd_array_offset) else null;
     const fd_select = if (info.fd_select_offset != 0) try readFdSelect(data, info.fd_select_offset) else null;
     if ((fd_array == null) != (fd_select == null)) return error.BadCff;
@@ -133,6 +143,7 @@ pub fn prepare(data: []const u8, info: Info) CffError!Parsed {
     }
     return .{
         .info = info,
+        .strings = strings,
         .charstrings = try readIndex(data, info.charstrings_offset),
         .global_subrs = try readIndex(data, info.global_subrs_offset),
         .local_subrs = if (info.local_subrs_offset != 0) try readIndex(data, info.local_subrs_offset) else null,
@@ -243,6 +254,38 @@ pub const Index = struct {
     }
 };
 
+/// Resolve one glyph name from a parsed, non-CID CFF1 charset.
+///
+/// The returned slice borrows either static standard-string storage or the CFF
+/// bytes. Missing and empty names remain `null`; the Face-level resolver uses
+/// that signal to synthesize `gidNNN`, matching Skrifa's fallback policy.
+pub fn glyphName(
+    data: []const u8,
+    parsed: Parsed,
+    glyph_id: glyph_mod.GlyphId,
+) CffError!?[]const u8 {
+    if (glyph_id >= parsed.info.charstrings_count) return error.InvalidGlyph;
+    if (!hasGlyphNameCharset(data, parsed)) return null;
+    // Once a charset has been selected, Skrifa synthesizes just the affected
+    // glyph when an individual SID lookup is malformed or uncovered. Keep the
+    // same total high-level behavior rather than turning optional metadata into
+    // an outline/font load failure.
+    const sid = charsetSidForGlyph(data, parsed.info, glyph_id) catch return null;
+    const sid_index: usize = sid;
+    const name = if (sid_index < standard_strings.values.len)
+        standard_strings.values[sid_index]
+    else
+        parsed.strings.object(data, sid_index - standard_strings.values.len) catch return null;
+    return if (name.len == 0) null else name;
+}
+
+pub fn hasGlyphNameCharset(data: []const u8, parsed: Parsed) bool {
+    const info = parsed.info;
+    if (!info.charset_present or info.is_cid_keyed) return false;
+    if (info.charset_offset <= 2) return true;
+    return info.charset_offset < data.len and data[info.charset_offset] <= 2;
+}
+
 fn readIndex(data: []const u8, offset: usize) CffError!Index {
     // CFF INDEX offsets are 1-based relative to object_base. Store the resolved
     // object_base/end once so individual object slices only need bounds checks.
@@ -312,7 +355,10 @@ fn parseTopDict(dict: []const u8) CffError!Info {
     var parser = DictParser.init(dict);
     while (try parser.next()) |entry| {
         switch (entry.operator) {
-            15 => info.charset_offset = try dictOffsetOperand(entry.operands, 0),
+            15 => {
+                info.charset_offset = try dictOffsetOperand(entry.operands, 0);
+                info.charset_present = true;
+            },
             17 => info.charstrings_offset = try dictOffsetOperand(entry.operands, 0),
             18 => {
                 if (entry.operands.len < 2) return error.BadCff;
@@ -321,6 +367,10 @@ fn parseTopDict(dict: []const u8) CffError!Info {
             },
             1236 => info.fd_array_offset = try dictOffsetOperand(entry.operands, 0),
             1237 => info.fd_select_offset = try dictOffsetOperand(entry.operands, 0),
+            1230 => {
+                if (entry.operands.len < 3) return error.BadCff;
+                info.is_cid_keyed = true;
+            },
             else => {},
         }
     }
@@ -457,6 +507,135 @@ fn charsetGlyphForSid(data: []const u8, info: Info, sid: u16) CffError!glyph_mod
     }
     return error.InvalidGlyph;
 }
+
+fn charsetSidForGlyph(
+    data: []const u8,
+    info: Info,
+    glyph_id: glyph_mod.GlyphId,
+) CffError!u16 {
+    if (glyph_id >= info.charstrings_count) return error.InvalidGlyph;
+    if (glyph_id == 0) return 0;
+    return switch (info.charset_offset) {
+        0 => if (glyph_id <= 228) glyph_id else error.InvalidGlyph,
+        1 => if (glyph_id < expert_charset.len) expert_charset[@as(usize, glyph_id)] else error.InvalidGlyph,
+        2 => if (glyph_id < expert_subset_charset.len) expert_subset_charset[@as(usize, glyph_id)] else error.InvalidGlyph,
+        else => try customCharsetSidForGlyph(data, info, glyph_id),
+    };
+}
+
+test "CFF glyph-name charsets resolve predefined and custom SIDs" {
+    const iso = Info{
+        .charstrings_offset = 0,
+        .charstrings_count = 229,
+        .global_subrs_offset = 0,
+        .charset_present = true,
+    };
+    try std.testing.expectEqual(@as(u16, 0), try charsetSidForGlyph(&.{}, iso, 0));
+    try std.testing.expectEqual(@as(u16, 228), try charsetSidForGlyph(&.{}, iso, 228));
+
+    var expert = iso;
+    expert.charset_offset = 1;
+    expert.charstrings_count = expert_charset.len;
+    try std.testing.expectEqual(@as(u16, 229), try charsetSidForGlyph(&.{}, expert, 2));
+
+    const format_0 = [_]u8{ 0xff, 0xff, 0xff, 0, 0x01, 0x87, 0x00, 0x22 };
+    const custom = Info{
+        .charstrings_offset = 0,
+        .charstrings_count = 3,
+        .global_subrs_offset = 0,
+        .charset_offset = 3,
+        .charset_present = true,
+    };
+    try std.testing.expectEqual(@as(u16, 391), try charsetSidForGlyph(&format_0, custom, 1));
+    try std.testing.expectEqual(@as(u16, 34), try charsetSidForGlyph(&format_0, custom, 2));
+    try std.testing.expectError(error.InvalidGlyph, charsetSidForGlyph(&format_0, custom, 3));
+}
+
+test "CFF glyph-name charset ranges reject malformed coverage" {
+    const truncated = [_]u8{ 0xff, 0xff, 0xff, 1, 0, 34 };
+    const info = Info{
+        .charstrings_offset = 0,
+        .charstrings_count = 3,
+        .global_subrs_offset = 0,
+        .charset_offset = 3,
+        .charset_present = true,
+    };
+    try std.testing.expectError(error.EndOfStream, charsetSidForGlyph(&truncated, info, 1));
+
+    const overlong = [_]u8{ 0xff, 0xff, 0xff, 1, 0, 34, 3 };
+    try std.testing.expectError(error.BadCff, charsetSidForGlyph(&overlong, info, 1));
+}
+
+fn customCharsetSidForGlyph(
+    data: []const u8,
+    info: Info,
+    glyph_id: glyph_mod.GlyphId,
+) CffError!u16 {
+    var cursor = info.charset_offset;
+    if (cursor >= data.len) return error.EndOfStream;
+    const format = data[cursor];
+    cursor += 1;
+    var glyph: usize = 1;
+    switch (format) {
+        0 => {
+            const index = @as(usize, glyph_id) - 1;
+            if (index >= @as(usize, info.charstrings_count) - 1) return error.InvalidGlyph;
+            if (cursor > data.len or index >= (data.len - cursor) / 2) return error.EndOfStream;
+            return std.mem.readInt(u16, data[cursor + index * 2 ..][0..2], .big);
+        },
+        1, 2 => while (glyph < info.charstrings_count) {
+            if (cursor > data.len or data.len - cursor < 2) return error.EndOfStream;
+            const first = std.mem.readInt(u16, data[cursor..][0..2], .big);
+            cursor += 2;
+            const left: usize = if (format == 1) blk: {
+                if (cursor >= data.len) return error.EndOfStream;
+                const value = data[cursor];
+                cursor += 1;
+                break :blk value;
+            } else blk: {
+                if (cursor > data.len or data.len - cursor < 2) return error.EndOfStream;
+                const value = std.mem.readInt(u16, data[cursor..][0..2], .big);
+                cursor += 2;
+                break :blk value;
+            };
+            const run_len = left + 1;
+            if (run_len > info.charstrings_count - glyph) return error.BadCff;
+            if (glyph_id < glyph + run_len) {
+                const delta = @as(usize, glyph_id) - glyph;
+                if (delta > std.math.maxInt(u16) - first) return error.BadCff;
+                return first + @as(u16, @intCast(delta));
+            }
+            glyph += run_len;
+        },
+        else => return error.UnsupportedCff,
+    }
+    return error.InvalidGlyph;
+}
+
+// Predefined CFF Expert charsets map glyph ids to SIDs. They are distinct
+// from both StandardEncoding and the standard-string table.
+const expert_charset = [_]u16{
+    0,   1,   229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 13,  14,  15,  99,
+    239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 27,  28,  249, 250, 251, 252,
+    253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 109, 110,
+    267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282,
+    283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293, 294, 295, 296, 297, 298,
+    299, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314,
+    315, 316, 317, 318, 158, 155, 163, 319, 320, 321, 322, 323, 324, 325, 326, 150,
+    164, 169, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340,
+    341, 342, 343, 344, 345, 346, 347, 348, 349, 350, 351, 352, 353, 354, 355, 356,
+    357, 358, 359, 360, 361, 362, 363, 364, 365, 366, 367, 368, 369, 370, 371, 372,
+    373, 374, 375, 376, 377, 378,
+};
+
+const expert_subset_charset = [_]u16{
+    0,   1,   231, 232, 235, 236, 237, 238, 13,  14,  15,  99,  239, 240, 241, 242,
+    243, 244, 245, 246, 247, 248, 27,  28,  249, 250, 251, 253, 254, 255, 256, 257,
+    258, 259, 260, 261, 262, 263, 264, 265, 266, 109, 110, 267, 268, 269, 270, 272,
+    300, 301, 302, 305, 314, 315, 158, 155, 163, 320, 321, 322, 323, 324, 325, 326,
+    150, 164, 169, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339,
+    340, 341, 342, 343, 344, 345, 346,
+};
 
 fn standardEncodingSid(code: u8) u16 {
     // seac uses Adobe StandardEncoding character codes. The CFF standard SID

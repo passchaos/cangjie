@@ -20,8 +20,11 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
 pub fn run(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.Face, options: options_mod.Options) !report.Result {
     const glyph_id = try resolveGlyphId(font, options);
     if (options.dirty_rect) {
-        if (options.mode != .raster_prepared) return error.InvalidArguments;
-        return runPreparedDirty(io, allocator, font, glyph_id, options);
+        return switch (options.mode) {
+            .raster_reuse => runRasterReuseDirty(io, allocator, font, glyph_id, options),
+            .raster_prepared => runPreparedDirty(io, allocator, font, glyph_id, options),
+            else => error.InvalidArguments,
+        };
     }
     if (options.warmup != 0) {
         var warmup_checksum: u64 = 0;
@@ -53,6 +56,56 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.F
         .samples = try samples.toOwnedSlice(allocator),
         .dirty_pixels = 0,
     };
+}
+
+fn runRasterReuseDirty(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options) !report.Result {
+    const coords = options.normalizedVariationCoords();
+    const session = font.glyphs().session();
+    var outline = if (coords.len == 0)
+        try session.outline(allocator, glyph_id)
+    else
+        try session.outlineAt(allocator, glyph_id, coords);
+    defer outline.deinit();
+    var target = try cangjie.render.GrayTarget.init(allocator, options.target_size, options.target_size);
+    defer target.deinit();
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
+    defer rasterizer.deinit();
+    rasterizer.setHintSize(options.font_size);
+    rasterizer.setSampling(options.samples_per_axis);
+    const units_per_em = font.properties().units_per_em;
+
+    // Discover the exact clipped antialiasing fringe once. The measured loop
+    // still runs the ordinary scan converter on every iteration; only the
+    // target clear and consumer are restricted to pixels that can change.
+    try rasterizer.drawOutline(&target, &outline, 0, options.font_size, options.font_size, units_per_em);
+    const bounds = dirty_rect.nonZeroBounds(target.pixels, target.width);
+    const dirty_pixels = if (bounds) |value| value.pixelCount() else 0;
+    if (options.warmup != 0) {
+        var ignored: u64 = 0;
+        try runRasterReuseDirtyIterations(&rasterizer, &target, &outline, units_per_em, bounds, options, options.warmup, &ignored);
+    }
+    var samples = std.ArrayList(report.Sample).empty;
+    errdefer samples.deinit(allocator);
+    var elapsed: i128 = 0;
+    var checksum: u64 = 0;
+    for (0..options.samples) |sample_index| {
+        var sample_checksum: u64 = 0;
+        const start = std.Io.Clock.now(.awake, io).nanoseconds;
+        try runRasterReuseDirtyIterations(&rasterizer, &target, &outline, units_per_em, bounds, options, options.iterations, &sample_checksum);
+        const duration = std.Io.Clock.now(.awake, io).nanoseconds - start;
+        elapsed += duration;
+        checksum = updateChecksum(checksum, sample_checksum);
+        try samples.append(allocator, .{ .index = sample_index, .elapsed_ns = duration, .iterations = options.iterations, .checksum = sample_checksum });
+    }
+    return .{ .elapsed_ns = elapsed, .checksum = checksum, .samples = try samples.toOwnedSlice(allocator), .dirty_pixels = dirty_pixels };
+}
+
+fn runRasterReuseDirtyIterations(rasterizer: *cangjie.render.Rasterizer, target: *cangjie.render.GrayTarget, outline: *const cangjie.font.Outline, units_per_em: u16, bounds: ?dirty_rect.Bounds, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
+    for (0..iterations) |_| {
+        dirty_rect.clear(target.pixels, target.width, bounds);
+        try rasterizer.drawOutline(target, outline, 0, options.font_size, options.font_size, units_per_em);
+        checksum.* = updateChecksum(checksum.*, dirty_rect.checksum(target.pixels, target.width, bounds));
+    }
 }
 
 fn runPreparedDirty(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options) !report.Result {

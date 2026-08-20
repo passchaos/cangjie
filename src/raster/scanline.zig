@@ -362,6 +362,28 @@ fn lessThanWindingIntersection(_: void, lhs: WindingIntersection, rhs: WindingIn
 }
 
 pub fn sortWindingIntersections(intersections: []WindingIntersection) void {
+    switch (intersections.len) {
+        0, 1 => return,
+        2 => {
+            compareSwapIntersections(&intersections[0], &intersections[1]);
+            return;
+        },
+        3 => {
+            compareSwapIntersections(&intersections[0], &intersections[1]);
+            compareSwapIntersections(&intersections[1], &intersections[2]);
+            compareSwapIntersections(&intersections[0], &intersections[1]);
+            return;
+        },
+        4 => {
+            compareSwapIntersections(&intersections[0], &intersections[1]);
+            compareSwapIntersections(&intersections[2], &intersections[3]);
+            compareSwapIntersections(&intersections[0], &intersections[2]);
+            compareSwapIntersections(&intersections[1], &intersections[3]);
+            compareSwapIntersections(&intersections[1], &intersections[2]);
+            return;
+        },
+        else => {},
+    }
     if (intersections.len <= 16) {
         var index: usize = 1;
         while (index < intersections.len) : (index += 1) {
@@ -375,6 +397,28 @@ pub fn sortWindingIntersections(intersections: []WindingIntersection) void {
         return;
     }
     std.sort.heap(WindingIntersection, intersections, {}, lessThanWindingIntersection);
+}
+
+inline fn compareSwapIntersections(a: *WindingIntersection, b: *WindingIntersection) void {
+    if (a.x > b.x) {
+        const temporary = a.*;
+        a.* = b.*;
+        b.* = temporary;
+    }
+}
+
+test "small winding sorting networks preserve ascending intersections" {
+    const values = [_]f32{ 4, 1, 3, 2 };
+    for (2..values.len + 1) |len| {
+        var intersections: [4]WindingIntersection = undefined;
+        for (values, 0..) |value, index| {
+            intersections[index] = .{ .x = value, .delta = @intCast(index) };
+        }
+        sortWindingIntersections(intersections[0..len]);
+        for (intersections[1..len], intersections[0 .. len - 1]) |current, previous| {
+            try std.testing.expect(previous.x <= current.x);
+        }
+    }
 }
 
 pub const CoveredSpan = struct {

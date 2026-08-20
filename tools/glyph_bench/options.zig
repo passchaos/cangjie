@@ -251,7 +251,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --iterations N       measured iterations, default 10000
         \\  --warmup N           unmeasured warmup iterations, default 1000
         \\  --samples N          independent measured samples, default 1
-        \\  --dirty-rect         clear and hash only the clipped glyph rectangle
+        \\  --dirty-rect         for reused/prepared raster, clear and hash only the clipped glyph rectangle
         \\  --variation CSV      normalized variation coordinates, e.g. 0.5,-0.25
         \\
         \\examples:
@@ -277,5 +277,11 @@ test "parse codepoint rejects non-scalar values" {
 
 test "parse accepts dirty rectangle benchmark mode" {
     const options = try parse(&.{ "glyph-bench", "--mode", "raster-prepared", "--dirty-rect" });
+    try std.testing.expect(options.dirty_rect);
+}
+
+test "parse accepts reused raster dirty rectangle mode" {
+    const options = try parse(&.{ "glyph-bench", "--mode", "raster-reuse", "--dirty-rect" });
+    try std.testing.expectEqual(Mode.raster_reuse, options.mode);
     try std.testing.expect(options.dirty_rect);
 }

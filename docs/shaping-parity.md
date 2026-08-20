@@ -3175,3 +3175,21 @@ shaping-performance superiority.
   equal-work microbenchmark or a claim that Cangjie's one-shot scan converter
   or antialiasing algorithm is universally faster. A client-side cached
   FreeType bitmap would define a different, upload/blit-only boundary.
+- Direct `raster-reuse` now has the same clipped-target consumer as the
+  prepared/FreeType dirty-rectangle rows. Both engines discover the stable
+  non-zero fringe outside timing, then clear, draw, and hash only that rectangle;
+  Cangjie still runs its ordinary flatten-and-scan path on every iteration.
+  Fixed-CPU-30 medians on Roboto 64 px leave FreeType ahead: Cangjie/FreeType
+  measured about `25.32/10.25 µs` for `A`, `35.70/13.89 µs` for `g`, and
+  `33.04/18.24 µs` for `é`. Comparable dirty areas (`1840/1886`, `1421/1421`,
+  and `1421/1470` pixels) show that full-target hashing was not the cause of
+  the direct scan-conversion deficit.
+- Direct scanline intersection sorting now uses fixed compare-swap networks for
+  two through four intersections, which dominate ordinary glyph sample rows,
+  while retaining insertion/heap sorting for larger rows. Across Roboto 64 px
+  `A`, `g`, and `é`, direct dirty-render checksums were byte-identical; 1×1,
+  2×2, and 3×3 density controls were byte-identical as well. Fixed-CPU-30
+  five-repeat counters reduced retired instructions by about `3.7%`, `3.5%`,
+  and `2.1%`, and branches by about `5.8%`, `6.1%`, and `3.3%`, respectively.
+  Cycle reductions were about `0.7--1.6%` under substantial frequency noise,
+  so this narrows but does not close the FreeType gap above.

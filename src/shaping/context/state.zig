@@ -122,6 +122,8 @@ pub const State = struct {
         self.output.gsub_table_proof_cache = &self.gsub_table_proofs;
         self.output.gpos_table_proof_cache = &self.gpos_table_proofs;
         self.output.lookup_selection_cache = &self.lookup_selection;
+        self.output.glyph_metrics_cache = &self.glyph_metrics;
+        self.output.glyph_index_cache = &self.glyph_indices;
     }
 
     fn detachPlanCaches(self: *State) void {
@@ -129,5 +131,7 @@ pub const State = struct {
         self.output.gsub_table_proof_cache = null;
         self.output.gpos_table_proof_cache = null;
         self.output.lookup_selection_cache = null;
+        self.output.glyph_metrics_cache = null;
+        self.output.glyph_index_cache = null;
     }
 };

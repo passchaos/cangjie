@@ -1331,12 +1331,17 @@ both runners apply 0.75 units of letter spacing and 2.0 units of word spacing
 to the complete 16-unit paragraph before breaking at width 200. On Parley's
 109-byte Latin sample both produce 105 glyphs and five lines with stable
 per-engine checksums. A fixed-CPU-30 Cangjie/Parley/Parley/Cangjie 11-sample
-probe measured Cangjie at `2.107/2.077 ms` and Parley at
-`117.1/113.0 µs` per layout. This closes a missing styled/spacing benchmark
-coverage item but exposes a roughly 18x Cangjie deficit: Cangjie's current
-`layoutStyled` path performs unified style metadata and paragraph work that
-the default path avoids. It is therefore a concrete optimization target, not
-evidence of Parley-relative superiority.
+probe initially measured Cangjie at `2.107/2.077 ms` and Parley at
+`117.1/113.0 µs` per layout. Profiling showed that the styled segment bridge
+discarded the engine's glyph-index and glyph-metrics caches, forcing complete
+SFNT/cmap checksum validation for every glyph. Threading those existing caches
+through the styled driver reduced retired instructions from about `13.76B`
+to `392M` and cycles from `3.48B` to `141M` per 1,000 layouts, with the
+same Cangjie checksum. A post-fix fixed-CPU-30 31-sample matrix measured
+Cangjie at `118.4/128.1 µs` and Parley at `185.5/176.5 µs`: Cangjie is
+about `1.45x` faster by geometric mean on this output-count-equivalent
+styled/spacing boundary. This is still one Latin style workload, not an
+overall Parley performance claim.
 
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another

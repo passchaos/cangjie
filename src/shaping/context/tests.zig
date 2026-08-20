@@ -196,3 +196,44 @@ test "engine owns styled metadata and paragraph measurement" {
     try std.testing.expect(metrics.width > 0);
     try std.testing.expect(metrics.height > 0);
 }
+
+test "styled layout reuses face-derived glyph caches" {
+    const test_font = @import("../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const cascade = face_mod.Cascade.init(face_mod.backend.faces(&fonts));
+    const spans = [_]styled_paragraph.Span{.{
+        .byte_start = 0,
+        .byte_len = 3,
+        .style_index = 1,
+        .font_size = 16,
+        .letter_spacing = 0.75,
+        .word_spacing = 2,
+    }};
+
+    var engine = context_mod.Engine.init(std.testing.allocator, .{});
+    defer engine.deinit();
+    _ = try engine.layoutStyled(cascade, .{
+        .text = "A A",
+        .default_font_size = 16,
+        .spans = &spans,
+        .options = .{ .max_width = 200 },
+    });
+    const first = engine.stats();
+    _ = try engine.layoutStyled(cascade, .{
+        .text = "A A",
+        .default_font_size = 16,
+        .spans = &spans,
+        .options = .{ .max_width = 200 },
+    });
+    const reused = engine.stats();
+    try std.testing.expect(
+        reused.glyph_indices.hits > first.glyph_indices.hits,
+    );
+    try std.testing.expect(
+        reused.glyph_metrics.hits > first.glyph_metrics.hits,
+    );
+}

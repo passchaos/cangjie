@@ -182,6 +182,8 @@ const Driver = struct {
         const item_text = self.text[byte_start..byte_end];
         var segment_context = SegmentContext{
             .buffer = self.buffer,
+            .metrics_cache = self.buffer.glyph_metrics_cache,
+            .glyph_index_cache = self.buffer.glyph_index_cache,
             .font_size = span.font_size,
             .lookup_options = .{
                 .lookup = .{
@@ -537,6 +539,8 @@ const Driver = struct {
 
 const SegmentContext = struct {
     buffer: *context_output.Buffer,
+    metrics_cache: ?*@import("../../shaping/context/cache/root.zig").GlyphMetricsCache,
+    glyph_index_cache: ?*@import("../../shaping/context/cache/root.zig").GlyphIndexCache,
     font_size: f32,
     lookup_options: pipeline_types.ResolvedLookupOptions,
 
@@ -552,8 +556,8 @@ const SegmentContext = struct {
         const glyph_start = self.buffer.glyphs.items.len;
         try segment_pipeline.run(.{
             .font = font,
-            .metrics_cache = null,
-            .glyph_index_cache = null,
+            .metrics_cache = self.metrics_cache,
+            .glyph_index_cache = self.glyph_index_cache,
             .buffer = self.buffer,
             .text = text,
             .font_size = self.font_size,

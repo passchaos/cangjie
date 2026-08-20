@@ -17,7 +17,8 @@ pub fn ruleSet(
     position: usize,
     lookup_flag: u16,
     run: Options,
-) Error!?match.Match {
+    result: *match.Match,
+) Error!bool {
     const rule_count = try view.readU16(set_offset);
     var candidate_window = window.Window.init(
         view,
@@ -30,18 +31,17 @@ pub fn ruleSet(
     for (0..rule_count) |rule_index| {
         const rule_offset = set_offset +
             try view.readU16(set_offset + 2 + rule_index * 2);
-        if (try rule(view, rule_offset, &candidate_window)) |result| {
-            return result;
-        }
+        if (try rule(view, rule_offset, &candidate_window, result)) return true;
     }
-    return null;
+    return false;
 }
 
 fn rule(
     view: View,
     rule_offset: usize,
     candidate_window: *window.Window,
-) Error!?match.Match {
+    result: *match.Match,
+) Error!bool {
     var cursor = rule_offset;
 
     const backtrack_count = try view.readU16(cursor);
@@ -51,28 +51,28 @@ fn rule(
     }
     if ((try candidate_window.backtrackIndices(
         backtrack_count,
-    )) == null) return null;
+    )) == null) return false;
     if (!try classesMatch(
         view,
         cursor,
         backtrack_count,
         candidate_window,
         .backtrack,
-    )) return null;
+    )) return false;
     cursor += backtrack_count * 2;
 
     const input_count = try view.readU16(cursor);
     cursor += 2;
-    if (input_count == 0) return null;
+    if (input_count == 0) return false;
     if (input_count > window.max_region_glyphs) return error.UnsupportedGsub;
-    if ((try candidate_window.inputIndices(input_count)) == null) return null;
+    if ((try candidate_window.inputIndices(input_count)) == null) return false;
     if (!try classesMatch(
         view,
         cursor,
         input_count - 1,
         candidate_window,
         .input,
-    )) return null;
+    )) return false;
     cursor += (input_count - 1) * 2;
 
     const lookahead_count = try view.readU16(cursor);
@@ -83,18 +83,18 @@ fn rule(
     if ((try candidate_window.lookaheadIndices(
         input_count,
         lookahead_count,
-    )) == null) return null;
+    )) == null) return false;
     if (!try lookaheadClassesMatch(
         view,
         cursor,
         input_count,
         lookahead_count,
         candidate_window,
-    )) return null;
+    )) return false;
     cursor += lookahead_count * 2;
 
     const record_count = try view.readU16(cursor);
-    return match.Match.init(
+    result.set(
         candidate_window,
         input_count,
         backtrack_count,
@@ -104,6 +104,7 @@ fn rule(
             .count = record_count,
         } },
     );
+    return true;
 }
 
 const Region = enum { backtrack, input };

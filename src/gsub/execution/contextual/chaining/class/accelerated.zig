@@ -2,10 +2,12 @@
 
 const std = @import("std");
 const accelerator = @import("../../../../accelerator/root.zig");
+const shaping_sections = @import("../../../../../shaping_sections.zig");
 const filtering = @import("../../../../runtime/filtering.zig");
 const Options = @import("../../../../runtime/options.zig").Options;
 const table = @import("../../../../table/root.zig");
 const commit = @import("commit.zig");
+const match = @import("match.zig");
 const matching = @import("matching/accelerated.zig");
 const model = @import("../../model.zig");
 const GlyphId = @import("../../../../../glyph.zig").GlyphId;
@@ -81,7 +83,7 @@ pub fn at(
     );
 }
 
-fn applyEligibleAt(
+noinline fn applyEligibleAt(
     comptime Executor: type,
     view: View,
     parsed: Subtable,
@@ -90,15 +92,17 @@ fn applyEligibleAt(
     allocator: std.mem.Allocator,
     lookup_flag: u16,
     run: Options,
-) Error!model.ApplyResult {
-    const matched = try matching.subtable(
+) linksection(shaping_sections.isolated_hotpaths) Error!model.ApplyResult {
+    var matched: match.Match = undefined;
+    if (!try matching.subtable(
         view,
         parsed,
         glyphs.items,
         position,
         lookup_flag,
         run,
-    ) orelse return .{};
+        &matched,
+    )) return .{};
     return commit.apply(
         Executor,
         view,

@@ -3017,6 +3017,24 @@ shaping-performance superiority.
   instructions/branches and `0.45%` in cycles. All checksums were unchanged,
   and the complete HarfBuzz/HarfRust parity umbrella passes, including the
   10,000-line Hindi corpus at `b01a5388ce792b49`.
+- Chaining class-context matching now returns a boolean and writes its three
+  bounded physical-index regions only after a rule succeeds. Returning
+  `!?Match` had made each rejected rule initialize or copy the large
+  error-union payload even though no region escaped; both accelerated and
+  defensive format-2 paths now share the success-only materialization
+  contract. The accelerated wrapper remains in the isolated hot-path section,
+  preventing its code-size change from shifting unrelated Latin and Arabic
+  functions. A fixed-CPU-30 A/B/B/A plus B/A/A/B 31-sample matrix reduced
+  NotoSansDevanagari `hi-words` process medians from an average
+  `1465.911` to `1417.134 ns/glyph`, about `3.33%`; every process kept
+  checksum `e057170f005a0939`. Five-repeat counters reduced retired
+  instructions by `3.32%` and branches by `1.76%`; cycles were effectively
+  flat in that counter order and branch misses rose `1.43%`, while the
+  interleaved wall-time matrix retained the clear gain. Roboto instructions
+  and branches changed by less than `0.003%` and cycles improved `0.24%`;
+  Amiri long text instructions/branches stayed within `0.001%`. The complete
+  test suite and shaping, corpus, and USE HarfBuzz/HarfRust parity umbrellas
+  pass, including the 10,000-line Hindi checksum `b01a5388ce792b49`.
 - Prepared 4x4 raster rows now accumulate full-pixel interiors as signed range
   differences and resolve them during the already-required blend walk. Exact
   sample-center tests remain at both span boundaries, while 1x1, 2x2, and

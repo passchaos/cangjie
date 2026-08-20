@@ -5,6 +5,7 @@ const filtering = @import("../../../../runtime/filtering.zig");
 const Options = @import("../../../../runtime/options.zig").Options;
 const table = @import("../../../../table/root.zig");
 const commit = @import("commit.zig");
+const match = @import("match.zig");
 const matching = @import("matching/direct.zig");
 const window = @import("matching/window.zig");
 const model = @import("../../model.zig");
@@ -104,7 +105,8 @@ fn parsedAt(
     );
     if (set_relative == 0) return .{};
 
-    const matched = try matching.ruleSet(
+    var matched: match.Match = undefined;
+    if (!try matching.ruleSet(
         view,
         parsed.subtable_offset + set_relative,
         parsed.class_defs,
@@ -112,7 +114,8 @@ fn parsedAt(
         position,
         lookup_flag,
         run,
-    ) orelse return .{};
+        &matched,
+    )) return .{};
     return commit.apply(
         Executor,
         view,

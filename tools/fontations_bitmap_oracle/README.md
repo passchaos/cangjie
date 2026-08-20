@@ -16,5 +16,13 @@ bit-aligned formats 2, 5, and 7. Cangjie retains that same public boundary.
 
 ```sh
 cargo run --manifest-path tools/fontations_bitmap_oracle/Cargo.toml -- \
-  /tmp/cangjie-bgra.ttf 1 16
+  /tmp/cangjie-bgra.ttf bitmap 1 16
+```
+
+The same binary also provides a repeated unscaled outline draw boundary for
+Skrifa comparisons:
+
+```sh
+cargo run --release --manifest-path tools/fontations_bitmap_oracle/Cargo.toml -- \
+  /path/to/font.ttf outline GLYPH_ID 10000 31
 ```

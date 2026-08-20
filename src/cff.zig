@@ -37,6 +37,18 @@ pub const Parsed = struct {
     local_subrs: ?Index,
     fd_array: ?Index,
     fd_select: ?FdSelect,
+    /// Per-FD private dictionaries decoded once for CID-keyed fonts.
+    cid_private: []const Info = &.{},
+    cid_local_subrs: []const ?Index = &.{},
+    allocator: ?std.mem.Allocator = null,
+
+    pub fn deinit(self: *Parsed) void {
+        if (self.allocator) |allocator| {
+            allocator.free(self.cid_local_subrs);
+            allocator.free(self.cid_private);
+        }
+        self.* = undefined;
+    }
 };
 
 pub const FdSelect = struct {
@@ -85,8 +97,25 @@ pub fn parseInfo(data: []const u8) CffError!Info {
     return info;
 }
 
-pub fn parse(data: []const u8) CffError!Parsed {
-    return try prepare(data, try parseInfo(data));
+pub fn parse(allocator: std.mem.Allocator, data: []const u8) CffError!Parsed {
+    var parsed = try prepare(data, try parseInfo(data));
+    if (parsed.fd_array) |fd_array| {
+        const private = try allocator.alloc(Info, fd_array.count);
+        errdefer allocator.free(private);
+        const local_subrs = try allocator.alloc(?Index, fd_array.count);
+        errdefer allocator.free(local_subrs);
+        for (private, local_subrs, 0..) |*slot, *subrs, fd_index| {
+            slot.* = try parseCidFontDict(data, fd_array, fd_index);
+            subrs.* = if (slot.local_subrs_offset != 0)
+                try readIndex(data, slot.local_subrs_offset)
+            else
+                null;
+        }
+        parsed.cid_private = private;
+        parsed.cid_local_subrs = local_subrs;
+        parsed.allocator = allocator;
+    }
+    return parsed;
 }
 
 pub fn prepare(data: []const u8, info: Info) CffError!Parsed {
@@ -146,10 +175,27 @@ fn appendGlyphOutlinePreparedAt(allocator: std.mem.Allocator, data: []const u8, 
     if (seac_depth > 2) return error.BadCff;
     if (glyph_id >= parsed.charstrings.count) return error.InvalidGlyph;
     const bytes = try parsed.charstrings.object(data, glyph_id);
-    const private = if (parsed.fd_array) |fd_array| blk: {
+    const SelectedPrivate = struct { info: Info, local_subrs: ?Index };
+    const selected: SelectedPrivate = if (parsed.fd_array) |fd_array| blk: {
         const fd_index = try fdSelectValue(data, parsed.fd_select.?, glyph_id, parsed.charstrings.count, fd_array.count);
-        break :blk try parseCidFontDict(data, fd_array, fd_index);
-    } else parsed.info;
+        if (fd_index < parsed.cid_private.len and
+            fd_index < parsed.cid_local_subrs.len)
+        {
+            break :blk .{
+                .info = parsed.cid_private[fd_index],
+                .local_subrs = parsed.cid_local_subrs[fd_index],
+            };
+        }
+        const info = try parseCidFontDict(data, fd_array, fd_index);
+        break :blk .{
+            .info = info,
+            .local_subrs = if (info.local_subrs_offset != 0)
+                try readIndex(data, info.local_subrs_offset)
+            else
+                null,
+        };
+    } else .{ .info = parsed.info, .local_subrs = parsed.local_subrs };
+    const private = selected.info;
     if (hints) |program| program.hint_params = private.hint_params;
     var interpreter = Type2Interpreter{
         .allocator = allocator,
@@ -158,7 +204,7 @@ fn appendGlyphOutlinePreparedAt(allocator: std.mem.Allocator, data: []const u8, 
         .default_width_x = private.default_width_x,
         .cff_data = data,
         .global_subrs = parsed.global_subrs,
-        .local_subrs = if (private.local_subrs_offset != 0) try readIndex(data, private.local_subrs_offset) else null,
+        .local_subrs = selected.local_subrs,
         .x = origin.x,
         .y = origin.y,
         .hints = hints,

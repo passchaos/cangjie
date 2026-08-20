@@ -993,7 +993,8 @@ pub const Font = struct {
             if (horizontal_header) |header| header.line_gap else 0;
         const cff_parsed: ?CffParsedInfo = if (format == .opentype_cff and cff != null) blk: {
             const cff_table = cff.?;
-            const parsed = try cff_mod.parse(data[cff_table.offset .. cff_table.offset + cff_table.length]);
+            var parsed = try cff_mod.parse(allocator, data[cff_table.offset .. cff_table.offset + cff_table.length]);
+            errdefer parsed.deinit();
             if (parsed.info.charstrings_count != glyph_count) return error.BadSfnt;
             break :blk parsed;
         } else null;
@@ -1168,6 +1169,7 @@ pub const Font = struct {
     }
 
     pub fn deinit(self: *Font) void {
+        if (self.cff_parsed) |*parsed| parsed.deinit();
         self.allocator.free(self.cmap_subtables);
         self.allocator.free(self.owned_tables);
         self.* = undefined;
@@ -2043,7 +2045,7 @@ pub const Font = struct {
             try cff_mod.appendGlyphOutlinePreparedWithHints(
                 allocator,
                 data,
-                self.cff_parsed orelse try cff_mod.parse(data),
+                self.cff_parsed orelse try cff_mod.parse(self.allocator, data),
                 &outline,
                 glyph_id,
                 &program,
@@ -5706,7 +5708,7 @@ pub const Font = struct {
                 try validateCffGlyphCount(self.data, cff, self.glyph_count);
                 try cff_mod.appendGlyphOutline(allocator, cff_data, try cff_mod.parseInfo(cff_data), &outline, glyph_id);
             } else {
-                try cff_mod.appendGlyphOutlinePrepared(allocator, cff_data, self.cff_parsed orelse try cff_mod.parse(cff_data), &outline, glyph_id);
+                try cff_mod.appendGlyphOutlinePrepared(allocator, cff_data, self.cff_parsed orelse try cff_mod.parse(self.allocator, cff_data), &outline, glyph_id);
             }
             // Unlike glyf, CFF has no per-glyph header bounds. Materialize them
             // from the executed Type2 path so public extents and raster callers
@@ -5903,7 +5905,7 @@ pub const Font = struct {
                 try validateCffGlyphCount(self.data, cff, self.glyph_count);
                 try cff_mod.appendGlyphOutline(outline.allocator, cff_data, try cff_mod.parseInfo(cff_data), outline, glyph_id);
             } else {
-                try cff_mod.appendGlyphOutlinePrepared(outline.allocator, cff_data, self.cff_parsed orelse try cff_mod.parse(cff_data), outline, glyph_id);
+                try cff_mod.appendGlyphOutlinePrepared(outline.allocator, cff_data, self.cff_parsed orelse try cff_mod.parse(self.allocator, cff_data), outline, glyph_id);
             }
         }
         outline_geometry.transformPathCommands(outline.commands.items[command_start..], transform);

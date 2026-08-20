@@ -116,6 +116,20 @@ load-time superiority over FreeType or Fontations.
 
 ## Fontations Coverage Gate
 
+The Fontations/Skrifa oracle now also exposes a repeated unscaled outline draw
+boundary. On fixed CPU 30, 31-sample medians for Roboto `A` measured Cangjie's
+parsed `GlyphSession` at `1007/1024 ns` versus Skrifa at `1025/1196 ns`; Noto
+Serif `g` measured `4717/4623 ns` versus `6815/6868 ns`. The initial Noto Kufi
+Arabic `س` row exposed a Cangjie deficit at about `6000 ns` versus
+`5766/5798 ns`. Profiling found repeated CFF Private DICT and Local Subrs INDEX
+decoding on every glyph. Parse-time CFF state now owns decoded per-FD private
+records and local subroutine indexes; the post-fix Cangjie row measured
+`3585/3751 ns` versus Skrifa's fresh `5641/5782 ns`, about a `1.55x`
+geometric-mean Cangjie lead. Command-stream checksums are stable within each
+engine, and the existing CFF/FreeType correctness gates remain authoritative
+for geometry parity. These are three unscaled outline workloads, not an
+overall Fontations performance claim.
+
 `docs/fontations-coverage.json` maps every public top-level table family in
 Fontations `read-fonts` 0.42.2, plus eight grouped Skrifa 0.45.2 capability
 families covering `MetadataProvider` and embedded TrueType hinting, to a

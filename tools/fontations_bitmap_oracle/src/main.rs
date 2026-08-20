@@ -1,5 +1,10 @@
-use skrifa::{bitmap::BitmapData, prelude::Size, FontRef, GlyphId, MetadataProvider};
-use std::{env, fs, process};
+use skrifa::{
+    bitmap::BitmapData,
+    outline::{DrawSettings, OutlinePen},
+    prelude::{LocationRef, Size},
+    FontRef, GlyphId, MetadataProvider,
+};
+use std::{env, fs, hint::black_box, process, time::Instant};
 
 fn fail(message: &str) -> ! {
     eprintln!("fontations bitmap oracle: {message}");
@@ -9,11 +14,22 @@ fn fail(message: &str) -> ! {
 fn main() {
     let mut args = env::args().skip(1);
     let path = args.next().unwrap_or_else(|| fail("missing font path"));
+    let mode = args.next().unwrap_or_else(|| fail("missing mode"));
     let glyph_id: u32 = args
         .next()
         .unwrap_or_else(|| fail("missing glyph id"))
         .parse()
         .unwrap_or_else(|_| fail("invalid glyph id"));
+    let bytes = fs::read(path).unwrap_or_else(|_| fail("cannot read font"));
+    let font = FontRef::new(&bytes).unwrap_or_else(|_| fail("cannot parse font"));
+    match mode.as_str() {
+        "bitmap" => bitmap(&font, glyph_id, &mut args),
+        "outline" => outline(&font, glyph_id, &mut args),
+        _ => fail("mode must be bitmap or outline"),
+    }
+}
+
+fn bitmap(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {
     let size: f32 = args
         .next()
         .unwrap_or_else(|| fail("missing size"))
@@ -22,9 +38,6 @@ fn main() {
     if args.next().is_some() {
         fail("unexpected argument");
     }
-
-    let bytes = fs::read(path).unwrap_or_else(|_| fail("cannot read font"));
-    let font = FontRef::new(&bytes).unwrap_or_else(|_| fail("cannot parse font"));
     let glyph = font
         .bitmap_strikes()
         .glyph_for_size(Size::new(size), GlyphId::new(glyph_id))
@@ -48,4 +61,95 @@ fn main() {
         data.len(),
         hash,
     );
+}
+
+fn outline(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {
+    let iterations: usize = args
+        .next()
+        .unwrap_or_else(|| fail("missing iterations"))
+        .parse()
+        .unwrap_or_else(|_| fail("invalid iterations"));
+    let samples: usize = args
+        .next()
+        .unwrap_or_else(|| fail("missing samples"))
+        .parse()
+        .unwrap_or_else(|_| fail("invalid samples"));
+    if iterations == 0 || samples == 0 || args.next().is_some() {
+        fail("invalid outline arguments");
+    }
+    let glyph = font
+        .outline_glyphs()
+        .get(GlyphId::new(glyph_id))
+        .unwrap_or_else(|| fail("missing outline glyph"));
+    let mut values = Vec::with_capacity(samples);
+    let mut checksum = 0_u64;
+    let mut commands = 0_usize;
+    for _ in 0..samples {
+        for _ in 0..3 {
+            let mut pen = HashPen::default();
+            glyph
+                .draw(unscaled_settings(), &mut pen)
+                .unwrap_or_else(|_| fail("cannot draw outline"));
+            checksum = pen.hash;
+            commands = pen.commands;
+        }
+        let start = Instant::now();
+        let mut batch_hash = 0_u64;
+        for _ in 0..iterations {
+            let mut pen = HashPen::default();
+            glyph
+                .draw(unscaled_settings(), &mut pen)
+                .unwrap_or_else(|_| fail("cannot draw outline"));
+            batch_hash = batch_hash.wrapping_add(pen.hash);
+        }
+        values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
+        black_box(batch_hash);
+    }
+    values.sort_by(f64::total_cmp);
+    println!(
+        "engine=skrifa\tmode=outline\titerations={iterations}\tsamples={samples}\tmedian_ns_per_iter={:.3}\tcommands={commands}\tchecksum={checksum:016x}",
+        values[values.len() / 2],
+    );
+}
+
+fn unscaled_settings() -> DrawSettings<'static> {
+    DrawSettings::unhinted(Size::unscaled(), LocationRef::default())
+}
+
+#[derive(Default)]
+struct HashPen {
+    hash: u64,
+    commands: usize,
+}
+
+impl HashPen {
+    fn command(&mut self, tag: u8, values: &[f32]) {
+        self.hash ^= u64::from(tag);
+        self.hash = self.hash.wrapping_mul(0x100000001b3);
+        for value in values {
+            for byte in value.to_bits().to_le_bytes() {
+                self.hash ^= u64::from(byte);
+                self.hash = self.hash.wrapping_mul(0x100000001b3);
+            }
+        }
+        self.commands += 1;
+    }
+}
+
+impl OutlinePen for HashPen {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.command(1, &[x, y]);
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.command(2, &[x, y]);
+    }
+    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+        self.command(3, &[cx, cy, x, y]);
+    }
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        self.command(4, &[cx0, cy0, cx1, cy1, x, y]);
+    }
+    fn close(&mut self) {
+        self.command(5, &[]);
+    }
 }

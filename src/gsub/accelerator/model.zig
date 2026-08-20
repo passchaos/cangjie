@@ -8,6 +8,16 @@ const GlyphDigest = @import("../../glyph_digest.zig").GlyphDigest;
 const GlyphId = @import("../../glyph.zig").GlyphId;
 const class_context = @import("../../opentype/class_context.zig");
 
+/// Contextual and ligature acceleration use fixed stack scratch for component
+/// offsets. Builders omit larger authored definitions so runtime execution and
+/// cached sidecars share one explicit bound.
+pub const max_ligature_components = 64;
+
+/// Class-based contextual accelerators and their runtime matchers share fixed
+/// stack windows. Keep the builder admission policy and executor storage bound
+/// as one model contract so neither side can silently accept wider rules.
+pub const max_context_region_glyphs = 64;
+
 pub const Lookup = struct {
     /// Dispatch fields decoded once from the validated Lookup table. Runtime
     /// use checks `lookup_offset`, so a stale or foreign sidecar falls back to
@@ -207,6 +217,22 @@ pub const ReverseChainingContextKey = struct {
     backtrack: GlyphId,
     lookahead_0: GlyphId,
     lookahead_1: GlyphId,
+
+    pub fn lessThan(lhs: ReverseChainingContextKey, rhs: ReverseChainingContextKey) bool {
+        if (lhs.target != rhs.target) return lhs.target < rhs.target;
+        if (lhs.backtrack != rhs.backtrack) return lhs.backtrack < rhs.backtrack;
+        if (lhs.lookahead_0 != rhs.lookahead_0) {
+            return lhs.lookahead_0 < rhs.lookahead_0;
+        }
+        return lhs.lookahead_1 < rhs.lookahead_1;
+    }
+
+    pub fn eql(lhs: ReverseChainingContextKey, rhs: ReverseChainingContextKey) bool {
+        return lhs.target == rhs.target and
+            lhs.backtrack == rhs.backtrack and
+            lhs.lookahead_0 == rhs.lookahead_0 and
+            lhs.lookahead_1 == rhs.lookahead_1;
+    }
 };
 
 pub const ReverseChainingContextEntry = struct {

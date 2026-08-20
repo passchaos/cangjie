@@ -52,6 +52,26 @@ pub fn read(
     return sets;
 }
 
+pub fn setCountPublic(data: []const u8, offset: usize) ParseError!u16 {
+    return setCount(data, offset);
+}
+
+pub fn readSet(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    offset: usize,
+    set_index: usize,
+) (Error || error{InvalidMarkGlyphSet})![]GlyphId {
+    const set_count = try setCount(data, offset);
+    if (set_index >= set_count) return error.InvalidMarkGlyphSet;
+    const children_start = 4 + @as(usize, set_count) * 4;
+    const relative = try bin.readU32At(data, offset + 4 + set_index * 4);
+    if (relative < children_start or relative > data.len - offset) {
+        return error.BadSfnt;
+    }
+    return coverage.glyphs(allocator, data, offset + relative);
+}
+
 pub fn free(allocator: std.mem.Allocator, sets: [][]GlyphId) void {
     freeInitialized(allocator, sets);
     allocator.free(sets);

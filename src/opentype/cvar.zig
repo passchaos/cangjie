@@ -89,6 +89,126 @@ pub fn validate(data: []const u8, offset: usize, length: usize, axis_count: usiz
     }
 }
 
+/// Accumulate cvar deltas for one normalized axis-order location.
+///
+/// The caller supplies a zeroed or previously accumulated design-unit delta
+/// array with exactly one entry per CVT value. Tuple deltas are rounded only
+/// after all active tuples have contributed, matching the OpenType/FreeType
+/// cvar lifecycle before CVT scaling and prep execution.
+pub fn accumulateDeltas(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    axis_count: usize,
+    cvt_value_count: usize,
+    normalized_coords: []const f32,
+    out: []i32,
+) Error!void {
+    if (out.len != cvt_value_count or
+        normalized_coords.len != axis_count)
+    {
+        return error.BadSfnt;
+    }
+    const h = try header(data, offset, length, axis_count);
+    var headers_cursor: usize = 8;
+    var data_cursor = h.data_offset;
+    const shared_points: ?DecodedPoints = if (h.uses_shared_point_numbers)
+        try decodePackedPointNumbers(
+            allocator,
+            data,
+            offset,
+            length,
+            &data_cursor,
+            cvt_value_count,
+        )
+    else
+        null;
+    defer if (shared_points) |points| points.deinit(allocator);
+
+    const accumulated = try allocator.alloc(f64, cvt_value_count);
+    defer allocator.free(accumulated);
+    @memset(accumulated, 0);
+    for (0..h.tuple_count) |_| {
+        const tuple = try readTupleHeader(
+            data,
+            offset,
+            length,
+            headers_cursor,
+            axis_count,
+        );
+        headers_cursor += tuple.header_size;
+        if (tuple.variation_data_size > length - data_cursor) {
+            return error.BadSfnt;
+        }
+        const tuple_end = data_cursor + tuple.variation_data_size;
+        var payload_cursor = data_cursor;
+        const private_points: ?DecodedPoints =
+            if (tuple.hasPrivatePointNumbers())
+                try decodePackedPointNumbers(
+                    allocator,
+                    data,
+                    offset,
+                    length,
+                    &payload_cursor,
+                    cvt_value_count,
+                )
+            else
+                null;
+        defer if (private_points) |points| points.deinit(allocator);
+        const points = private_points orelse shared_points;
+        const count = if (points) |selection|
+            selection.values.len
+        else
+            cvt_value_count;
+        const deltas = try allocator.alloc(i32, count);
+        defer allocator.free(deltas);
+        try decodePackedDeltas(
+            data,
+            offset,
+            &payload_cursor,
+            tuple_end,
+            deltas,
+        );
+        if (payload_cursor != tuple_end) return error.BadSfnt;
+        const scalar = try tupleScalar(
+            data,
+            offset + tuple.header_offset,
+            axis_count,
+            tuple.tuple_index,
+            normalized_coords,
+        );
+        if (scalar != 0) {
+            for (deltas, 0..) |delta, index| {
+                const target = if (points) |selection|
+                    selection.values[index]
+                else
+                    index;
+                accumulated[target] += @as(f64, @floatFromInt(delta)) *
+                    scalar;
+            }
+        }
+        data_cursor = tuple_end;
+    }
+    for (out, accumulated) |*result, value| {
+        if (!std.math.isFinite(value) or
+            value < @as(f64, @floatFromInt(std.math.minInt(i32))) or
+            value > @as(f64, @floatFromInt(std.math.maxInt(i32))))
+        {
+            return error.BadSfnt;
+        }
+        result.* +|= @intFromFloat(@round(value));
+    }
+}
+
+const DecodedPoints = struct {
+    values: []usize,
+
+    fn deinit(self: DecodedPoints, allocator: std.mem.Allocator) void {
+        allocator.free(self.values);
+    }
+};
+
 pub fn info(allocator: std.mem.Allocator, data: []const u8, offset: usize, length: usize, axis_count: usize) Error!Info {
     const h = try header(data, offset, length, axis_count);
     const tuples = try allocator.alloc(TupleInfo, h.tuple_count);
@@ -274,6 +394,64 @@ fn validatePackedPointNumbers(data: []const u8, table_offset: usize, table_lengt
     return .{ .explicit = .{ .count = point_count, .max_point = if (saw_point) last_point else 0 } };
 }
 
+fn decodePackedPointNumbers(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    table_offset: usize,
+    table_length: usize,
+    cursor: *usize,
+    cvt_value_count: usize,
+) Error!?DecodedPoints {
+    if (cursor.* >= table_length) return error.BadSfnt;
+    const first = data[table_offset + cursor.*];
+    cursor.* += 1;
+    if (first == 0) return null;
+    const count: usize = if ((first & 0x80) == 0)
+        first
+    else blk: {
+        if (cursor.* >= table_length) return error.BadSfnt;
+        const second = data[table_offset + cursor.*];
+        cursor.* += 1;
+        break :blk (@as(usize, first & 0x7f) << 8) | second;
+    };
+    const values = try allocator.alloc(usize, count);
+    errdefer allocator.free(values);
+    var written: usize = 0;
+    var last: usize = 0;
+    while (written < count) {
+        if (cursor.* >= table_length) return error.BadSfnt;
+        const control = data[table_offset + cursor.*];
+        cursor.* += 1;
+        const run_count = @as(usize, control & 0x7f) + 1;
+        if (run_count > count - written) return error.BadSfnt;
+        const words = (control & 0x80) != 0;
+        for (0..run_count) |_| {
+            const delta: usize = if (words) blk: {
+                if (cursor.* > table_length or
+                    2 > table_length - cursor.*)
+                {
+                    return error.BadSfnt;
+                }
+                const value =
+                    try bin.readU16At(data, table_offset + cursor.*);
+                cursor.* += 2;
+                break :blk value;
+            } else blk: {
+                if (cursor.* >= table_length) return error.BadSfnt;
+                const value = data[table_offset + cursor.*];
+                cursor.* += 1;
+                break :blk value;
+            };
+            last = std.math.add(usize, last, delta) catch
+                return error.BadSfnt;
+            if (last >= cvt_value_count) return error.BadSfnt;
+            values[written] = last;
+            written += 1;
+        }
+    }
+    return .{ .values = values };
+}
+
 fn deltaCount(points: PointSelection, cvt_value_count: usize) usize {
     return switch (points) {
         .all_points => cvt_value_count,
@@ -300,6 +478,93 @@ fn validatePackedDeltas(data: []const u8, table_offset: usize, cursor: *usize, l
         cursor.* += run_bytes;
         remaining -= run_count;
     }
+}
+
+fn decodePackedDeltas(
+    data: []const u8,
+    table_offset: usize,
+    cursor: *usize,
+    limit: usize,
+    out: []i32,
+) Error!void {
+    var written: usize = 0;
+    while (written < out.len) {
+        if (cursor.* >= limit) return error.BadSfnt;
+        const control = data[table_offset + cursor.*];
+        cursor.* += 1;
+        const run_count = @as(usize, control & 0x3f) + 1;
+        if (run_count > out.len - written) return error.BadSfnt;
+        if ((control & 0x80) != 0) {
+            @memset(out[written .. written + run_count], 0);
+        } else if ((control & 0x40) != 0) {
+            for (out[written .. written + run_count]) |*value| {
+                if (cursor.* > limit or 2 > limit - cursor.*) {
+                    return error.BadSfnt;
+                }
+                value.* =
+                    try bin.readI16At(data, table_offset + cursor.*);
+                cursor.* += 2;
+            }
+        } else {
+            for (out[written .. written + run_count]) |*value| {
+                if (cursor.* >= limit) return error.BadSfnt;
+                value.* = @as(i8, @bitCast(data[table_offset + cursor.*]));
+                cursor.* += 1;
+            }
+        }
+        written += run_count;
+    }
+}
+
+fn tupleScalar(
+    data: []const u8,
+    tuple_offset: usize,
+    axis_count: usize,
+    tuple_index: u16,
+    normalized_coords: []const f32,
+) Error!f64 {
+    var result: f64 = 1;
+    const peak_offset = tuple_offset + 4;
+    const start_offset = peak_offset + axis_count * 2;
+    const end_offset = start_offset + axis_count * 2;
+    for (0..axis_count) |axis| {
+        const peak = f2Dot14(
+            try readNormalizedCoordinate(data, peak_offset + axis * 2),
+        );
+        if (peak == 0) continue;
+        const coord: f64 = normalized_coords[axis];
+        if (!std.math.isFinite(coord) or coord < -1 or coord > 1) {
+            return error.BadSfnt;
+        }
+        if (coord == 0) return 0;
+        if (coord == peak) continue;
+        if ((tuple_index & intermediate_region_flag) != 0) {
+            const start = f2Dot14(try readNormalizedCoordinate(
+                data,
+                start_offset + axis * 2,
+            ));
+            const end = f2Dot14(try readNormalizedCoordinate(
+                data,
+                end_offset + axis * 2,
+            ));
+            if (coord < start or coord > end) return 0;
+            if (coord < peak) {
+                if (peak != start) {
+                    result *= (coord - start) / (peak - start);
+                }
+            } else if (peak != end) {
+                result *= (end - coord) / (end - peak);
+            }
+        } else {
+            if (coord < @min(peak, 0) or coord > @max(peak, 0)) return 0;
+            result *= coord / peak;
+        }
+    }
+    return result;
+}
+
+fn f2Dot14(value: i16) f64 {
+    return @as(f64, @floatFromInt(value)) / 16384.0;
 }
 
 fn writeU16Test(bytes: []u8, offset: usize, value: u16) void {
@@ -354,4 +619,46 @@ test "cvar rejects explicit CVT point indexes outside cvt table" {
     bytes[18] = 7;
 
     try std.testing.expectError(error.BadSfnt, validate(&bytes, 0, bytes.len, 1, 4));
+}
+
+test "cvar accumulates normalized CVT deltas" {
+    var bytes: [19]u8 = .{0} ** 19;
+    writeU16Test(&bytes, 0, 1);
+    writeU16Test(&bytes, 2, 0);
+    writeU16Test(&bytes, 4, 1);
+    writeU16Test(&bytes, 6, 14);
+    writeU16Test(&bytes, 8, 5);
+    writeU16Test(&bytes, 10, embedded_peak_tuple_flag);
+    writeI16Test(&bytes, 12, 0x4000);
+    bytes[14] = 3; // Four one-byte deltas.
+    bytes[15] = 2;
+    bytes[16] = 4;
+    bytes[17] = 6;
+    bytes[18] = 8;
+
+    var half = [_]i32{0} ** 4;
+    try accumulateDeltas(
+        std.testing.allocator,
+        &bytes,
+        0,
+        bytes.len,
+        1,
+        4,
+        &.{0.5},
+        &half,
+    );
+    try std.testing.expectEqualSlices(i32, &.{ 1, 2, 3, 4 }, &half);
+
+    var default = [_]i32{0} ** 4;
+    try accumulateDeltas(
+        std.testing.allocator,
+        &bytes,
+        0,
+        bytes.len,
+        1,
+        4,
+        &.{0},
+        &default,
+    );
+    try std.testing.expectEqualSlices(i32, &.{ 0, 0, 0, 0 }, &default);
 }

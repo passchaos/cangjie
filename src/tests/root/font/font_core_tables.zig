@@ -279,26 +279,26 @@ test "IFT table-keyed and glyph-keyed patch metadata decode from supplied bytes"
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");
     var table_patch: [38]u8 = .{0} ** 38;
-    @memcpy(table_patch[0..4], "IFTB");
+    @memcpy(table_patch[0..4], "iftk");
     for (0..16) |index| table_patch[8 + index] = @intCast(index);
     writeU16Root(&table_patch, 24, 1);
-    writeU32Root(&table_patch, 26, 0);
-    writeU32Root(&table_patch, 30, 4);
+    writeU32Root(&table_patch, 26, 34);
+    writeU32Root(&table_patch, 30, 38);
     @memcpy(table_patch[34..38], "data");
     const table_info = try incremental.parseTablePatch(allocator, &table_patch);
     defer incremental.freeTablePatch(allocator, table_info);
-    try std.testing.expectEqualStrings("IFTB", &table_info.format);
-    try std.testing.expectEqualSlices(u32, &.{ 0, 4 }, table_info.patch_offsets);
+    try std.testing.expectEqualStrings("iftk", &table_info.format);
+    try std.testing.expectEqualSlices(u32, &.{ 34, 38 }, table_info.patch_offsets);
 
     var glyph_patch: [31]u8 = .{0} ** 31;
-    @memcpy(glyph_patch[0..4], "IFTG");
+    @memcpy(glyph_patch[0..4], "ifgk");
     glyph_patch[8] = 1;
     for (0..16) |index| glyph_patch[9 + index] = @intCast(15 - index);
     writeU32Root(&glyph_patch, 25, 256);
     glyph_patch[29] = 0xaa;
     glyph_patch[30] = 0xbb;
     const glyph_info = try incremental.parseGlyphPatch(&glyph_patch);
-    try std.testing.expectEqualStrings("IFTG", &glyph_info.format);
+    try std.testing.expectEqualStrings("ifgk", &glyph_info.format);
     try std.testing.expectEqual(@as(u8, 1), glyph_info.flags);
     try std.testing.expectEqual(@as(u32, 256), glyph_info.max_uncompressed_length);
     try std.testing.expectEqualSlices(u8, &.{ 0xaa, 0xbb }, glyph_info.brotli_stream);
@@ -480,6 +480,9 @@ test "parses EBDT EBLC bitmap glyph metadata" {
     const bitmap_info = (try font.bitmapGlyphInfo(glyph_id, 12)) orelse return error.MissingBitmapGlyph;
     try std.testing.expectEqual(BitmapStrikeSource.eblc_ebdt, bitmap_info.source);
     try std.testing.expectEqual(@as(?u16, 1), bitmap_info.image_format);
+    try std.testing.expectEqual(@as(?u8, 1), bitmap_info.bit_depth);
+    try std.testing.expect(bitmap_info.row_byte_aligned);
+    try std.testing.expectEqual(@as(?u16, 9), bitmap_info.advance);
     try std.testing.expectEqual(@as(i16, 1), bitmap_info.origin_offset_x);
     try std.testing.expectEqual(@as(i16, 9), bitmap_info.origin_offset_y);
     try std.testing.expectEqual(@as(u32, 8), bitmap_info.width);
@@ -487,6 +490,18 @@ test "parses EBDT EBLC bitmap glyph metadata" {
     try std.testing.expect(!bitmap_info.is_png);
     try std.testing.expectEqual(@as(usize, 1), bitmap_info.data_length);
     try std.testing.expect((try font.bitmapGlyphPng(glyph_id, 12)) == null);
+    const mask = (try font.bitmapGlyphMask(glyph_id, 12)) orelse
+        return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(BitmapStrikeSource.eblc_ebdt, mask.source);
+    try std.testing.expectEqual(@as(u8, 1), mask.bit_depth);
+    try std.testing.expect(mask.row_byte_aligned);
+    const coverage = try mask.decodeAlloc(allocator);
+    defer allocator.free(coverage);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 255, 0, 255, 0, 0, 0, 0, 0 },
+        coverage,
+    );
     try std.testing.expectEqual(@as(?u16, 12), try font.bestBitmapStrikePpem(12));
 }
 
@@ -529,4 +544,126 @@ test "parses CBDT CBLC PNG bitmap glyphs" {
     try std.testing.expectEqual(@as(u32, 1), bitmap.height);
     try std.testing.expect(std.mem.eql(u8, bitmap.data[1..4], "PNG"));
     try std.testing.expectEqual(@as(?u16, 16), try font.bestBitmapStrikePpem(18));
+}
+
+test "exposes Skrifa-compatible premultiplied BGRA bitmap data" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("../../../test_font.zig")
+        .buildCbdtBgraTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const glyph_id = try font.glyphIndex('A');
+
+    const info = (try font.bitmapGlyphInfo(glyph_id, 16)) orelse
+        return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(@as(?u8, 32), info.bit_depth);
+    try std.testing.expectEqual(@as(?u16, 1), info.image_format);
+    try std.testing.expectEqual(@as(usize, 8), info.data_length);
+    try std.testing.expect((try font.bitmapGlyphPng(glyph_id, 16)) == null);
+    try std.testing.expect((try font.bitmapGlyphMask(glyph_id, 16)) == null);
+
+    const bgra = (try font.bitmapGlyphBgra(glyph_id, 16)) orelse
+        return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(BitmapStrikeSource.cblc_cbdt, bgra.source);
+    try std.testing.expectEqual(@as(u16, 16), bgra.ppem);
+    try std.testing.expectEqual(@as(i16, 2), bgra.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, 13), bgra.origin_offset_y);
+    try std.testing.expectEqual(@as(u32, 2), bgra.width);
+    try std.testing.expectEqual(@as(u32, 1), bgra.height);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 7, 13, 64, 128, 10, 20, 30, 255 },
+        bgra.data,
+    );
+    const selected = (try font.bitmapGlyphData(glyph_id, 16)) orelse
+        return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(@as(u16, 16), selected.ppem());
+    try std.testing.expectEqualSlices(u8, bgra.data, selected.bgra.data);
+}
+
+test "exposes FreeType-compatible BGRA from bit-aligned bitmap formats" {
+    const allocator = std.testing.allocator;
+    inline for ([_]u16{ 2, 5, 7 }) |format| {
+        const bytes = try @import("../../../test_font.zig")
+            .buildCbdtBgraTtfWithFormat(allocator, format);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        const glyph_id = try font.glyphIndex('A');
+        const bgra = (try font.bitmapGlyphBgra(glyph_id, 16)) orelse
+            return error.MissingBitmapGlyph;
+        try std.testing.expectEqual(@as(i16, 2), bgra.origin_offset_x);
+        try std.testing.expectEqual(@as(i16, 13), bgra.origin_offset_y);
+        try std.testing.expectEqualSlices(
+            u8,
+            &.{ 7, 13, 64, 128, 10, 20, 30, 255 },
+            bgra.data,
+        );
+    }
+}
+
+test "preserves horizontal and vertical BigGlyphMetrics metadata" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("../../../test_font.zig")
+        .buildCbdtBgraVerticalMetricsTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const strikes = try font.bitmapStrikes(allocator);
+    defer allocator.free(strikes);
+    try std.testing.expectEqual(@as(u16, 16), strikes[0].ppem_x);
+    try std.testing.expectEqual(@as(u16, 18), strikes[0].ppem);
+    try std.testing.expectEqual(@as(u8, 1), strikes[0].flags);
+
+    const info = (try font.bitmapGlyphInfo(1, 18)) orelse
+        return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(@as(i16, 2), info.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, 13), info.origin_offset_y);
+    try std.testing.expectEqual(@as(?u16, 12), info.advance);
+    try std.testing.expectEqual(@as(?i16, 0), info.vertical_origin_offset_x);
+    try std.testing.expectEqual(@as(?i16, -1), info.vertical_origin_offset_y);
+    try std.testing.expectEqual(@as(?u16, 15), info.vertical_advance);
+}
+
+test "flattens EBDT compound bitmap components into parent metrics" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("../../../test_font.zig")
+        .buildCompoundEbdtTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const info = (try font.bitmapGlyphInfo(2, 16)) orelse
+        return error.MissingBitmapGlyph;
+    try std.testing.expectEqual(@as(?u16, 8), info.image_format);
+    try std.testing.expectEqual(@as(u32, 4), info.width);
+    try std.testing.expectEqual(@as(u32, 2), info.height);
+    var compound = (try font.compoundBitmapGlyphAlloc(allocator, 2, 16)) orelse
+        return error.MissingBitmapGlyph;
+    defer compound.deinit();
+    try std.testing.expectEqual(
+        support.OwnedBitmapGlyphData.Kind.mask8,
+        compound.kind,
+    );
+    try std.testing.expectEqual(@as(i16, 0), compound.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, 2), compound.origin_offset_y);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 255, 0, 0, 0, 0, 0, 255, 0 },
+        compound.data,
+    );
+}
+
+test "rejects recursive compound bitmap cycles during materialization" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("../../../test_font.zig")
+        .buildRecursiveCompoundEbdtTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    try std.testing.expectError(
+        error.BadSfnt,
+        font.compoundBitmapGlyphAlloc(allocator, 1, 16),
+    );
 }

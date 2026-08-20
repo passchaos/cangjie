@@ -19,3 +19,13 @@ pub const Header = struct {
     mark_glyph_sets_def_offset: ?u16 = null,
     item_variation_store_offset: ?u32 = null,
 };
+
+/// One resolved horizontal ligature caret in font design units.
+pub const LigatureCaret = struct {
+    position: f32,
+};
+
+/// One GDEF AttachList contour-point index.
+pub const AttachmentPoint = struct {
+    point_index: u16,
+};

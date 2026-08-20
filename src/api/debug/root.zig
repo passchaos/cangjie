@@ -2,15 +2,15 @@
 
 const std = @import("std");
 
-const impl = @import("../../debug.zig");
+const impl = @import("../../debug/root.zig");
 const face_mod = @import("../../font/face/root.zig");
-const layout = @import("../../layout.zig");
+const shape_profile = @import("../../shape_profile.zig");
 
 pub const OverlayKind = impl.OverlayKind;
 pub const Overlay = impl.DebugOverlay;
 pub const OverlayList = impl.DebugOverlayList;
 pub const OverlayOptions = impl.OverlayOptions;
-pub const ShapeProfile = layout.ShapeStageProfile;
+pub const ShapeProfile = shape_profile.ShapeStageProfile;
 
 pub const buildOverlays = impl.buildDebugOverlays;
 pub const dumpBidiMap = impl.dumpBidiMap;
@@ -19,11 +19,9 @@ pub const dumpOverlays = impl.dumpDebugOverlays;
 pub const dumpGlyphClusters = impl.dumpGlyphClusters;
 pub const dumpHitTest = impl.dumpHitTest;
 pub const dumpLineBreaks = impl.dumpLineBreaks;
-pub const dumpMissingGlyphs = impl.dumpMissingGlyphs;
 pub const dumpParagraphLayout = impl.dumpParagraphLayout;
 pub const dumpSelectionRects = impl.dumpSelectionRects;
 pub const dumpShapeRuns = impl.dumpShapeRuns;
-pub const dumpTextBufferLayoutStats = impl.dumpTextBufferLayoutStats;
 pub const dumpUnicodeSegmentation = impl.dumpUnicodeSegmentation;
 
 pub fn dumpFontCoverage(
@@ -45,7 +43,19 @@ pub fn dumpFontFallback(
 ) !void {
     return impl.dumpFontFallback(
         writer,
-        .{ .fonts = face_mod.backend.fonts(cascade.faces) },
+        .init(face_mod.backend.fonts(cascade.faces)),
+        text,
+    );
+}
+
+pub fn dumpMissingGlyphs(
+    writer: *std.Io.Writer,
+    cascade: face_mod.Cascade,
+    text: []const u8,
+) !void {
+    return impl.dumpMissingGlyphs(
+        writer,
+        .init(face_mod.backend.fonts(cascade.faces)),
         text,
     );
 }

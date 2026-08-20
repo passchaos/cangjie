@@ -12,6 +12,7 @@ pub const Result = struct {
     elapsed_ns: i128,
     checksum: u64,
     samples: []Sample,
+    dirty_pixels: usize = 0,
 };
 
 pub fn print(options: options_mod.Options, result: Result) void {
@@ -74,6 +75,7 @@ fn printText(options: options_mod.Options, result: Result) void {
         \\sample_median_ns_per_iter={d:.3}
         \\sample_max_ns_per_iter={d:.3}
         \\checksum={x}
+        \\dirty_pixels={d}
         \\
     , .{
         options.mode.label(),
@@ -94,6 +96,7 @@ fn printText(options: options_mod.Options, result: Result) void {
         stats.median,
         stats.max,
         result.checksum,
+        result.dirty_pixels,
     });
     for (result.samples) |sample| {
         const sample_ns_per_iter = if (sample.iterations == 0) 0 else @as(f64, @floatFromInt(sample.elapsed_ns)) / @as(f64, @floatFromInt(sample.iterations));
@@ -105,8 +108,8 @@ fn printTsv(options: options_mod.Options, result: Result) void {
     const ns_per_iter = nsPerIter(options, result);
     const stats = sampleStats(result.samples, options.iterations);
     std.debug.print(
-        "mode\tengine\tfont\tglyph_id\tcodepoint\tfont_size\ttarget_size\tsamples_per_axis\tvariation_coords\titerations\twarmup\tsamples\telapsed_ns\tns_per_iter\tsample_min_ns_per_iter\tsample_median_ns_per_iter\tsample_max_ns_per_iter\tchecksum\n" ++
-            "{s}\t{s}\t{s}\t{any}\tU+{X}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d:.3}\t{d:.3}\t{d:.3}\t{d:.3}\t{x}\n",
+        "mode\tengine\tfont\tglyph_id\tcodepoint\tfont_size\ttarget_size\tsamples_per_axis\tvariation_coords\titerations\twarmup\tsamples\telapsed_ns\tns_per_iter\tsample_min_ns_per_iter\tsample_median_ns_per_iter\tsample_max_ns_per_iter\tchecksum\tdirty_pixels\n" ++
+            "{s}\t{s}\t{s}\t{any}\tU+{X}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d:.3}\t{d:.3}\t{d:.3}\t{d:.3}\t{x}\t{d}\n",
         .{
             options.mode.label(),
             options.engine.label(),
@@ -126,6 +129,7 @@ fn printTsv(options: options_mod.Options, result: Result) void {
             stats.median,
             stats.max,
             result.checksum,
+            result.dirty_pixels,
         },
     );
 }

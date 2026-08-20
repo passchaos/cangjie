@@ -1,6 +1,7 @@
 //! Font-owned GDEF borrowed-byte lifecycle contracts.
 
 const std = @import("std");
+const face_mod = @import("../../../face/root.zig");
 const font_mod = @import("../../../../font.zig");
 const gdef = @import("../../../tables/layout/gdef/root.zig");
 const test_font = @import("../../../../test_font.zig");
@@ -57,6 +58,80 @@ test "GDEF lazy glyph class rejects mutated class values outside enum" {
     try std.testing.expectEqual(@as(u16, 7), try font.markAttachClass(3));
 }
 
+test "public GDEF glyph class enumeration includes unclassified complement" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildGdefClassTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const bases = try font.glyphsInClass(allocator, .base);
+    defer allocator.free(bases);
+    try std.testing.expectEqualSlices(u16, &.{1}, bases);
+    const face_bases = try face_mod.backend.face(&font).glyphs().inClass(
+        allocator,
+        .base,
+    );
+    defer allocator.free(face_bases);
+    try std.testing.expectEqualSlices(u16, &.{1}, face_bases);
+
+    const ligatures = try font.glyphsInClass(allocator, .ligature);
+    defer allocator.free(ligatures);
+    try std.testing.expectEqualSlices(u16, &.{2}, ligatures);
+
+    const marks = try font.glyphsInClass(allocator, .mark);
+    defer allocator.free(marks);
+    try std.testing.expectEqualSlices(u16, &.{3}, marks);
+    try std.testing.expectError(
+        error.BadSfnt,
+        font.glyphsInClass(allocator, @enumFromInt(99)),
+    );
+
+    const components = try font.glyphsInClass(allocator, .component);
+    defer allocator.free(components);
+    try std.testing.expectEqualSlices(u16, &.{4}, components);
+
+    const unclassified = try font.glyphsInClass(
+        allocator,
+        .unclassified,
+    );
+    defer allocator.free(unclassified);
+    try std.testing.expectEqualSlices(u16, &.{0}, unclassified);
+
+    const inspected =
+        @import("../../../../api/font/metadata/layout/root.zig")
+            .inspect(face_mod.backend.face(&font));
+    const inspected_marks = try inspected.glyphsInClass(
+        allocator,
+        .mark,
+    );
+    defer allocator.free(inspected_marks);
+    try std.testing.expectEqualSlices(u16, &.{3}, inspected_marks);
+}
+
+test "missing GDEF class enumeration treats all glyphs as unclassified" {
+    const allocator = std.testing.allocator;
+    const inert: [1]u8 = .{0};
+    var font = @import("../../fixtures/table_only.zig").init(
+        Font,
+        &inert,
+        4,
+        1,
+    );
+    defer font.deinit();
+
+    const unclassified = try font.glyphsInClass(
+        allocator,
+        .unclassified,
+    );
+    defer allocator.free(unclassified);
+    try std.testing.expectEqualSlices(u16, &.{ 0, 1, 2, 3 }, unclassified);
+
+    const marks = try font.glyphsInClass(allocator, .mark);
+    defer allocator.free(marks);
+    try std.testing.expectEqual(@as(usize, 0), marks.len);
+}
+
 test "GDEF lazy class APIs revalidate borrowed table checksum" {
     const allocator = std.testing.allocator;
 
@@ -73,6 +148,10 @@ test "GDEF lazy class APIs revalidate borrowed table checksum" {
     // because it no longer matches the SFNT checksum that Font.parse accepted.
     fixture.writeU16(bytes, gdef_offset + 20, @intFromEnum(GlyphClass.ligature));
     try std.testing.expectError(error.BadSfnt, font.glyphClass(1));
+    try std.testing.expectError(
+        error.BadSfnt,
+        font.glyphsInClass(allocator, .base),
+    );
 }
 
 test "GDEF lazy class APIs revalidate child offsets after borrowed bytes mutate" {

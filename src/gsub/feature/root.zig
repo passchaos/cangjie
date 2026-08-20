@@ -1,6 +1,8 @@
 //! GSUB feature planning surface.
 
 pub const model = @import("model.zig");
+pub const plan = @import("plan/root.zig");
+pub const run_selection = @import("run_selection.zig");
 pub const selection = @import("selection.zig");
 pub const validation = @import("validation.zig");
 pub const variations = @import("variations.zig");

@@ -2,6 +2,7 @@
 
 const std = @import("std");
 
+const cluster_safety = @import("../../../../cluster_safety.zig");
 const gsub = @import("../../../../../gsub.zig");
 const unicode = @import("../../../../../unicode.zig");
 
@@ -110,6 +111,30 @@ pub fn inheritMongolianVariationSelectors(
     }
 }
 
+/// Record HarfBuzz-compatible SAFE_TO_INSERT_TATWEEL candidates.
+///
+/// A boundary before source N is eligible when source N joins to the previous
+/// non-transparent source. This nominates an insertion point only; final output
+/// clears it when GSUB/GPOS/kerning marks the same source boundary unsafe.
+pub fn markSafeTatweelBoundaries(
+    allocator: std.mem.Allocator,
+    boundaries: *cluster_safety.SourceBoundaries,
+    codepoints: []const u21,
+    forms: []const unicode.JoiningForm,
+) !void {
+    if (codepoints.len != forms.len) return error.InvalidJoiningInput;
+    for (codepoints, forms, 0..) |codepoint, form, source_index| {
+        if (unicode.joiningTypeForCodepoint(codepoint) == .transparent) {
+            continue;
+        }
+        if (form != .medial and form != .final) continue;
+        try boundaries.markSafeTatweelBeforeSource(
+            allocator,
+            source_index,
+        );
+    }
+}
+
 fn markNativeOrderFallback(
     source_features: []u32,
     codepoints: []const u21,
@@ -173,4 +198,21 @@ fn appendUtf8Codepoints(
     while (iterator.nextCodepoint()) |codepoint| {
         try out.append(allocator, codepoint);
     }
+}
+
+test "tatweel candidates follow joining across transparent marks" {
+    const codepoints = [_]u21{ 0x0628, 0x064e, 0x0628 };
+    var forms: [codepoints.len]unicode.JoiningForm = undefined;
+    try unicode.resolveJoiningForms(&codepoints, &forms);
+    var boundaries = cluster_safety.SourceBoundaries{};
+    defer boundaries.deinit(std.testing.allocator);
+    boundaries.reset(0, 6, &.{ 0, 2, 4 });
+    try markSafeTatweelBoundaries(
+        std.testing.allocator,
+        &boundaries,
+        &codepoints,
+        &forms,
+    );
+    try std.testing.expect(!boundaries.isSafeTatweelBeforeByte(2));
+    try std.testing.expect(boundaries.isSafeTatweelBeforeByte(4));
 }

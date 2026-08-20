@@ -2,27 +2,31 @@
 
 const std = @import("std");
 
-const core = @import("../../../core.zig");
 const face_mod = @import("../../../font/face/root.zig");
-const layout = @import("../../../layout.zig");
+const paragraph_types = @import("../../../layout/types/paragraph.zig");
+const context_output = @import("../../../shaping/context/output.zig");
+const font_fallback = @import("../../../shaping/fallback/font/root.zig");
+const attributed_model = @import("../../../text/attributed/root.zig");
 
-pub const Text = core.AttributedText;
-pub const Run = core.AttributedRun;
-pub const RunLayout = core.AttributedRunLayout;
-pub const GlyphRun = core.AttributedGlyphRun;
-pub const GlyphRunLayout = core.AttributedGlyphRunLayout;
-pub const ParagraphLayout = core.AttributedParagraphLayout;
-pub const StyleRun = core.AttributedStyleRun;
+pub const Text = attributed_model.AttributedText;
+pub const Run = attributed_model.AttributedRun;
+pub const RunLayout = attributed_model.AttributedRunLayout;
+pub const GlyphRun = attributed_model.AttributedGlyphRun;
+pub const GlyphRunLayout = attributed_model.AttributedGlyphRunLayout;
+pub const ParagraphLayout = attributed_model.AttributedParagraphLayout;
+pub const StyleRun = attributed_model.AttributedStyleRun;
+pub const DecorationKind = attributed_model.TextDecorationKind;
+pub const DecorationSegment = attributed_model.TextDecorationSegment;
 
 pub fn measure(
     allocator: std.mem.Allocator,
     cascade: face_mod.Cascade,
     attributed: Text,
     max_width: f32,
-) !layout.TextMetrics {
-    var buffer = layout.LayoutBuffer.init(allocator);
+) !paragraph_types.TextMetrics {
+    var buffer = context_output.Buffer.init(allocator);
     defer buffer.deinit();
-    return core.measureAttributedTextUtf8(
+    return attributed_model.measureAttributedTextUtf8(
         internalCascade(cascade),
         &buffer,
         attributed,
@@ -34,8 +38,8 @@ pub fn measureRuns(
     allocator: std.mem.Allocator,
     cascade: face_mod.Cascade,
     attributed: Text,
-) !layout.TextMetrics {
-    return core.measureAttributedRunsUtf8(
+) !paragraph_types.TextMetrics {
+    return attributed_model.measureAttributedRunsUtf8(
         allocator,
         internalCascade(cascade),
         attributed,
@@ -47,7 +51,7 @@ pub fn layoutRuns(
     cascade: face_mod.Cascade,
     attributed: Text,
 ) !RunLayout {
-    return core.layoutAttributedRunsUtf8(
+    return attributed_model.layoutAttributedRunsUtf8(
         allocator,
         internalCascade(cascade),
         attributed,
@@ -59,7 +63,7 @@ pub fn layoutGlyphRuns(
     cascade: face_mod.Cascade,
     attributed: Text,
 ) !GlyphRunLayout {
-    return core.layoutAttributedGlyphRunsUtf8(
+    return attributed_model.layoutAttributedGlyphRunsUtf8(
         allocator,
         internalCascade(cascade),
         attributed,
@@ -72,7 +76,7 @@ pub fn layoutParagraph(
     attributed: Text,
     max_width: f32,
 ) !ParagraphLayout {
-    return core.layoutAttributedParagraphUtf8(
+    return attributed_model.layoutAttributedParagraphUtf8(
         allocator,
         internalCascade(cascade),
         attributed,
@@ -80,6 +84,6 @@ pub fn layoutParagraph(
     );
 }
 
-fn internalCascade(cascade: face_mod.Cascade) layout.FontCascade {
-    return .{ .fonts = face_mod.backend.fonts(cascade.faces) };
+fn internalCascade(cascade: face_mod.Cascade) font_fallback.Cascade {
+    return .init(face_mod.backend.fonts(cascade.faces));
 }

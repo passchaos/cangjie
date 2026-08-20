@@ -15,6 +15,7 @@ pub const Result = struct {
     vertical_advance: f32,
     x_offset: f32,
     y_offset: f32,
+    orientation: @import("../../../../layout/glyph_position.zig").Orientation,
 };
 
 pub fn resolve(
@@ -107,12 +108,12 @@ pub fn resolve(
             @as(f32, @floatFromInt(kerx_adjustment.x_advance))) *
             input.scale +
             kern_x_advance;
-    const use_sideways_vertical_advance =
-        input.options.writing_mode.isVertical() and
-        policy.glyphUsesSidewaysAdvance(
-            source_codepoint,
-            input.options.text_orientation,
-        );
+    const orientation = policy.glyphOrientation(
+        source_codepoint,
+        input.options.writing_mode,
+        input.options.text_orientation,
+    );
+    const use_sideways_vertical_advance = orientation == .sideways;
     const vertical_metrics =
         if (input.options.writing_mode.isVertical())
             try policy.verticalMetrics(
@@ -148,8 +149,11 @@ pub fn resolve(
     else
         input.font_size +
             @as(f32, @floatFromInt(kerx_adjustment.y_advance)) * input.scale;
-    const vertical_x_offset = if (vertical_metrics) |_|
-        (@as(f32, @floatFromInt(metrics.advance_width)) * 0.5) * input.scale
+    const vertical_x_offset = if (input.options.writing_mode.isVertical())
+        -@as(
+            f32,
+            @floatFromInt(@divTrunc(@as(i32, metrics.advance_width), 2)),
+        ) * input.scale
     else
         0.0;
     const vertical_y_offset =
@@ -159,7 +163,7 @@ pub fn resolve(
                 glyph_id,
                 input.options.normalized_variation_coords,
             );
-            break :origin @as(f32, @floatFromInt(origin_y)) * input.scale;
+            break :origin -@as(f32, @floatFromInt(origin_y)) * input.scale;
         } else 0.0;
     const zeroed_mark_x_offset =
         if (mark_zeroing.adjust_offsets and
@@ -203,7 +207,7 @@ pub fn resolve(
                 kerx_state_x_offset
             else if (kerx_adjustment.attachment_type == .cursive and
                 kerx_adjustment.attachment_parent_index != null)
-                -vertical_x_offset + kerx_state_x_offset
+                vertical_x_offset + kerx_state_x_offset
             else
                 vertical_x_offset +
                     gpos_x_offset +
@@ -245,5 +249,6 @@ pub fn resolve(
         .vertical_advance = vertical_advance,
         .x_offset = x_offset,
         .y_offset = y_offset,
+        .orientation = orientation,
     };
 }

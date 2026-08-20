@@ -2,6 +2,7 @@ const std = @import("std");
 const charstring_mod = @import("cff2/charstring.zig");
 const variation_mod = @import("cff2/variation.zig");
 const glyph_mod = @import("../glyph.zig");
+const type2_hint = @import("../font/hinting/type2/root.zig");
 
 pub const Error = error{BadSfnt} || std.mem.Allocator.Error;
 
@@ -41,6 +42,7 @@ pub const PrivateDictInfo = struct {
     default_width_x: ?i32 = null,
     nominal_width_x: ?i32 = null,
     variation_store_index: ?u16 = null,
+    hint_params: type2_hint.Params = .{},
 };
 
 pub const CharStringScanInfo = charstring_mod.Info;
@@ -167,6 +169,36 @@ pub fn appendGlyphOutlineAtCoords(allocator: std.mem.Allocator, data: []const u8
     return try charstring_mod.appendOutline(CharStringScanContext, &execution.context, allocator, execution.charstring, outline);
 }
 
+pub fn appendGlyphOutlineAtCoordsWithHints(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    glyph_id: usize,
+    glyph_count: usize,
+    normalized_coords: []const f32,
+    outline: *glyph_mod.GlyphOutline,
+    hints: *type2_hint.Program,
+) Error!?CharStringBoundsInfo {
+    var execution = (try charStringExecutionContext(
+        data,
+        offset,
+        length,
+        glyph_id,
+        glyph_count,
+        normalized_coords,
+    )) orelse return null;
+    hints.hint_params = execution.context.hint_params;
+    return try charstring_mod.appendOutlineWithHints(
+        CharStringScanContext,
+        &execution.context,
+        allocator,
+        execution.charstring,
+        outline,
+        hints,
+    );
+}
+
 const CharStringExecutionContext = struct {
     charstring: []const u8,
     context: CharStringScanContext,
@@ -188,11 +220,19 @@ fn charStringExecutionContext(data: []const u8, offset: usize, length: usize, gl
     const charstring = try indexObject(table, index, glyph_id);
 
     const selected_fd = (try selectedFontDictIndex(table, parsed, glyph_id, glyph_count)) orelse 0;
-    const private_dict = if (parsed.fd_array_index) |fd_array| blk: {
+    var private_dict = if (parsed.fd_array_index) |fd_array| blk: {
         if (selected_fd >= fd_array.count) return error.BadSfnt;
         const font_dict = try parseFontDict(table, fd_array, selected_fd);
         break :blk font_dict.private_dict;
     } else null;
+    if (private_dict) |*private| {
+        private.hint_params = try parsePrivateHintParamsAtCoords(
+            table,
+            private.data,
+            parsed.top_dict.vstore_offset,
+            normalized_coords,
+        );
+    }
 
     return .{
         .charstring = charstring,
@@ -203,8 +243,68 @@ fn charStringExecutionContext(data: []const u8, offset: usize, length: usize, gl
             .normalized_coords = normalized_coords,
             .global_subrs_index = parsed.global_subrs_index,
             .local_subrs_index = if (private_dict) |private| private.local_subrs_index else null,
+            .hint_params = if (private_dict) |private| private.hint_params else .{},
         },
     };
+}
+
+fn parsePrivateHintParamsAtCoords(
+    table: []const u8,
+    dict: []const u8,
+    vstore_offset: ?usize,
+    normalized_coords: []const f32,
+) Error!type2_hint.Params {
+    var result = type2_hint.Params{};
+    var parser = DictParser{ .data = dict };
+    var stack: [max_dict_operands]DictOperand = undefined;
+    var stack_len: usize = 0;
+    var vs_index: u16 = 0;
+    while (try parser.next()) |entry| {
+        if (stack_len + entry.operands.len > stack.len) return error.BadSfnt;
+        @memcpy(stack[stack_len .. stack_len + entry.operands.len], entry.operands);
+        stack_len += entry.operands.len;
+        switch (entry.op) {
+            22, 23 => {
+                if (stack_len == 0) return error.BadSfnt;
+                const value = try readIntegerOperandAt(stack[0..stack_len], stack_len - 1);
+                if (value < 0 or value > std.math.maxInt(u16)) return error.BadSfnt;
+                if (entry.op == 22) {
+                    vs_index = @intCast(value);
+                } else {
+                    // CFF2 Private DICT uses operator 23 for `blend`, while
+                    // operator 16 is the charstring encoding.
+                    const store = vstore_offset orelse return error.BadSfnt;
+                    const target_len: usize = @intCast(value);
+                    const region_count = try variation_mod.regionCount(table, store, vs_index);
+                    const required = target_len * (region_count + 1) + 1;
+                    if (required > stack_len) return error.BadSfnt;
+                    const start = stack_len - required;
+                    for (0..target_len) |target| {
+                        var blended = stack[start + target].number;
+                        for (0..region_count) |region| {
+                            blended += stack[start + target_len + target * region_count + region].number *
+                                try variation_mod.scalar(table, store, vs_index, region, normalized_coords);
+                        }
+                        stack[start + target] = DictOperand.numberValue(blended);
+                    }
+                    stack_len = start + target_len;
+                    continue;
+                }
+            },
+            6 => try setBlueValues(&result.blues, stack[0..stack_len]),
+            7 => try setBlueValues(&result.other_blues, stack[0..stack_len]),
+            8 => try setBlueValues(&result.family_blues, stack[0..stack_len]),
+            9 => try setBlueValues(&result.family_other_blues, stack[0..stack_len]),
+            0x0c09 => result.blue_scale = try hintFixed(stack[0..stack_len]),
+            0x0c0a => result.blue_shift = try hintFixed(stack[0..stack_len]),
+            0x0c0b => result.blue_fuzz = try hintFixed(stack[0..stack_len]),
+            0x0c11 => result.language_group = try readIntegerOperandAt(stack[0..stack_len], 0),
+            else => {},
+        }
+        stack_len = 0;
+    }
+    if (stack_len != 0) return error.BadSfnt;
+    return result;
 }
 
 fn selectedFontDictIndex(table: []const u8, parsed: Info, glyph_id: usize, glyph_count: usize) Error!?u16 {
@@ -225,6 +325,7 @@ const CharStringScanContext = struct {
     normalized_coords: []const f32 = &.{},
     global_subrs_index: IndexInfo,
     local_subrs_index: ?IndexInfo = null,
+    hint_params: type2_hint.Params = .{},
 
     pub fn initialVariationStoreIndex(self: *CharStringScanContext) Error!u16 {
         return self.default_vs_index orelse 0;
@@ -425,6 +526,10 @@ fn parsePrivateDict(table: []const u8, offset: usize, size: usize) Error!Private
     var parser = DictParser{ .data = dict };
     while (try parser.next()) |entry| {
         switch (entry.op) {
+            6 => try setBlueValues(&result.hint_params.blues, entry.operands),
+            7 => try setBlueValues(&result.hint_params.other_blues, entry.operands),
+            8 => try setBlueValues(&result.hint_params.family_blues, entry.operands),
+            9 => try setBlueValues(&result.hint_params.family_other_blues, entry.operands),
             19 => {
                 const relative_offset = try readOffsetOperandAt(entry.operands, 0);
                 if (relative_offset > std.math.maxInt(usize) - offset) return error.BadSfnt;
@@ -440,10 +545,35 @@ fn parsePrivateDict(table: []const u8, offset: usize, size: usize) Error!Private
                 if (index > std.math.maxInt(u16)) return error.BadSfnt;
                 result.variation_store_index = @intCast(index);
             },
+            0x0c09 => result.hint_params.blue_scale = try hintFixed(entry.operands),
+            0x0c0a => result.hint_params.blue_shift = try hintFixed(entry.operands),
+            0x0c0b => result.hint_params.blue_fuzz = try hintFixed(entry.operands),
+            0x0c11 => result.hint_params.language_group = try readIntegerOperandAt(entry.operands, 0),
             else => {},
         }
     }
     return result;
+}
+
+fn setBlueValues(
+    values: *type2_hint.params.BlueValues,
+    operands: []const DictOperand,
+) Error!void {
+    if ((operands.len & 1) != 0) return error.BadSfnt;
+    var deltas: [type2_hint.params.max_blue_values * 2]f32 = undefined;
+    const len = @min(operands.len, deltas.len);
+    for (operands[0..len], deltas[0..len]) |operand, *delta| {
+        if (!std.math.isFinite(operand.number)) return error.BadSfnt;
+        delta.* = operand.number;
+    }
+    values.setDeltas(deltas[0..len]) catch return error.BadSfnt;
+}
+
+fn hintFixed(operands: []const DictOperand) Error!type2_hint.fixed.Fixed {
+    if (operands.len == 0 or !std.math.isFinite(operands[0].number)) {
+        return error.BadSfnt;
+    }
+    return type2_hint.fixed.Fixed.fromF32(operands[0].number);
 }
 
 fn fdSelectValue(table: []const u8, offset: usize, glyph_id: usize, glyph_count: usize, fd_count: usize) Error!u16 {

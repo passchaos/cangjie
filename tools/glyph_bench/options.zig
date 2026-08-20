@@ -25,12 +25,14 @@ pub const Engine = enum {
 
 pub const Mode = enum {
     outline,
+    outline_session,
     raster,
     raster_reuse,
     raster_prepared,
 
     pub fn fromName(name: []const u8) ?Mode {
         if (std.mem.eql(u8, name, "outline")) return .outline;
+        if (std.mem.eql(u8, name, "outline-session")) return .outline_session;
         if (std.mem.eql(u8, name, "raster")) return .raster;
         if (std.mem.eql(u8, name, "raster-reuse")) return .raster_reuse;
         if (std.mem.eql(u8, name, "raster-prepared")) return .raster_prepared;
@@ -40,6 +42,7 @@ pub const Mode = enum {
     pub fn label(self: Mode) []const u8 {
         return switch (self) {
             .outline => "outline",
+            .outline_session => "outline-session",
             .raster => "raster",
             .raster_reuse => "raster-reuse",
             .raster_prepared => "raster-prepared",
@@ -93,6 +96,7 @@ pub const Options = struct {
     iterations: usize = 10_000,
     warmup: usize = 1_000,
     samples: usize = 1,
+    dirty_rect: bool = false,
     variation_coord_buf: [max_variation_coords]f32 = undefined,
     variation_coord_count: usize = 0,
 
@@ -164,6 +168,8 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.samples = try parsePositiveUsize(args[i]);
+        } else if (std.mem.eql(u8, arg, "--dirty-rect")) {
+            options.dirty_rect = true;
         } else if (std.mem.eql(u8, arg, "--variation") or std.mem.eql(u8, arg, "--variations")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -177,7 +183,8 @@ pub fn parse(args: []const []const u8) !Options {
     if (!std.math.isFinite(options.font_size) or options.font_size <= 0) return error.InvalidArguments;
     if (options.target_size == 0 or options.samples_per_axis == 0 or options.iterations == 0 or options.samples == 0) return error.InvalidArguments;
     if ((options.engine == .freetype or options.engine == .compare_freetype) and
-        (options.mode == .raster_reuse or options.mode == .raster_prepared)) return error.InvalidArguments;
+        (options.mode == .outline_session or
+            options.mode == .raster_prepared)) return error.InvalidArguments;
     return options;
 }
 
@@ -216,11 +223,11 @@ fn parseVariationCoords(options: *Options, text: []const u8) !void {
 pub fn printUsage(args: []const []const u8) void {
     const exe = if (args.len > 0) args[0] else "glyph-bench";
     std.debug.print(
-        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode outline|raster|raster-reuse|raster-prepared] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation] [--glyph-id n|--codepoint U+XXXX]
+        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode outline|outline-session|raster|raster-reuse|raster-prepared] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation] [--glyph-id n|--codepoint U+XXXX]
         \\
         \\options:
         \\  --engine NAME        cangjie, freetype, or compare-freetype; default cangjie
-        \\  --mode NAME          outline, raster, raster-reuse, or raster-prepared; default outline
+        \\  --mode NAME          outline, outline-session, raster, raster-reuse, or raster-prepared; default outline
         \\  --format text|tsv    output format, default text
         \\  --font PATH          use a real font
         \\  --builtin NAME       use an in-repo fixture, default gvar-compound
@@ -232,6 +239,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --iterations N       measured iterations, default 10000
         \\  --warmup N           unmeasured warmup iterations, default 1000
         \\  --samples N          independent measured samples, default 1
+        \\  --dirty-rect         clear and hash only the clipped glyph rectangle
         \\  --variation CSV      normalized variation coordinates, e.g. 0.5,-0.25
         \\
         \\examples:
@@ -253,4 +261,9 @@ test "parse codepoint accepts documented decimal and hexadecimal forms" {
 test "parse codepoint rejects non-scalar values" {
     try std.testing.expectError(error.InvalidArguments, parseCodepoint("U+D800"));
     try std.testing.expectError(error.InvalidArguments, parseCodepoint("U+110000"));
+}
+
+test "parse accepts dirty rectangle benchmark mode" {
+    const options = try parse(&.{ "glyph-bench", "--mode", "raster-prepared", "--dirty-rect" });
+    try std.testing.expect(options.dirty_rect);
 }

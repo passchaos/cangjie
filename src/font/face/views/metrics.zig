@@ -2,10 +2,18 @@
 
 const font_mod = @import("../../../font.zig");
 const glyph_mod = @import("../../../glyph.zig");
+const global_metrics = @import("global_metrics.zig");
+
+pub const Global = global_metrics.Metrics;
 
 pub const View = struct {
     /// Borrowed source-level view backing; use the methods below.
     implementation: *const font_mod.Font,
+
+    /// Return unscaled design metrics (`null`) or metrics scaled to `size`.
+    pub fn global(self: View, size: ?f32) font_mod.FontError!Global {
+        return global_metrics.read(self.implementation, size);
+    }
 
     pub fn horizontal(
         self: View,
@@ -71,5 +79,17 @@ pub const View = struct {
         self: View,
     ) font_mod.FontError!font_mod.FontDecorationMetrics {
         return self.implementation.decorationMetrics();
+    }
+
+    /// Resolve one OpenType MVAR value tag in design units.
+    pub fn variationDelta(
+        self: View,
+        value_tag: [4]u8,
+        normalized_coords: []const f32,
+    ) font_mod.FontError!?i32 {
+        return self.implementation.mvarDeltaAtCoords(
+            value_tag,
+            normalized_coords,
+        );
     }
 };

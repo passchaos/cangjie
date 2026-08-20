@@ -1099,6 +1099,18 @@ Current local snapshot after the Nastaliq parity work:
   for Roboto `A`, `4.6%` for `g`, `4.3%` for `é`, `2.9%` for Amiri `س`,
   and `4.8%` for `م`. All five target checksums remained byte-identical, and
   boundary/huge-finite differential tests cover the fast and defensive paths.
+- `glyph-bench --mode raster-reuse` now accepts FreeType as well as Cangjie,
+  establishing an explicitly symmetric reused-face/reused-target lifecycle.
+  This is a colder boundary than the earlier `raster` row: Cangjie reuses its
+  decoded outline, target, and rasterizer, while FreeType reuses its face and
+  target but still performs `FT_Load_Glyph(FT_LOAD_RENDER)` per iteration. On
+  fixed CPU 30 at 64 px, Cangjie/FreeType medians were approximately
+  `10,923/1,751 ns` for Roboto `A`, `15,066/1,902 ns` for `g`, and
+  `10,589/2,017 ns` for `é`. The larger `5.2--7.9x` gap proves that scan
+  conversion itself, not only Cangjie's one-shot outline/setup overhead,
+  remains the dominant FreeType-relative deficit. Checksums are stable within
+  each engine but intentionally differ because their antialiasing algorithms
+  expose different pixel coverage.
 - A final fixed-CPU-30 absolute Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix at
   commit `30984d9` measured Amiri `fa-thelittleprince` at `765.566` versus
   `794.637 ns/glyph`, a Cangjie lead of about `3.66%`; Amiri `fa-words` at
@@ -2198,6 +2210,123 @@ shaping-performance superiority.
   origin `(-512,578)` and advance `-1024` instead of using half the line height
   as the y origin. The Font-level origin API is shared by layout output and the
   parity runner so renderers receive the same complete vertical translation.
+  Public positioned glyphs now store the actual HarfBuzz-style negative
+  origin offsets, including HVAR/VVAR/gvar variation and odd horizontal
+  advances; the parity runner reads those fields directly and retains only its
+  explicit synthetic bold/slant adjustment.
+  Positioned output now also retains the resolved per-glyph orientation:
+  explicit upright/sideways policy applies uniformly, while CSS mixed mode
+  keeps U/Tu/Tr upright and marks only UAX #50 R glyphs sideways. CPU
+  grayscale, color, and TrueType-hinted run renderers rotate those glyphs
+  clockwise around the shaping origin without changing advances.
+  Paragraph layout now exposes that same output through vertical greedy
+  wrapping. Global, UTF-8 ranged, and attributed `word-break` /
+  `overflow-wrap` / wrap-mode policy tailors safe UAX #14 boundaries before
+  any requested grapheme-safe emergency breaks. Boundaries belong to the
+  preceding source scalar, and ranged no-wrap spans defer rather than globally
+  disable later wrapping. `vertical_rl` and `vertical_lr` select right-to-left
+  or left-to-right block progression independently from TTB/BTT inline
+  direction. Physical column bounds, y-axis hit testing, horizontal
+  caret/selection bars, owned TextGeometry, debug overlays, retained reflow,
+  renderer draw-list y pens, and source-preserving `preserve` / `collapse` /
+  `break-spaces` whitespace policy are covered together. Flow-axis first-line
+  indentation and hard-segment paragraph spacing map to vertical y and x
+  geometry respectively, including RL/LR mirroring. Explicit and repeating tab
+  rulers support start/center/end/decimal y-axis fields. In-flow U+FFFC objects
+  map physical height to vertical inline advance and width to centered column
+  block extent across wrapping, interaction, retained/styled layout, and draw
+  output. Vertical start/center/end alignment maps to top/center/bottom inside
+  the post-indent inline region, while active tab-ruler columns remain pinned
+  to start. Source-order `max-lines` truncation synchronizes column, glyph/run,
+  object, and styled metadata prefixes before physical RL/LR placement.
+  Optional ellipsis resolves three periods through the terminal source style's
+  cascade, size, and variation instance, then lays them out along positive-down
+  y. It uses vertical metrics/origins for upright output and horizontal advance
+  for sideways output. Fitting repairs aligned tab fields, column alignment,
+  run ownership, object-derived block width, styled metadata, and retained
+  restoration; a trailing hard break's omitted empty column still triggers the
+  tail, while a zero-column limit remains empty.
+  Signed paragraph and attributed letter/word spacing also maps to vertical y:
+  negative values are exact while every resulting source advance stays
+  nonnegative, and an over-compressed request fails explicitly instead of
+  producing reverse wrap/caret topology. Plain, intrinsic, retained, styled,
+  tab-ruler, interaction, TextGeometry, and renderer output share that proof.
+  UAX #9 source bidi now resolves once per paragraph and applies L1/L2 inside
+  each final column along positive-down y, including strong R/AL text,
+  embeddings/overrides, isolates, mirroring, hard/soft columns, fallback runs,
+  fontless tabs/objects, ellipsis, retained reflow, styled metadata,
+  interaction geometry, and renderer output. Explicit `direction=rtl` still
+  means unsupported bottom-to-top inline progression; RL/LR remains block-axis
+  column order.
+  Greedy and balanced line-break strategies now both operate on vertical
+  source-order columns. The balanced path preserves greedy's per-hard-segment
+  column count, then performs bounded squared-slack optimization over the same
+  UAX/dictionary/ranged/emergency and unsafe-to-break boundary graph. Optional
+  Thai/Lao/Khmer/Myanmar dictionaries feed one-shot, retained, styled,
+  intrinsic, and balanced vertical layout through the shared width-independent
+  analysis. Positive-down tab fields, signed spacing, hard segments, bidi,
+  retained/styled output, max-lines, and ellipsis are retained; an incomplete
+  or complexity-limited search falls back transactionally to greedy columns.
+  Explicit U+00AD opportunities now use the same vertical boundary graph and
+  materialize a source-owning U+2010/U+002D/U+00AD fallback with the owning
+  run's orientation, variable-font instance, vertical origin, and inline
+  advance. Both retained invisible outputs and shaper-omitted
+  default-ignorables are covered; greedy/balanced fitting, aligned tabs,
+  intrinsic sizing, retained/styled metadata, bidi, interaction, renderer
+  output, custom hyphen characters, and ellipsis share that result.
+  Liang-pattern automatic boundaries now share the same vertical resolver and
+  source-neutral insertion transaction. Greedy and balanced column selection
+  enforce consecutive-hyphen limits, balanced DP retains horizontal-compatible
+  hyphen penalties, and `break-all`, unsafe shaped boundaries, missing custom
+  glyphs, retained/styled metadata, intrinsic sizing, bidi, and ellipsis are
+  covered directly.
+  Generic `TextAlign.justify` now expands UAX #14 spaces or conservative CJK
+  source boundaries along positive-down y. Only non-terminal soft columns
+  receive a target; hard/terminal/truncated/ellipsized/tab-ruler/unbounded
+  columns retain natural size. Greedy and balanced selection, retained/styled
+  restoration, bidi, interaction/TextGeometry, renderer pens, punctuation
+  processing, and RL/LR placement consume the same expanded advances.
+  Caller-selected `line_regions` now map x to the vertical block origin and
+  y/width to positive-down inline origin/height. Greedy and balanced wrapping
+  use each region's measure, explicit regions bypass first-column indentation,
+  RL/LR placement honors supplied x, and retained resolver replay, styled
+  metadata, TextGeometry, renderer pens, alignment, justification, optical
+  punctuation, and ellipsis consume the retained region geometry.
+  Static and out-of-flow-resolver exclusions now support both vertical block
+  progressions. Physical
+  x-band overlap produces unavailable positive-down y intervals; each column
+  selects the widest remaining fragment, while a fully blocked band advances
+  to the nearest rectangle edge in block progression without manufacturing
+  source output.
+  Indentation, explicit-region precedence, retained/styled restoration,
+  TextGeometry, and renderer origins are covered. Fully blocked vertical-rl
+  bands advance left, and the resolved local coordinates translate into the
+  same terminal-at-zero convention as ordinary RL columns.
+  `ShapedParagraph.breakLines` now commits one vertical column per caller
+  advance. Per-column regions and max-height retry the same source boundary
+  transactionally, partial layouts expose only committed columns, checkpoints
+  restore cursor/regions/glyph mutations, and final bidi, optical punctuation,
+  run pens, and inline objects execute once through retained presentation.
+  Line-end East Asian punctuation can now hang along the positive-down inline
+  axis. Greedy/emergency/balanced fitting use occupied height; final
+  column-local bidi assigns bottom-edge `hang_end`, then top/center/bottom
+  alignment, paragraph metrics, retained/styled layout, tabs, interaction,
+  renderer output, and ellipsis consume the same unchanged glyph advances.
+  CLREQ/JIS/GB/CNS punctuation compression now shares the inline-axis capacity
+  model with horizontal lines. Greedy/emergency/balanced fitting and intrinsic
+  sizing operate on effective occupied height, final logical-order mutation
+  updates y advance/offset before column-local bidi, and retained/styled
+  reflow, interaction geometry, renderer output, hanging, tabs, and ellipsis
+  consume the same result. Compression is transactional for indivisible
+  overfull fragments whose capacity cannot fit the requested measure.
+  Ordinary out-of-flow source-anchor fallbacks remain zero-occupancy while
+  retaining paint output. Custom out-of-flow markers now accept absolute
+  presentation-only geometry directly and through placement-only concrete
+  resolver replay; retained/styled layout, intrinsic sizing, draw output, and
+  line-limit visibility keep those bounds outside flow metrics. Bottom-to-top
+  inline progression and physical left/right alignment are rejected explicitly
+  until they are migrated to the shared
+  inline/block-axis model; this is not yet full vertical paragraph parity.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari
@@ -2459,6 +2588,16 @@ shaping-performance superiority.
   smoke runs reliably.
 - Avoid retaining optimizations that only improve a single noisy run or regress
   Roboto/word-list smoke cases.
+- Chaining class windows now track decoded class prefixes by length instead of
+  zeroing three 64-byte validity arrays for every candidate glyph. Region
+  discovery is monotone, so later authored rules extend the same prefix while a
+  changed lookahead origin resets one length. A four-pair fixed-CPU-30 ABBA run
+  with 31-sample medians reduced NotoSansDevanagari `hi-words` from an average
+  `1556.1` to `1549.1 ns/glyph` (about `0.45%`) and Roboto `en-words` from
+  `253.1` to `245.5 ns/glyph` (about `3.0%`), with unchanged corpus checksums.
+  The Devanagari win is small but repeatable; more importantly, perf had
+  attributed about `5.6%` to memset inside class/glyph/coverage contextual
+  windows, and this removes the class-window share without new allocations.
 - Font cascade selection now treats each extended grapheme/shaping cluster as
   one fallback unit. A font must cover every visible scalar, explicit cmap-14
   UVS support wins when present, and default-ignorable join controls do not
@@ -2482,6 +2621,17 @@ shaping-performance superiority.
   the four complex glyphs reduced cycles by roughly 16.7–22.0%. Direct and
   prepared target checksums are byte-identical, with differential tests for
   1/2/3/4 samples, repeated calls, empty outlines, and small-size emboldening.
+- Repeated public outline decoding now has an explicit parsed-proof
+  `font.GlyphSession`, while `Face.glyphs().outline` retains whole-table
+  borrowed-byte revalidation. On the built-in compound TrueType fixture, an
+  11-sample ReleaseFast run measured about `146 ns/glyph` for the session,
+  `616 ns/glyph` for the strict API, and `181 ns/glyph` for FreeType's
+  no-scale/no-hinting load: the trusted Cangjie session was about `1.24x`
+  faster than FreeType with identical Cangjie outline checksums. The
+  `outline-session` benchmark mode retains default and varied-output parity;
+  mutation tests document that only the strict API authenticates later source
+  changes. Raster benchmarks now use the same parse-proof path as production
+  rendering instead of charging the defensive public checksum pass per glyph.
 - Predecoded PairPos format 2 accelerators now merge coverage membership and
   class1 into one sorted `(glyph, class)` table. Every covered first glyph gets
   its explicit or implicit-zero class during accelerator construction, so the
@@ -2822,3 +2972,162 @@ shaping-performance superiority.
   Devanagari instructions rose `0.13%`, branches fell `0.20%`, and its
   single-order cycles rose about `1.05%`. All A/B checksums were identical, and
   the full ReleaseFast, corpus, shaping, and USE gates pass unchanged.
+- Complete shaped-run caching remains opt-in after a workload audit found that
+  Roboto `en-words`, Amiri `fa-words`, and NotoSansDevanagari `hi-words` contain
+  no repeated lines: enabling the cache adds lookup and ownership work without
+  a possible hit. A two-hit admission prototype still regressed the Roboto
+  unique-word median substantially, so it was not retained. The production
+  cache now addresses the independent correctness problem instead: it has a
+  32-entry LRU bound (with a zero-capacity mode for explicit callers), frees an
+  evicted run's complete exact key and shaped output, and refreshes recency on
+  exact collision-safe hits. This prevents an opt-in cache from growing without
+  bound while preserving its first-repeat hit behavior and the default-off
+  performance policy.
+
+- GSUB's mutation-aware run-digest cache now stores one unfiltered glyph
+  superset per mutation epoch instead of separate summaries for every lookup
+  flag and source-feature scope. These digests are used only as necessary-
+  condition rejection filters: lookup/source filtering can remove candidates
+  but cannot introduce a glyph absent from the superset, so false positives
+  remain safe while false negatives remain impossible. Fixed-CPU-30 B/A/A/B
+  comparisons against `321044b` reduced NotoSansDevanagari `hi-words` medians
+  from `1603.990`/`1564.477` to `1520.574`/`1496.665 ns/glyph`, about `4.9%`
+  overall. The same matrix improved Roboto `en-words` by about `5.1%`,
+  SourceSerifVariable `en-words` by about `4.5%`, Amiri `fa-words` by about
+  `6.4%`, and Amiri `fa-thelittleprince` by about `2.0%`. All A/B checksums
+  were identical.
+  A post-change fixed-CPU-30 Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix
+  measured NotoSansDevanagari at `1462.429`/`1464.667` versus
+  `951.391`/`947.447 ns/glyph`, leaving Cangjie about `54%` slower.
+  Amiri `fa-thelittleprince` remained a small Cangjie win at
+  `746.081`/`745.761` versus `758.687`/`753.144 ns/glyph`; Roboto,
+  SourceSerifVariable, and Amiri words still trailed. The broader performance
+  objective therefore remains open.
+- Indic source preparation now derives syllable ids and source-scoped basic
+  feature masks in one syllable walk. Both maps use the same boundaries, but
+  the old production path called the specialized boundary scanner twice per
+  shaped item before any staged lookup ran. The independent builders remain as
+  focused test surfaces and a new differential verifies the fused result. A
+  fixed-CPU-30 B/A/A/B 11-sample matrix reduced NotoSansDevanagari
+  `hi-words` medians from `1483.591`/`1487.765` to
+  `1454.802`/`1454.693 ns/glyph`, about `2.1%`. Interleaved five-iteration
+  counters reduced retired instructions by `0.80%`, branches by `1.19%`, and
+  cycles by `1.68%`. Roboto retired instructions/branches were identical and
+  cycles improved about `2.4%`; Amiri long text improved about `0.05%` in
+  instructions/branches and `0.45%` in cycles. All checksums were unchanged,
+  and the complete HarfBuzz/HarfRust parity umbrella passes, including the
+  10,000-line Hindi corpus at `b01a5388ce792b49`.
+- Chaining class-context matching now returns a boolean and writes its three
+  bounded physical-index regions only after a rule succeeds. Returning
+  `!?Match` had made each rejected rule initialize or copy the large
+  error-union payload even though no region escaped; both accelerated and
+  defensive format-2 paths now share the success-only materialization
+  contract. The accelerated wrapper remains in the isolated hot-path section,
+  preventing its code-size change from shifting unrelated Latin and Arabic
+  functions. A fixed-CPU-30 A/B/B/A plus B/A/A/B 31-sample matrix reduced
+  NotoSansDevanagari `hi-words` process medians from an average
+  `1465.911` to `1417.134 ns/glyph`, about `3.33%`; every process kept
+  checksum `e057170f005a0939`. Five-repeat counters reduced retired
+  instructions by `3.32%` and branches by `1.76%`; cycles were effectively
+  flat in that counter order and branch misses rose `1.43%`, while the
+  interleaved wall-time matrix retained the clear gain. Roboto instructions
+  and branches changed by less than `0.003%` and cycles improved `0.24%`;
+  Amiri long text instructions/branches stayed within `0.001%`. The complete
+  test suite and shaping, corpus, and USE HarfBuzz/HarfRust parity umbrellas
+  pass, including the 10,000-line Hindi checksum `b01a5388ce792b49`.
+- Chaining glyph-context matching now follows the same success-only output
+  contract instead of returning its three 64-index regions inside
+  `!?Match`. The fixed-position wrapper is kept out of line in the isolated
+  hot-path section, so its reduced result traffic cannot perturb unrelated
+  code layout. Against `7037c05`, a fixed-CPU-30 B/A/A/B 11-sample probe
+  reduced NotoSansDevanagari `hi-words` medians from
+  `1432.475/1418.528` to `1409.786/1395.402 ns/glyph`, about `1.61%`;
+  retired instructions, branches, and cycles fell `1.84%`, `0.98%`, and
+  `0.85%` in five-repeat counters, with branch misses down `0.24%`.
+  Roboto and Amiri word/long-text controls improved in the interleaved probe,
+  and all checksums were unchanged.
+- Prepared 4x4 raster rows now accumulate full-pixel interiors as signed range
+  differences and resolve them during the already-required blend walk. Exact
+  sample-center tests remain at both span boundaries, while 1x1, 2x2, and
+  nonstandard sampling densities stay on the compact legacy prepared scanner.
+  Direct/prepared byte parity passes for every retained sampling density,
+  repeated calls, overlapping non-zero contours, empty outlines, and small-size
+  emboldening. Fixed-CPU-30 B/A/A/B 21-sample medians for Roboto 64 px
+  prepared rendering improved `A` from `10,724`/`10,768` to
+  `9,179`/`9,189 ns` (about `14.5%`), `g` from `11,698`/`11,717` to
+  `10,118`/`10,151 ns` (about `13.4%`), and `é` from
+  `8,146`/`8,101` to `7,014`/`7,028 ns` (about `13.6%`). Retired
+  instructions fell `17.1%`, `16.5%`, and `16.9%`, respectively. The lower
+  density control checksums stayed identical on their unchanged implementation.
+  Prepared rendering now beats Cangjie's repeated direct scanner on the same
+  rows by about `14%` for `A`, `31%` for `g`, and `31%` for `é`, but still
+  does not close the larger FreeType raster gap.
+- Runtime CFF1/CFF2 hinting now builds the FreeType-derived Type2 horizontal
+  hint map rather than applying independent rounded stem edges. It retains
+  hintmask/cntrmask state, variation-aware Private DICT blue zones, initial-map
+  placement, pair adjustment, overlap rejection, blue capture, and stem
+  locking in 16.16 before exposing 26.6-precise pixel paths. The installed
+  FreeType differential now passes STIX `A`, `H`, and `o` across 9/13/16 ppem
+  plus Cantarell variable-CFF2 `A` and `B` at normalized `-1` and `0.5`,
+  comparing every outline point/tag/contour and the grid-fitted advance. The
+  Cantarell gate also covers CFF2 Private DICT operator-23 `blend`, which is
+  distinct from the charstring blend opcode. This closes a concrete
+  Fontations/Skrifa outline-correctness gap, but no Type2 speed claim is made;
+  FreeType still leads the broader scan-conversion measurements above.
+- Prepared geometry now caches the sorted edge intersections for all four
+  fixed 4x4 sample rows during `prepare`, so every repeated draw starts at
+  winding/span accumulation instead of rebuilding active edges and sorting the
+  same intersections. The immutable cache remains target-independent; target
+  clipping chooses a row subrange, and pathological coordinate spans decline
+  the cache and retain the bounded legacy scan. Other sampling densities keep
+  their former implementation. Fixed-CPU-30 B/A/A/B 21-sample medians for
+  Roboto 64 px reduced `A` from about `10,155`/`10,145` to
+  `8,308`/`8,218 ns` (about `18.5%`), `g` from `11,039`/`11,008` to
+  `9,074`/`9,060 ns` (about `17.7%`), and `é` from `8,171`/`8,179` to
+  `7,005`/`6,984 ns` (about `14.5%`). Interleaved counters reduced retired
+  instructions by about `15.7%`, `18.3%`, and `12.9%`, and cycles by about
+  `18.4%`, `18.3%`, and `14.7%`, respectively. All target checksums and the
+  retained direct/prepared 1/2/3/4-density differential are unchanged.
+- Prepared non-zero geometry now resolves those cached 4x4 intersections into
+  a target-independent byte coverage rectangle during `prepare`. Repeated
+  draws clip and blend that rectangle directly; even-odd fills, other sample
+  densities, pathological coordinate spans, and coverage over 16 MiB retain
+  the bounded scanners. Fixed-CPU-30 B/A/A/B 21-sample medians reduced Roboto
+  `A` from about `8,243`/`8,239` to `4,660`/`4,664 ns` (about `43.4%`),
+  `g` from `9,100`/`9,157` to `4,565`/`4,560 ns` (about `50.0%`), and `é`
+  from `6,986`/`6,990` to `4,402`/`4,396 ns` (about `37.0%`). Counters
+  reduced retired instructions by about `46.4%`, `53.7%`, and `40.5%`, and
+  cycles by about `44.4%`, `50.2%`, and `36.7%`, respectively. All target
+  checksums remain identical; the 1x1 counter control is cycle-neutral, and
+  the 2x2/3x3 wall-time controls stayed within noise or improved. FreeType's
+  reused raster still remains ahead of this boundary.
+- The dense prepared coverage cache now records each row's inclusive non-zero
+  x range. Target clipping intersects that range before the blend walk, so
+  empty exterior pixels are never loaded. Fixed-CPU-30 comparisons against the
+  first coverage-cache state reduced Roboto `A` from about `4.65` to `4.00
+  µs`, `g` from `4.49` to `4.15 µs`, and `é` from `4.40` to `3.84 µs`;
+  retired instructions fell about `15.6%`, `6.6%`, and `14.2%`, respectively.
+  Checksums, clipping behavior, and the retained lower-density controls remain
+  unchanged.
+- `glyph-bench --dirty-rect` now exposes a public repeated-render boundary
+  with matched dirty-target work: both engines reuse their face and target,
+  then clear, draw, and hash only the previously discovered clipped glyph
+  rectangle. Cangjie also reuses its immutable prepared geometry/coverage;
+  FreeType still performs `FT_Load_Glyph(FT_LOAD_RENDER)` because its reusable
+  face API does not expose an equivalent prepared-coverage object. Fixed CPU 30
+  with 20,000 iterations and 21 samples measured Cangjie/FreeType medians of
+  about `2,622/4,433 ns` for Roboto `A`, `2,115/5,578 ns` for `g`, and
+  `1,781/5,214 ns` for `é`: Cangjie leads by about `1.69x`, `2.64x`, and
+  `2.93x`. The reported dirty rectangles are comparable (`1840/1886`,
+  `1421/1421`, and `1421/1470` pixels); per-engine checksums remain stable.
+  Five-repeat `perf stat` runs on the same fixed CPU retired about
+  `615M/1,506M`, `662M/1,901M`, and `555M/1,780M` instructions and
+  `177M/397M`, `195M/501M`, and `165M/475M` cycles for
+  Cangjie/FreeType, respectively. Branches were about `92M/229M`,
+  `102M/294M`, and `85M/277M`; branch misses stayed below `0.22%` of
+  branches for both engines. These counters corroborate the wall-time result
+  rather than attributing it only to frequency or scheduling noise.
+  This is a public-pipeline win under those stated reuse contracts, not an
+  equal-work microbenchmark or a claim that Cangjie's one-shot scan converter
+  or antialiasing algorithm is universally faster. A client-side cached
+  FreeType bitmap would define a different, upload/blit-only boundary.

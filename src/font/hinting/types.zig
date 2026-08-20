@@ -1,0 +1,202 @@
+//! Concrete TrueType size-program inputs and retained state.
+//!
+//! Coordinates consumed by the interpreter use signed 26.6 fixed point
+//! integers, matching FreeType and the OpenType instruction contract. The
+//! source borrows validated font tables; `Instance` copies mutable CVT,
+//! storage, definitions, and retained graphics state.
+
+const std = @import("std");
+
+pub const Error = error{
+    BadSfnt,
+    InvalidHintPpem,
+    InvalidHintScale,
+    HintExecutionLimitExceeded,
+    HintStackOverflow,
+    HintStackUnderflow,
+    HintCallStackOverflow,
+    InvalidHintDefinition,
+    TooManyHintDefinitions,
+    InvalidHintJump,
+    InvalidHintStorage,
+    InvalidHintCvt,
+    InvalidHintOperand,
+    StaleHintingInstance,
+    UnsupportedHintGlyph,
+    DivideByZero,
+    UnsupportedHintInstruction,
+} || std.mem.Allocator.Error;
+
+pub const Program = enum(u2) {
+    font,
+    control_value,
+    glyph,
+};
+
+/// TrueType bytecode interpreter behavior exposed by one PPEM instance.
+pub const Interpreter = enum {
+    /// Microsoft rasterizer v1.7 / FreeType interpreter version 35.
+    classic,
+    /// FreeType's minimal ClearType-compatible interpreter version 40.
+    cleartype,
+
+    pub fn advertisedVersion(self: Interpreter) i32 {
+        return switch (self) {
+            .classic => 35,
+            .cleartype => 40,
+        };
+    }
+};
+
+pub const Limits = struct {
+    max_storage: usize,
+    max_function_defs: usize,
+    max_instruction_defs: usize,
+    max_stack_elements: usize,
+    max_twilight_points: usize,
+    max_component_depth: usize = 100,
+};
+
+pub const Source = struct {
+    /// Optional owning-face identity used to reject cross-face transactions.
+    /// Standalone VM tests use zero.
+    face_identity: usize = 0,
+    units_per_em: u16,
+    font_program: []const u8,
+    control_value_program: []const u8,
+    glyph_program: []const u8 = &.{},
+    /// Big-endian signed FUnit values borrowed directly from `cvt `.
+    control_value_data: []const u8,
+    /// Complete fvar axis-order location, quantized to F2Dot14 values.
+    normalized_coords: []const f32 = &.{},
+    /// Borrowed validated cvar table payload, empty when absent.
+    control_value_variation_data: []const u8 = &.{},
+    interpreter: Interpreter = .classic,
+    /// FreeType-classified legacy faces bypass v40 compatibility hacks.
+    tricky: bool = false,
+    limits: Limits,
+};
+
+pub const Target = enum {
+    /// Standard anti-aliased grayscale target.
+    normal,
+    /// Lighter anti-aliased hinting.
+    light,
+    /// Horizontal RGB/BGR subpixel outline target.
+    lcd,
+    /// Vertical RGB/BGR subpixel outline target.
+    vertical_lcd,
+    /// Strong full-pixel monochrome target.
+    mono,
+
+    pub fn isSmooth(self: Target) bool {
+        return self != .mono;
+    }
+
+    pub fn isVerticalLcd(self: Target) bool {
+        return self == .vertical_lcd;
+    }
+
+    pub fn isGrayscaleClearType(self: Target) bool {
+        return self == .normal or self == .light;
+    }
+};
+
+pub const Options = struct {
+    target: Target = .normal,
+    interpreter: Interpreter = .classic,
+};
+
+pub const RoundMode = enum {
+    half_grid,
+    grid,
+    double_grid,
+    down_to_grid,
+    up_to_grid,
+    off,
+    super,
+    super_45,
+};
+
+/// Graphics-state fields that survive `prep` and seed every glyph program.
+pub const RetainedGraphicsState = struct {
+    auto_flip: bool = true,
+    control_value_cutin: i32 = 68,
+    delta_base: i32 = 9,
+    delta_shift: i32 = 3,
+    instruct_control: u8 = 0,
+    min_distance: i32 = 64,
+    scan_control: bool = false,
+    scan_type: i32 = 0,
+    single_width_cutin: i32 = 0,
+    single_width: i32 = 0,
+    scale_16_16: i32 = 0,
+    ppem: u16 = 0,
+    target: Target = .normal,
+};
+
+pub fn scaleFUnits(value: i32, scale_16_16: i32) i32 {
+    const product = @as(i64, value) * @as(i64, scale_16_16);
+    // OpenType/FreeType fixed multiplication rounds by adding 0.5 ulp before
+    // shifting. Apply the sign after magnitude rounding so negative values use
+    // the same nearest convention.
+    const magnitude: u64 = @intCast(if (product < 0) -product else product);
+    const rounded: i64 = @intCast((magnitude + 0x8000) >> 16);
+    return clampI64ToI32(if (product < 0) -rounded else rounded);
+}
+
+pub fn mulDiv(a: i32, b: i32, c: i32) Error!i32 {
+    if (c == 0) return error.DivideByZero;
+    const product = @as(i64, a) * @as(i64, b);
+    return clampI64ToI32(@divTrunc(product, @as(i64, c)));
+}
+
+/// Signed multiply/divide with the nearest rounding used by TrueType MUL.
+///
+/// DIV deliberately uses `mulDiv` above because its bytecode contract
+/// truncates instead. Keeping separate helpers prevents scalar VM arithmetic
+/// from accidentally sharing two observably different rounding rules.
+pub fn mulDivNearest(a: i32, b: i32, c: i32) Error!i32 {
+    if (c == 0) return error.DivideByZero;
+    const product = @as(i64, a) * b;
+    const divisor: i64 = c;
+    const product_magnitude: u64 =
+        @intCast(if (product < 0) -product else product);
+    const divisor_magnitude: u64 =
+        @intCast(if (divisor < 0) -divisor else divisor);
+    const quotient: i64 = @intCast(
+        (product_magnitude + (divisor_magnitude >> 1)) /
+            divisor_magnitude,
+    );
+    return clampI64ToI32(
+        if ((product < 0) != (divisor < 0))
+            -quotient
+        else
+            quotient,
+    );
+}
+
+pub fn floor26Dot6(value: i32) i32 {
+    return value & ~@as(i32, 63);
+}
+
+pub fn ceil26Dot6(value: i32) i32 {
+    return (value +| 63) & ~@as(i32, 63);
+}
+
+fn clampI64ToI32(value: i64) i32 {
+    if (value <= std.math.minInt(i32)) return std.math.minInt(i32);
+    if (value >= std.math.maxInt(i32)) return std.math.maxInt(i32);
+    return @intCast(value);
+}
+
+test "26.6 scaling follows signed nearest fixed multiplication" {
+    try std.testing.expectEqual(@as(i32, 640), scaleFUnits(1000, 41943));
+    try std.testing.expectEqual(@as(i32, -640), scaleFUnits(-1000, 41943));
+    try std.testing.expectEqual(@as(i32, 1), try mulDiv(1, 3, 2));
+    try std.testing.expectEqual(@as(i32, 2), try mulDivNearest(1, 3, 2));
+    try std.testing.expectEqual(@as(i32, -2), try mulDivNearest(-1, 3, 2));
+    try std.testing.expectEqual(@as(i32, 64), floor26Dot6(127));
+    try std.testing.expectEqual(@as(i32, -128), floor26Dot6(-65));
+    try std.testing.expectEqual(@as(i32, 128), ceil26Dot6(65));
+}

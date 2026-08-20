@@ -1,3 +1,5 @@
+const std = @import("std");
+
 pub const ShapeStageProfile = struct {
     pub const max_lookup_entries = 128;
     pub const lookup_window_capacity = 5;
@@ -135,3 +137,14 @@ pub const ShapeStageProfile = struct {
         }
     }
 };
+
+pub fn now(profile: ?*ShapeStageProfile, io: ?std.Io) i128 {
+    return if (profile != null)
+        std.Io.Clock.now(.awake, io.?).nanoseconds
+    else
+        0;
+}
+
+pub fn elapsed(start: i128, io: ?std.Io) i128 {
+    return std.Io.Clock.now(.awake, io.?).nanoseconds - start;
+}

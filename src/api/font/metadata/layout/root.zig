@@ -7,8 +7,16 @@ pub const BaselineAxis = font.BaseAxisInfo;
 pub const BaselineScript = font.BaseScriptInfo;
 
 pub const GlyphClass = font.GlyphClass;
+pub const LigatureCaret = font.LigatureCaret;
+pub const AttachmentPoint = font.AttachmentPoint;
 pub const Kern = font.KernInfo;
 pub const KernSubtable = font.KernSubtableInfo;
+pub const Justification = font.JstfInfo;
+pub const JustificationScript = font.JstfScriptInfo;
+pub const JustificationLanguage = font.JstfLanguageInfo;
+pub const JustificationPriority = font.JstfPriorityInfo;
+pub const JustificationLookupList = font.JstfLookupListInfo;
+pub const JustificationMaximumLookup = font.JstfMaxLookupInfo;
 
 pub const Cff2 = font.Cff2Info;
 pub const Cff2FontDictionary = font.Cff2FontDictInfo;

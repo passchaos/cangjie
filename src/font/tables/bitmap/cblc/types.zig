@@ -4,8 +4,11 @@ const glyph = @import("../../../../glyph.zig");
 const bitmap = @import("../types.zig");
 
 pub const Strike = struct {
+    ppem_x: u16,
     ppem: u16,
     ppi: u16,
+    bit_depth: u8,
+    flags: u8,
     offset: usize,
     index_tables_size: usize,
     table_count: usize,
@@ -20,4 +23,9 @@ pub const GlyphLocation = struct {
     /// Index formats 2 and 5 store one BigGlyphMetrics record shared by all
     /// images. CBDT image format 19 has no inline metrics and consumes it.
     shared_metrics: ?bitmap.Metrics = null,
+};
+
+pub const SelectedGlyph = struct {
+    strike: Strike,
+    location: GlyphLocation,
 };

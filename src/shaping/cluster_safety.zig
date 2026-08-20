@@ -14,13 +14,20 @@ pub const SourceBoundaries = struct {
     /// activated only when a boundary exceeds the inline 64-byte mask.
     unsafe_before_byte: std.DynamicBitSetUnmanaged = .{},
     inline_boundaries: u64 = 0,
+    /// Arabic-family shapers nominate source boundaries where inserting
+    /// U+0640 can preserve joining. Positioning safety later filters these
+    /// candidates before they reach public glyph flags.
+    safe_tatweel_before_byte: std.DynamicBitSetUnmanaged = .{},
+    inline_tatweel_boundaries: u64 = 0,
     byte_base: usize = 0,
     byte_len: usize = 0,
     dense_active: bool = false,
+    tatweel_dense_active: bool = false,
     source_byte_starts: []const usize = &.{},
 
     pub fn deinit(self: *SourceBoundaries, allocator: std.mem.Allocator) void {
         self.unsafe_before_byte.deinit(allocator);
+        self.safe_tatweel_before_byte.deinit(allocator);
         self.* = .{};
     }
 
@@ -33,7 +40,9 @@ pub const SourceBoundaries = struct {
         self.byte_base = byte_base;
         self.byte_len = byte_len;
         self.inline_boundaries = 0;
+        self.inline_tatweel_boundaries = 0;
         self.dense_active = false;
+        self.tatweel_dense_active = false;
         self.source_byte_starts = source_byte_starts;
     }
 
@@ -179,6 +188,41 @@ pub const SourceBoundaries = struct {
         return self.unsafe_before_byte.isSet(local);
     }
 
+    pub fn markSafeTatweelBeforeSource(
+        self: *SourceBoundaries,
+        allocator: std.mem.Allocator,
+        source_index: usize,
+    ) std.mem.Allocator.Error!void {
+        if (source_index >= self.source_byte_starts.len) return;
+        try self.markTatweelBoundary(
+            allocator,
+            self.source_byte_starts[source_index],
+        );
+    }
+
+    /// HarfBuzz clears SAFE_TO_INSERT_TATWEEL whenever later GSUB/GPOS/kerning
+    /// evidence makes the same cluster unsafe to break.
+    pub fn isSafeTatweelBeforeByte(
+        self: *const SourceBoundaries,
+        byte_offset: usize,
+    ) bool {
+        if (self.isUnsafeBeforeByte(byte_offset) or
+            byte_offset < self.byte_base)
+        {
+            return false;
+        }
+        const local = byte_offset - self.byte_base;
+        if (local > self.byte_len) return false;
+        if (!self.tatweel_dense_active) {
+            if (local >= @bitSizeOf(u64)) return false;
+            const shift: u6 = @intCast(local);
+            return (self.inline_tatweel_boundaries &
+                (@as(u64, 1) << shift)) != 0;
+        }
+        if (local >= self.safe_tatweel_before_byte.capacity()) return false;
+        return self.safe_tatweel_before_byte.isSet(local);
+    }
+
     fn markByteSpan(
         self: *SourceBoundaries,
         allocator: std.mem.Allocator,
@@ -233,6 +277,23 @@ pub const SourceBoundaries = struct {
         self.unsafe_before_byte.set(local);
     }
 
+    fn markTatweelBoundary(
+        self: *SourceBoundaries,
+        allocator: std.mem.Allocator,
+        byte_offset: usize,
+    ) std.mem.Allocator.Error!void {
+        if (byte_offset < self.byte_base) return;
+        const local = byte_offset - self.byte_base;
+        if (local > self.byte_len) return;
+        if (!self.tatweel_dense_active and local < @bitSizeOf(u64)) {
+            const shift: u6 = @intCast(local);
+            self.inline_tatweel_boundaries |= @as(u64, 1) << shift;
+            return;
+        }
+        try self.ensureTatweelDense(allocator);
+        self.safe_tatweel_before_byte.set(local);
+    }
+
     fn ensureDense(
         self: *SourceBoundaries,
         allocator: std.mem.Allocator,
@@ -254,6 +315,29 @@ pub const SourceBoundaries = struct {
             pending &= pending - 1;
         }
         self.dense_active = true;
+    }
+
+    fn ensureTatweelDense(
+        self: *SourceBoundaries,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!void {
+        if (self.tatweel_dense_active) return;
+        const required_capacity = self.byte_len +| 1;
+        if (self.safe_tatweel_before_byte.capacity() < required_capacity) {
+            try self.safe_tatweel_before_byte.resize(
+                allocator,
+                required_capacity,
+                false,
+            );
+        }
+        self.safe_tatweel_before_byte.unsetAll();
+        var pending = self.inline_tatweel_boundaries;
+        while (pending != 0) {
+            const boundary: usize = @ctz(pending);
+            self.safe_tatweel_before_byte.set(boundary);
+            pending &= pending - 1;
+        }
+        self.tatweel_dense_active = true;
     }
 
     fn inlineRangeMask(start: usize, end: usize) u64 {
@@ -342,4 +426,36 @@ test "reset reuses storage without leaking flags into a shorter run" {
     try std.testing.expect(!safety.isUnsafeBeforeByte(20));
     try std.testing.expect(!safety.isUnsafeBeforeByte(21));
     try std.testing.expect(!safety.isUnsafeBeforeByte(7));
+}
+
+test "tatweel candidates are filtered by later unsafe evidence" {
+    var safety = SourceBoundaries{};
+    defer safety.deinit(std.testing.allocator);
+    safety.reset(0, 8, &.{ 0, 2, 5, 7 });
+    try safety.markSafeTatweelBeforeSource(std.testing.allocator, 1);
+    try safety.markSafeTatweelBeforeSource(std.testing.allocator, 2);
+    try std.testing.expect(safety.isSafeTatweelBeforeByte(2));
+    try std.testing.expect(safety.isSafeTatweelBeforeByte(5));
+
+    try safety.markGlyphPair(
+        std.testing.allocator,
+        &.{ 0, 1, 2, 3 },
+        0,
+        2,
+    );
+    try std.testing.expect(!safety.isSafeTatweelBeforeByte(2));
+    try std.testing.expect(!safety.isSafeTatweelBeforeByte(5));
+}
+
+test "tatweel candidate storage grows past the inline boundary mask" {
+    var safety = SourceBoundaries{};
+    defer safety.deinit(std.testing.allocator);
+    const starts = [_]usize{ 100, 170 };
+    safety.reset(100, 80, &starts);
+    try safety.markSafeTatweelBeforeSource(std.testing.allocator, 1);
+    try std.testing.expect(safety.isSafeTatweelBeforeByte(170));
+
+    safety.reset(300, 2, &.{ 300, 301 });
+    try std.testing.expect(!safety.isSafeTatweelBeforeByte(170));
+    try std.testing.expect(!safety.isSafeTatweelBeforeByte(301));
 }

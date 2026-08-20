@@ -311,8 +311,12 @@ fn glyphYAdvances(allocator: std.mem.Allocator, font: *const cangjie.font.Face, 
     const values = try allocator.alloc(i32, glyphs.len);
     for (glyphs, values) |glyph, *value| {
         const runtime_value = fontUnitPosition(font, font_size, glyph.y_advance);
-        value.* = if (usesHarfBuzzVerticalSummary(options.direction) and glyph.vertical and runtime_value > 0)
-            try harfBuzzVerticalAdvance(font, glyph)
+        value.* = if (usesHarfBuzzVerticalSummary(options.direction) and
+            glyph.isVertical())
+            if (usesSyntheticVerticalSpaceAdvance(glyph.codepoint))
+                -runtime_value
+            else
+                try harfBuzzVerticalAdvance(font, glyph)
         else
             runtime_value;
     }
@@ -328,29 +332,30 @@ fn glyphXOffsets(
     glyphs: []const cangjie.shaping.Glyph,
 ) ![]const i32 {
     const values = try allocator.alloc(i32, glyphs.len);
-    const preserve_vertical_position_delta = verticalKerningFeatureRequested(options);
     for (glyphs, values) |glyph, *value| {
-        if (usesHarfBuzzVerticalSummary(options.direction) and glyph.vertical) {
-            const origin = try syntheticVerticalOriginX(font, glyph.glyph_id, options, normalized_variation_coords);
-            if (preserve_vertical_position_delta) {
-                const default_runtime_origin = @as(f32, @floatFromInt((try font.metrics().horizontalAt(glyph.glyph_id, normalized_variation_coords)).advance_width)) *
-                    0.5 * font_size / @as(f32, @floatFromInt(font.properties().units_per_em));
-                const runtime_delta = fontUnitPosition(
-                    font,
-                    font_size,
-                    glyph.x_offset - default_runtime_origin,
+        if (usesHarfBuzzVerticalSummary(options.direction) and
+            glyph.isVertical() and
+            options.font_bold_x != 0)
+        {
+            const default_origin =
+                @divTrunc(
+                    @as(i32, (try font.metrics().horizontalAt(
+                        glyph.glyph_id,
+                        normalized_variation_coords,
+                    )).advance_width),
+                    2,
                 );
-                // Explicit `vkrn` may change x after the default origin is
-                // installed. Preserve that delta for vertical kerning probes
-                // instead of replacing the complete result with the
-                // synthesized origin.
-                value.* = -origin + runtime_delta;
-            } else {
-                // Existing synthetic-bold/slant and fallback-space fixtures
-                // intentionally summarize only HarfBuzz's vertical origin;
-                // their transformed public x coordinate is not a GPOS delta.
-                value.* = -origin;
-            }
+            const runtime_delta =
+                fontUnitPosition(font, font_size, glyph.x_offset) +
+                default_origin;
+            value.* =
+                -try syntheticVerticalOriginX(
+                    font,
+                    glyph.glyph_id,
+                    options,
+                    normalized_variation_coords,
+                ) +
+                runtime_delta;
         } else {
             value.* = fontUnitPosition(font, font_size, glyph.x_offset);
         }
@@ -358,27 +363,29 @@ fn glyphXOffsets(
     return values;
 }
 
-fn verticalKerningFeatureRequested(options: options_mod.Options) bool {
-    const vkrn_tag = (@as(u32, 'v') << 24) |
-        (@as(u32, 'k') << 16) |
-        (@as(u32, 'r') << 8) |
-        @as(u32, 'n');
-    for (options.featureOverrides()) |feature| {
-        if (feature.tag == vkrn_tag) return feature.enabled;
-    }
-    return false;
-}
-
 fn glyphYOffsets(allocator: std.mem.Allocator, font: *const cangjie.font.Face, font_size: f32, options: options_mod.Options, normalized_variation_coords: []const f32, glyphs: []const cangjie.shaping.Glyph) ![]const i32 {
     const values = try allocator.alloc(i32, glyphs.len);
     for (glyphs, values) |glyph, *value| {
-        value.* = if (usesHarfBuzzVerticalSummary(options.direction) and glyph.vertical) vertical: {
+        value.* = if (usesHarfBuzzVerticalSummary(options.direction) and glyph.isVertical()) vertical: {
             if (options.font_slant != 0 or options.font_bold_x != 0 or options.font_bold_y != 0) {
-                break :vertical -try syntheticVerticalOriginY(font, glyph.glyph_id, options, normalized_variation_coords);
+                const default_origin = try font.metrics().shapingVerticalOrigin(
+                    glyph.glyph_id,
+                    normalized_variation_coords,
+                );
+                const runtime_delta =
+                    fontUnitPosition(font, font_size, glyph.y_offset) +
+                    default_origin;
+                break :vertical -try syntheticVerticalOriginY(
+                    font,
+                    glyph.glyph_id,
+                    options,
+                    normalized_variation_coords,
+                ) + runtime_delta;
             }
-            break :vertical -try font.metrics().shapingVerticalOrigin(
-                glyph.glyph_id,
-                normalized_variation_coords,
+            break :vertical fontUnitPosition(
+                font,
+                font_size,
+                glyph.y_offset,
             );
         } else fontUnitPosition(font, font_size, glyph.y_offset);
     }
@@ -392,7 +399,8 @@ fn usesHarfBuzzVerticalSummary(direction: options_mod.Direction) bool {
 fn glyphFlags(allocator: std.mem.Allocator, text: []const u8, options: options_mod.Options, glyphs: []const cangjie.shaping.Glyph) ![]const u32 {
     const values = try allocator.alloc(u32, glyphs.len);
     for (glyphs, values) |glyph, *value| {
-        value.* = @intFromBool(glyph.isUnsafeToBreakBefore());
+        value.* = @intFromBool(glyph.isUnsafeToBreakBefore()) |
+            (@as(u32, @intFromBool(glyph.isSafeToInsertTatweel())) << 2);
     }
     if (!options.unsafe_to_concat) return values;
     if (options.direction != .rtl or !textContainsCodepoint(text, 0x200c)) return values;
@@ -488,6 +496,19 @@ fn harfBuzzVerticalAdvance(font: *const cangjie.font.Face, glyph: cangjie.shapin
 
 fn defaultVerticalAdvance(font: *const cangjie.font.Face) i32 {
     return @as(i32, font.properties().ascender) - @as(i32, font.properties().descender);
+}
+
+fn usesSyntheticVerticalSpaceAdvance(codepoint: u21) bool {
+    return switch (codepoint) {
+        0x0020,
+        0x00a0,
+        0x2000...0x200a,
+        0x202f,
+        0x205f,
+        0x3000,
+        => true,
+        else => false,
+    };
 }
 
 fn fontUnitPosition(font: *const cangjie.font.Face, font_size: f32, value: f32) i32 {

@@ -3,6 +3,7 @@ const cangjie = @import("cangjie");
 
 const options_mod = @import("options.zig");
 const report = @import("report.zig");
+const dirty_rect = @import("dirty_rect.zig");
 
 pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Options) ![]u8 {
     if (options.font_path) |path| {
@@ -17,6 +18,10 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.Face, options: options_mod.Options) !report.Result {
     const glyph_id = try resolveGlyphId(font, options);
+    if (options.dirty_rect) {
+        if (options.mode != .raster_prepared) return error.InvalidArguments;
+        return runPreparedDirty(io, allocator, font, glyph_id, options);
+    }
     if (options.warmup != 0) {
         var warmup_checksum: u64 = 0;
         try runIterations(allocator, font, glyph_id, options, options.warmup, &warmup_checksum);
@@ -45,7 +50,59 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.F
         .elapsed_ns = elapsed,
         .checksum = checksum,
         .samples = try samples.toOwnedSlice(allocator),
+        .dirty_pixels = 0,
     };
+}
+
+fn runPreparedDirty(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options) !report.Result {
+    const coords = options.normalizedVariationCoords();
+    const session = font.glyphs().session();
+    var outline = if (coords.len == 0)
+        try session.outline(allocator, glyph_id)
+    else
+        try session.outlineAt(allocator, glyph_id, coords);
+    defer outline.deinit();
+    var target = try cangjie.render.GrayTarget.init(allocator, options.target_size, options.target_size);
+    defer target.deinit();
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
+    defer rasterizer.deinit();
+    rasterizer.setHintSize(options.font_size);
+    rasterizer.setSampling(options.samples_per_axis);
+    var prepared = try rasterizer.prepare(&outline, 0, options.font_size, options.font_size, font.properties().units_per_em);
+    defer prepared.deinit();
+    // Discover the exact clipped rectangle once outside timing. This keeps the
+    // benchmark on public renderer APIs and includes the same antialiasing
+    // fringe that repeated atlas updates must clear.
+    try rasterizer.drawPrepared(&target, &prepared);
+    const bounds = dirty_rect.nonZeroBounds(target.pixels, target.width);
+    const dirty_pixels = if (bounds) |value| value.pixelCount() else 0;
+    if (options.warmup != 0) {
+        var ignored: u64 = 0;
+        try runPreparedDirtyIterations(&rasterizer, &target, &prepared, bounds, options.warmup, &ignored);
+    }
+    var samples = std.ArrayList(report.Sample).empty;
+    errdefer samples.deinit(allocator);
+    var elapsed: i128 = 0;
+    var checksum: u64 = 0;
+    for (0..options.samples) |sample_index| {
+        var sample_checksum: u64 = 0;
+        const start = std.Io.Clock.now(.awake, io).nanoseconds;
+        try runPreparedDirtyIterations(&rasterizer, &target, &prepared, bounds, options.iterations, &sample_checksum);
+        const duration = std.Io.Clock.now(.awake, io).nanoseconds - start;
+        elapsed += duration;
+        checksum = updateChecksum(checksum, sample_checksum);
+        try samples.append(allocator, .{ .index = sample_index, .elapsed_ns = duration, .iterations = options.iterations, .checksum = sample_checksum });
+    }
+    return .{ .elapsed_ns = elapsed, .checksum = checksum, .samples = try samples.toOwnedSlice(allocator), .dirty_pixels = dirty_pixels };
+}
+
+fn runPreparedDirtyIterations(rasterizer: *cangjie.render.Rasterizer, target: *cangjie.render.GrayTarget, prepared: *const cangjie.render.Prepared, bounds: ?dirty_rect.Bounds, iterations: usize, checksum: *u64) !void {
+    var i: usize = 0;
+    while (i < iterations) : (i += 1) {
+        dirty_rect.clear(target.pixels, target.width, bounds);
+        try rasterizer.drawPrepared(target, prepared);
+        checksum.* = updateChecksum(checksum.*, dirty_rect.checksum(target.pixels, target.width, bounds));
+    }
 }
 
 fn resolveGlyphId(font: *const cangjie.font.Face, options: options_mod.Options) !cangjie.font.GlyphId {
@@ -57,9 +114,24 @@ fn resolveGlyphId(font: *const cangjie.font.Face, options: options_mod.Options) 
 fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
     switch (options.mode) {
         .outline => try runOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
+        .outline_session => try runOutlineSessionIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster => try runRasterIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_reuse => try runRasterReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_prepared => try runRasterPreparedIterations(allocator, font, glyph_id, options, iterations, checksum),
+    }
+}
+
+fn runOutlineSessionIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
+    const coords = options.normalizedVariationCoords();
+    const session = font.glyphs().session();
+    var i: usize = 0;
+    while (i < iterations) : (i += 1) {
+        var outline = if (coords.len == 0)
+            try session.outline(allocator, glyph_id)
+        else
+            try session.outlineAt(allocator, glyph_id, coords);
+        checksum.* = updateChecksum(checksum.*, outlineChecksum(outline));
+        outline.deinit();
     }
 }
 
@@ -89,10 +161,11 @@ fn runRasterIterations(allocator: std.mem.Allocator, font: *const cangjie.font.F
     while (i < iterations) : (i += 1) {
         target.clear(0);
         {
+            const session = font.glyphs().session();
             var outline = if (coords.len == 0)
-                try font.glyphs().outline(allocator, glyph_id)
+                try session.outline(allocator, glyph_id)
             else
-                try font.glyphs().outlineAt(allocator, glyph_id, coords);
+                try session.outlineAt(allocator, glyph_id, coords);
             defer outline.deinit();
             try rasterizer.drawOutline(&target, &outline, 0, options.font_size, options.font_size, units_per_em);
         }
@@ -102,10 +175,11 @@ fn runRasterIterations(allocator: std.mem.Allocator, font: *const cangjie.font.F
 
 fn runRasterReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
     const coords = options.normalizedVariationCoords();
+    const session = font.glyphs().session();
     var outline = if (coords.len == 0)
-        try font.glyphs().outline(allocator, glyph_id)
+        try session.outline(allocator, glyph_id)
     else
-        try font.glyphs().outlineAt(allocator, glyph_id, coords);
+        try session.outlineAt(allocator, glyph_id, coords);
     defer outline.deinit();
 
     var target = try cangjie.render.GrayTarget.init(allocator, options.target_size, options.target_size);
@@ -125,10 +199,11 @@ fn runRasterReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.f
 
 fn runRasterPreparedIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
     const coords = options.normalizedVariationCoords();
+    const session = font.glyphs().session();
     var outline = if (coords.len == 0)
-        try font.glyphs().outline(allocator, glyph_id)
+        try session.outline(allocator, glyph_id)
     else
-        try font.glyphs().outlineAt(allocator, glyph_id, coords);
+        try session.outlineAt(allocator, glyph_id, coords);
     defer outline.deinit();
 
     var target = try cangjie.render.GrayTarget.init(allocator, options.target_size, options.target_size);

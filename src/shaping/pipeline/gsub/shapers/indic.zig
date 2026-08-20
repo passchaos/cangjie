@@ -109,21 +109,18 @@ pub fn finish(input: Input) !void {
         input.allocator,
         input.codepoints.items.len,
     );
-    indic.markSourceSyllables(
-        input.source_syllables.items,
-        input.codepoints.items,
-        input.lookup_options.script_tag,
-    );
+    const has_basic_source_features =
+        indic.markSourceSyllablesAndBasicFeatures(
+            input.source_syllables.items,
+            input.source_features.items,
+            input.codepoints.items,
+            input.lookup_options.script_tag,
+        );
     try input.source_pref_substituted.resize(
         input.allocator,
         input.codepoints.items.len,
     );
     @memset(input.source_pref_substituted.items, false);
-    const has_basic_source_features = indic.markBasicSourceFeatures(
-        input.source_features.items,
-        input.codepoints.items,
-        input.lookup_options.script_tag,
-    );
     input.options.source_features = input.source_features.items;
     input.options.source_syllables = input.source_syllables.items;
 

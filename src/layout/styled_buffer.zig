@@ -1,5 +1,8 @@
 const std = @import("std");
 const run_types = @import("types/runs.zig");
+const ellipsis_runs = @import("line_break/reflow/ellipsis_runs.zig");
+const reflow_regions = @import("line_break/reflow/regions.zig");
+const tabs = @import("paragraph/tabs.zig");
 const styled_paragraph = @import("styled_paragraph.zig");
 const unicode = @import("../unicode.zig");
 
@@ -14,6 +17,7 @@ pub const Metadata = styled_paragraph.GlyphMetadata;
 pub const Buffer = struct {
     allocator: std.mem.Allocator,
     metadata: std.ArrayList(Metadata) = .empty,
+    content_widths: ?@import("types/paragraph.zig").ContentWidths = null,
 
     pub fn init(allocator: std.mem.Allocator) Buffer {
         return .{ .allocator = allocator };
@@ -26,10 +30,17 @@ pub const Buffer = struct {
 
     pub fn clear(self: *Buffer) void {
         self.metadata.clearRetainingCapacity();
+        self.content_widths = null;
     }
 
     pub fn glyphMetadata(self: *const Buffer) []const Metadata {
         return self.metadata.items;
+    }
+
+    pub fn contentWidths(
+        self: *const Buffer,
+    ) ?@import("types/paragraph.zig").ContentWidths {
+        return self.content_widths;
     }
 };
 
@@ -46,13 +57,18 @@ pub fn rebuild(
             return error.InvalidStyleSpans;
         list.appendAssumeCapacity(.{
             .style_index = span.style_index,
-            .layout_spacing = if (isWordSpacingCodepoint(glyph.codepoint))
+            .layout_spacing = if (glyph.isInlineObject())
+                0
+            else if (glyph.isTab())
+                0
+            else if (isWordSpacingCodepoint(glyph.codepoint))
                 span.word_spacing
             else if (!isMandatoryLineBreak(glyph.codepoint))
                 span.letter_spacing
             else
                 0,
             .minimum_line_height = span.minimum_line_height,
+            .vertical_align = span.vertical_align,
         });
     }
 }
@@ -60,11 +76,69 @@ pub fn rebuild(
 pub fn applySpacing(
     metadata: []const Metadata,
     glyphs: anytype,
+    writing_mode: @import("../shaping/pipeline/types.zig").WritingMode,
 ) !void {
     if (metadata.len != glyphs.len) return error.InvalidStyleSpans;
     for (glyphs, metadata) |*glyph, item| {
-        glyph.x_advance += item.layout_spacing;
+        if (writing_mode.isVertical()) {
+            glyph.y_advance += item.layout_spacing;
+        } else {
+            glyph.x_advance += item.layout_spacing;
+        }
     }
+}
+
+/// Rebuild the glyph-parallel sidecar after paragraph reflow inserts automatic
+/// line-end hyphens. Existing source glyph metadata remains byte-for-byte
+/// unchanged; an insertion inherits paint and minimum height from the style at
+/// its source boundary, but never inherits letter/word spacing.
+pub fn insertAutomaticHyphenMetadata(
+    list: *std.ArrayList(Metadata),
+    allocator: std.mem.Allocator,
+    glyphs: anytype,
+    spans: []const styled_paragraph.Span,
+) !void {
+    var automatic_count: usize = 0;
+    for (glyphs) |glyph| {
+        automatic_count += @intFromBool(glyph.isAutomaticHyphen());
+    }
+    if (automatic_count == 0) return;
+    const retained_source_count = glyphs.len - automatic_count;
+    if (retained_source_count > list.items.len) {
+        return error.InvalidStyleSpans;
+    }
+    for (glyphs) |glyph| {
+        if (glyph.isAutomaticHyphen() and
+            spanForBoundary(spans, glyph.cluster) == null)
+        {
+            return error.InvalidStyleSpans;
+        }
+    }
+
+    const old = try allocator.dupe(Metadata, list.items);
+    defer allocator.free(old);
+    try list.ensureTotalCapacity(allocator, glyphs.len);
+    list.clearRetainingCapacity();
+    var old_index: usize = 0;
+    for (glyphs) |glyph| {
+        if (glyph.isAutomaticHyphen()) {
+            const span = spanForBoundary(spans, glyph.cluster).?;
+            list.appendAssumeCapacity(.{
+                .style_index = span.style_index,
+                .layout_spacing = 0,
+                .minimum_line_height = span.minimum_line_height,
+                .vertical_align = span.vertical_align,
+            });
+            continue;
+        }
+        std.debug.assert(old_index < old.len);
+        list.appendAssumeCapacity(old[old_index]);
+        old_index += 1;
+    }
+    // `max_lines` truncation may have removed a source suffix before this
+    // pass. The unused tail belongs to omitted glyphs and is intentionally
+    // discarded when the rebuilt list adopts `glyphs.len`.
+    std.debug.assert(old_index == retained_source_count);
 }
 
 pub fn synchronizeAfterTruncation(
@@ -90,6 +164,47 @@ fn replaceTailWithSynthetic(
     if (list.items.len != glyph_count) return error.InvalidStyleSpans;
 }
 
+/// Reserve metadata capacity before an axis-specific ellipsis mutates glyphs.
+///
+/// Keeping allocation before the glyph transaction prevents an OOM from
+/// leaving the sidecar shorter than already-materialized synthetic output.
+pub fn reserveEllipsisTail(
+    list: *std.ArrayList(Metadata),
+    allocator: std.mem.Allocator,
+    synthetic_glyph_count: usize,
+) !void {
+    try list.ensureTotalCapacity(
+        allocator,
+        list.items.len + synthetic_glyph_count,
+    );
+}
+
+/// Synchronize metadata after an axis-specific ellipsis implementation trims
+/// source glyphs and appends a synthetic tail. The dots inherit terminal paint
+/// and minimum-line-height state but never source letter/word spacing.
+pub fn replaceTailWithEllipsis(
+    list: *std.ArrayList(Metadata),
+    allocator: std.mem.Allocator,
+    glyph_count: usize,
+    synthetic_glyph_count: usize,
+) !void {
+    if (glyph_count < synthetic_glyph_count) {
+        return error.InvalidStyleSpans;
+    }
+    // Capture the terminal visible source style before fitting can remove the
+    // complete final column. In that case the retained glyph immediately
+    // before the dots belongs to an earlier column and is not the paint owner.
+    const style = terminalStyle(list.items, list.items.len);
+    if (list.capacity < glyph_count) return error.InvalidStyleSpans;
+    try replaceTailWithSynthetic(
+        list,
+        allocator,
+        glyph_count,
+        synthetic_glyph_count,
+        style,
+    );
+}
+
 pub fn appendEllipsis(
     list: *std.ArrayList(Metadata),
     allocator: std.mem.Allocator,
@@ -97,6 +212,7 @@ pub fn appendEllipsis(
     max_width: f32,
     alignment: anytype,
     alignedLineX: anytype,
+    options: anytype,
 ) !void {
     if (list.items.len != buffer.glyphs.items.len) {
         return error.InvalidStyleSpans;
@@ -106,16 +222,28 @@ pub fn appendEllipsis(
     const line = &buffer.lines.items[buffer.lines.items.len - 1];
     const ellipsis_count: usize = 3;
     const run_index = line.run_start + line.run_len - 1;
-    var run = &buffer.runs.items[run_index];
-    const font = run_types.fontForBackend(run.*);
+    const run_template = buffer.runs.items[run_index];
+    const font = run_types.fontForBackend(run_template);
     const dot_metrics = try font.horizontalMetrics(try font.glyphIndex('.'));
     const dot_advance = @as(f32, @floatFromInt(dot_metrics.advance_width)) *
-        (run.font_size / @as(f32, @floatFromInt(font.units_per_em)));
+        (run_template.font_size /
+            @as(f32, @floatFromInt(font.units_per_em)));
     const ellipsis_width = dot_advance * @as(f32, @floatFromInt(ellipsis_count));
-    const width_limit = if (std.math.isFinite(max_width))
-        max_width
-    else
-        std.math.inf(f32);
+    const space_advance = defaultSpaceAdvance(buffer.glyphs.items);
+    const fallback_tab_interval =
+        @as(f32, @floatFromInt(@max(1, options.tab_width))) *
+        space_advance;
+    const region = reflow_regions.stored(line.*, max_width);
+    const width_limit = region.width;
+    // Optical punctuation hanging is invalid once ellipsis changes the
+    // terminal glyph. Restore the full advance sum before fitting the dots.
+    line.width = tabs.recomputeRangeWithTerminal(
+        buffer.glyphs.items[line.glyph_start .. line.glyph_start + line.glyph_len],
+        options.tab_stops,
+        fallback_tab_interval,
+        space_advance,
+        ellipsis_width,
+    );
     // Capture paint and minimum-line-height state before the fit loop can
     // remove every visible glyph. Synthetic dots intentionally do not inherit
     // source letter/word spacing.
@@ -130,12 +258,39 @@ pub fn appendEllipsis(
     );
     try list.ensureTotalCapacity(allocator, list.items.len + ellipsis_count);
 
-    while (line.glyph_len > 0 and line.width + ellipsis_width > width_limit) {
+    // A discretionary hyphen describes continuation onto another visible
+    // line. Ellipsis ends the visible text instead, so remove that glyph before
+    // ordinary fit trimming even when the dots already fit beside it.
+    while (line.glyph_len > 0 and
+        buffer.glyphs.items[
+            line.glyph_start + line.glyph_len - 1
+        ].isDiscretionaryHyphen())
+    {
         const remove_index = line.glyph_start + line.glyph_len - 1;
         line.width -= buffer.glyphs.items[remove_index].x_advance;
         _ = buffer.glyphs.pop();
         line.glyph_len -= 1;
-        if (run.glyph_len > 0) run.glyph_len -= 1;
+        line.width = tabs.recomputeRangeWithTerminal(
+            buffer.glyphs.items[line.glyph_start .. line.glyph_start + line.glyph_len],
+            options.tab_stops,
+            fallback_tab_interval,
+            space_advance,
+            ellipsis_width,
+        );
+    }
+
+    while (line.glyph_len > 0 and line.width > width_limit) {
+        const remove_index = line.glyph_start + line.glyph_len - 1;
+        line.width -= buffer.glyphs.items[remove_index].x_advance;
+        _ = buffer.glyphs.pop();
+        line.glyph_len -= 1;
+        line.width = tabs.recomputeRangeWithTerminal(
+            buffer.glyphs.items[line.glyph_start .. line.glyph_start + line.glyph_len],
+            options.tab_stops,
+            fallback_tab_interval,
+            space_advance,
+            ellipsis_width,
+        );
     }
 
     const dot_glyph = try font.glyphIndex('.');
@@ -143,6 +298,11 @@ pub fn appendEllipsis(
         buffer.glyphs.items[line.glyph_start + line.glyph_len - 1].cluster
     else
         0;
+    const synthetic_run_index = try ellipsis_runs.prepare(
+        buffer,
+        buffer.glyphs.items.len,
+        run_template,
+    );
     for (0..ellipsis_count) |_| {
         try buffer.glyphs.append(buffer.allocator, .{
             .glyph_id = dot_glyph,
@@ -151,8 +311,11 @@ pub fn appendEllipsis(
             .x_advance = dot_advance,
         });
         line.glyph_len += 1;
-        run.glyph_len += 1;
-        line.width += dot_advance;
+    }
+    buffer.runs.items[synthetic_run_index].glyph_len += ellipsis_count;
+    line.width = 0;
+    for (buffer.glyphs.items[line.glyph_start .. line.glyph_start + line.glyph_len]) |glyph| {
+        line.width += glyph.x_advance;
     }
     try replaceTailWithSynthetic(
         list,
@@ -166,7 +329,34 @@ pub fn appendEllipsis(
         line.glyph_start,
         line.glyph_start + line.glyph_len,
     );
-    line.x = alignedLineX(line.width, max_width, alignment);
+    const final_alignment =
+        if (tabs.contains(
+            buffer.glyphs.items[line.glyph_start .. line.glyph_start + line.glyph_len],
+        ))
+            line.resolved_alignment orelse alignment
+        else
+            alignment;
+    line.resolved_alignment = final_alignment;
+    line.x = region.x + alignedLineX(
+        @min(line.width, region.width),
+        region.width,
+        final_alignment,
+    );
+}
+
+fn defaultSpaceAdvance(glyphs: anytype) f32 {
+    for (glyphs) |glyph| {
+        if (glyph.codepoint == ' ') return @max(glyph.x_advance, 1);
+    }
+    for (glyphs) |glyph| {
+        if (!glyph.isTab() and
+            glyph.codepoint != '\n' and
+            glyph.x_advance > 0)
+        {
+            return glyph.x_advance;
+        }
+    }
+    return 1;
 }
 
 pub fn reorderByPermutation(
@@ -269,11 +459,27 @@ fn appendEllipsisStyle(
         .style_index = style.style_index,
         .layout_spacing = 0,
         .minimum_line_height = style.minimum_line_height,
+        .vertical_align = style.vertical_align,
     });
 }
 
+fn spanForBoundary(
+    spans: []const styled_paragraph.Span,
+    boundary: usize,
+) ?styled_paragraph.Span {
+    if (spans.len == 0) return null;
+    // Automatic hyphens are attached to the preceding fragment. At a style
+    // boundary, use that fragment's style rather than the next source glyph.
+    for (spans) |span| {
+        if (boundary > span.byte_start and boundary <= span.byteEnd()) {
+            return span;
+        }
+    }
+    return styled_paragraph.spanForCluster(spans, boundary);
+}
+
 fn isWordSpacingCodepoint(codepoint: u21) bool {
-    return codepoint == ' ' or codepoint == '\t';
+    return codepoint == ' ';
 }
 
 fn isMandatoryLineBreak(codepoint: u21) bool {

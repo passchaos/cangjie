@@ -8,9 +8,11 @@ const types = @import("../types.zig");
 const cblc_data = @import("data.zig");
 const cblc_types = @import("types.zig");
 const cblc_index = @import("index.zig");
+const materialize = @import("materialize.zig");
 
 pub const Strike = cblc_types.Strike;
 pub const GlyphLocation = cblc_types.GlyphLocation;
+pub const SelectedGlyph = cblc_types.SelectedGlyph;
 
 pub const glyphLocation = cblc_index.glyphLocation;
 pub const imageLocation = cblc_index.imageLocation;
@@ -60,12 +62,23 @@ pub fn strike(
     }
     const start_glyph = try bin.readU16At(data, offset + 40);
     const end_glyph = try bin.readU16At(data, offset + 42);
+    const bit_depth = data[offset + 46];
+    const flags = data[offset + 47];
     if (start_glyph > end_glyph or end_glyph >= glyph_count) {
         return error.BadSfnt;
     }
+    if (bit_depth != 1 and bit_depth != 2 and bit_depth != 4 and
+        bit_depth != 8 and bit_depth != 32)
+    {
+        return error.BadSfnt;
+    }
+    if ((flags & ~@as(u8, 0x03)) != 0) return error.BadSfnt;
     return .{
-        .ppem = data[offset + 44],
+        .ppem_x = data[offset + 44],
+        .ppem = data[offset + 45],
         .ppi = 0,
+        .bit_depth = bit_depth,
+        .flags = flags,
         .offset = location_table.offset + index_array_offset,
         .index_tables_size = index_tables_size,
         .table_count = table_count,
@@ -139,6 +152,161 @@ pub fn glyphPng(
     return best;
 }
 
+pub fn glyphBgra(
+    data: []const u8,
+    location_table: types.Table,
+    data_table: types.Table,
+    glyph_count: u16,
+    glyph_id: glyph.GlyphId,
+    size_px: f32,
+    source: types.StrikeSource,
+) types.Error!?types.GlyphBgra {
+    const strike_count = try strikeCount(data, location_table);
+    var best: ?types.GlyphBgra = null;
+    for (0..strike_count) |strike_index| {
+        const current =
+            try strike(data, location_table, glyph_count, strike_index);
+        const location =
+            (try glyphLocation(data, current, glyph_id)) orelse continue;
+        const candidate = (try cblc_data.glyphBgra(
+            data,
+            data_table,
+            current,
+            location,
+            source,
+        )) orelse continue;
+        if (best == null or
+            types.ppemIsPreferred(candidate.ppem, best.?.ppem, size_px))
+        {
+            best = candidate;
+        }
+    }
+    return best;
+}
+
+pub fn glyphData(
+    data: []const u8,
+    location_table: types.Table,
+    data_table: types.Table,
+    glyph_count: u16,
+    glyph_id: glyph.GlyphId,
+    size_px: f32,
+    source: types.StrikeSource,
+) types.Error!?types.GlyphData {
+    const strike_count = try strikeCount(data, location_table);
+    var best: ?types.GlyphData = null;
+    for (0..strike_count) |strike_index| {
+        const current =
+            try strike(data, location_table, glyph_count, strike_index);
+        const location =
+            (try glyphLocation(data, current, glyph_id)) orelse continue;
+        const candidate = (try cblc_data.glyphData(
+            data,
+            data_table,
+            current,
+            location,
+            source,
+        )) orelse continue;
+        if (best == null or
+            types.ppemIsPreferred(candidate.ppem(), best.?.ppem(), size_px))
+        {
+            best = candidate;
+        }
+    }
+    return best;
+}
+
+pub fn selectedGlyph(
+    data: []const u8,
+    location_table: types.Table,
+    glyph_count: u16,
+    glyph_id: glyph.GlyphId,
+    size_px: f32,
+) types.Error!?SelectedGlyph {
+    const strike_count = try strikeCount(data, location_table);
+    var best: ?SelectedGlyph = null;
+    for (0..strike_count) |strike_index| {
+        const current =
+            try strike(data, location_table, glyph_count, strike_index);
+        const location =
+            (try glyphLocation(data, current, glyph_id)) orelse continue;
+        if (best == null or types.ppemIsPreferred(
+            current.ppem,
+            best.?.strike.ppem,
+            size_px,
+        )) {
+            best = .{ .strike = current, .location = location };
+        }
+    }
+    return best;
+}
+
+pub fn glyphLocationInStrike(
+    data: []const u8,
+    selected_strike: Strike,
+    glyph_id: glyph.GlyphId,
+) types.Error!?GlyphLocation {
+    return glyphLocation(data, selected_strike, glyph_id);
+}
+
+pub fn compoundGlyphAlloc(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    location_table: types.Table,
+    data_table: types.Table,
+    glyph_count: u16,
+    glyph_id: glyph.GlyphId,
+    size_px: f32,
+    source: types.StrikeSource,
+) types.Error!?types.OwnedGlyphData {
+    const selected = (try selectedGlyph(
+        data,
+        location_table,
+        glyph_count,
+        glyph_id,
+        size_px,
+    )) orelse return null;
+    return materialize.glyphAlloc(
+        allocator,
+        data,
+        data_table,
+        selected,
+        source,
+    );
+}
+
+pub fn glyphMask(
+    data: []const u8,
+    location_table: types.Table,
+    data_table: types.Table,
+    glyph_count: u16,
+    glyph_id: glyph.GlyphId,
+    size_px: f32,
+    source: types.StrikeSource,
+) types.Error!?types.GlyphMask {
+    const strike_count = try strikeCount(data, location_table);
+    var best: ?types.GlyphMask = null;
+    for (0..strike_count) |strike_index| {
+        const current =
+            try strike(data, location_table, glyph_count, strike_index);
+        const location =
+            (try glyphLocation(data, current, glyph_id)) orelse continue;
+        const candidate = (try cblc_data.glyphMask(
+            data,
+            data_table,
+            current,
+            location,
+            source,
+        )) orelse continue;
+        if (best == null or
+            types.ppemIsPreferred(candidate.ppem, best.?.ppem, size_px))
+        {
+            best = candidate;
+        }
+    }
+    return best;
+}
+
 pub fn validate(
     data: []const u8,
     location_table: types.Table,
@@ -153,7 +321,13 @@ pub fn validate(
             const location =
                 (try glyphLocation(data, current, @intCast(index))) orelse
                 continue;
-            try cblc_data.validate(data, data_table, location, glyph_count);
+            try cblc_data.validate(
+                data,
+                data_table,
+                location,
+                current.bit_depth,
+                glyph_count,
+            );
         }
     }
 }
@@ -162,15 +336,25 @@ pub fn validateGlyphData(
     data: []const u8,
     data_table: types.Table,
     location: GlyphLocation,
+    bit_depth: u8,
     glyph_count: u16,
 ) types.Error!void {
-    return try cblc_data.validate(data, data_table, location, glyph_count);
+    return try cblc_data.validate(
+        data,
+        data_table,
+        location,
+        bit_depth,
+        glyph_count,
+    );
 }
 
 test "CBLC fixed-size index formats validate dense and sparse invariants" {
     const selected_strike = Strike{
+        .ppem_x = 16,
         .ppem = 16,
         .ppi = 0,
+        .bit_depth = 1,
+        .flags = 1,
         .offset = 0,
         .index_tables_size = 32,
         .table_count = 1,
@@ -204,6 +388,7 @@ test "CBLC fixed-size index formats validate dense and sparse invariants" {
     writeU16(&data, 48, 1); // startGlyphIndex.
     writeU16(&data, 50, 3); // endGlyphIndex.
     data[52] = 16; // ppem.
+    data[54] = 1; // bitDepth.
 
     writeU16(&data, 56, 1); // firstGlyphIndex.
     writeU16(&data, 58, 3); // lastGlyphIndex.
@@ -281,6 +466,7 @@ test "CBDT non-PNG image formats are skipped by PNG lookup" {
     writeU16(&bytes, 48, 1);
     writeU16(&bytes, 50, 1);
     bytes[52] = 16;
+    bytes[54] = 1;
 
     writeU16(&bytes, 56, 1);
     writeU16(&bytes, 58, 1);

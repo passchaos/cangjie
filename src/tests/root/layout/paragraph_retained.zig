@@ -5,7 +5,8 @@ const support = @import("../support.zig");
 const LayoutBuffer = support.LayoutBuffer;
 const TextShaper = support.TextShaper;
 const GraphemeCluster = support.GraphemeCluster;
-const LineBreak = support.LineBreak;
+const LineBreakOpportunity =
+    @import("../../../layout/line_break/opportunity.zig").Opportunity;
 const Font = support.Font;
 const GlyphPosition = support.GlyphPosition;
 const CascadeRun = support.CascadeRun;
@@ -49,7 +50,10 @@ test "shaped paragraphs reflow repeatedly without reshaping or accumulating layo
     defer allocator.free(pristine_runs);
     const pristine_graphemes = try allocator.dupe(GraphemeCluster, paragraph.grapheme_clusters);
     defer allocator.free(pristine_graphemes);
-    const pristine_breaks = try allocator.dupe(LineBreak, paragraph.line_breaks);
+    const pristine_breaks = try allocator.dupe(
+        LineBreakOpportunity,
+        paragraph.line_breaks,
+    );
     defer allocator.free(pristine_breaks);
 
     var reflow = ReflowBuffer.init(allocator);
@@ -80,7 +84,11 @@ test "shaped paragraphs reflow repeatedly without reshaping or accumulating layo
     try std.testing.expectEqualSlices(GlyphPosition, pristine_glyphs, paragraph.glyphs);
     try std.testing.expectEqualSlices(CascadeRun, pristine_runs, paragraph.runs);
     try std.testing.expectEqualSlices(GraphemeCluster, pristine_graphemes, paragraph.grapheme_clusters);
-    try std.testing.expectEqualSlices(LineBreak, pristine_breaks, paragraph.line_breaks);
+    try std.testing.expectEqualSlices(
+        LineBreakOpportunity,
+        pristine_breaks,
+        paragraph.line_breaks,
+    );
 }
 
 test "shaped paragraphs restore advances between justified reflows" {
@@ -129,6 +137,332 @@ test "shaped paragraphs restore advances between justified reflows" {
     });
     try std.testing.expectApproxEqAbs(@as(f32, 50), justified_again.lines[0].width, 0.001);
     try std.testing.expectEqualSlices(GlyphPosition, paragraph.glyphs, shape_buffer.glyphs.items);
+}
+
+test "retained reflow changes word and overflow policies without reshaping" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        "AAAA",
+        20,
+        .{ .max_width = 100 },
+    );
+    defer paragraph.deinit();
+    const pristine = try allocator.dupe(GlyphPosition, paragraph.glyphs);
+    defer allocator.free(pristine);
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+
+    const overflow = try paragraph.layout(&reflow, .{
+        .max_width = 17,
+        .overflow_wrap = .normal,
+    });
+    try std.testing.expectEqual(@as(usize, 1), overflow.lines.len);
+
+    const break_word = try paragraph.layout(&reflow, .{
+        .max_width = 17,
+        .overflow_wrap = .break_word,
+    });
+    try std.testing.expectEqual(@as(usize, 4), break_word.lines.len);
+
+    const break_all = try paragraph.layout(&reflow, .{
+        .max_width = 17,
+        .word_break = .break_all,
+        .overflow_wrap = .normal,
+    });
+    try std.testing.expectEqual(@as(usize, 4), break_all.lines.len);
+
+    const restored = try paragraph.layout(&reflow, .{
+        .max_width = 100,
+        .overflow_wrap = .normal,
+    });
+    try std.testing.expectEqual(@as(usize, 1), restored.lines.len);
+    try std.testing.expectEqualSlices(
+        GlyphPosition,
+        pristine,
+        paragraph.glyphs,
+    );
+}
+
+test "retained reflow switches whitespace collapse without source loss" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    const text = "  A   A  ";
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        text,
+        20,
+        .{ .max_width = 200 },
+    );
+    defer paragraph.deinit();
+    const pristine = try allocator.dupe(GlyphPosition, paragraph.glyphs);
+    defer allocator.free(pristine);
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+
+    const collapsed = try paragraph.layout(&reflow, .{
+        .max_width = 200,
+        .white_space_collapse = .collapse,
+    });
+    try std.testing.expectEqual(@as(usize, 1), collapsed.lines.len);
+    const collapsed_width = collapsed.lines[0].width;
+    try std.testing.expectEqual(@as(f32, 0), collapsed.glyphs[0].x_advance);
+    try std.testing.expectEqual(@as(f32, 0), collapsed.glyphs[1].x_advance);
+
+    const preserved = try paragraph.layout(&reflow, .{
+        .max_width = 200,
+        .white_space_collapse = .preserve,
+    });
+    try std.testing.expect(preserved.lines[0].width > collapsed_width);
+    try std.testing.expect(preserved.glyphs[0].x_advance > 0);
+    try std.testing.expectEqualSlices(
+        GlyphPosition,
+        pristine,
+        paragraph.glyphs,
+    );
+
+    const collapsed_again = try paragraph.layout(&reflow, .{
+        .max_width = 200,
+        .white_space_collapse = .collapse,
+    });
+    try std.testing.expectApproxEqAbs(
+        collapsed_width,
+        collapsed_again.lines[0].width,
+        0.001,
+    );
+}
+
+test "retained paragraph reports policy-aware intrinsic content widths" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    const text = "AAAA AAA";
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        text,
+        20,
+        .{ .max_width = 100 },
+    );
+    defer paragraph.deinit();
+
+    const normal = try paragraph.contentWidths(.{
+        .max_width = 1,
+        .overflow_wrap = .normal,
+    });
+    const break_word = try paragraph.contentWidths(.{
+        .max_width = 999,
+        .overflow_wrap = .break_word,
+    });
+    try std.testing.expectApproxEqAbs(normal.min, break_word.min, 0.001);
+    try std.testing.expectApproxEqAbs(normal.max, break_word.max, 0.001);
+    try std.testing.expect(normal.min < normal.max);
+
+    const anywhere = try paragraph.contentWidths(.{
+        .max_width = 999,
+        .overflow_wrap = .anywhere,
+    });
+    try std.testing.expect(anywhere.min < break_word.min);
+    try std.testing.expectApproxEqAbs(normal.max, anywhere.max, 0.001);
+
+    const break_all = try paragraph.contentWidths(.{
+        .max_width = 999,
+        .word_break = .break_all,
+        .overflow_wrap = .normal,
+    });
+    try std.testing.expectApproxEqAbs(anywhere.min, break_all.min, 0.001);
+    try std.testing.expectApproxEqAbs(normal.max, break_all.max, 0.001);
+
+    const no_wrap = try paragraph.contentWidths(.{
+        .max_width = 1,
+        .wrap_mode = .no_wrap,
+        .word_break = .break_all,
+        .overflow_wrap = .anywhere,
+    });
+    try std.testing.expectApproxEqAbs(no_wrap.max, no_wrap.min, 0.001);
+}
+
+test "engine exposes one-shot intrinsic content widths" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const face_mod = @import("../../../font/face/root.zig");
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var engine = support.Engine.init(allocator, .{});
+    defer engine.deinit();
+    const cascade = face_mod.Cascade.init(
+        &.{face_mod.backend.face(&font)},
+    );
+
+    const widths = try engine.contentWidths(cascade, .{
+        .text = "AAAA AAA",
+        .font_size = 20,
+        .options = .{
+            .max_width = 1,
+            .overflow_wrap = .anywhere,
+        },
+    });
+    try std.testing.expect(widths.min < widths.max);
+}
+
+test "intrinsic widths honor hard breaks whitespace tabs and objects" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    const marker = @import("../../../layout/inline_object/root.zig");
+    const text = " A  A\nA\t" ++ marker.object_replacement_utf8 ++ " A";
+    const objects = [_]@import("../../../layout/inline_object/root.zig").Object{
+        .{
+            .id = 77,
+            .byte_index = " A  A\nA\t".len,
+            .width = 30,
+            .height = 20,
+        },
+    };
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        text,
+        20,
+        .{
+            .max_width = 100,
+            .inline_objects = &objects,
+        },
+    );
+    defer paragraph.deinit();
+
+    const preserved = try paragraph.contentWidths(.{
+        .max_width = 1,
+        .inline_objects = &objects,
+        .tab_stops = &.{.{ .position = 80 }},
+    });
+    try std.testing.expect(preserved.min >= 30);
+    try std.testing.expect(preserved.max >= preserved.min);
+
+    const collapsed = try paragraph.contentWidths(.{
+        .max_width = 999,
+        .inline_objects = &objects,
+        .tab_stops = &.{.{ .position = 80 }},
+        .white_space_collapse = .collapse,
+    });
+    try std.testing.expect(collapsed.max < preserved.max);
+    try std.testing.expect(collapsed.min >= 30);
+
+    const break_spaces = try paragraph.contentWidths(.{
+        .max_width = 999,
+        .inline_objects = &objects,
+        .tab_stops = &.{.{ .position = 80 }},
+        .white_space_collapse = .break_spaces,
+    });
+    try std.testing.expect(break_spaces.min <= break_spaces.max);
+    // break-spaces keeps each authored blank in intrinsic measurement rather
+    // than trimming it like normal UAX whitespace.
+    try std.testing.expect(break_spaces.max >= collapsed.max);
+}
+
+test "retained paragraphs own run variation coordinates" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildMetricVariationTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        "A A",
+        20,
+        .{
+            .max_width = 200,
+            .normalized_variation_coords = &.{0.5},
+        },
+    );
+    defer paragraph.deinit();
+    // Reuse the shaping buffer with unrelated output; retained ownership must
+    // keep the coordinate pool and run ranges intact.
+    _ = try TextShaper.shapeUtf8WithOptions(
+        &font,
+        &shape_buffer,
+        "A",
+        20,
+        .{},
+    );
+
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const layout = try paragraph.layout(&reflow, .{
+        .max_width = 200,
+        .normalized_variation_coords = &.{0.5},
+    });
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0.5},
+        layout.normalized_variation_coords,
+    );
+    const shaped = paragraph.shapedText();
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0.5},
+        shaped.runs[0].normalizedVariationCoords(shaped),
+    );
 }
 
 test "shaped paragraph reflow restores content after ellipsis truncation" {

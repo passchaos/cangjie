@@ -76,4 +76,41 @@ pub const View = struct {
     ) font_mod.FontError!?font_mod.BitmapGlyphInfo {
         return self.implementation.bitmapGlyphInfo(glyph_id, size_px);
     }
+
+    pub fn bitmapBgra(
+        self: View,
+        glyph_id: glyph_mod.GlyphId,
+        size_px: f32,
+    ) font_mod.FontError!?font_mod.BitmapGlyphBgra {
+        return self.implementation.bitmapGlyphBgra(glyph_id, size_px);
+    }
+
+    pub fn bitmapData(
+        self: View,
+        glyph_id: glyph_mod.GlyphId,
+        size_px: f32,
+    ) font_mod.FontError!?font_mod.BitmapGlyphData {
+        return self.implementation.bitmapGlyphData(glyph_id, size_px);
+    }
+
+    pub fn compoundBitmapAlloc(
+        self: View,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+        size_px: f32,
+    ) font_mod.FontError!?font_mod.OwnedBitmapGlyphData {
+        return self.implementation.compoundBitmapGlyphAlloc(
+            allocator,
+            glyph_id,
+            size_px,
+        );
+    }
+
+    pub fn bitmapMask(
+        self: View,
+        glyph_id: glyph_mod.GlyphId,
+        size_px: f32,
+    ) font_mod.FontError!?font_mod.BitmapGlyphMask {
+        return self.implementation.bitmapGlyphMask(glyph_id, size_px);
+    }
 };

@@ -1,5 +1,6 @@
 const std = @import("std");
 const bin = @import("../binary.zig");
+const name_languages = @import("../font/tables/metadata/name_languages.zig");
 
 pub const Error = error{
     BadSfnt,
@@ -23,6 +24,8 @@ pub const NameId = enum(u16) {
     typographic_subfamily = 17,
     compatible_full_name = 18,
     sample_text = 19,
+    wws_family = 21,
+    wws_subfamily = 22,
     _,
 };
 
@@ -44,6 +47,44 @@ pub const RecordInfo = struct {
         return switch (self.encoding) {
             .utf16_be => try decodeUtf16BeName(self.string, out),
             .raw_bytes => try decodeSingleByteName(self.string, out),
+        };
+    }
+
+    /// Return the BCP-47 language of this record when the platform language
+    /// identifier has a standardized mapping. Format-1 language-tag records
+    /// are resolved by `LocalizedString.language` because they need the name
+    /// table's LangTagRecord storage.
+    pub fn legacyLanguage(self: RecordInfo) ?[]const u8 {
+        return switch (self.platform_id) {
+            1, 3 => name_languages.find(self.language_id),
+            else => null,
+        };
+    }
+};
+
+/// One localized string selected by name ID. The raw value and optional
+/// format-1 language tag borrow the font bytes; legacy language mappings are
+/// static. Decode the value into caller storage with `decodeUtf8`.
+pub const LocalizedString = struct {
+    record: RecordInfo,
+    language: ?Language = null,
+
+    pub const Language = union(enum) {
+        static: []const u8,
+        utf16_be: []const u8,
+    };
+
+    pub fn decodeUtf8(self: LocalizedString, out: []u8) Error![]const u8 {
+        return self.record.decodeUtf8(out);
+    }
+
+    /// Decode the optional BCP-47 language into caller storage. Legacy
+    /// platform identifiers return a static slice; format-1 tags use `out`.
+    pub fn languageUtf8(self: LocalizedString, out: []u8) Error!?[]const u8 {
+        const language = self.language orelse return null;
+        return switch (language) {
+            .static => |value| value,
+            .utf16_be => |value| try decodeUtf16BeName(value, out),
         };
     }
 };
@@ -181,6 +222,74 @@ pub fn languageTag(data: []const u8, name: Table, language_id: u16, out: []u8) E
     const index: usize = @intCast(language_id & 0x7fff);
     if (index >= layout.lang_tag_count) return null;
     return try decodeUtf16BeName(try languageTagString(table, layout, index), out);
+}
+
+/// Enumerate all localized strings for one name ID in canonical name-table
+/// order. The returned array is caller-owned; its string and language payloads
+/// borrow `data`. This is the allocation-explicit counterpart of Skrifa's
+/// `MetadataProvider::localized_strings` iterator.
+pub fn localizedStrings(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    name: Table,
+    name_id: u16,
+) Error![]LocalizedString {
+    const table = try nameTableSlice(data, name);
+    const layout = try readNameTableLayout(table);
+    try validateNameLanguageTags(table, layout);
+
+    var count: usize = 0;
+    var previous_key: ?NameRecordKey = null;
+    for (0..layout.count) |index| {
+        const record = try readNameRecord(table, index);
+        try validateNameRecordOrdering(previous_key, record.key());
+        previous_key = record.key();
+        try validateNameRecordMetadata(layout, record);
+        const string_data = try nameRecordString(table, layout, record);
+        try validateNameRecordEncoding(record, string_data, .tolerate_invalid);
+        if (record.name_id == name_id) count += 1;
+    }
+
+    const values = try allocator.alloc(LocalizedString, count);
+    errdefer allocator.free(values);
+    var value_index: usize = 0;
+    for (0..layout.count) |index| {
+        const record = try readNameRecord(table, index);
+        if (record.name_id != name_id) continue;
+        const string_data = try nameRecordString(table, layout, record);
+        values[value_index] = .{
+            .record = .{
+                .platform_id = record.platform_id,
+                .encoding_id = record.encoding_id,
+                .language_id = record.language_id,
+                .name_id = record.name_id,
+                .storage_offset = record.offset,
+                .string = string_data,
+                .encoding = if (isUtf16Name(record)) .utf16_be else .raw_bytes,
+            },
+            .language = try localizedLanguage(table, layout, record),
+        };
+        value_index += 1;
+    }
+    return values;
+}
+
+fn localizedLanguage(
+    table: []const u8,
+    layout: NameTableLayout,
+    record: NameRecord,
+) Error!?LocalizedString.Language {
+    if (layout.format == 1 and record.language_id >= 0x8000) {
+        const index: usize = @intCast(record.language_id - 0x8000);
+        return .{ .utf16_be = try languageTagString(table, layout, index) };
+    }
+    return switch (record.platform_id) {
+        1, 3 => if (name_languages.find(record.language_id)) |tag|
+            .{ .static = tag }
+        else
+            null,
+        else => null,
+    };
 }
 
 /// Compact index of name IDs that have at least one structurally valid string.

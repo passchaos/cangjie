@@ -2454,6 +2454,15 @@ const retained_inline_cangjie_expected_gates = [_]struct {
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const fontations_coverage_step = b.step(
+        "fontations-coverage",
+        "Verify Fontations table and high-level capability evidence",
+    );
+    const fontations_coverage_cmd = b.addSystemCommand(&.{
+        "python3",
+        "tools/verify_fontations_coverage.py",
+    });
+    fontations_coverage_step.dependOn(&fontations_coverage_cmd.step);
     const enable_harfbuzz = b.option(bool, "enable-harfbuzz", "Build shape-bench with the HarfBuzz reference engine") orelse false;
     const harfbuzz_prefix = b.option([]const u8, "harfbuzz-prefix", "Prefix containing HarfBuzz include/ and lib/");
     const harfbuzz_include_dir = b.option([]const u8, "harfbuzz-include-dir", "Directory containing hb.h and hb-ot.h");
@@ -2566,12 +2575,66 @@ pub fn build(b: *std.Build) void {
         reflow_bench_cmd.addArgs(args);
     }
 
+    const paragraph_bench_exe = b.addExecutable(.{
+        .name = "cangjie-paragraph-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/paragraph_bench.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "cangjie", .module = mod },
+            },
+        }),
+    });
+    const paragraph_bench_step = b.step(
+        "paragraph-bench",
+        "Benchmark end-to-end paragraph construction for Parley comparison",
+    );
+    const paragraph_bench_cmd = b.addRunArtifact(paragraph_bench_exe);
+    paragraph_bench_step.dependOn(&paragraph_bench_cmd.step);
+    if (b.args) |args| paragraph_bench_cmd.addArgs(args);
+
     const freetype_c = b.addTranslateC(.{
         .root_source_file = b.path("tools/glyph_bench/freetype.h"),
         .target = target,
         .optimize = optimize,
     });
     freetype_c.linkSystemLibrary("freetype2", .{ .use_pkg_config = .force });
+
+    const hinting_freetype_c = b.addTranslateC(.{
+        .root_source_file = b.path("tests/hinting_freetype.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    hinting_freetype_c.linkSystemLibrary(
+        "freetype2",
+        .{ .use_pkg_config = .force },
+    );
+    const hinting_freetype_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/hinting_freetype_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "cangjie", .module = mod },
+                .{
+                    .name = "freetype",
+                    .module = hinting_freetype_c.createModule(),
+                },
+            },
+        }),
+    });
+    hinting_freetype_tests.root_module.linkSystemLibrary(
+        "freetype2",
+        .{ .use_pkg_config = .force },
+    );
+    const hinting_freetype_test_step = b.step(
+        "hinting-freetype-test",
+        "Compare hinted TrueType outlines with FreeType v35 and v40",
+    );
+    hinting_freetype_test_step.dependOn(
+        &b.addRunArtifact(hinting_freetype_tests).step,
+    );
 
     const shape_bench_options = b.addOptions();
     shape_bench_options.addOption(bool, "enable_harfbuzz", enable_harfbuzz);
@@ -3468,6 +3531,11 @@ pub fn build(b: *std.Build) void {
     }
 
     const bench_smoke_step = b.step("bench-smoke", "Run quick TSV smoke checks for benchmark tools");
+    const paragraph_bench_smoke_cmd = b.addRunArtifact(paragraph_bench_exe);
+    paragraph_bench_smoke_cmd.addArg("builtin:minimal");
+    paragraph_bench_smoke_cmd.addFileArg(b.path("tests/data/spaces-horizontal.txt"));
+    paragraph_bench_smoke_cmd.addArgs(&.{ "1", "1" });
+    bench_smoke_step.dependOn(&paragraph_bench_smoke_cmd.step);
     const shape_bench_smoke_cmd = b.addRunArtifact(shape_bench_exe);
     shape_bench_smoke_cmd.addArgs(&.{
         "--engine",     "cangjie",
@@ -3515,6 +3583,18 @@ pub fn build(b: *std.Build) void {
         "--samples",    "1",
     });
     bench_smoke_step.dependOn(&glyph_freetype_raster_smoke_cmd.step);
+
+    const glyph_freetype_raster_reuse_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
+    glyph_freetype_raster_reuse_smoke_cmd.addArgs(&.{
+        "--engine",     "freetype",
+        "--mode",       "raster-reuse",
+        "--format",     "tsv",
+        "--builtin",    "gvar-compound",
+        "--iterations", "1",
+        "--warmup",     "0",
+        "--samples",    "1",
+    });
+    bench_smoke_step.dependOn(&glyph_freetype_raster_reuse_smoke_cmd.step);
 
     const glyph_compare_freetype_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
     glyph_compare_freetype_smoke_cmd.addArgs(&.{
@@ -3576,6 +3656,31 @@ pub fn build(b: *std.Build) void {
         "--variation",  "0.5",
     });
     bench_smoke_step.dependOn(&glyph_raster_prepared_smoke_cmd.step);
+
+    const glyph_raster_dirty_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
+    glyph_raster_dirty_smoke_cmd.addArgs(&.{
+        "--mode",        "raster-prepared",
+        "--dirty-rect",  "--format",
+        "tsv",           "--builtin",
+        "gvar-compound", "--iterations",
+        "1",             "--warmup",
+        "0",             "--samples",
+        "1",
+    });
+    bench_smoke_step.dependOn(&glyph_raster_dirty_smoke_cmd.step);
+
+    const glyph_freetype_dirty_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
+    glyph_freetype_dirty_smoke_cmd.addArgs(&.{
+        "--engine",      "freetype",
+        "--mode",        "raster-reuse",
+        "--dirty-rect",  "--format",
+        "tsv",           "--builtin",
+        "gvar-compound", "--iterations",
+        "1",             "--warmup",
+        "0",             "--samples",
+        "1",
+    });
+    bench_smoke_step.dependOn(&glyph_freetype_dirty_smoke_cmd.step);
 }
 
 fn addKerxCrossStreamParityGates(

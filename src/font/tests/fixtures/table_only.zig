@@ -49,6 +49,7 @@ pub fn init(
         .gdef = null,
         .gpos = null,
         .gsub = null,
+        .jstf = null,
         .ankr = null,
         .feat = null,
         .trak = null,

@@ -23,26 +23,68 @@ pub fn visualPermutation(
     var order = std.ArrayList(usize).empty;
     errdefer order.deinit(allocator);
     try order.ensureTotalCapacity(allocator, glyphs.len);
-    const base_direction: unicode.BidiClass = if (rtl) .rtl else .ltr;
+    var paragraph = try unicode.resolveBidiParagraph(
+        allocator,
+        text,
+        if (rtl) .rtl else .ltr,
+    );
+    defer paragraph.deinit();
     for (lines) |line| {
         const line_start = line.glyph_start;
         const line_end = line.glyph_start + line.glyph_len;
         if (line.byte_len != 0 and line_start < line_end) {
-            var map = try unicode.buildBidiMap(
+            const scalar_start = paragraph.scalarIndexForByte(
+                line.byte_start,
+            ) orelse return error.InvalidBidiMap;
+            const scalar_end = paragraph.scalarIndexForByte(
+                line.byte_start + line.byte_len,
+            ) orelse return error.InvalidBidiMap;
+            var retained_x9: [1]usize = undefined;
+            var retained_x9_count: usize = 0;
+            for (glyphs[line_start..line_end]) |glyph| {
+                if (!glyph.isDiscretionaryHyphen() or
+                    glyph.isAutomaticHyphen())
+                {
+                    continue;
+                }
+                retained_x9[0] = paragraph.scalarIndexForByte(
+                    glyph.cluster,
+                ) orelse return error.InvalidBidiMap;
+                retained_x9_count = 1;
+                break;
+            }
+            const retained = retained_x9[0..retained_x9_count];
+            const visual_order = try paragraph.visualOrderRetaining(
                 allocator,
-                text[line.byte_start .. line.byte_start + line.byte_len],
-                base_direction,
+                scalar_start,
+                scalar_end,
+                retained,
             );
-            defer map.deinit();
-            for (map.items) |item_value| {
-                var item = item_value;
-                item.byte_start += line.byte_start;
+            defer allocator.free(visual_order);
+            const line_levels = try paragraph.lineLevelsRetaining(
+                allocator,
+                scalar_start,
+                scalar_end,
+                retained,
+            );
+            defer allocator.free(line_levels);
+            for (visual_order) |scalar_index| {
+                const scalar = paragraph.scalars[scalar_index];
+                const level = line_levels[scalar_index - scalar_start];
                 appendItem(
                     cluster_index,
                     seen,
                     line_start,
                     line_end,
-                    item,
+                    .{
+                        .logical_index = scalar_index,
+                        .visual_index = 0,
+                        .byte_start = scalar.byte_start,
+                        .byte_len = scalar.byte_len,
+                        .codepoint = scalar.codepoint,
+                        .visual_codepoint = scalar.codepoint,
+                        .direction = if (level & 1 != 0) .rtl else .ltr,
+                    },
                     &order,
                 );
             }
@@ -72,7 +114,13 @@ fn buildClusterIndex(
 ) ![]ClusterEntry {
     const entries = try allocator.alloc(ClusterEntry, glyphs.len);
     for (glyphs, entries, 0..) |glyph, *entry, glyph_index| {
-        entry.* = .{ .cluster = glyph.cluster, .glyph_index = glyph_index };
+        entry.* = .{
+            .cluster = if (glyph.isAutomaticHyphen() and glyph_index != 0)
+                glyphs[glyph_index - 1].cluster
+            else
+                glyph.cluster,
+            .glyph_index = glyph_index,
+        };
     }
     std.sort.heap(ClusterEntry, entries, {}, entryLessThan);
     return entries;
@@ -141,7 +189,17 @@ fn clusterRange(
 }
 
 test "styled bidi permutation preserves equal-cluster output order" {
-    const Glyph = struct { cluster: usize };
+    const Glyph = struct {
+        cluster: usize,
+
+        fn isAutomaticHyphen(_: @This()) bool {
+            return false;
+        }
+
+        fn isDiscretionaryHyphen(_: @This()) bool {
+            return false;
+        }
+    };
     const Line = struct {
         glyph_start: usize,
         glyph_len: usize,

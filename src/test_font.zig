@@ -25,6 +25,252 @@ pub fn buildBaseTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try baseTtfTables(allocator));
 }
 
+pub fn buildJstfTtf(allocator: std.mem.Allocator) ![]u8 {
+    const base = try minimalTtfTables(allocator);
+    const tables = try allocator.alloc(Table, base.len + 1);
+    errdefer allocator.free(tables);
+    @memcpy(tables[0..base.len], base);
+    allocator.free(base);
+    tables[base.len] = .{ .tag = "JSTF", .data = try jstfTable(allocator) };
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
+pub fn buildJstfExpansionTtf(allocator: std.mem.Allocator) ![]u8 {
+    const base = try scriptFeatureGsubTtfTables(allocator);
+    const tables = try allocator.alloc(Table, base.len + 1);
+    errdefer allocator.free(tables);
+    @memcpy(tables[0..base.len], base);
+    allocator.free(base);
+    tables[base.len] = .{
+        .tag = "JSTF",
+        .data = try jstfExpansionTable(allocator),
+    };
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
+/// Build a focused JSTF runtime fixture with three GSUB and GPOS lookups.
+///
+/// Lookup zero is inactive by default, while one and two are active. The
+/// second extension priority enables zero and disables two. GSUB lookup zero
+/// feeds lookup one, so applying the enabled lookup after ordinary shaping
+/// produces a different glyph than rebuilding the plan in LookupList order.
+pub fn buildJstfModificationTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const tables = try allocator.alloc(Table, 10);
+    errdefer allocator.free(tables);
+    tables[0] = .{
+        .tag = "GPOS",
+        .data = try jstfModificationGposTable(allocator),
+    };
+    tables[1] = .{
+        .tag = "GSUB",
+        .data = try jstfModificationGsubTable(allocator),
+    };
+    tables[2] = .{
+        .tag = "JSTF",
+        .data = try jstfModificationTable(allocator),
+    };
+    tables[3] = .{
+        .tag = "cmap",
+        .data = try cmapFormat12RangesTable(allocator, &.{
+            .{ .start = ' ', .end = ' ', .glyph_id = 2 },
+            .{ .start = 'A', .end = 'A', .glyph_id = 1 },
+        }),
+    };
+    tables[4] = .{
+        .tag = "glyf",
+        .data = try emptyGlyfTable(allocator, 5),
+    };
+    tables[5] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[6] = .{
+        .tag = "hhea",
+        .data = try hheaTableWithMetrics(allocator, 5),
+    };
+    tables[7] = .{
+        .tag = "hmtx",
+        .data = try jstfModificationHmtxTable(allocator),
+    };
+    tables[8] = .{
+        .tag = "loca",
+        .data = try emptyLocaTable(allocator, 5),
+    };
+    tables[9] = .{
+        .tag = "maxp",
+        .data = try maxpTableWithGlyphs(allocator, 5),
+    };
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
+/// Build a JSTF shrinkage fixture whose first priority cannot fit and whose
+/// second priority combines GSUB/GPOS modification lists with shrinkage Max.
+pub fn buildJstfShrinkageTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const tables = try allocator.alloc(Table, 10);
+    errdefer allocator.free(tables);
+    tables[0] = .{
+        .tag = "GPOS",
+        .data = try jstfShrinkageGposTable(allocator),
+    };
+    tables[1] = .{
+        .tag = "GSUB",
+        .data = try jstfShrinkageGsubTable(allocator),
+    };
+    tables[2] = .{
+        .tag = "JSTF",
+        .data = try jstfShrinkageTable(allocator),
+    };
+    tables[3] = .{
+        .tag = "cmap",
+        .data = try cmapFormat12RangesTable(allocator, &.{
+            .{ .start = ' ', .end = ' ', .glyph_id = 2 },
+            .{ .start = 'A', .end = 'A', .glyph_id = 1 },
+        }),
+    };
+    tables[4] = .{
+        .tag = "glyf",
+        .data = try emptyGlyfTable(allocator, 5),
+    };
+    tables[5] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[6] = .{
+        .tag = "hhea",
+        .data = try hheaTableWithMetrics(allocator, 5),
+    };
+    tables[7] = .{
+        .tag = "hmtx",
+        .data = try jstfModificationHmtxTable(allocator),
+    };
+    tables[8] = .{
+        .tag = "loca",
+        .data = try emptyLocaTable(allocator, 5),
+    };
+    tables[9] = .{
+        .tag = "maxp",
+        .data = try maxpTableWithGlyphs(allocator, 5),
+    };
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
+pub fn buildJstfCardinalityShrinkageTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const tables = try allocator.alloc(Table, 9);
+    errdefer allocator.free(tables);
+    tables[0] = .{
+        .tag = "GSUB",
+        .data = try jstfCardinalityGsubTable(allocator),
+    };
+    tables[1] = .{
+        .tag = "JSTF",
+        .data = try jstfCardinalityTable(allocator),
+    };
+    tables[2] = .{
+        .tag = "cmap",
+        .data = try cmapFormat12RangesTable(allocator, &.{
+            .{ .start = ' ', .end = ' ', .glyph_id = 2 },
+            .{ .start = 'A', .end = 'A', .glyph_id = 1 },
+        }),
+    };
+    tables[3] = .{
+        .tag = "glyf",
+        .data = try emptyGlyfTable(allocator, 4),
+    };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{
+        .tag = "hhea",
+        .data = try hheaTableWithMetrics(allocator, 4),
+    };
+    tables[6] = .{
+        .tag = "hmtx",
+        .data = try jstfCardinalityHmtxTable(allocator),
+    };
+    tables[7] = .{
+        .tag = "loca",
+        .data = try emptyLocaTable(allocator, 4),
+    };
+    tables[8] = .{
+        .tag = "maxp",
+        .data = try maxpTableWithGlyphs(allocator, 4),
+    };
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
+/// Add a synthetic JSTF ExtenderGlyph table to any validated font fixture.
+///
+/// This preserves the base font's Arabic shaping and Tatweel cmap while
+/// allowing focused runtime tests to name either the real U+0640 glyph or a
+/// deliberately unrelated glyph as the authored extender set.
+pub fn addJstfExtenderTable(
+    allocator: std.mem.Allocator,
+    sfnt_bytes: []const u8,
+    script_tag: *const [4]u8,
+    extender_glyph: u16,
+) ![]u8 {
+    if (sfnt_bytes.len < 12) return error.BadSfnt;
+    const table_count = std.mem.readInt(u16, sfnt_bytes[4..6], .big);
+    if (12 + @as(usize, table_count) * 16 > sfnt_bytes.len) {
+        return error.BadSfnt;
+    }
+    const tables = try allocator.alloc(Table, @as(usize, table_count) + 1);
+    var initialized: usize = 0;
+    errdefer {
+        for (tables[0..initialized]) |table| allocator.free(table.data);
+        allocator.free(tables);
+    }
+    for (0..table_count) |index| {
+        const record = 12 + index * 16;
+        const offset: usize = @intCast(std.mem.readInt(
+            u32,
+            sfnt_bytes[record + 8 ..][0..4],
+            .big,
+        ));
+        const length: usize = @intCast(std.mem.readInt(
+            u32,
+            sfnt_bytes[record + 12 ..][0..4],
+            .big,
+        ));
+        if (offset > sfnt_bytes.len or length > sfnt_bytes.len - offset) {
+            return error.BadSfnt;
+        }
+        if (std.mem.eql(u8, sfnt_bytes[record .. record + 4], "JSTF")) {
+            return error.BadSfnt;
+        }
+        tables[index] = .{
+            // buildSfnt consumes this synchronously while the caller's base
+            // font bytes remain alive; only payload bytes require ownership.
+            .tag = sfnt_bytes[record .. record + 4],
+            .data = try allocator.dupe(
+                u8,
+                sfnt_bytes[offset .. offset + length],
+            ),
+        };
+        // Per-table head checksums are defined with checkSumAdjustment zeroed.
+        // buildSfnt is constructing a new directory and does not preserve the
+        // original font-wide adjustment.
+        if (std.mem.eql(u8, tables[index].tag, "head") and
+            tables[index].data.len >= 12)
+        {
+            writeU32(tables[index].data, 8, 0);
+        }
+        initialized += 1;
+    }
+    tables[table_count] = .{
+        .tag = "JSTF",
+        .data = try jstfExtenderOnlyTable(
+            allocator,
+            script_tag,
+            extender_glyph,
+        ),
+    };
+    initialized += 1;
+    const scaler = std.mem.readInt(u32, sfnt_bytes[0..4], .big);
+    // Ownership transfers to buildSfnt, whose own error path releases every
+    // initialized payload and the table array.
+    initialized = 0;
+    return buildSfnt(allocator, scaler, tables);
+}
+
 pub fn buildMvarTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try mvarTtfTables(allocator));
 }
@@ -33,12 +279,83 @@ pub fn buildMetricVariationTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try metricVariationTtfTables(allocator));
 }
 
+pub fn buildWidthVariationTtf(allocator: std.mem.Allocator) ![]u8 {
+    const tables = try metricVariationTtfTables(allocator);
+    for (tables) |*table| {
+        if (!std.mem.eql(u8, table.tag, "fvar")) continue;
+        // Reuse the HVAR fixture but expose its single dimension through the
+        // registered width tag used by line-level font expansion.
+        writeTag(table.data, 16, "wdth");
+        writeF16Dot16(table.data, 20, 50.0);
+        writeF16Dot16(table.data, 24, 100.0);
+        writeF16Dot16(table.data, 28, 200.0);
+        break;
+    }
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
 pub fn buildCvarTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try cvarTtfTables(allocator));
 }
 
 pub fn buildTrueTypeProgramTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try trueTypeProgramTtfTables(allocator));
+}
+
+/// Build executable fpgm/prep programs for PPEM hint-instance tests.
+pub fn buildTrueTypeHintingTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const base = try minimalTtfTables(allocator);
+    const tables = allocator.alloc(Table, base.len + 3) catch |err| {
+        for (base) |table| allocator.free(table.data);
+        allocator.free(base);
+        return err;
+    };
+    @memcpy(tables[0..base.len], base);
+    allocator.free(base);
+    var initialized = base.len;
+    var owns_tables = true;
+    errdefer if (owns_tables) {
+        for (tables[0..initialized]) |table| allocator.free(table.data);
+        allocator.free(tables);
+    };
+    // Replace maxp with VM limits large enough for the executable programs.
+    for (tables[0..base.len]) |*table| {
+        if (!std.mem.eql(u8, table.tag, "maxp")) continue;
+        const replacement = try hintingMaxpTable(allocator);
+        allocator.free(table.data);
+        table.data = replacement;
+        break;
+    }
+    tables[base.len] = .{
+        .tag = "cvt ",
+        .data = try hintingCvtTable(allocator),
+    };
+    initialized += 1;
+    tables[base.len + 1] = .{
+        .tag = "fpgm",
+        .data = try hintingFontProgram(allocator),
+    };
+    initialized += 1;
+    tables[base.len + 2] = .{
+        .tag = "prep",
+        .data = try hintingPrepProgram(allocator),
+    };
+    initialized += 1;
+    owns_tables = false; // buildSfnt takes ownership of every table payload.
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
+/// Build a static compound glyph with USE_MY_METRICS and parent bytecode.
+pub fn buildTrueTypeCompoundHintingTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    return buildSfnt(
+        allocator,
+        0x00010000,
+        try trueTypeCompoundHintingTables(allocator),
+    );
 }
 
 pub fn buildAnkrTtf(allocator: std.mem.Allocator) ![]u8 {
@@ -149,6 +466,17 @@ pub fn buildVerticalMetricsTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try verticalMetricsTtfTables(allocator));
 }
 
+pub fn buildVerticalFallbackTtf(
+    allocator: std.mem.Allocator,
+    codepoints: []const u32,
+) ![]u8 {
+    return buildSfnt(
+        allocator,
+        0x00010000,
+        try verticalFallbackTtfTables(allocator, codepoints),
+    );
+}
+
 pub fn buildVorgTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try vorgTtfTables(allocator));
 }
@@ -201,6 +529,118 @@ pub fn buildNamedTtfWithPostScript(allocator: std.mem.Allocator, family: []const
 pub fn buildNameLanguageTagTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try nameLanguageTagTtfTables(allocator));
 }
+
+/// Wrap a caller-supplied `name` table in the repository's minimal valid TTF.
+/// This keeps name API tests focused without checking in a second full font.
+pub fn buildTtfWithNameTable(
+    allocator: std.mem.Allocator,
+    name_table: []const u8,
+) ![]u8 {
+    const base = try minimalTtfTables(allocator);
+    const tables = allocator.alloc(Table, base.len + 1) catch |err| {
+        for (base) |table| allocator.free(table.data);
+        allocator.free(base);
+        return err;
+    };
+    @memcpy(tables[0..base.len], base);
+    allocator.free(base);
+    var initialized = base.len;
+    var owns_tables = true;
+    errdefer if (owns_tables) {
+        for (tables[0..initialized]) |table| allocator.free(table.data);
+        allocator.free(tables);
+    };
+    tables[base.len] = .{
+        .tag = "name",
+        .data = try allocator.dupe(u8, name_table),
+    };
+    initialized += 1;
+    owns_tables = false; // buildSfnt takes ownership of the complete array.
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
+/// Add or replace selected table payloads in the minimal TTF fixture. This is
+/// used to embed authoritative upstream metadata tables while retaining a
+/// complete outline-bearing Face accepted by Cangjie's whole-font parser.
+pub fn buildTtfWithMetadataTables(
+    allocator: std.mem.Allocator,
+    replacements: []const MetadataTable,
+) ![]u8 {
+    const base = try minimalTtfTables(allocator);
+    var base_owned = true;
+    defer if (base_owned) {
+        for (base) |table| allocator.free(table.data);
+        allocator.free(base);
+    };
+    var append_count: usize = 0;
+    for (replacements, 0..) |replacement, index| {
+        for (replacements[0..index]) |previous| {
+            if (std.mem.eql(u8, &replacement.tag, &previous.tag)) {
+                return error.DuplicateMetadataTable;
+            }
+        }
+        var found = false;
+        for (base) |table| {
+            if (std.mem.eql(u8, table.tag, &replacement.tag)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) append_count += 1;
+    }
+
+    const tables = try allocator.alloc(Table, base.len + append_count);
+    @memcpy(tables[0..base.len], base);
+    allocator.free(base);
+    base_owned = false;
+
+    var initialized = base.len;
+    var owns_tables = true;
+    errdefer if (owns_tables) {
+        for (tables[0..initialized]) |table| allocator.free(table.data);
+        allocator.free(tables);
+    };
+    for (replacements) |*replacement| {
+        for (tables[0..initialized]) |*table| {
+            if (!std.mem.eql(u8, table.tag, &replacement.tag)) continue;
+            const copy = try allocator.dupe(u8, replacement.data);
+            allocator.free(table.data);
+            table.data = copy;
+            break;
+        } else {
+            tables[initialized] = .{
+                // `replacement` points into the caller's slice, which outlives
+                // this synchronous build and therefore keeps the tag stable.
+                .tag = &replacement.tag,
+                .data = try allocator.dupe(u8, replacement.data),
+            };
+            initialized += 1;
+        }
+    }
+    owns_tables = false; // buildSfnt takes ownership of the complete array.
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
+pub fn buildTtfWithGlobalMetricValues(
+    allocator: std.mem.Allocator,
+    ascender: i16,
+    descender: i16,
+    advance_max: u16,
+) ![]u8 {
+    const hhea = try hheaTable(allocator);
+    defer allocator.free(hhea);
+    writeI16(hhea, 4, ascender);
+    writeI16(hhea, 6, descender);
+    writeU16(hhea, 10, advance_max);
+    return buildTtfWithMetadataTables(allocator, &.{
+        .{ .tag = "hhea".*, .data = hhea },
+    });
+}
+
+pub const MetadataTable = struct {
+    tag: [4]u8,
+    data: []const u8,
+};
 
 pub fn buildNamedTtfWithStyle(allocator: std.mem.Allocator, family: []const u8, subfamily: []const u8, full_name: []const u8, weight: u16, width: u16, italic: bool, bold: bool) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try styledTtfTables(allocator, family, subfamily, full_name, weight, width, italic, bold));
@@ -330,6 +770,46 @@ pub fn buildEbdtBitmapTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try ebdtBitmapTtfTables(allocator));
 }
 
+pub fn buildCbdtBgraTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildCbdtBgraTtfWithFormat(allocator, 1);
+}
+
+/// Reference fixture for Skrifa's complete raw 32-bpp BDT format set.
+pub fn buildCbdtBgraTtfWithFormat(
+    allocator: std.mem.Allocator,
+    image_format: u16,
+) ![]u8 {
+    return buildSfnt(
+        allocator,
+        0x00010000,
+        try cbdtBgraTtfTables(allocator, image_format),
+    );
+}
+
+pub fn buildCbdtBgraVerticalMetricsTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const tables = try cbdtBgraTtfTables(allocator, 5);
+    // BitmapSize.ppemY differs from ppemX so public strike metadata proves
+    // that the two authored axes are retained independently.
+    tables[1].data[8 + 45] = 18;
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
+pub fn buildCompoundEbdtTtf(allocator: std.mem.Allocator) ![]u8 {
+    return buildSfnt(allocator, 0x00010000, try compoundEbdtTtfTables(allocator));
+}
+
+pub fn buildRecursiveCompoundEbdtTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    return buildSfnt(
+        allocator,
+        0x00010000,
+        try recursiveCompoundEbdtTtfTables(allocator),
+    );
+}
+
 pub fn buildVarcTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try varcTtfTables(allocator));
 }
@@ -348,6 +828,87 @@ pub fn buildVarcHvarTtf(allocator: std.mem.Allocator) ![]u8 {
 
 pub fn buildIftTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try iftTtfTables(allocator));
+}
+
+pub fn buildIftTableKeyedPatch(allocator: std.mem.Allocator) ![]u8 {
+    const replace_stream = [_]u8{
+        27, 7, 0, 248, 165, 202, 228, 130, 146, 56, 166, 0,
+    };
+    const count: usize = 2;
+    const header_len = 26 + (count + 1) * 4;
+    const replace_len = 9 + replace_stream.len;
+    const drop_len = 9;
+    const bytes = try allocator.alloc(u8, header_len + replace_len + drop_len);
+    @memset(bytes, 0);
+    @memcpy(bytes[0..4], "iftk");
+    for (0..16) |index| bytes[8 + index] = @intCast(index);
+    writeU16(bytes, 24, count);
+    writeU32(bytes, 26, @intCast(header_len));
+    writeU32(bytes, 30, @intCast(header_len + replace_len));
+    writeU32(bytes, 34, @intCast(bytes.len));
+    @memcpy(bytes[header_len..][0..4], "kern");
+    bytes[header_len + 4] = 1;
+    writeU32(bytes, header_len + 5, 8);
+    @memcpy(bytes[header_len + 9 ..][0..replace_stream.len], &replace_stream);
+    const drop = header_len + replace_len;
+    @memcpy(bytes[drop..][0..4], "kern");
+    bytes[drop + 4] = 2;
+    return bytes;
+}
+
+pub fn buildIftDropTablePatch(allocator: std.mem.Allocator) ![]u8 {
+    const header_len: usize = 26 + 2 * 4;
+    const bytes = try allocator.alloc(u8, header_len + 9);
+    @memset(bytes, 0);
+    @memcpy(bytes[0..4], "iftk");
+    for (0..16) |index| bytes[8 + index] = @intCast(index);
+    writeU16(bytes, 24, 1);
+    writeU32(bytes, 26, header_len);
+    writeU32(bytes, 30, @intCast(bytes.len));
+    @memcpy(bytes[header_len..][0..4], "dict");
+    bytes[header_len + 4] = 2;
+    return bytes;
+}
+
+pub fn buildIftSharedDictionaryPatch(allocator: std.mem.Allocator) ![]u8 {
+    const stream = [_]u8{
+        0xa1, 0xe0, 0x00, 0xc0, 0x2f, 0x3a, 0x38, 0xf4,
+        0x01, 0xd1, 0xaf, 0x54, 0x84, 0x14, 0x71, 0x2a,
+        0x80, 0x04, 0xa2, 0x1c, 0xd3, 0xdd, 0x07,
+    };
+    const header_len: usize = 26 + 2 * 4;
+    const bytes = try allocator.alloc(u8, header_len + 9 + stream.len);
+    @memset(bytes, 0);
+    @memcpy(bytes[0..4], "iftk");
+    for (0..16) |index| bytes[8 + index] = @intCast(index);
+    writeU16(bytes, 24, 1);
+    writeU32(bytes, 26, header_len);
+    writeU32(bytes, 30, @intCast(bytes.len));
+    @memcpy(bytes[header_len..][0..4], "dict");
+    writeU32(bytes, header_len + 5, 29);
+    @memcpy(bytes[header_len + 9 ..], &stream);
+    return bytes;
+}
+
+/// Fontations-compatible `ifgk` patch replacing glyph 1 in the synthetic
+/// short-loca fixture. The Brotli stream expands to one `GlyphPatches` record
+/// (`glyf`, gid 1) whose outline has a 600-unit xMax instead of 700.
+pub fn buildIftGlyphKeyedPatch(allocator: std.mem.Allocator) ![]u8 {
+    const stream = [_]u8{
+        0x1b, 0x30, 0x00, 0xf8, 0x8f, 0xd4, 0x5a, 0x4d,
+        0x4d, 0xf7, 0x22, 0xaa, 0xdd, 0xde, 0x83, 0x06,
+        0x14, 0x34, 0x9e, 0x59, 0x40, 0x25, 0x81, 0x04,
+        0xac, 0x95, 0x17, 0x6f, 0x8c, 0x14, 0x08, 0x28,
+        0x12, 0x39, 0xf7, 0x6d, 0x34, 0x4c, 0x81, 0x5a,
+        0x55, 0x31, 0xfb, 0x88, 0xf8, 0x15,
+    };
+    const bytes = try allocator.alloc(u8, 29 + stream.len);
+    @memset(bytes, 0);
+    @memcpy(bytes[0..4], "ifgk");
+    for (0..16) |index| bytes[9 + index] = @intCast(index);
+    writeU32(bytes, 25, 49);
+    @memcpy(bytes[29..], &stream);
+    return bytes;
 }
 
 pub fn buildMathTtf(allocator: std.mem.Allocator) ![]u8 {
@@ -598,6 +1159,47 @@ pub fn buildNamedTtc(allocator: std.mem.Allocator) ![]u8 {
 
 pub fn buildMinimalGsubTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try minimalGsubTtfTables(allocator));
+}
+
+/// Two-component GSUB ligature with one authored GDEF caret at 300/1000 em.
+pub fn buildGdefLigatureCaretTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const base = try minimalGsubTtfTables(allocator);
+    const tables = try allocator.alloc(Table, base.len + 1);
+    errdefer allocator.free(tables);
+    @memcpy(tables[0..base.len], base);
+    allocator.free(base);
+    tables[base.len] = .{
+        .tag = "GDEF",
+        .data = try gdefLigatureCaretTable(allocator),
+    };
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
+/// GDEF 1.3 format-3 caret whose VariationIndex adds seven design units at
+/// normalized coordinate 0.5.
+pub fn buildGdefVariableLigatureCaretTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const base = try minimalGsubTtfTables(allocator);
+    const tables = try allocator.alloc(Table, base.len + 3);
+    errdefer allocator.free(tables);
+    @memcpy(tables[0..base.len], base);
+    allocator.free(base);
+    tables[base.len] = .{
+        .tag = "GDEF",
+        .data = try gdefVariableLigatureCaretTable(allocator),
+    };
+    tables[base.len + 1] = .{
+        .tag = "fvar",
+        .data = try singleAxisFvarTable(allocator),
+    };
+    tables[base.len + 2] = .{
+        .tag = "name",
+        .data = try singleAxisNameTable(allocator),
+    };
+    return buildSfnt(allocator, 0x00010000, tables);
 }
 
 pub fn buildMultipleGsubTtf(allocator: std.mem.Allocator) ![]u8 {
@@ -961,6 +1563,49 @@ fn compoundPointMatchTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[5] = .{ .tag = "loca", .data = try compoundPointMatchLocaTable(allocator) };
     tables[6] = .{ .tag = "maxp", .data = try compoundPointMatchMaxpTable(allocator) };
     tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn trueTypeCompoundHintingTables(
+    allocator: std.mem.Allocator,
+) ![]Table {
+    const tables = try allocator.alloc(Table, 8);
+    var initialized: usize = 0;
+    errdefer {
+        for (tables[0..initialized]) |table| allocator.free(table.data);
+        allocator.free(tables);
+    }
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    initialized += 1;
+    tables[1] = .{
+        .tag = "glyf",
+        .data = try trueTypeCompoundHintingGlyfTable(allocator),
+    };
+    initialized += 1;
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    initialized += 1;
+    tables[3] = .{
+        .tag = "hhea",
+        .data = try hheaTableWithMetrics(allocator, 3),
+    };
+    initialized += 1;
+    tables[4] = .{
+        .tag = "hmtx",
+        .data = try hmtxTableWithLigature(allocator),
+    };
+    initialized += 1;
+    tables[5] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    initialized += 1;
+    tables[6] = .{
+        .tag = "loca",
+        .data = try trueTypeCompoundHintingLocaTable(allocator),
+    };
+    initialized += 1;
+    tables[7] = .{
+        .tag = "maxp",
+        .data = try trueTypeCompoundHintingMaxpTable(allocator),
+    };
+    initialized += 1;
     return tables;
 }
 
@@ -1448,6 +2093,50 @@ fn verticalMetricsTtfTables(allocator: std.mem.Allocator) ![]Table {
     return tables;
 }
 
+fn verticalFallbackTtfTables(
+    allocator: std.mem.Allocator,
+    codepoints: []const u32,
+) ![]Table {
+    const glyph_count = codepoints.len + 1;
+    const tables = try allocator.alloc(Table, 10);
+    errdefer allocator.free(tables);
+    tables[0] = .{
+        .tag = "cmap",
+        .data = try cmapFormat12SequentialTable(allocator, codepoints),
+    };
+    tables[1] = .{
+        .tag = "glyf",
+        .data = try emptyGlyfTable(allocator, glyph_count),
+    };
+    tables[2] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[3] = .{
+        .tag = "hhea",
+        .data = try hheaTableWithMetrics(allocator, @intCast(glyph_count)),
+    };
+    tables[4] = .{
+        .tag = "hmtx",
+        .data = try hmtxTableWithGlyphCount(allocator, glyph_count),
+    };
+    tables[5] = .{
+        .tag = "loca",
+        .data = try emptyLocaTable(allocator, glyph_count),
+    };
+    tables[6] = .{
+        .tag = "maxp",
+        .data = try maxpTableWithGlyphs(allocator, @intCast(glyph_count)),
+    };
+    tables[7] = .{
+        .tag = "vhea",
+        .data = try vheaTableWithMetrics(allocator, @intCast(glyph_count)),
+    };
+    tables[8] = .{
+        .tag = "vmtx",
+        .data = try vmtxTableWithGlyphCount(allocator, glyph_count),
+    };
+    tables[9] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
 fn vorgTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 9);
     errdefer allocator.free(tables);
@@ -1897,6 +2586,46 @@ fn ebdtBitmapTtfTables(allocator: std.mem.Allocator) ![]Table {
     return tables;
 }
 
+fn cbdtBgraTtfTables(
+    allocator: std.mem.Allocator,
+    image_format: u16,
+) ![]Table {
+    const tables = try allocator.alloc(Table, 8);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "CBDT", .data = try cbdtBgraTable(allocator, image_format) };
+    tables[1] = .{ .tag = "CBLC", .data = try cblcBgraTable(allocator, image_format) };
+    tables[2] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTable(allocator) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTable(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn compoundEbdtTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try allocator.alloc(Table, 8);
+    errdefer allocator.free(tables);
+    tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
+    tables[1] = .{ .tag = "EBDT", .data = try compoundEbdtTable(allocator) };
+    tables[2] = .{ .tag = "EBLC", .data = try compoundEblcTable(allocator) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 3) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTableWithColorGlyphs(allocator) };
+    tables[6] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 3) };
+    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    return tables;
+}
+
+fn recursiveCompoundEbdtTtfTables(allocator: std.mem.Allocator) ![]Table {
+    const tables = try compoundEbdtTtfTables(allocator);
+    allocator.free(tables[1].data);
+    tables[1].data = try recursiveCompoundEbdtTable(allocator);
+    allocator.free(tables[2].data);
+    tables[2].data = try recursiveCompoundEblcTable(allocator);
+    return tables;
+}
+
 fn varcTtfTables(allocator: std.mem.Allocator) ![]Table {
     const tables = try allocator.alloc(Table, 9);
     errdefer allocator.free(tables);
@@ -1939,7 +2668,7 @@ fn varcHvarTtfTables(allocator: std.mem.Allocator) ![]Table {
 }
 
 fn iftTtfTables(allocator: std.mem.Allocator) ![]Table {
-    const tables = try allocator.alloc(Table, 9);
+    const tables = try allocator.alloc(Table, 10);
     errdefer allocator.free(tables);
     tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[1] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
@@ -1950,6 +2679,7 @@ fn iftTtfTables(allocator: std.mem.Allocator) ![]Table {
     tables[6] = .{ .tag = "kern", .data = try kernTable(allocator) };
     tables[7] = .{ .tag = "loca", .data = try locaTable(allocator) };
     tables[8] = .{ .tag = "maxp", .data = try maxpTable(allocator) };
+    tables[9] = .{ .tag = "dict", .data = try allocator.dupe(u8, "abcdef\n") };
     return tables;
 }
 
@@ -3705,7 +4435,7 @@ fn gvarDeltaTable(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn gvarCompoundTable(allocator: std.mem.Allocator) ![]u8 {
-    const bytes = try allocator.alloc(u8, 56);
+    const bytes = try allocator.alloc(u8, 72);
     @memset(bytes, 0);
     writeU16(bytes, 0, 1);
     writeU16(bytes, 2, 0);
@@ -3717,24 +4447,39 @@ fn gvarCompoundTable(allocator: std.mem.Allocator) ![]u8 {
     writeU32(bytes, 16, 36); // glyphVariationDataArrayOffset after offset array.
     writeU32(bytes, 20, 0);
     writeU32(bytes, 24, 0);
-    writeU32(bytes, 28, 0);
-    writeU32(bytes, 32, 20);
+    writeU32(bytes, 28, 16);
+    writeU32(bytes, 32, 36);
 
-    writeU16(bytes, 36, 1); // one tuple.
-    writeU16(bytes, 38, 10); // tuple data starts after one 6-byte header.
-    writeU16(bytes, 40, 10); // tuple payload size.
-    writeU16(bytes, 42, 0xa000); // embedded peak + private point numbers.
+    // Glyph 1: move child outline point 0 by +16 at the peak. Compound
+    // execution must inherit this tuple when it re-decodes the child.
+    writeU16(bytes, 36, 1);
+    writeU16(bytes, 38, 10);
+    writeU16(bytes, 40, 6);
+    writeU16(bytes, 42, 0xa000);
     writeF2Dot14(bytes, 44, 1.0);
-    bytes[46] = 3; // component point 0, left phantom, right phantom.
-    bytes[47] = 2; // one byte run with three point-number deltas.
-    bytes[48] = 0; // component point id 0.
-    bytes[49] = 1; // left phantom point id 1.
-    bytes[50] = 1; // right phantom point id 2.
-    bytes[51] = 2; // three x deltas.
-    bytes[52] = 20; // component offset x delta.
-    bytes[53] = 0; // left phantom x delta.
-    bytes[54] = 18; // right phantom x delta.
-    bytes[55] = 0x82; // three y deltas are zero.
+    bytes[46] = 1; // one private point.
+    bytes[47] = 0; // one byte point-number run.
+    bytes[48] = 0; // point 0.
+    bytes[49] = 0; // one byte X-delta run.
+    bytes[50] = 16;
+    bytes[51] = 0x80; // one zero Y delta.
+
+    const compound = 52;
+    writeU16(bytes, compound + 0, 1); // one tuple.
+    writeU16(bytes, compound + 2, 10); // data after one 6-byte header.
+    writeU16(bytes, compound + 4, 10); // tuple payload size.
+    writeU16(bytes, compound + 6, 0xa000);
+    writeF2Dot14(bytes, compound + 8, 1.0);
+    bytes[compound + 10] = 3;
+    bytes[compound + 11] = 2;
+    bytes[compound + 12] = 0; // component point id 0.
+    bytes[compound + 13] = 1; // left phantom point id 1.
+    bytes[compound + 14] = 1; // right phantom point id 2.
+    bytes[compound + 15] = 2;
+    bytes[compound + 16] = 20; // component offset x delta.
+    bytes[compound + 17] = 0; // left phantom x delta.
+    bytes[compound + 18] = 18; // right phantom x delta.
+    bytes[compound + 19] = 0x82; // three y deltas are zero.
     return bytes;
 }
 
@@ -3806,6 +4551,497 @@ fn fvarTable(allocator: std.mem.Allocator) ![]u8 {
     writeF16Dot16(bytes, 74, 700.0);
     writeF16Dot16(bytes, 78, 150.0);
     writeU16(bytes, 82, 261);
+    return bytes;
+}
+
+fn jstfTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 82);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 1);
+    writeTag(bytes, 6, "latn");
+    writeU16(bytes, 10, 12);
+
+    const script = 12;
+    writeU16(bytes, script, 12);
+    writeU16(bytes, script + 2, 16);
+    writeU16(bytes, script + 4, 0);
+
+    const extenders = 24;
+    writeU16(bytes, extenders, 1);
+    writeU16(bytes, extenders + 2, 1);
+
+    const language = 28;
+    writeU16(bytes, language, 1);
+    writeU16(bytes, language + 2, 4);
+
+    const priority = 32;
+    writeU16(bytes, priority, 20);
+    writeU16(bytes, priority + 8, 24);
+
+    const gsub_list = 52;
+    writeU16(bytes, gsub_list, 0);
+
+    const max_list = 56;
+    writeU16(bytes, max_list, 1);
+    writeU16(bytes, max_list + 2, 4);
+
+    const lookup = 60;
+    writeU16(bytes, lookup, 1);
+    writeU16(bytes, lookup + 2, 0);
+    writeU16(bytes, lookup + 4, 1);
+    writeU16(bytes, lookup + 6, 8);
+
+    const single_pos = 68;
+    writeU16(bytes, single_pos, 1);
+    writeU16(bytes, single_pos + 2, 8);
+    writeU16(bytes, single_pos + 4, 0x0004);
+    writeI16(bytes, single_pos + 6, 50);
+
+    const coverage = 76;
+    writeU16(bytes, coverage, 1);
+    writeU16(bytes, coverage + 2, 1);
+    writeU16(bytes, coverage + 4, 1);
+    return bytes;
+}
+
+fn jstfExpansionTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 68);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 1);
+    writeTag(bytes, 6, "DFLT");
+    writeU16(bytes, 10, 12);
+
+    const script = 12;
+    writeU16(bytes, script, 0);
+    writeU16(bytes, script + 2, 6);
+    writeU16(bytes, script + 4, 0);
+
+    const language = 18;
+    writeU16(bytes, language, 1);
+    writeU16(bytes, language + 2, 4);
+
+    const priority = 22;
+    writeU16(bytes, priority + 18, 20);
+
+    const max_list = 42;
+    writeU16(bytes, max_list, 1);
+    writeU16(bytes, max_list + 2, 4);
+
+    const lookup = 46;
+    writeU16(bytes, lookup, 1);
+    writeU16(bytes, lookup + 2, 0);
+    writeU16(bytes, lookup + 4, 1);
+    writeU16(bytes, lookup + 6, 8);
+
+    const single_pos = 54;
+    writeU16(bytes, single_pos, 1);
+    writeU16(bytes, single_pos + 2, 8);
+    writeU16(bytes, single_pos + 4, 0x0004);
+    writeI16(bytes, single_pos + 6, 600);
+
+    const coverage = 62;
+    writeU16(bytes, coverage, 1);
+    writeU16(bytes, coverage + 2, 1);
+    // scriptFeatureGsub fixture maps space to glyph 4.
+    writeU16(bytes, coverage + 4, 4);
+    return bytes;
+}
+
+fn jstfModificationTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 78);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 1);
+    writeTag(bytes, 6, "latn");
+    writeU16(bytes, 10, 12);
+
+    const script = 12;
+    writeU16(bytes, script, 0);
+    writeU16(bytes, script + 2, 6);
+    writeU16(bytes, script + 4, 0);
+
+    const language = 18;
+    writeU16(bytes, language, 2);
+    writeU16(bytes, language + 2, 8);
+    writeU16(bytes, language + 4, 28);
+
+    // Priority zero enables lookup zero but disables lookup one. It selects
+    // narrow glyph 3 and must be rejected, after which priority one starts
+    // again from the unmodified source.
+    const priority_zero = 26;
+    writeU16(bytes, priority_zero + 10, 40);
+    writeU16(bytes, priority_zero + 12, 48);
+    writeU16(bytes, priority_zero + 14, 40);
+    writeU16(bytes, priority_zero + 16, 48);
+
+    // Priority one enables lookup zero and disables lookup two. The four lists
+    // deliberately share offsets because GSUB and GPOS use the same indexes.
+    const priority_one = 46;
+    writeU16(bytes, priority_one + 10, 20);
+    writeU16(bytes, priority_one + 12, 24);
+    writeU16(bytes, priority_one + 14, 20);
+    writeU16(bytes, priority_one + 16, 24);
+    writeU16(bytes, 66, 1);
+    writeU16(bytes, 68, 0);
+    writeU16(bytes, 70, 1);
+    writeU16(bytes, 72, 2);
+    writeU16(bytes, 74, 1);
+    writeU16(bytes, 76, 1);
+    return bytes;
+}
+
+fn jstfModificationGsubTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 160);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 10);
+    writeU16(bytes, 6, 34);
+    writeU16(bytes, 8, 72);
+
+    // DFLT activates only features one and two. Feature zero exists solely so
+    // JSTF can enable its lookup by index.
+    writeU16(bytes, 10, 1);
+    writeTag(bytes, 12, "DFLT");
+    writeU16(bytes, 16, 8);
+    writeU16(bytes, 18, 4);
+    writeU16(bytes, 20, 0);
+    writeU16(bytes, 22, 0);
+    writeU16(bytes, 24, 0xffff);
+    writeU16(bytes, 26, 2);
+    writeU16(bytes, 28, 1);
+    writeU16(bytes, 30, 2);
+
+    writeU16(bytes, 34, 3);
+    writeTag(bytes, 36, "ss01");
+    writeU16(bytes, 40, 20);
+    writeTag(bytes, 42, "liga");
+    writeU16(bytes, 46, 26);
+    writeTag(bytes, 48, "calt");
+    writeU16(bytes, 52, 32);
+    for (0..3) |feature_index| {
+        const feature = 54 + feature_index * 6;
+        writeU16(bytes, feature, 0);
+        writeU16(bytes, feature + 2, 1);
+        writeU16(bytes, feature + 4, @intCast(feature_index));
+    }
+
+    writeU16(bytes, 72, 3);
+    writeU16(bytes, 74, 8);
+    writeU16(bytes, 76, 38);
+    writeU16(bytes, 78, 68);
+
+    // lookup 0: glyph 1 -> glyph 3
+    writeSingleSubstitutionLookup(bytes, 80, 1, 2);
+    // lookup 1: glyph 3 -> glyph 4. Correct JSTF ordering reaches glyph 4;
+    // executing lookup 0 after the normal plan would stop at glyph 3.
+    writeSingleSubstitutionLookup(bytes, 110, 3, 1);
+    // lookup 2: glyph 4 -> glyph 1, disabled by the accepted priority.
+    writeSingleSubstitutionLookup(bytes, 140, 4, -3);
+    return bytes;
+}
+
+fn writeSingleSubstitutionLookup(
+    bytes: []u8,
+    lookup: usize,
+    covered_glyph: u16,
+    delta: i16,
+) void {
+    writeU16(bytes, lookup, 1);
+    writeU16(bytes, lookup + 2, 0);
+    writeU16(bytes, lookup + 4, 1);
+    writeU16(bytes, lookup + 6, 8);
+    const subtable = lookup + 8;
+    writeU16(bytes, subtable, 1);
+    writeU16(bytes, subtable + 2, 6);
+    writeI16(bytes, subtable + 4, delta);
+    const coverage = subtable + 6;
+    writeU16(bytes, coverage, 1);
+    writeU16(bytes, coverage + 2, 1);
+    writeU16(bytes, coverage + 4, covered_glyph);
+}
+
+fn jstfModificationGposTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 166);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 10);
+    writeU16(bytes, 6, 34);
+    writeU16(bytes, 8, 72);
+
+    writeU16(bytes, 10, 1);
+    writeTag(bytes, 12, "DFLT");
+    writeU16(bytes, 16, 8);
+    writeU16(bytes, 18, 4);
+    writeU16(bytes, 20, 0);
+    writeU16(bytes, 22, 0);
+    writeU16(bytes, 24, 0xffff);
+    writeU16(bytes, 26, 2);
+    writeU16(bytes, 28, 1);
+    writeU16(bytes, 30, 2);
+
+    writeU16(bytes, 34, 3);
+    writeTag(bytes, 36, "ss01");
+    writeU16(bytes, 40, 20);
+    writeTag(bytes, 42, "kern");
+    writeU16(bytes, 46, 26);
+    writeTag(bytes, 48, "dist");
+    writeU16(bytes, 52, 32);
+    for (0..3) |feature_index| {
+        const feature = 54 + feature_index * 6;
+        writeU16(bytes, feature, 0);
+        writeU16(bytes, feature + 2, 1);
+        writeU16(bytes, feature + 4, @intCast(feature_index));
+    }
+
+    writeU16(bytes, 72, 3);
+    writeU16(bytes, 74, 8);
+    writeU16(bytes, 76, 40);
+    writeU16(bytes, 78, 72);
+    // lookup 0 is enabled by JSTF; lookup 2 is disabled. Distinct placement
+    // and advance fields make both effects independently observable.
+    writeSinglePositionLookup(bytes, 80, 4, 0x0001, 100);
+    writeSinglePositionLookup(bytes, 112, 4, 0x0004, 100);
+    writeSinglePositionLookup(bytes, 144, 4, 0x0004, -50);
+    return bytes;
+}
+
+fn writeSinglePositionLookup(
+    bytes: []u8,
+    lookup: usize,
+    covered_glyph: u16,
+    value_format: u16,
+    value: i16,
+) void {
+    writeU16(bytes, lookup, 1);
+    writeU16(bytes, lookup + 2, 0);
+    writeU16(bytes, lookup + 4, 1);
+    writeU16(bytes, lookup + 6, 8);
+    const subtable = lookup + 8;
+    writeU16(bytes, subtable, 1);
+    writeU16(bytes, subtable + 2, 8);
+    writeU16(bytes, subtable + 4, value_format);
+    writeI16(bytes, subtable + 6, value);
+    const coverage = subtable + 8;
+    writeU16(bytes, coverage, 1);
+    writeU16(bytes, coverage + 2, 1);
+    writeU16(bytes, coverage + 4, covered_glyph);
+}
+
+fn jstfModificationHmtxTable(allocator: std.mem.Allocator) ![]u8 {
+    const advances = [_]u16{ 500, 800, 400, 700, 1200 };
+    const bytes = try allocator.alloc(u8, advances.len * 4);
+    for (advances, 0..) |advance, glyph_index| {
+        writeU16(bytes, glyph_index * 4, advance);
+        writeI16(bytes, glyph_index * 4 + 2, 0);
+    }
+    return bytes;
+}
+
+fn jstfShrinkageTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 110);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 1);
+    writeTag(bytes, 6, "latn");
+    writeU16(bytes, 10, 12);
+
+    const script = 12;
+    writeU16(bytes, script, 0);
+    writeU16(bytes, script + 2, 6);
+    writeU16(bytes, script + 4, 0);
+
+    const language = 18;
+    writeU16(bytes, language, 2);
+    writeU16(bytes, language + 2, 8);
+    writeU16(bytes, language + 4, 28);
+
+    // Priority zero disables the first active GSUB/GPOS lookup. It remains too
+    // wide, so priority one must restart from the untouched source.
+    const priority_zero = 26;
+    writeU16(bytes, priority_zero + 2, 48);
+    writeU16(bytes, priority_zero + 6, 48);
+
+    // Priority one enables lookup zero, disables lookup two, and applies an
+    // embedded maximum -200 advance per glyph.
+    const priority_one = 46;
+    writeU16(bytes, priority_one + 0, 20);
+    writeU16(bytes, priority_one + 2, 24);
+    writeU16(bytes, priority_one + 4, 20);
+    writeU16(bytes, priority_one + 6, 24);
+    writeU16(bytes, priority_one + 8, 32);
+
+    writeU16(bytes, 66, 1);
+    writeU16(bytes, 68, 0);
+    writeU16(bytes, 70, 1);
+    writeU16(bytes, 72, 2);
+    writeU16(bytes, 74, 1);
+    writeU16(bytes, 76, 1);
+
+    const max_list = 78;
+    writeU16(bytes, max_list, 1);
+    writeU16(bytes, max_list + 2, 4);
+    const lookup = 82;
+    writeU16(bytes, lookup, 1);
+    writeU16(bytes, lookup + 2, 0);
+    writeU16(bytes, lookup + 4, 1);
+    writeU16(bytes, lookup + 6, 8);
+    const single_pos = 90;
+    writeU16(bytes, single_pos, 1);
+    writeU16(bytes, single_pos + 2, 8);
+    writeU16(bytes, single_pos + 4, 0x0004);
+    writeI16(bytes, single_pos + 6, -200);
+    const coverage = 98;
+    writeU16(bytes, coverage, 1);
+    writeU16(bytes, coverage + 2, 1);
+    writeU16(bytes, coverage + 4, 3);
+    return bytes;
+}
+
+fn jstfShrinkageGsubTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try jstfModificationGsubTable(allocator);
+    // lookup 0: 1 -> 4; lookup 1: 4 -> 3; lookup 2: 3 -> 1.
+    // Thus the normal active set leaves glyph 1 unchanged, while priority one
+    // executes 0 -> 1 and disables lookup two, ending at narrow glyph 3.
+    writeI16(bytes, 92, 3);
+    writeU16(bytes, 98, 1);
+    writeI16(bytes, 122, -1);
+    writeU16(bytes, 128, 4);
+    writeI16(bytes, 152, -2);
+    writeU16(bytes, 158, 3);
+    return bytes;
+}
+
+fn jstfShrinkageGposTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 166);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 10);
+    writeU16(bytes, 6, 34);
+    writeU16(bytes, 8, 72);
+    writeU16(bytes, 10, 1);
+    writeTag(bytes, 12, "DFLT");
+    writeU16(bytes, 16, 8);
+    writeU16(bytes, 18, 4);
+    writeU16(bytes, 24, 0xffff);
+    writeU16(bytes, 26, 2);
+    writeU16(bytes, 28, 1);
+    writeU16(bytes, 30, 2);
+
+    writeU16(bytes, 34, 3);
+    writeTag(bytes, 36, "ss01");
+    writeU16(bytes, 40, 20);
+    writeTag(bytes, 42, "kern");
+    writeU16(bytes, 46, 26);
+    writeTag(bytes, 48, "dist");
+    writeU16(bytes, 52, 32);
+    for (0..3) |feature_index| {
+        const feature = 54 + feature_index * 6;
+        writeU16(bytes, feature + 2, 1);
+        writeU16(bytes, feature + 4, @intCast(feature_index));
+    }
+
+    writeU16(bytes, 72, 3);
+    writeU16(bytes, 74, 8);
+    writeU16(bytes, 76, 40);
+    writeU16(bytes, 78, 72);
+    // Priority one reaches glyph 3. Lookup one adds +100 advance, lookup two
+    // would add another +100 but is disabled, and lookup zero adds placement.
+    writeSinglePositionLookup(bytes, 80, 3, 0x0001, 50);
+    writeSinglePositionLookup(bytes, 112, 3, 0x0004, 100);
+    writeSinglePositionLookup(bytes, 144, 3, 0x0004, 100);
+    return bytes;
+}
+
+fn jstfCardinalityTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 48);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 1);
+    writeTag(bytes, 6, "latn");
+    writeU16(bytes, 10, 12);
+    const script = 12;
+    writeU16(bytes, script + 2, 6);
+    const language = 18;
+    writeU16(bytes, language, 1);
+    writeU16(bytes, language + 2, 4);
+    const priority = 22;
+    writeU16(bytes, priority, 20);
+    const enable = 42;
+    writeU16(bytes, enable, 1);
+    writeU16(bytes, enable + 2, 0);
+    return bytes;
+}
+
+fn jstfCardinalityGsubTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 80);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 10);
+    writeU16(bytes, 6, 30);
+    writeU16(bytes, 8, 44);
+    writeU16(bytes, 10, 1);
+    writeTag(bytes, 12, "DFLT");
+    writeU16(bytes, 16, 8);
+    writeU16(bytes, 18, 4);
+    writeU16(bytes, 24, 0xffff);
+    writeU16(bytes, 26, 0);
+    writeU16(bytes, 30, 1);
+    writeTag(bytes, 32, "ss01");
+    writeU16(bytes, 36, 8);
+    writeU16(bytes, 40, 1);
+    writeU16(bytes, 42, 0);
+    writeU16(bytes, 44, 1);
+    writeU16(bytes, 46, 4);
+    const lookup = 48;
+    writeU16(bytes, lookup, 4);
+    writeU16(bytes, lookup + 4, 1);
+    writeU16(bytes, lookup + 6, 8);
+    const ligature = 56;
+    writeU16(bytes, ligature, 1);
+    writeU16(bytes, ligature + 2, 18);
+    writeU16(bytes, ligature + 4, 1);
+    writeU16(bytes, ligature + 6, 8);
+    const set = 64;
+    writeU16(bytes, set, 1);
+    writeU16(bytes, set + 2, 4);
+    writeU16(bytes, set + 4, 3);
+    writeU16(bytes, set + 6, 2);
+    writeU16(bytes, set + 8, 1);
+    const coverage = 74;
+    writeU16(bytes, coverage, 1);
+    writeU16(bytes, coverage + 2, 1);
+    writeU16(bytes, coverage + 4, 1);
+    return bytes;
+}
+
+fn jstfCardinalityHmtxTable(allocator: std.mem.Allocator) ![]u8 {
+    const advances = [_]u16{ 500, 800, 400, 1200 };
+    const bytes = try allocator.alloc(u8, advances.len * 4);
+    for (advances, 0..) |advance, glyph_index| {
+        writeU16(bytes, glyph_index * 4, advance);
+        writeI16(bytes, glyph_index * 4 + 2, 0);
+    }
+    return bytes;
+}
+
+fn jstfExtenderOnlyTable(
+    allocator: std.mem.Allocator,
+    script_tag: *const [4]u8,
+    extender_glyph: u16,
+) ![]u8 {
+    const bytes = try allocator.alloc(u8, 24);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 1);
+    @memcpy(bytes[6..10], script_tag);
+    writeU16(bytes, 10, 12);
+    const script = 12;
+    writeU16(bytes, script, 6);
+    const extenders = 18;
+    writeU16(bytes, extenders, 1);
+    writeU16(bytes, extenders + 2, extender_glyph);
     return bytes;
 }
 
@@ -4269,6 +5505,46 @@ fn cvtTable(allocator: std.mem.Allocator) ![]u8 {
     writeI16(bytes, 4, -5);
     writeI16(bytes, 6, 0);
     return bytes;
+}
+
+fn hintingMaxpTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try maxpTable(allocator);
+    writeU16(bytes, 16, 2); // maxTwilightPoints.
+    writeU16(bytes, 18, 2); // maxStorage.
+    writeU16(bytes, 20, 2); // maxFunctionDefs.
+    writeU16(bytes, 22, 1); // maxInstructionDefs.
+    writeU16(bytes, 24, 16); // maxStackElements.
+    writeU16(bytes, 26, 16); // maxSizeOfInstructions.
+    return bytes;
+}
+
+fn hintingCvtTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 4);
+    writeI16(bytes, 0, 10);
+    writeI16(bytes, 2, -5);
+    return bytes;
+}
+
+fn hintingFontProgram(allocator: std.mem.Allocator) ![]u8 {
+    // FDEF 0: add 2 to the top stack value.
+    return allocator.dupe(u8, &.{
+        0xb0, 0, // PUSHB[1] function id.
+        0x2c, // FDEF.
+        0xb0, 2, // PUSHB[1] 2.
+        0x60, // ADD.
+        0x2d, // ENDF.
+    });
+}
+
+fn hintingPrepProgram(allocator: std.mem.Allocator) ![]u8 {
+    // storage[0] = FDEF0(MPPEM), cvt[0] = 96, cut-in = 72.
+    return allocator.dupe(u8, &.{
+        0x4b, // MPPEM.
+        0xb0, 0, 0x2b, // CALL function 0.
+        0xb0, 0, 0x23, 0x42, // SWAP; WS storage[0].
+        0xb1, 0, 96, 0x44, // WCVTP cvt[0] = 96.
+        0xb0, 72, 0x1d, // SCVTCI 72.
+    });
 }
 
 fn cvarTable(allocator: std.mem.Allocator) ![]u8 {
@@ -5253,6 +6529,213 @@ fn eblcBitmapTable(allocator: std.mem.Allocator) ![]u8 {
     return bytes;
 }
 
+fn cbdtBgraTable(
+    allocator: std.mem.Allocator,
+    image_format: u16,
+) ![]u8 {
+    const metrics_len: usize = switch (image_format) {
+        1, 2 => 5,
+        5 => 0,
+        6, 7 => 8,
+        else => return error.InvalidBitmapImageFormat,
+    };
+    const bytes = try allocator.alloc(u8, 4 + metrics_len + 2 * 4);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 3);
+    writeU16(bytes, 2, 0);
+    const off = 4;
+    if (metrics_len != 0) {
+        bytes[off + 0] = 1; // height.
+        bytes[off + 1] = 2; // width.
+        bytes[off + 2] = 2; // bearingX/horiBearingX.
+        bytes[off + 3] = 13; // bearingY/horiBearingY.
+        bytes[off + 4] = 12; // advance/horiAdvance.
+    }
+    // Premultiplied sRGB BGRA, matching Skrifa's BitmapData::Bgra contract.
+    const pixels = [_]u8{
+        7,  13, 64, 128,
+        10, 20, 30, 255,
+    };
+    @memcpy(bytes[off + metrics_len ..], &pixels);
+    return bytes;
+}
+
+fn cblcBgraTable(
+    allocator: std.mem.Allocator,
+    image_format: u16,
+) ![]u8 {
+    const uses_shared_metrics = image_format == 5;
+    const subtable_size: usize = if (uses_shared_metrics) 20 else 12;
+    const bytes = try allocator.alloc(u8, 8 + 48 + 8 + subtable_size);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 3);
+    writeU16(bytes, 2, 0);
+    writeU32(bytes, 4, 1);
+
+    const size = 8;
+    writeU32(bytes, size + 0, 56);
+    writeU32(bytes, size + 4, @intCast(8 + subtable_size));
+    writeU32(bytes, size + 8, 1);
+    bytes[size + 16] = 13;
+    bytes[size + 17] = @bitCast(@as(i8, -3));
+    bytes[size + 18] = 12;
+    bytes[size + 28] = 13;
+    bytes[size + 29] = @bitCast(@as(i8, -3));
+    bytes[size + 30] = 12;
+    writeU16(bytes, size + 40, 1);
+    writeU16(bytes, size + 42, 1);
+    bytes[size + 44] = 16;
+    bytes[size + 45] = 16;
+    bytes[size + 46] = 32;
+    bytes[size + 47] = 1;
+
+    const record = 56;
+    writeU16(bytes, record + 0, 1);
+    writeU16(bytes, record + 2, 1);
+    writeU32(bytes, record + 4, 8);
+
+    const subtable = 64;
+    writeU16(bytes, subtable + 0, if (uses_shared_metrics) 2 else 3);
+    writeU16(bytes, subtable + 2, image_format);
+    writeU32(bytes, subtable + 4, 4);
+    if (uses_shared_metrics) {
+        writeU32(bytes, subtable + 8, 8); // Fixed image size.
+        bytes[subtable + 12] = 1;
+        bytes[subtable + 13] = 2;
+        bytes[subtable + 14] = 2;
+        bytes[subtable + 15] = 13;
+        bytes[subtable + 16] = 12;
+        bytes[subtable + 17] = 0;
+        bytes[subtable + 18] = @bitCast(@as(i8, -1));
+        bytes[subtable + 19] = 15;
+    } else {
+        writeU16(bytes, subtable + 8, 0);
+        const metrics_len: u16 = if (image_format == 6 or image_format == 7) 8 else 5;
+        writeU16(bytes, subtable + 10, metrics_len + 8);
+    }
+    return bytes;
+}
+
+fn compoundEbdtTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 26);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 2);
+    writeU16(bytes, 2, 0);
+
+    // Glyph 1: a 2x1 format-1 mask with authored pixels 10.
+    bytes[4] = 1;
+    bytes[5] = 2;
+    bytes[6] = 0;
+    bytes[7] = 1;
+    bytes[8] = 2;
+    bytes[9] = 0b1000_0000;
+
+    // Glyph 2: a 4x2 format-8 canvas containing glyph 1 at (0,0) and (2,1).
+    bytes[10] = 2;
+    bytes[11] = 4;
+    bytes[12] = 0;
+    bytes[13] = 2;
+    bytes[14] = 4;
+    bytes[15] = 0; // padding.
+    writeU16(bytes, 16, 2);
+    writeU16(bytes, 18, 1);
+    bytes[20] = 0;
+    bytes[21] = 0;
+    writeU16(bytes, 22, 1);
+    bytes[24] = 2;
+    bytes[25] = 1;
+    return bytes;
+}
+
+fn compoundEblcTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 8 + 48 + 16 + 24);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 2);
+    writeU16(bytes, 2, 0);
+    writeU32(bytes, 4, 1);
+    const size = 8;
+    writeU32(bytes, size + 0, 56);
+    writeU32(bytes, size + 4, 40);
+    writeU32(bytes, size + 8, 2);
+    writeU16(bytes, size + 40, 1);
+    writeU16(bytes, size + 42, 2);
+    bytes[size + 44] = 16;
+    bytes[size + 45] = 16;
+    bytes[size + 46] = 1;
+    bytes[size + 47] = 1;
+
+    const records = 56;
+    writeU16(bytes, records + 0, 1);
+    writeU16(bytes, records + 2, 1);
+    writeU32(bytes, records + 4, 16);
+    writeU16(bytes, records + 8, 2);
+    writeU16(bytes, records + 10, 2);
+    writeU32(bytes, records + 12, 28);
+
+    const first = 72;
+    writeU16(bytes, first + 0, 3);
+    writeU16(bytes, first + 2, 1);
+    writeU32(bytes, first + 4, 4);
+    writeU16(bytes, first + 8, 0);
+    writeU16(bytes, first + 10, 6);
+
+    const second = 84;
+    writeU16(bytes, second + 0, 3);
+    writeU16(bytes, second + 2, 8);
+    writeU32(bytes, second + 4, 4);
+    writeU16(bytes, second + 8, 6);
+    writeU16(bytes, second + 10, 22);
+    return bytes;
+}
+
+fn recursiveCompoundEbdtTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 22);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 2);
+    writeU16(bytes, 2, 0);
+    // Glyph 1 references glyph 2; glyph 2 references glyph 1.
+    inline for ([_]usize{ 4, 13 }, 0..) |offset, index| {
+        bytes[offset + 0] = 1;
+        bytes[offset + 1] = 1;
+        bytes[offset + 2] = 0;
+        bytes[offset + 3] = 1;
+        bytes[offset + 4] = 1;
+        bytes[offset + 5] = 0;
+        writeU16(bytes, offset + 6, 1);
+        writeU16(bytes, offset + 8, if (index == 0) 2 else 1);
+    }
+    return bytes;
+}
+
+fn recursiveCompoundEblcTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 8 + 48 + 8 + 14);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 2);
+    writeU16(bytes, 2, 0);
+    writeU32(bytes, 4, 1);
+    const size = 8;
+    writeU32(bytes, size + 0, 56);
+    writeU32(bytes, size + 4, 22);
+    writeU32(bytes, size + 8, 1);
+    writeU16(bytes, size + 40, 1);
+    writeU16(bytes, size + 42, 2);
+    bytes[size + 44] = 16;
+    bytes[size + 45] = 16;
+    bytes[size + 46] = 1;
+    const record = 56;
+    writeU16(bytes, record + 0, 1);
+    writeU16(bytes, record + 2, 2);
+    writeU32(bytes, record + 4, 8);
+    const subtable = 64;
+    writeU16(bytes, subtable + 0, 3);
+    writeU16(bytes, subtable + 2, 8);
+    writeU32(bytes, subtable + 4, 4);
+    writeU16(bytes, subtable + 8, 0);
+    writeU16(bytes, subtable + 10, 9);
+    writeU16(bytes, subtable + 12, 18);
+    return bytes;
+}
+
 fn cbdtPngTable(allocator: std.mem.Allocator) ![]u8 {
     const png = cbdtFixturePng();
     const image_len = 5 + 4 + png.len;
@@ -5612,6 +7095,81 @@ fn gdefClassTable(allocator: std.mem.Allocator) ![]u8 {
     return bytes;
 }
 
+fn gdefLigatureCaretTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 34);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 0);
+    writeU16(bytes, 8, 12);
+
+    const list = 12;
+    writeU16(bytes, list, 6);
+    writeU16(bytes, list + 2, 1);
+    writeU16(bytes, list + 4, 12);
+    writeU16(bytes, list + 6, 1);
+    writeU16(bytes, list + 8, 1);
+    writeU16(bytes, list + 10, 2);
+
+    const ligature = list + 12;
+    writeU16(bytes, ligature, 1);
+    writeU16(bytes, ligature + 2, 4);
+    writeU16(bytes, ligature + 4, 1);
+    writeI16(bytes, ligature + 6, 300);
+    return bytes;
+}
+
+fn gdefVariableLigatureCaretTable(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const store_offset: usize = 46;
+    const bytes = try allocator.alloc(u8, store_offset + 34);
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 2, 3);
+    writeU16(bytes, 8, 18);
+    writeU32(bytes, 14, store_offset);
+
+    const list = 18;
+    writeU16(bytes, list, 6);
+    writeU16(bytes, list + 2, 1);
+    writeU16(bytes, list + 4, 12);
+    writeU16(bytes, list + 6, 1);
+    writeU16(bytes, list + 8, 1);
+    writeU16(bytes, list + 10, 2);
+
+    const ligature = list + 12;
+    writeU16(bytes, ligature, 1);
+    writeU16(bytes, ligature + 2, 4);
+    writeU16(bytes, ligature + 4, 3);
+    writeI16(bytes, ligature + 6, 300);
+    writeU16(bytes, ligature + 8, 6);
+    writeU16(bytes, ligature + 10, 0);
+    writeU16(bytes, ligature + 12, 0);
+    writeU16(bytes, ligature + 14, 0x8000);
+
+    writeSingleAxisItemVariationStore(bytes, store_offset);
+    return bytes;
+}
+
+fn writeSingleAxisItemVariationStore(bytes: []u8, offset: usize) void {
+    writeU16(bytes, offset, 1);
+    writeU32(bytes, offset + 2, 12);
+    writeU16(bytes, offset + 6, 1);
+    writeU32(bytes, offset + 8, 24);
+
+    writeU16(bytes, offset + 12, 1);
+    writeU16(bytes, offset + 14, 1);
+    writeI16(bytes, offset + 16, 0);
+    writeI16(bytes, offset + 18, 0x2000);
+    writeI16(bytes, offset + 20, 0x4000);
+
+    writeU16(bytes, offset + 24, 1);
+    writeU16(bytes, offset + 26, 1);
+    writeU16(bytes, offset + 28, 1);
+    writeU16(bytes, offset + 30, 0);
+    writeI16(bytes, offset + 32, 7);
+}
+
 fn gsubIgnoreMarksTable(allocator: std.mem.Allocator) ![]u8 {
     const bytes = try allocator.alloc(u8, 82);
     @memset(bytes, 0);
@@ -5781,6 +7339,56 @@ fn gvarCompoundGlyfTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, off + 12, 1); // component glyph id.
     bytes[off + 14] = 10; // x offset.
     bytes[off + 15] = 0; // y offset.
+    return bytes;
+}
+
+fn trueTypeCompoundHintingGlyfTable(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const bytes = try allocator.alloc(u8, 66);
+    @memset(bytes, 0);
+    // Child glyph 1 has the usual triangle plus SHPIX point 0 by +1px.
+    const child = 12;
+    writeI16(bytes, child + 0, 1);
+    writeI16(bytes, child + 2, 0);
+    writeI16(bytes, child + 4, 0);
+    writeI16(bytes, child + 6, 700);
+    writeI16(bytes, child + 8, 700);
+    writeU16(bytes, child + 10, 2);
+    writeU16(bytes, child + 12, 4);
+    bytes[child + 14] = 0xb1;
+    bytes[child + 15] = 0;
+    bytes[child + 16] = 64;
+    bytes[child + 17] = 0x38;
+    bytes[child + 18] = 0x31;
+    bytes[child + 19] = 0x21;
+    bytes[child + 20] = 0x25;
+    writeU16(bytes, child + 21, 350);
+    writeU16(bytes, child + 23, 350);
+    bytes[child + 25] = 250;
+    writeU16(bytes, child + 26, 700);
+
+    const off = 40;
+    writeI16(bytes, off + 0, -1);
+    writeI16(bytes, off + 2, 0);
+    writeI16(bytes, off + 4, 0);
+    writeI16(bytes, off + 6, 700);
+    writeI16(bytes, off + 8, 700);
+    // Byte XY arguments, child metric ownership, and parent instructions.
+    writeU16(bytes, off + 10, 0x0002 | 0x0100 | 0x0200);
+    writeU16(bytes, off + 12, 1);
+    bytes[off + 14] = 10;
+    bytes[off + 15] = 0;
+    writeU16(bytes, off + 16, 7);
+    // Parent reads the placed point 0 and writes it to storage[0]. The
+    // observed coordinate proves child hinting preceded component placement.
+    bytes[off + 18] = 0xb0;
+    bytes[off + 19] = 0;
+    bytes[off + 20] = 0x46;
+    bytes[off + 21] = 0xb0;
+    bytes[off + 22] = 0;
+    bytes[off + 23] = 0x23;
+    bytes[off + 24] = 0x42;
     return bytes;
 }
 
@@ -6215,6 +7823,18 @@ fn vmtxTable(allocator: std.mem.Allocator) ![]u8 {
     return bytes;
 }
 
+fn vmtxTableWithGlyphCount(
+    allocator: std.mem.Allocator,
+    glyph_count: usize,
+) ![]u8 {
+    const bytes = try allocator.alloc(u8, glyph_count * 4);
+    for (0..glyph_count) |glyph_index| {
+        writeU16(bytes, glyph_index * 4, 1000);
+        writeI16(bytes, glyph_index * 4 + 2, 0);
+    }
+    return bytes;
+}
+
 fn locaTable(allocator: std.mem.Allocator) ![]u8 {
     const bytes = try allocator.alloc(u8, 12);
     writeU16(bytes, 0, 0);
@@ -6236,6 +7856,17 @@ fn gvarCompoundLocaTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 2, 6);
     writeU16(bytes, 4, 20);
     writeU16(bytes, 6, 28);
+    return bytes;
+}
+
+fn trueTypeCompoundHintingLocaTable(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const bytes = try allocator.alloc(u8, 8);
+    writeU16(bytes, 0, 0);
+    writeU16(bytes, 2, 6);
+    writeU16(bytes, 4, 20);
+    writeU16(bytes, 6, 33);
     return bytes;
 }
 
@@ -7823,6 +9454,17 @@ fn gvarCompoundMaxpTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 12, 1); // maxCompositeContours.
     writeU16(bytes, 28, 1); // maxComponentElements.
     writeU16(bytes, 30, 1); // maxComponentDepth.
+    return bytes;
+}
+
+fn trueTypeCompoundHintingMaxpTable(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const bytes = try gvarCompoundMaxpTable(allocator);
+    writeU16(bytes, 16, 2); // maxTwilightPoints.
+    writeU16(bytes, 18, 1); // Parent bytecode writes storage[0].
+    writeU16(bytes, 24, 16); // maxStackElements.
+    writeU16(bytes, 26, 16); // maxSizeOfInstructions.
     return bytes;
 }
 

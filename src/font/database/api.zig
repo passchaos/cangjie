@@ -6,7 +6,8 @@
 const std = @import("std");
 
 const face_mod = @import("../face/root.zig");
-const impl = @import("../../database.zig");
+const paragraph_types = @import("../../layout/types/paragraph.zig");
+const impl = @import("root.zig");
 
 pub const FaceInfo = struct {
     face: *const face_mod.Face,
@@ -203,7 +204,7 @@ pub const Database = struct {
         attributed: anytype,
         default_query: Query,
         max_width: f32,
-    ) !@import("../../layout.zig").TextMetrics {
+    ) !paragraph_types.TextMetrics {
         return implConst(self).measureAttributedTextUtf8(
             allocator,
             attributed,

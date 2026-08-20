@@ -355,7 +355,7 @@ test "caches font fallback coverage by codepoint" {
     try std.testing.expectEqual(@as(usize, 1), try fallback_cache.selectFont(cascade, 'B'));
     try std.testing.expectEqual(@as(usize, 1), fallback_cache.hits);
     try std.testing.expectEqual(@as(usize, 2), fallback_cache.misses);
-    try std.testing.expectEqual(@as(usize, 2), fallback_cache.entries.count());
+    try std.testing.expectEqual(@as(usize, 2), fallback_cache.scalarEntryCount());
     fallback_cache.clear();
 
     try std.testing.expectEqual(@as(usize, 1), try fallback_cache.selectFontWithGlyphCache(cascade, &glyph_cache, 'B'));
@@ -373,10 +373,10 @@ test "caches font fallback coverage by codepoint" {
     try std.testing.expectEqual(@as(usize, 4), shaped.runs.len);
     try std.testing.expect(fallback_cache.hits >= 3);
     try std.testing.expectEqual(@as(usize, 2), fallback_cache.misses);
-    try std.testing.expectEqual(@as(usize, 2), fallback_cache.entries.count());
+    try std.testing.expectEqual(@as(usize, 2), fallback_cache.scalarEntryCount());
 
     fallback_cache.clear();
-    try std.testing.expectEqual(@as(usize, 0), fallback_cache.entries.count());
+    try std.testing.expectEqual(@as(usize, 0), fallback_cache.scalarEntryCount());
     try std.testing.expectEqual(@as(usize, 0), fallback_cache.hits);
     try std.testing.expectEqual(@as(usize, 0), fallback_cache.misses);
 }
@@ -550,7 +550,10 @@ test "caches shaped runs for repeated shaping requests" {
     try std.testing.expectEqual(@as(usize, 1), shaped_cache.misses);
     const fallback_misses_after_first = fallback_cache.misses;
     const metrics_misses_after_first = metrics_cache.misses;
-    try std.testing.expect(fallback_misses_after_first > 0);
+    // A one-face cascade has no fallback choice and now bypasses the fallback
+    // cache entirely; the shaped-run cache must still prevent any later cache
+    // traffic and preserve exact output.
+    try std.testing.expectEqual(@as(usize, 0), fallback_misses_after_first);
     try std.testing.expect(metrics_misses_after_first > 0);
 
     var second_buffer = LayoutBuffer.init(allocator);

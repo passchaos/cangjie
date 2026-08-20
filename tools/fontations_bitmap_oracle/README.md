@@ -1,0 +1,20 @@
+# Fontations bitmap oracle
+
+This tiny binary reads one generated raw EBDT/CBDT fixture through the pinned
+local Fontations/Skrifa checkout. It reports Skrifa's selected data kind,
+metrics, byte length, and FNV-1a payload hash. Cangjie's integration test uses
+the same fixture vectors and contract; maintainers can run the oracle when
+updating the pinned Fontations revision without adding Rust to the normal Zig
+test dependency graph. The retained formats 1 and 6 both report:
+
+```text
+bgra  2  1  2  13  8  9703b39ed959628c
+```
+
+Skrifa deliberately returns no high-level glyph for the corresponding 32-bpp
+bit-aligned formats 2, 5, and 7. Cangjie retains that same public boundary.
+
+```sh
+cargo run --manifest-path tools/fontations_bitmap_oracle/Cargo.toml -- \
+  /tmp/cangjie-bgra.ttf 1 16
+```

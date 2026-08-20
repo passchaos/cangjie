@@ -58,6 +58,11 @@ pub const Options = struct {
     active_auto_zwj: bool = true,
     /// Preselected LookupList indexes owned by a caller-side cache.
     selected_lookups: ?[]const u16 = null,
+    /// Additional LookupList indexes enabled by one OpenType JSTF suggestion.
+    /// Font validation guarantees ascending, duplicate-free indexes.
+    enabled_lookups: []const u16 = &.{},
+    /// Ascending LookupList indexes suppressed by one JSTF suggestion.
+    disabled_lookups: []const u16 = &.{},
     /// Per-lookup sidecars built for the exact validated table range.
     lookup_accelerators: ?[]const acceleration.Lookup = null,
     /// Mutation epoch shared by all lookup stages in one top-level run.

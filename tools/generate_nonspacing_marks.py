@@ -4,7 +4,7 @@
 Usage:
     tools/generate_nonspacing_marks.py \
         path/to/extracted/DerivedGeneralCategory.txt \
-        src/unicode/nonspacing_mark.zig
+        src/unicode/mark/nonspacing.zig
 
 HarfBuzz synthesizes OpenType mark classes from Unicode General_Category when
 a font has no GDEF GlyphClassDef. Grapheme_Cluster_Break=Extend is not an

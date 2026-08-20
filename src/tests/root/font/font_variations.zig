@@ -197,6 +197,19 @@ test "lazy VORG metadata revalidates borrowed table bytes" {
     try std.testing.expectError(error.BadSfnt, font.verticalOrigins(allocator));
 }
 
+test "Fontations VORG fixture matches read-fonts vertical origins" {
+    const allocator = std.testing.allocator;
+    const bytes = @embedFile("../../../../tests/data/fontations/vorg.ttf");
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    // These are the exact assertions in read-fonts/src/tables/vorg.rs.
+    try std.testing.expectEqual(@as(?i16, 880), try font.verticalOriginY(0));
+    try std.testing.expectEqual(@as(?i16, 867), try font.verticalOriginY(1));
+    try std.testing.expectEqual(@as(?i16, 880), try font.verticalOriginY(2));
+    try std.testing.expectEqual(@as(?i16, 824), try font.verticalOriginY(3));
+}
+
 test "vertical header metadata is exposed when present" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

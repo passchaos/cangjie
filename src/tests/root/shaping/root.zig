@@ -1,8 +1,12 @@
 //! Shaping integration-test group.
 
 test {
+    _ = @import("diagnostics.zig");
+    _ = @import("fallback.zig");
     _ = @import("font_contracts.zig");
     _ = @import("gpos_and_aat.zig");
     _ = @import("gpos_attachments.zig");
     _ = @import("gsub.zig");
+    _ = @import("pipeline_state.zig");
+    _ = @import("vertical.zig");
 }

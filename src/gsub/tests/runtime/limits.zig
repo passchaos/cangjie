@@ -32,3 +32,49 @@ test "GSUB run limits reject scaling overflow and attach to concrete options" {
         options.max_glyph_count,
     );
 }
+
+test "GSUB mutation and nested budgets fail without consuming state" {
+    var operations_left: usize = 2;
+    const options = runtime.Options{
+        .operations_left = &operations_left,
+        .max_glyph_count = 8,
+    };
+
+    try runtime.limits.consumeNested(options);
+    try std.testing.expectEqual(@as(usize, 1), operations_left);
+    try runtime.limits.consumeMutation(options, 3, 1, 4);
+    try std.testing.expectEqual(@as(usize, 0), operations_left);
+
+    try std.testing.expectError(
+        error.ShapingLimitExceeded,
+        runtime.limits.consumeMutation(options, 6, 1, 4),
+    );
+    try std.testing.expectEqual(@as(usize, 0), operations_left);
+    try std.testing.expectError(
+        error.ShapingLimitExceeded,
+        runtime.limits.consumeNested(options),
+    );
+}
+
+test "GSUB mutation budget rejects invalid removal and count overflow" {
+    var operations_left: usize = 1;
+    const options = runtime.Options{
+        .operations_left = &operations_left,
+        .max_glyph_count = std.math.maxInt(usize),
+    };
+    try std.testing.expectError(
+        error.InvalidShapingInput,
+        runtime.limits.consumeMutation(options, 2, 3, 0),
+    );
+    try std.testing.expectEqual(@as(usize, 1), operations_left);
+    try std.testing.expectError(
+        error.ShapingLimitExceeded,
+        runtime.limits.consumeMutation(
+            options,
+            std.math.maxInt(usize),
+            0,
+            1,
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), operations_left);
+}

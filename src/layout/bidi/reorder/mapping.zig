@@ -16,21 +16,45 @@ pub fn buildClusterIndex(
     allocator: std.mem.Allocator,
     glyphs: []const GlyphPosition,
 ) ![]ClusterEntry {
-    const entries = try allocator.alloc(ClusterEntry, glyphs.len);
+    var entries = std.ArrayList(ClusterEntry).empty;
+    errdefer entries.deinit(allocator);
+    try buildClusterIndexInto(allocator, &entries, glyphs);
+    return try entries.toOwnedSlice(allocator);
+}
+
+pub fn buildClusterIndexInto(
+    allocator: std.mem.Allocator,
+    entries: *std.ArrayList(ClusterEntry),
+    glyphs: []const GlyphPosition,
+) !void {
+    entries.clearRetainingCapacity();
+    try entries.resize(allocator, glyphs.len);
     var monotone = true;
-    for (glyphs, entries, 0..) |glyph, *entry, glyph_index| {
-        entry.* = .{ .cluster = glyph.cluster, .glyph_index = glyph_index };
+    for (glyphs, entries.items, 0..) |glyph, *entry, glyph_index| {
+        // A generated hyphen is logically inserted at a source boundary and
+        // intentionally keeps that boundary as its public caret cluster. For
+        // bidi permutation only, attach it to the preceding source atom: LTR
+        // emits it after that atom and RTL emits it before, which is exactly
+        // the visual line-end behavior of a discretionary hyphen.
+        const visual_cluster =
+            if (glyph.isAutomaticHyphen() and glyph_index != 0)
+                glyphs[glyph_index - 1].cluster
+            else
+                glyph.cluster;
+        entry.* = .{
+            .cluster = visual_cluster,
+            .glyph_index = glyph_index,
+        };
         if (glyph_index != 0 and
-            glyph.cluster < glyphs[glyph_index - 1].cluster)
+            visual_cluster < entries.items[glyph_index - 1].cluster)
         {
             monotone = false;
         }
     }
     // Common shaping preserves monotone clusters, making this already sorted.
     // Script reordering needs the stable cluster/index tie-break below.
-    if (monotone) return entries;
-    std.sort.heap(ClusterEntry, entries, {}, entryLessThan);
-    return entries;
+    if (monotone) return;
+    std.sort.heap(ClusterEntry, entries.items, {}, entryLessThan);
 }
 
 pub fn appendItem(
@@ -167,7 +191,8 @@ fn appendItemGlyph(
 ) !void {
     const glyph = glyphs[glyph_index];
     const visual_codepoint =
-        if (@max(glyph.source_byte_len, 1) == item.byte_len)
+        if (!glyph.isDiscretionaryHyphen() and
+        @max(glyph.source_byte_len, 1) == item.byte_len)
             item.visual_codepoint
         else
             null;
@@ -202,6 +227,7 @@ fn appendGlyph(
     if (visual_codepoint) |codepoint| mirror: {
         if (codepoint == glyph.codepoint) break :mirror;
         const run_index = glyph_run_indices[glyph_index];
+        if (run_index == @import("runs.zig").no_run) break :mirror;
         const font = if (run_index < old_runs.len)
             run_types.fontForBackend(old_runs[run_index])
         else

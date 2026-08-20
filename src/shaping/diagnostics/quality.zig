@@ -175,5 +175,5 @@ fn scriptRun(
 }
 
 fn sourceEnd(glyph: GlyphPosition) usize {
-    return glyph.cluster + @max(glyph.source_byte_len, 1);
+    return glyph.sourceByteEnd();
 }

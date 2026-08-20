@@ -1,7 +1,16 @@
 const std = @import("std");
+const decorations = @import("decorations.zig");
 const face_mod = @import("../../font/face/root.zig");
 const Font = @import("../../font.zig").Font;
-const layout = @import("../../layout.zig");
+const glyph_position = @import("../../layout/glyph_position.zig");
+const inline_object = @import("../../layout/inline_object/root.zig");
+const styled_buffer = @import("../../layout/styled_buffer.zig");
+const styled_paragraph = @import("../../layout/styled_paragraph.zig");
+const paragraph_types = @import("../../layout/types/paragraph.zig");
+const run_types = @import("../../layout/types/runs.zig");
+const context_output = @import("../../shaping/context/output.zig");
+const font_fallback = @import("../../shaping/fallback/font/root.zig");
+const shaping_orchestrator = @import("../../shaping/orchestrator.zig");
 const unicode = @import("../../unicode.zig");
 
 pub fn StyleRun(comptime TextStyle: type) type {
@@ -16,19 +25,26 @@ pub fn StyleRun(comptime TextStyle: type) type {
 pub fn Result(comptime TextStyle: type) type {
     return struct {
         allocator: std.mem.Allocator,
-        glyphs: []layout.GlyphPosition,
-        font_runs: []layout.CascadeRun,
-        lines: []layout.ParagraphLine,
+        glyphs: []glyph_position.GlyphPosition,
+        font_runs: []run_types.CascadeRun,
+        normalized_variation_coords: []f32,
+        lines: []paragraph_types.ParagraphLine,
+        inline_objects: []inline_object.Positioned,
         style_runs: []StyleRun(TextStyle),
-        paragraph: layout.ParagraphLayout,
+        decorations: []decorations.Segment,
+        content_widths: paragraph_types.ContentWidths,
+        paragraph: paragraph_types.ParagraphLayout,
 
         /// `TextStyle` can contain borrowed strings and feature/variation
         /// slices. Callers keep those payloads alive until this result is no
         /// longer used; the geometry and run arrays themselves are owned here.
         pub fn deinit(self: *@This()) void {
+            self.allocator.free(self.decorations);
             self.allocator.free(self.style_runs);
+            self.allocator.free(self.inline_objects);
             self.allocator.free(self.lines);
             self.allocator.free(self.font_runs);
+            self.allocator.free(self.normalized_variation_coords);
             self.allocator.free(self.glyphs);
             self.* = undefined;
         }
@@ -37,7 +53,7 @@ pub fn Result(comptime TextStyle: type) type {
 
 pub fn layoutAttributed(
     allocator: std.mem.Allocator,
-    cascade: layout.FontCascade,
+    cascade: font_fallback.Cascade,
     attributed: anytype,
     max_width: f32,
 ) !Result(@TypeOf(attributed.primaryTextStyle())) {
@@ -57,10 +73,10 @@ pub fn layoutAttributed(
 
 pub fn layoutResolved(
     allocator: std.mem.Allocator,
-    cascade: layout.FontCascade,
+    cascade: font_fallback.Cascade,
     attributed: anytype,
     runs: anytype,
-    spans: []const layout.StyledParagraphSpan,
+    spans: []const styled_paragraph.Span,
     max_width: f32,
 ) !Result(@TypeOf(attributed.primaryTextStyle())) {
     const primary_style = attributed.primaryTextStyle();
@@ -68,12 +84,22 @@ pub fn layoutResolved(
     // Paragraph-wide line height is a minimum shared by every style. A style's
     // line height is carried separately and affects only intersecting lines.
     options.line_height = attributed.paragraph_style.line_height;
+    options.inline_objects = attributed.inline_objects;
+    if (options.writing_mode.isVertical()) {
+        for (runs) |run| {
+            if (run.style.decoration.underline or
+                run.style.decoration.strikethrough)
+            {
+                return error.UnsupportedVerticalParagraphOptions;
+            }
+        }
+    }
 
-    var buffer = layout.LayoutBuffer.init(allocator);
+    var buffer = context_output.Buffer.init(allocator);
     defer buffer.deinit();
-    var styled = layout.StyledParagraphBuffer.init(allocator);
+    var styled = styled_buffer.Buffer.init(allocator);
     defer styled.deinit();
-    const paragraph = try layout.TextShaper.layoutStyledParagraphUtf8(
+    const paragraph = try shaping_orchestrator.TextShaper.layoutStyledParagraphUtf8(
         cascade,
         &buffer,
         &styled,
@@ -83,12 +109,20 @@ pub fn layoutResolved(
         options,
     );
 
-    const glyphs = try allocator.dupe(layout.GlyphPosition, paragraph.glyphs);
+    const glyphs = try allocator.dupe(glyph_position.GlyphPosition, paragraph.glyphs);
     errdefer allocator.free(glyphs);
-    const font_runs = try allocator.dupe(layout.CascadeRun, paragraph.runs);
+    const font_runs = try allocator.dupe(run_types.CascadeRun, paragraph.runs);
     errdefer allocator.free(font_runs);
-    const lines = try allocator.dupe(layout.ParagraphLine, paragraph.lines);
+    const normalized_variation_coords = try allocator.dupe(
+        f32,
+        paragraph.normalized_variation_coords,
+    );
+    errdefer allocator.free(normalized_variation_coords);
+    const lines = try allocator.dupe(paragraph_types.ParagraphLine, paragraph.lines);
     errdefer allocator.free(lines);
+    const inline_objects =
+        try allocator.dupe(inline_object.Positioned, paragraph.inline_objects);
+    errdefer allocator.free(inline_objects);
     const styled_glyphs = styled.glyphMetadata();
     if (styled_glyphs.len != glyphs.len) return error.InvalidStyleSpans;
     const style_runs = try buildStyleRuns(
@@ -98,17 +132,31 @@ pub fn layoutResolved(
         runs,
     );
     errdefer allocator.free(style_runs);
+    const decoration_segments = try decorations.build(
+        allocator,
+        paragraph,
+        style_runs,
+    );
+    errdefer allocator.free(decoration_segments);
 
     return .{
         .allocator = allocator,
         .glyphs = glyphs,
         .font_runs = font_runs,
+        .normalized_variation_coords = normalized_variation_coords,
         .lines = lines,
+        .inline_objects = inline_objects,
         .style_runs = style_runs,
+        .decorations = decoration_segments,
+        .content_widths = styled.contentWidths() orelse
+            return error.InvalidParagraphLayout,
         .paragraph = .{
             .glyphs = glyphs,
             .runs = font_runs,
+            .normalized_variation_coords = normalized_variation_coords,
             .lines = lines,
+            .inline_objects = inline_objects,
+            .writing_mode = paragraph.writing_mode,
             .width = paragraph.width,
             .height = paragraph.height,
         },
@@ -116,11 +164,11 @@ pub fn layoutResolved(
 }
 
 pub fn measureAttributed(
-    cascade: layout.FontCascade,
-    buffer: *layout.LayoutBuffer,
+    cascade: font_fallback.Cascade,
+    buffer: *context_output.Buffer,
     attributed: anytype,
     max_width: f32,
-) !layout.TextMetrics {
+) !paragraph_types.TextMetrics {
     const runs = try attributed.runs(buffer.allocator);
     defer buffer.allocator.free(runs);
     const spans = try layoutSpansForRuns(buffer.allocator, runs);
@@ -129,23 +177,25 @@ pub fn measureAttributed(
 }
 
 pub fn measureResolved(
-    cascade: layout.FontCascade,
-    buffer: *layout.LayoutBuffer,
+    cascade: font_fallback.Cascade,
+    buffer: *context_output.Buffer,
     attributed: anytype,
-    spans: []const layout.StyledParagraphSpan,
+    spans: []const styled_paragraph.Span,
     max_width: f32,
-) !layout.TextMetrics {
+) !paragraph_types.TextMetrics {
     const primary_style = attributed.primaryTextStyle();
-    var styled = layout.StyledParagraphBuffer.init(buffer.allocator);
+    var styled = styled_buffer.Buffer.init(buffer.allocator);
     defer styled.deinit();
-    const paragraph = try layout.TextShaper.layoutStyledParagraphUtf8(
+    var options = attributed.paragraph_style.paragraphOptions(max_width);
+    options.inline_objects = attributed.inline_objects;
+    const paragraph = try shaping_orchestrator.TextShaper.layoutStyledParagraphUtf8(
         cascade,
         buffer,
         &styled,
         attributed.text,
         primary_style.font_size,
         spans,
-        attributed.paragraph_style.paragraphOptions(max_width),
+        options,
     );
     return metricsFromParagraph(paragraph);
 }
@@ -153,8 +203,8 @@ pub fn measureResolved(
 fn layoutSpansForRuns(
     allocator: std.mem.Allocator,
     runs: anytype,
-) ![]layout.StyledParagraphSpan {
-    const spans = try allocator.alloc(layout.StyledParagraphSpan, runs.len);
+) ![]styled_paragraph.Span {
+    const spans = try allocator.alloc(styled_paragraph.Span, runs.len);
     errdefer allocator.free(spans);
     for (runs, spans, 0..) |run, *span, style_index| {
         const public_style_index = std.math.cast(u32, style_index) orelse
@@ -177,6 +227,10 @@ fn layoutSpansForRuns(
             .letter_spacing = run.style.letter_spacing,
             .word_spacing = run.style.word_spacing,
             .minimum_line_height = run.style.line_height,
+            .vertical_align = run.style.vertical_align,
+            .wrap_mode = run.style.wrap_mode,
+            .word_break = run.style.word_break,
+            .overflow_wrap = run.style.overflow_wrap,
         };
     }
     return spans;
@@ -186,7 +240,7 @@ pub fn layoutSpansForResolvedRuns(
     allocator: std.mem.Allocator,
     runs: anytype,
     fonts: []const []const *const Font,
-) ![]layout.StyledParagraphSpan {
+) ![]styled_paragraph.Span {
     if (fonts.len != runs.len) return error.InvalidStyleSpans;
     const spans = try layoutSpansForRuns(allocator, runs);
     errdefer allocator.free(spans);
@@ -200,7 +254,7 @@ pub fn layoutSpansForResolvedRuns(
 fn buildStyleRuns(
     comptime TextStyle: type,
     allocator: std.mem.Allocator,
-    styled_glyphs: []const layout.StyledGlyphMetadata,
+    styled_glyphs: []const styled_buffer.Metadata,
     logical_runs: anytype,
 ) ![]StyleRun(TextStyle) {
     var output = std.ArrayList(StyleRun(TextStyle)).empty;
@@ -231,24 +285,6 @@ fn buildStyleRuns(
     return try output.toOwnedSlice(allocator);
 }
 
-fn metricsFromParagraph(paragraph: layout.ParagraphLayout) layout.TextMetrics {
-    if (paragraph.lines.len == 0) {
-        return .{
-            .width = 0,
-            .height = 0,
-            .baseline = 0,
-            .ascent = 0,
-            .descent = 0,
-            .leading = 0,
-        };
-    }
-    const first = paragraph.lines[0];
-    return .{
-        .width = paragraph.width,
-        .height = paragraph.height,
-        .baseline = first.y + first.baseline,
-        .ascent = first.ascent,
-        .descent = first.descent,
-        .leading = first.leading,
-    };
+fn metricsFromParagraph(paragraph: paragraph_types.ParagraphLayout) paragraph_types.TextMetrics {
+    return paragraph_types.metrics(paragraph);
 }

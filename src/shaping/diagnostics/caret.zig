@@ -84,7 +84,7 @@ fn validateSourceSpan(
     const source_end = sourceEnd(glyph);
     var valid = true;
 
-    if (glyph.source_byte_len == 0) {
+    if (glyph.source_byte_len == 0 and !glyph.isAutomaticHyphen()) {
         valid = false;
         try issues.append(allocator, .{
             .kind = .empty_source_span,
@@ -155,7 +155,7 @@ fn checkBoundary(
 }
 
 fn sourceEnd(glyph: GlyphPosition) usize {
-    return glyph.cluster + @max(glyph.source_byte_len, 1);
+    return glyph.sourceByteEnd();
 }
 
 fn isUtf8Boundary(text: []const u8, byte_offset: usize) bool {

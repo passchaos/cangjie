@@ -156,6 +156,10 @@ fn applyHangul(input: Input) !void {
     ) orelse input.options.features;
     var options = input.options.*;
     options.features = overrides;
+    // This preliminary source-scoped pass exists only to apply ljmo/vjmo/tjmo.
+    // JSTF enable indexes belong to the complete generic plan below and must
+    // not run once here and then a second time in that final plan.
+    options.enabled_lookups = &.{};
     if (input.table_proved) {
         try font_shaping.applyGsubWithOptionsUsingGdefAfterProof(
             input.font,

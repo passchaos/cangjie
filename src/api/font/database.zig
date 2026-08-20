@@ -1,7 +1,7 @@
 //! Font discovery, matching, manifests, and fallback-cascade construction.
 
 const public = @import("../../font/database/api.zig");
-const impl = @import("../../database.zig");
+const impl = @import("../../font/database/root.zig");
 
 pub const Database = public.Database;
 pub const FaceInfo = public.FaceInfo;

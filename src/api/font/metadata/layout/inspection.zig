@@ -35,11 +35,54 @@ pub const View = struct {
         return self.implementation().glyphClass(glyph_id);
     }
 
+    pub fn glyphsInClass(
+        self: View,
+        allocator: std.mem.Allocator,
+        class: font.GlyphClass,
+    ) font.FontError![]glyph.GlyphId {
+        return self.implementation().glyphsInClass(allocator, class);
+    }
+
     pub fn markAttachClass(
         self: View,
         glyph_id: glyph.GlyphId,
     ) font.FontError!u16 {
         return self.implementation().markAttachClass(glyph_id);
+    }
+
+    pub fn attachmentPoints(
+        self: View,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph.GlyphId,
+    ) font.FontError![]font.AttachmentPoint {
+        return self.implementation().attachmentPoints(allocator, glyph_id);
+    }
+
+    pub fn ligatureCarets(
+        self: View,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph.GlyphId,
+        normalized_coords: []const f32,
+    ) font.FontError![]font.LigatureCaret {
+        // This is the same defensive read exposed on `Face.glyphs()`, kept
+        // here so layout-table inspection remains a complete GDEF surface.
+        return self.implementation().ligatureCarets(
+            allocator,
+            glyph_id,
+            normalized_coords,
+        );
+    }
+
+    pub fn markGlyphSetCount(self: View) font.FontError!usize {
+        return self.implementation().markGlyphSetCount();
+    }
+
+    pub fn markGlyphSet(
+        self: View,
+        allocator: std.mem.Allocator,
+        set_index: usize,
+    ) font.FontError![]glyph.GlyphId {
+        return self.implementation().markGlyphSet(allocator, set_index);
     }
 
     pub fn kerning(
@@ -63,6 +106,21 @@ pub const View = struct {
         info: font.KernInfo,
     ) void {
         self.implementation().freeKernInfo(allocator, info);
+    }
+
+    pub fn justification(
+        self: View,
+        allocator: std.mem.Allocator,
+    ) font.FontError!?font.JstfInfo {
+        return self.implementation().jstfInfo(allocator);
+    }
+
+    pub fn freeJustification(
+        self: View,
+        allocator: std.mem.Allocator,
+        info: font.JstfInfo,
+    ) void {
+        self.implementation().freeJstfInfo(allocator, info);
     }
 
     pub fn cff2(self: View) font.FontError!?font.Cff2Info {

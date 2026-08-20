@@ -31,11 +31,29 @@ newly reconstructed bytes, so `cangjie.font.container.OwnedFace` owns both the
 decoded allocation and the `Face` borrowing it. Destroying `OwnedFace`
 deinitializes the parser before releasing those bytes.
 
+`Face.glyphs().outline` is the defensive one-shot outline API: it revalidates
+borrowed table checksums so post-parse source mutation fails explicitly. For
+trusted immutable bytes and repeated atlas/path construction,
+`Face.glyphs().session()` returns a lightweight borrowed `GlyphSession` that
+reuses the whole-face grammar/checksum proof established by `Face.parse`. The
+face and its source bytes must outlive the session and must remain unchanged;
+returned outlines remain allocator-owned exactly like one-shot output.
+
 `cangjie.font.container.decodeAlloc` always returns owned bytes, including a
 copy for plain SFNT/TTC input. Its size limit applies to the decoded output and
 therefore bounds WOFF expansion and DFONT-to-SFNT/TTC reconstruction.
 Convenience database loaders use a conservative 64 MiB default; callers
 loading a trusted larger collection can use the explicit `*WithLimit` APIs.
+
+The implementation is organized under `src/font/container/`:
+
+- `root.zig` owns format detection, the unified decode contract, and the
+  internal decoded-face owner.
+- `dfont.zig`, `woff1.zig`, and `woff2.zig` isolate format-specific validation
+  and reconstruction.
+- `binary.zig` centralizes checked ranges, alignment, and big-endian access.
+- `test_support.zig` and `tests.zig` keep fixture construction and malformed
+  input coverage outside production decoders.
 
 `cangjie.font.database.Database` decodes containers before parsing and fallback
 discovery. It:
@@ -70,6 +88,23 @@ fixed transformed-glyf WOFF2 fixture, and optional installed real fonts.
 Current real-font probes include HarfBuzz's retained `DFONT.dfont`, MathJax
 WOFF1, Annapurna SIL WOFF1/WOFF2, and a variable General Sans WOFF2.
 
+Embedded bitmap coverage includes sbix PNG, CBDT PNG formats 17/18/19, and
+raw EBDT/CBDT formats 1/2/5/6/7. Compound formats 8/9 recursively flatten
+same-strike components under a FreeType-compatible depth guard. Raw strikes
+expose borrowed 1/2/4/8-bpp mask payloads with row-alignment metadata and
+bounded 8-bit coverage decoding.
+All raw 32-bpp formats expose premultiplied sRGB BGRA payloads without a
+conversion allocation. Formats 1/6 match Skrifa; formats 2/5/7 additionally
+match FreeType's BGRA output and exceed Skrifa's current high-level boundary.
+The CPU renderer and draw-list
+atlas surface consume masks as alpha and PNG/BGRA content as color.
+CBLC/EBLC inspection retains distinct horizontal/vertical ppem values, strike
+orientation flags, and both horizontal and vertical `BigGlyphMetrics`
+bearings/advances instead of collapsing them into one horizontal record.
+`tools/freetype_bitmap_oracle.c` reads the retained format-8 fixture through
+FreeType and confirms parent metrics `4x2`, bearing `(0,2)`, and rows `1000` /
+`0010`; the Cangjie materializer and CPU-render tests retain the same pixels.
+
 ## Performance Scope
 
 Container decoding is a load-time cost, not a shaping hot path. Representative
@@ -78,3 +113,45 @@ ms for a 38 KiB variable General Sans WOFF2, including reconstruction and
 parse. Already-decoded SFNT copy-and-parse was substantially cheaper. These
 figures establish practical startup cost only; they are not a claim of
 load-time superiority over FreeType or Fontations.
+
+## Fontations Coverage Gate
+
+`docs/fontations-coverage.json` maps every public top-level table family in
+Fontations `read-fonts` 0.42.2, plus eight grouped Skrifa 0.45.2 capability
+families covering `MetadataProvider` and embedded TrueType hinting, to a
+concrete Cangjie implementation file and a live test artifact.
+`zig build fontations-coverage` verifies that every pinned upstream module and
+API is mapped exactly once, the referenced files remain live, and every test
+artifact still declares Zig tests. This is an inventory and evidence-maintenance
+gate, not proof of per-table semantic parity or superiority; those stronger
+claims require reference differential tests and same-host performance
+measurements.
+
+CFF1 and variable CFF2 outlines now expose reusable PPEM-specific Type2
+hinting instances. The charstring executor retains horizontal/vertical stems,
+hint masks, and counter masks; Private DICT parsing supplies variation-aware
+blue zones, family zones, BlueScale/Shift/Fuzz, and LanguageGroup. The native
+hint map uses FreeType-compatible 16.16 arithmetic, blue-zone capture, initial
+mapping, overlap rejection, pair adjustment, cross-mask stem locking, and
+26.6 output truncation. `zig build hinting-freetype-test` compares complete
+point/tag/contour/advance output for deployed STIX CFF1 glyphs at several
+sizes and Cantarell variable CFF2 glyphs at non-default locations. This closes
+the previously missing Skrifa `HintingInstance` CFF boundary; it is correctness
+evidence, not a CFF outline-performance superiority claim.
+
+The incremental-font surface also applies table-keyed `iftk` patches: it
+validates compatibility IDs and sorted offsets, supports shared-dictionary
+Brotli diffs plus replace/drop flags, ignores duplicate tags after the first
+entry like Fontations, and rebuilds a tag-sorted SFNT with fresh table
+checksums and `head.checkSumAdjustment`. The decoder loads the system Brotli C
+runtime dynamically; unavailable platforms report
+`error.BrotliRuntimeUnavailable` rather than accepting compressed bytes.
+
+Glyph-keyed `ifgk` patch groups are applied atomically as well. Cangjie
+authenticates every selected `IFT `/`IFTX` compatibility id, decodes and
+validates every `GlyphPatches` directory before reconstruction, merges
+duplicate table/glyph keys with first-patch priority, and rebuilds the coupled
+`glyf`/`loca`, `gvar`, CFF, and CFF2 CharStrings data defined by the IFT
+specification. Unknown table tags are ignored. Application-bitmap bits are
+committed only after every supported table succeeds, and the operation returns
+a separately owned canonical SFNT without modifying the borrowed source face.

@@ -7,14 +7,15 @@
 
 const std = @import("std");
 
-const internal_layout = @import("../../layout.zig");
-pub const LayoutBuffer = internal_layout.LayoutBuffer;
-pub const FontFallbackCache = internal_layout.FontFallbackCache;
-pub const GlyphIndexCache = internal_layout.GlyphIndexCache;
-pub const GlyphMetricsCache = internal_layout.GlyphMetricsCache;
-pub const ShapedRunCache = internal_layout.ShapedRunCache;
-pub const ShapePlanCache = internal_layout.ShapePlanCache;
-pub const ShapePlanKey = internal_layout.ShapePlanKey;
+const layout_cache = @import("../../shaping/context/cache/root.zig");
+const shaping_plan = @import("../../shaping/plan/root.zig");
+pub const LayoutBuffer = @import("../../shaping/context/output.zig").Buffer;
+pub const FontFallbackCache = layout_cache.FontFallbackCache;
+pub const GlyphIndexCache = layout_cache.GlyphIndexCache;
+pub const GlyphMetricsCache = layout_cache.GlyphMetricsCache;
+pub const ShapedRunCache = layout_cache.ShapedRunCache;
+pub const ShapePlanCache = shaping_plan.ShapePlanCache;
+pub const ShapePlanKey = shaping_plan.ShapePlanKey;
 pub const TextShaper = @import("../../shaping/text_shaper.zig").TextShaper;
 
 pub const Script = @import("../../unicode.zig").Script;
@@ -30,28 +31,28 @@ pub const BidiRun = @import("../../unicode.zig").BidiRun;
 pub const JoiningForm = @import("../../unicode.zig").JoiningForm;
 pub const JoiningType = @import("../../unicode.zig").JoiningType;
 pub const VerticalOrientation = @import("../../unicode.zig").VerticalOrientation;
-pub const AttributedText = @import("../../core.zig").AttributedText;
-pub const AttributedRun = @import("../../core.zig").AttributedRun;
-pub const AttributedRunLayout = @import("../../core.zig").AttributedRunLayout;
-pub const AttributedGlyphRun = @import("../../core.zig").AttributedGlyphRun;
-pub const AttributedGlyphRunLayout = @import("../../core.zig").AttributedGlyphRunLayout;
-pub const AttributedParagraphLayout = @import("../../core.zig").AttributedParagraphLayout;
-pub const AttributedStyleRun = @import("../../core.zig").AttributedStyleRun;
-pub const ByteRange = @import("../../core.zig").ByteRange;
-pub const CharRange = @import("../../core.zig").CharRange;
-pub const ClusterRange = @import("../../core.zig").ClusterRange;
-pub const CoreBaselineMetrics = @import("../../core.zig").CoreBaselineMetrics;
-pub const FontWeight = @import("../../core.zig").FontWeight;
-pub const FontId = @import("../../core.zig").FontId;
-pub const GraphemeRange = @import("../../core.zig").GraphemeRange;
+pub const AttributedText = @import("../../text/attributed/root.zig").AttributedText;
+pub const AttributedRun = @import("../../text/attributed/root.zig").AttributedRun;
+pub const AttributedRunLayout = @import("../../text/attributed/root.zig").AttributedRunLayout;
+pub const AttributedGlyphRun = @import("../../text/attributed/root.zig").AttributedGlyphRun;
+pub const AttributedGlyphRunLayout = @import("../../text/attributed/root.zig").AttributedGlyphRunLayout;
+pub const AttributedParagraphLayout = @import("../../text/attributed/root.zig").AttributedParagraphLayout;
+pub const AttributedStyleRun = @import("../../text/attributed/root.zig").AttributedStyleRun;
+pub const ByteRange = @import("../../text/style/root.zig").ByteRange;
+pub const CharRange = @import("../../text/style/root.zig").CharRange;
+pub const ClusterRange = @import("../../text/style/root.zig").ClusterRange;
+pub const CoreBaselineMetrics = @import("../../text/style/root.zig").CoreBaselineMetrics;
+pub const FontWeight = @import("../../text/style/root.zig").FontWeight;
+pub const FontId = @import("../../text/style/root.zig").FontId;
+pub const GraphemeRange = @import("../../text/style/root.zig").GraphemeRange;
 pub const GraphemeCluster = @import("../../unicode.zig").GraphemeCluster;
 pub const GraphemeClusterIterator = @import("../../unicode.zig").GraphemeClusterIterator;
 pub const graphemeClusters = @import("../../unicode.zig").graphemeClusters;
 pub const grapheme_unicode_version = @import("../../unicode.zig").grapheme_unicode_version;
-pub const GlyphCluster = @import("../../core.zig").GlyphCluster;
-pub const GlyphRange = @import("../../core.zig").GlyphRange;
-pub const Language = @import("../../core.zig").Language;
-pub const Locale = @import("../../core.zig").Locale;
+pub const GlyphCluster = @import("../../text/style/root.zig").GlyphCluster;
+pub const GlyphRange = @import("../../text/style/root.zig").GlyphRange;
+pub const Language = @import("../../text/style/root.zig").Language;
+pub const Locale = @import("../../text/style/root.zig").Locale;
 pub const WordSegment = @import("../../unicode.zig").WordSegment;
 pub const WordBoundarySegment = @import("../../unicode.zig").WordBoundarySegment;
 pub const WordBoundaryIterator = @import("../../unicode.zig").WordBoundaryIterator;
@@ -68,58 +69,49 @@ pub const LineBreakIterator = @import("../../unicode.zig").LineBreakIterator;
 pub const line_break_unicode_version = @import("../../unicode.zig").line_break_unicode_version;
 pub const WordBreakDictionary =
     @import("../../text/segmentation/root.zig").WordBreakDictionary;
-pub const OverflowMode = @import("../../core.zig").OverflowMode;
+pub const OverflowMode = @import("../../text/style/root.zig").OverflowMode;
 pub const FeatureOverride = @import("../../unicode.zig").FeatureOverride;
 pub const GsubFeatureRange = @import("../../unicode.zig").GsubFeatureRange;
-pub const ParagraphStyle = @import("../../core.zig").ParagraphStyle;
-pub const StyleSpan = @import("../../core.zig").StyleSpan;
-pub const TextDecoration = @import("../../core.zig").TextDecoration;
-pub const TextFontStyle = @import("../../core.zig").TextFontStyle;
-pub const TextMetrics = @import("../../core.zig").TextMetrics;
-pub const TextRange = @import("../../core.zig").TextRange;
-pub const TextSpan = @import("../../core.zig").TextSpan;
-pub const TextStyle = @import("../../core.zig").TextStyle;
-pub const VerticalAlign = @import("../../core.zig").VerticalAlign;
-pub const WrapMode = @import("../../core.zig").WrapMode;
+pub const ParagraphStyle = @import("../../text/style/root.zig").ParagraphStyle;
+pub const StyleSpan = @import("../../text/style/root.zig").StyleSpan;
+pub const TextDecoration = @import("../../text/style/root.zig").TextDecoration;
+pub const TextFontStyle = @import("../../text/style/root.zig").TextFontStyle;
+pub const TextMetrics = @import("../../text/style/root.zig").TextMetrics;
+pub const TextRange = @import("../../text/style/root.zig").TextRange;
+pub const TextSpan = @import("../../text/style/root.zig").TextSpan;
+pub const TextStyle = @import("../../text/style/root.zig").TextStyle;
+pub const VerticalAlign = @import("../../text/style/root.zig").VerticalAlign;
+pub const WrapMode = @import("../../text/style/root.zig").WrapMode;
 pub const OpenTypeLanguageTag = @import("../../unicode.zig").OpenTypeLanguageTag;
 pub const OpenTypeScriptTag = @import("../../unicode.zig").OpenTypeScriptTag;
-pub const FontDatabase = @import("../../database.zig").FontDatabase;
-pub const FontFaceInfo = @import("../../database.zig").FontFaceInfo;
-pub const FontManifestEntry = @import("../../database.zig").FontManifestEntry;
-pub const FontQuery = @import("../../database.zig").FontQuery;
-pub const FontSource = @import("../../database.zig").FontSource;
-pub const FontStyle = @import("../../database.zig").FontStyle;
-pub const ImeComposition = @import("../../editor.zig").ImeComposition;
-pub const LineColumn = @import("../../editor.zig").LineColumn;
-pub const DebugOverlay = @import("../../debug.zig").DebugOverlay;
-pub const DebugOverlayList = @import("../../debug.zig").DebugOverlayList;
-pub const EditRecord = @import("../../editor.zig").EditRecord;
-pub const DisplayWidthMode = @import("../../editor.zig").DisplayWidthMode;
-pub const MultiCursorSet = @import("../../editor.zig").MultiCursorSet;
-pub const OverlayKind = @import("../../debug.zig").OverlayKind;
-pub const OverlayOptions = @import("../../debug.zig").OverlayOptions;
-pub const SyntaxHighlightSet = @import("../../editor.zig").SyntaxHighlightSet;
-pub const SyntaxHighlightSpan = @import("../../editor.zig").SyntaxHighlightSpan;
-pub const SyntaxHighlightPalette = @import("../../editor.zig").SyntaxHighlightPalette;
-pub const TerminalColumnOptions = @import("../../editor.zig").TerminalColumnOptions;
-pub const combinedSystemFontSourcesForOs = @import("../../database.zig").combinedSystemFontSourcesForOs;
-pub const defaultSystemFontSources = @import("../../database.zig").defaultSystemFontSources;
-pub const defaultSystemFontSourcesForOs = @import("../../database.zig").defaultSystemFontSourcesForOs;
-pub const manifestEntryMatchesBytes = @import("../../database.zig").manifestEntryMatchesBytes;
-pub const measureAttributedRunsUtf8 = @import("../../core.zig").measureAttributedRunsUtf8;
-pub const measureAttributedTextUtf8 = @import("../../core.zig").measureAttributedTextUtf8;
-pub const parseManifest = @import("../../database.zig").parseManifest;
-pub const readManifestFile = @import("../../database.zig").readManifestFile;
-pub const serializeManifest = @import("../../database.zig").serializeManifest;
-pub const userFontSourcesForOs = @import("../../database.zig").userFontSourcesForOs;
-pub const writeManifestFile = @import("../../database.zig").writeManifestFile;
+pub const FontDatabase = @import("../../font/database/root.zig").FontDatabase;
+pub const FontFaceInfo = @import("../../font/database/root.zig").FontFaceInfo;
+pub const FontManifestEntry = @import("../../font/database/root.zig").FontManifestEntry;
+pub const FontQuery = @import("../../font/database/root.zig").FontQuery;
+pub const FontSource = @import("../../font/database/root.zig").FontSource;
+pub const FontStyle = @import("../../font/database/root.zig").FontStyle;
+pub const DebugOverlay = @import("../../debug/root.zig").DebugOverlay;
+pub const DebugOverlayList = @import("../../debug/root.zig").DebugOverlayList;
+pub const OverlayKind = @import("../../debug/root.zig").OverlayKind;
+pub const OverlayOptions = @import("../../debug/root.zig").OverlayOptions;
+pub const combinedSystemFontSourcesForOs = @import("../../font/database/root.zig").combinedSystemFontSourcesForOs;
+pub const defaultSystemFontSources = @import("../../font/database/root.zig").defaultSystemFontSources;
+pub const defaultSystemFontSourcesForOs = @import("../../font/database/root.zig").defaultSystemFontSourcesForOs;
+pub const manifestEntryMatchesBytes = @import("../../font/database/root.zig").manifestEntryMatchesBytes;
+pub const measureAttributedRunsUtf8 = @import("../../text/attributed/root.zig").measureAttributedRunsUtf8;
+pub const measureAttributedTextUtf8 = @import("../../text/attributed/root.zig").measureAttributedTextUtf8;
+pub const parseManifest = @import("../../font/database/root.zig").parseManifest;
+pub const readManifestFile = @import("../../font/database/root.zig").readManifestFile;
+pub const serializeManifest = @import("../../font/database/root.zig").serializeManifest;
+pub const userFontSourcesForOs = @import("../../font/database/root.zig").userFontSourcesForOs;
+pub const writeManifestFile = @import("../../font/database/root.zig").writeManifestFile;
 pub const Font = @import("../../font.zig").Font;
-pub const FontContainerError = @import("../../font_container.zig").Error;
-pub const FontContainerFormat = @import("../../font_container.zig").Format;
-pub const default_max_decoded_font_size = @import("../../font_container.zig").default_max_decoded_size;
-pub const OwnedFace = @import("../../font_container.zig").OwnedFace;
-pub const decodeFontContainerAlloc = @import("../../font_container.zig").decodeFontContainerAlloc;
-pub const detectFontContainerFormat = @import("../../font_container.zig").detectFormat;
+pub const FontContainerError = @import("../../font/container/root.zig").Error;
+pub const FontContainerFormat = @import("../../font/container/root.zig").Format;
+pub const default_max_decoded_font_size = @import("../../font/container/root.zig").default_max_decoded_size;
+pub const OwnedFace = @import("../../font/container/root.zig").OwnedFace;
+pub const decodeFontContainerAlloc = @import("../../font/container/root.zig").decodeFontContainerAlloc;
+pub const detectFontContainerFormat = @import("../../font/container/root.zig").detectFormat;
 pub const AnkrAnchorInfo = @import("../../font.zig").AnkrAnchorInfo;
 pub const AnkrGlyphAnchorsInfo = @import("../../font.zig").AnkrGlyphAnchorsInfo;
 pub const AnkrInfo = @import("../../font.zig").AnkrInfo;
@@ -200,7 +192,7 @@ pub const MvarValueRecordInfo = @import("../../font.zig").MvarValueRecordInfo;
 pub const VvarInfo = @import("../../font.zig").VvarInfo;
 pub const VarcInfo = @import("../../font.zig").VarcInfo;
 pub const Os2Info = @import("../../font.zig").Os2Info;
-pub const FontFallbackDecision = @import("../../layout.zig").FontFallbackDecision;
+pub const FontFallbackDecision = @import("../../shaping/diagnostics/types.zig").FontFallbackDecision;
 pub const KernInfo = @import("../../font.zig").KernInfo;
 pub const KernSubtableInfo = @import("../../font.zig").KernSubtableInfo;
 pub const KerxInfo = @import("../../font.zig").KerxInfo;
@@ -211,17 +203,13 @@ pub const MorxFeatureInfo = @import("../../font.zig").MorxFeatureInfo;
 pub const MorxInfo = @import("../../font.zig").MorxInfo;
 pub const MorxSubtableInfo = @import("../../font.zig").MorxSubtableInfo;
 pub const KernTableDialect = @import("../../font.zig").KernTableDialect;
-pub const GlyphMetrics = @import("../../layout.zig").GlyphMetrics;
-pub const MissingGlyphDiagnostic = @import("../../layout.zig").MissingGlyphDiagnostic;
-pub const DirtyRange = @import("../../buffer.zig").DirtyRange;
-pub const LayoutConfig = @import("../../buffer.zig").LayoutConfig;
-pub const Selection = @import("../../buffer.zig").Selection;
-pub const CursorMoveDirection = @import("../../buffer.zig").CursorMoveDirection;
-pub const VisibleByteRange = @import("../../buffer.zig").VisibleByteRange;
-pub const VisibleLineRange = @import("../../buffer.zig").VisibleLineRange;
-pub const TextBuffer = @import("../../buffer.zig").TextBuffer;
-pub const TextEditor = @import("../../editor.zig").TextEditor;
+pub const GlyphMetrics = layout_cache.GlyphMetrics;
+pub const MissingGlyphDiagnostic = @import("../../shaping/diagnostics/types.zig").MissingGlyphDiagnostic;
 pub const BitmapGlyphPng = @import("../../font.zig").BitmapGlyphPng;
+pub const BitmapGlyphBgra = @import("../../font.zig").BitmapGlyphBgra;
+pub const BitmapGlyphMask = @import("../../font.zig").BitmapGlyphMask;
+pub const BitmapGlyphData = @import("../../font.zig").BitmapGlyphData;
+pub const OwnedBitmapGlyphData = @import("../../font.zig").OwnedBitmapGlyphData;
 pub const BitmapGlyphInfo = @import("../../font.zig").BitmapGlyphInfo;
 pub const BitmapStrikeInfo = @import("../../font.zig").BitmapStrikeInfo;
 pub const BitmapStrikeSource = @import("../../font.zig").BitmapStrikeSource;
@@ -229,7 +217,7 @@ pub const ColorLayer = @import("../../font.zig").ColorLayer;
 pub const ColorPaint = @import("../../font.zig").ColorPaint;
 pub const ColorClipBox = @import("../../font.zig").ColorClipBox;
 pub const ColorAffine = @import("../../font.zig").ColorAffine;
-pub const ColorGlyphPaint = @import("../../render_bridge.zig").ColorGlyphPaint;
+pub const ColorGlyphPaint = @import("../../render/bridge/root.zig").ColorGlyphPaint;
 pub const PaletteColor = @import("../../font.zig").PaletteColor;
 pub const PaletteInfo = @import("../../font.zig").PaletteInfo;
 pub const PcltInfo = @import("../../font.zig").PcltInfo;
@@ -249,78 +237,76 @@ pub const GlyphLocationInfo = @import("../../font.zig").GlyphLocationInfo;
 pub const Bounds = @import("../../glyph.zig").Bounds;
 pub const GlyphOutline = @import("../../glyph.zig").GlyphOutline;
 pub const OutlineBuilder = @import("../../glyph.zig").OutlineBuilder;
-pub const BaselineMetrics = @import("../../layout.zig").BaselineMetrics;
-pub const GlyphRun = @import("../../layout.zig").GlyphRun;
-pub const GlyphPosition = @import("../../layout.zig").GlyphPosition;
-pub const BridgeOptions = @import("../../render_bridge.zig").BridgeOptions;
-pub const ColorGlyphDrawCommand = @import("../../render_bridge.zig").ColorGlyphDrawCommand;
-pub const ColorGlyphLayerCommand = @import("../../render_bridge.zig").ColorGlyphLayerCommand;
-pub const ClipboardPayload = @import("../../editor.zig").ClipboardPayload;
-pub const CascadeRun = @import("../../layout.zig").CascadeRun;
-pub const FontCascade = @import("../../layout.zig").FontCascade;
-pub const GlyphAtlasCacheKey = @import("../../render_bridge.zig").GlyphAtlasCacheKey;
-pub const GlyphAtlasContent = @import("../../render_bridge.zig").GlyphAtlasContent;
-pub const GlyphAtlasRequest = @import("../../render_bridge.zig").GlyphAtlasRequest;
-pub const GlyphDrawList = @import("../../render_bridge.zig").GlyphDrawList;
-pub const GlyphPathCacheKey = @import("../../render_bridge.zig").GlyphPathCacheKey;
-pub const GlyphPathRequest = @import("../../render_bridge.zig").GlyphPathRequest;
-pub const GlyphPathSource = @import("../../render_bridge.zig").GlyphPathSource;
-pub const GlyphRenderMode = @import("../../render_bridge.zig").GlyphRenderMode;
-pub const GlyphRunDrawCommand = @import("../../render_bridge.zig").GlyphRunDrawCommand;
-pub const ParagraphLayout = @import("../../layout.zig").ParagraphLayout;
-pub const ParagraphLine = @import("../../layout.zig").ParagraphLine;
-pub const ParagraphOptions = @import("../../layout.zig").ParagraphOptions;
-pub const ReflowBuffer = @import("../../layout.zig").ReflowBuffer;
-pub const ShapedParagraph = @import("../../layout.zig").ShapedParagraph;
-pub const StyledGlyphMetadata = @import("../../layout.zig").StyledGlyphMetadata;
-pub const StyledParagraphBuffer = @import("../../layout.zig").StyledParagraphBuffer;
-pub const StyledParagraphSpan = @import("../../layout.zig").StyledParagraphSpan;
-pub const PositionedGlyph = @import("../../render_bridge.zig").PositionedGlyph;
-pub const PositionedAttributedRun = @import("../../core.zig").PositionedAttributedRun;
-pub const ClusterLevel = @import("../../layout.zig").ClusterLevel;
-pub const ScriptPosition = @import("../../layout.zig").ScriptPosition;
-pub const ShapeOptions = @import("../../layout.zig").ShapeOptions;
+pub const BaselineMetrics = @import("../../layout/line_break/reflow/root.zig").BaselineMetrics;
+pub const GlyphRun = @import("../../layout/types/runs.zig").GlyphRun;
+pub const GlyphOrientation =
+    @import("../../layout/glyph_position.zig").Orientation;
+pub const GlyphPosition = @import("../../layout/glyph_position.zig").GlyphPosition;
+pub const BridgeOptions = @import("../../render/bridge/root.zig").BridgeOptions;
+pub const ColorGlyphDrawCommand = @import("../../render/bridge/root.zig").ColorGlyphDrawCommand;
+pub const ColorGlyphLayerCommand = @import("../../render/bridge/root.zig").ColorGlyphLayerCommand;
+pub const CascadeRun = @import("../../layout/types/runs.zig").CascadeRun;
+pub const FontCascade = @import("../../shaping/fallback/font/root.zig").Cascade;
+pub const GlyphAtlasCacheKey = @import("../../render/bridge/root.zig").GlyphAtlasCacheKey;
+pub const GlyphAtlasContent = @import("../../render/bridge/root.zig").GlyphAtlasContent;
+pub const GlyphAtlasRequest = @import("../../render/bridge/root.zig").GlyphAtlasRequest;
+pub const GlyphDrawList = @import("../../render/bridge/root.zig").GlyphDrawList;
+pub const GlyphPathCacheKey = @import("../../render/bridge/root.zig").GlyphPathCacheKey;
+pub const GlyphPathRequest = @import("../../render/bridge/root.zig").GlyphPathRequest;
+pub const GlyphPathSource = @import("../../render/bridge/root.zig").GlyphPathSource;
+pub const GlyphRenderMode = @import("../../render/bridge/root.zig").GlyphRenderMode;
+pub const GlyphRunDrawCommand = @import("../../render/bridge/root.zig").GlyphRunDrawCommand;
+pub const ParagraphLayout = @import("../../layout/types/paragraph.zig").ParagraphLayout;
+pub const ParagraphLine = @import("../../layout/types/paragraph.zig").ParagraphLine;
+pub const ParagraphOptions = @import("../../layout/paragraph/options.zig").Options;
+pub const ReflowBuffer = @import("../../layout/paragraph/retained.zig").ReflowBuffer;
+pub const ShapedParagraph = @import("../../layout/paragraph/retained.zig").ShapedParagraph;
+pub const StyledGlyphMetadata = @import("../../layout/styled_buffer.zig").Metadata;
+pub const StyledParagraphBuffer = @import("../../layout/styled_buffer.zig").Buffer;
+pub const StyledParagraphSpan = @import("../../layout/styled_paragraph.zig").Span;
+pub const PositionedGlyph = @import("../../render/bridge/root.zig").PositionedGlyph;
+pub const PositionedAttributedRun = @import("../../text/attributed/root.zig").PositionedAttributedRun;
+pub const ClusterLevel = @import("../../shaping/pipeline/types.zig").ClusterLevel;
+pub const ScriptPosition = @import("../../shaping/pipeline/types.zig").ScriptPosition;
+pub const ShapeOptions = shaping_plan.ShapeOptions;
 pub const ShapeStageProfile = @import("../../shape_profile.zig").ShapeStageProfile;
-pub const ClusterCaretConsistencyReport = @import("../../layout.zig").ClusterCaretConsistencyReport;
-pub const ClusterCaretDiagnostic = @import("../../layout.zig").ClusterCaretDiagnostic;
-pub const ClusterCaretIssueKind = @import("../../layout.zig").ClusterCaretIssueKind;
-pub const ShapeQualityFontRunDiagnostic = @import("../../layout.zig").ShapeQualityFontRunDiagnostic;
-pub const ShapeQualityReport = @import("../../layout.zig").ShapeQualityReport;
-pub const ShapeQualityScriptRunDiagnostic = @import("../../layout.zig").ShapeQualityScriptRunDiagnostic;
-pub const ShapedText = @import("../../layout.zig").ShapedText;
-pub const ScriptedRun = @import("../../layout.zig").ScriptedRun;
-pub const ScriptedText = @import("../../layout.zig").ScriptedText;
-pub const TextAlign = @import("../../layout.zig").TextAlign;
-pub const TextCursorGeometry = @import("../../render_bridge.zig").TextCursorGeometry;
-pub const TextDirection = @import("../../layout.zig").TextDirection;
-pub const TextOrientation = @import("../../layout.zig").TextOrientation;
-pub const WritingMode = @import("../../layout.zig").WritingMode;
-pub const TextPosition = @import("../../layout.zig").TextPosition;
-pub const TextRect = @import("../../layout.zig").TextRect;
-pub const TextSelectionGeometry = @import("../../render_bridge.zig").TextSelectionGeometry;
+pub const ClusterCaretConsistencyReport = @import("../../shaping/diagnostics/types.zig").ClusterCaretConsistencyReport;
+pub const ClusterCaretDiagnostic = @import("../../shaping/diagnostics/types.zig").ClusterCaretDiagnostic;
+pub const ClusterCaretIssueKind = @import("../../shaping/diagnostics/types.zig").ClusterCaretIssueKind;
+pub const ShapeQualityFontRunDiagnostic = @import("../../shaping/diagnostics/types.zig").ShapeQualityFontRunDiagnostic;
+pub const ShapeQualityReport = @import("../../shaping/diagnostics/types.zig").ShapeQualityReport;
+pub const ShapeQualityScriptRunDiagnostic = @import("../../shaping/diagnostics/types.zig").ShapeQualityScriptRunDiagnostic;
+pub const ShapedText = @import("../../layout/types/runs.zig").ShapedText;
+pub const ScriptedRun = @import("../../layout/types/runs.zig").ScriptedRun;
+pub const ScriptedText = @import("../../layout/types/runs.zig").ScriptedText;
+pub const TextAlign = @import("../../layout/types/paragraph.zig").TextAlign;
+pub const TextCursorGeometry = @import("../../render/bridge/root.zig").TextCursorGeometry;
+pub const TextDirection = @import("../../shaping/pipeline/types.zig").TextDirection;
+pub const TextOrientation = @import("../../shaping/pipeline/types.zig").TextOrientation;
+pub const WritingMode = @import("../../shaping/pipeline/types.zig").WritingMode;
+pub const TextPosition = @import("../../layout/types/paragraph.zig").TextPosition;
+pub const TextRect = @import("../../layout/types/paragraph.zig").TextRect;
+pub const TextSelectionGeometry = @import("../../render/bridge/root.zig").TextSelectionGeometry;
 pub const Engine = @import("../../shaping/context/root.zig").Engine;
 pub const buildBidiMap = @import("../../unicode.zig").buildBidiMap;
-pub const buildDebugOverlays = @import("../../debug.zig").buildDebugOverlays;
-pub const buildGlyphDrawList = @import("../../render_bridge.zig").buildGlyphDrawList;
-pub const codepointDisplayWidth = @import("../../editor.zig").codepointDisplayWidth;
-pub const highlightZigSyntax = @import("../../editor.zig").highlightZigSyntax;
-pub const dumpBidiMap = @import("../../debug.zig").dumpBidiMap;
-pub const dumpBidiRuns = @import("../../debug.zig").dumpBidiRuns;
-pub const dumpDebugOverlays = @import("../../debug.zig").dumpDebugOverlays;
-pub const dumpFontCoverage = @import("../../debug.zig").dumpFontCoverage;
-pub const dumpFontFallback = @import("../../debug.zig").dumpFontFallback;
-pub const dumpGlyphClusters = @import("../../debug.zig").dumpGlyphClusters;
-pub const dumpHitTest = @import("../../debug.zig").dumpHitTest;
-pub const dumpLineBreaks = @import("../../debug.zig").dumpLineBreaks;
-pub const dumpMissingGlyphs = @import("../../debug.zig").dumpMissingGlyphs;
-pub const dumpParagraphLayout = @import("../../debug.zig").dumpParagraphLayout;
-pub const dumpSelectionRects = @import("../../debug.zig").dumpSelectionRects;
-pub const dumpShapeRuns = @import("../../debug.zig").dumpShapeRuns;
-pub const dumpTextBufferLayoutStats = @import("../../debug.zig").dumpTextBufferLayoutStats;
-pub const dumpUnicodeSegmentation = @import("../../debug.zig").dumpUnicodeSegmentation;
-pub const diagnoseClusterCaretConsistencyUtf8 = @import("../../layout.zig").diagnoseClusterCaretConsistencyUtf8;
-pub const diagnoseFontFallbackUtf8 = @import("../../layout.zig").diagnoseFontFallbackUtf8;
-pub const diagnoseShapeQualityUtf8 = @import("../../layout.zig").diagnoseShapeQualityUtf8;
+pub const buildDebugOverlays = @import("../../debug/root.zig").buildDebugOverlays;
+pub const buildGlyphDrawList = @import("../../render/bridge/root.zig").buildGlyphDrawList;
+pub const dumpBidiMap = @import("../../debug/root.zig").dumpBidiMap;
+pub const dumpBidiRuns = @import("../../debug/root.zig").dumpBidiRuns;
+pub const dumpDebugOverlays = @import("../../debug/root.zig").dumpDebugOverlays;
+pub const dumpFontCoverage = @import("../../debug/root.zig").dumpFontCoverage;
+pub const dumpFontFallback = @import("../../debug/root.zig").dumpFontFallback;
+pub const dumpGlyphClusters = @import("../../debug/root.zig").dumpGlyphClusters;
+pub const dumpHitTest = @import("../../debug/root.zig").dumpHitTest;
+pub const dumpLineBreaks = @import("../../debug/root.zig").dumpLineBreaks;
+pub const dumpMissingGlyphs = @import("../../debug/root.zig").dumpMissingGlyphs;
+pub const dumpParagraphLayout = @import("../../debug/root.zig").dumpParagraphLayout;
+pub const dumpSelectionRects = @import("../../debug/root.zig").dumpSelectionRects;
+pub const dumpShapeRuns = @import("../../debug/root.zig").dumpShapeRuns;
+pub const dumpUnicodeSegmentation = @import("../../debug/root.zig").dumpUnicodeSegmentation;
+pub const diagnoseClusterCaretConsistencyUtf8 = test_diagnostics.clusterCaretConsistency;
+pub const diagnoseFontFallbackUtf8 = @import("../../shaping/diagnostics/fallback.zig").analyze;
+pub const diagnoseShapeQualityUtf8 = test_diagnostics.shapeQuality;
 pub const inferOpenTypeLanguageTag = @import("../../unicode.zig").inferOpenTypeLanguageTag;
 pub const lineBreakClassForCodepoint = @import("../../unicode.zig").lineBreakClassForCodepoint;
 pub const lineBreaks = @import("../../unicode.zig").lineBreaks;
@@ -330,9 +316,9 @@ pub const itemizeGraphemeClusters = @import("../../unicode.zig").itemizeGrapheme
 pub const itemizeLineBreaks = @import("../../unicode.zig").itemizeLineBreaks;
 pub const itemizeScriptRuns = @import("../../unicode.zig").itemizeScriptRuns;
 pub const itemizeWordSegments = @import("../../unicode.zig").itemizeWordSegments;
-pub const layoutAttributedRunsUtf8 = @import("../../core.zig").layoutAttributedRunsUtf8;
-pub const layoutAttributedGlyphRunsUtf8 = @import("../../core.zig").layoutAttributedGlyphRunsUtf8;
-pub const layoutAttributedParagraphUtf8 = @import("../../core.zig").layoutAttributedParagraphUtf8;
+pub const layoutAttributedRunsUtf8 = @import("../../text/attributed/root.zig").layoutAttributedRunsUtf8;
+pub const layoutAttributedGlyphRunsUtf8 = @import("../../text/attributed/root.zig").layoutAttributedGlyphRunsUtf8;
+pub const layoutAttributedParagraphUtf8 = @import("../../text/attributed/root.zig").layoutAttributedParagraphUtf8;
 pub const openTypeTag = @import("../../unicode.zig").tag;
 pub const openTypeScriptTag = @import("../../unicode.zig").openTypeScriptTag;
 pub const openTypeScriptHorizontalDirection = @import("../../unicode.zig").openTypeScriptHorizontalDirection;
@@ -350,9 +336,49 @@ pub const Rasterizer = @import("../../raster.zig").Rasterizer;
 pub const bidiClassForCodepoint = @import("../../unicode.zig").bidiClassForCodepoint;
 pub const exactBidiClassForCodepoint = @import("../../unicode.zig").exactBidiClassForCodepoint;
 pub const resolveBidiParagraph = @import("../../unicode.zig").resolveBidiParagraph;
+
+const test_diagnostics = struct {
+    const orchestration = @import("../../shaping/diagnostics/orchestration.zig");
+    const ordinary_shaper = @import("../../shaping/orchestrator.zig").TextShaper;
+
+    pub fn clusterCaretConsistency(
+        allocator: std.mem.Allocator,
+        cascade: @import("../../shaping/fallback/font/root.zig").Cascade,
+        text: []const u8,
+        font_size: f32,
+        options: shaping_plan.ShapeOptions,
+    ) !@import("../../shaping/diagnostics/types.zig").ClusterCaretConsistencyReport {
+        return orchestration.clusterCaretConsistency(
+            ordinary_shaper,
+            allocator,
+            cascade,
+            text,
+            font_size,
+            options,
+        );
+    }
+
+    pub fn shapeQuality(
+        allocator: std.mem.Allocator,
+        cascade: @import("../../shaping/fallback/font/root.zig").Cascade,
+        text: []const u8,
+        font_size: f32,
+        options: shaping_plan.ShapeOptions,
+    ) !@import("../../shaping/diagnostics/types.zig").ShapeQualityReport {
+        return orchestration.shapeQuality(
+            ordinary_shaper,
+            allocator,
+            cascade,
+            text,
+            font_size,
+            options,
+        );
+    }
+};
+
 pub const testing = struct {
     pub const test_font = @import("../../test_font.zig");
-    pub const font_container = @import("../../font_container.zig").testing;
+    pub const font_container = @import("../../font/container/root.zig").testing;
     /// Internal shaping boundaries shared with repository-owned parity tools.
     /// They are intentionally not part of the supported font-stack API.
     pub const shaping_cluster = @import("../../unicode/grapheme/shaping_cluster.zig");

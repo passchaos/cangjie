@@ -1,55 +1,24 @@
 const std = @import("std");
 const face_mod = @import("font/face/root.zig");
 const font_raster = @import("font.zig").raster_backend;
+const hinting_outline = @import("font/hinting/outline.zig");
 const imx = @import("imx");
 const font_mod = @import("font.zig");
 const glyph_mod = @import("glyph.zig");
-const layout = @import("layout.zig");
+const run_types = @import("layout/types/runs.zig");
+const bitmap_raster = @import("raster/bitmap.zig");
+const composite_mod = @import("raster/composite.zig");
 const curves = @import("raster/curves.zig");
+const outline_raster = @import("raster/outline.zig");
+const prepared_mod = @import("raster/prepared.zig");
+const run_geometry = @import("render/run_geometry.zig");
 const scanline = @import("raster/scanline.zig");
 const prepared_scanline = @import("raster/prepared_scanline.zig");
+const targets = @import("raster/targets.zig");
 
-pub const RenderTarget = struct {
-    allocator: std.mem.Allocator,
-    width: u32,
-    height: u32,
-    pixels: []u8,
-
-    pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !RenderTarget {
-        const pixels = try allocator.alloc(u8, @as(usize, width) * height);
-        @memset(pixels, 0);
-        return .{ .allocator = allocator, .width = width, .height = height, .pixels = pixels };
-    }
-
-    pub fn deinit(self: *RenderTarget) void {
-        self.allocator.free(self.pixels);
-        self.* = undefined;
-    }
-
-    pub fn clear(self: *RenderTarget, value: u8) void {
-        @memset(self.pixels, value);
-    }
-
-    pub fn at(self: *const RenderTarget, x: u32, y: u32) u8 {
-        return self.pixels[@as(usize, y) * self.width + x];
-    }
-
-    fn blend(self: *RenderTarget, x: i32, y: i32, coverage: u8) void {
-        if (x < 0 or y < 0) return;
-        const ux: u32 = @intCast(x);
-        const uy: u32 = @intCast(y);
-        if (ux >= self.width or uy >= self.height) return;
-        const idx = @as(usize, uy) * self.width + ux;
-        self.pixels[idx] = @max(self.pixels[idx], coverage);
-    }
-};
-
-pub const Rgba = struct {
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-};
+pub const RenderTarget = targets.RenderTarget;
+pub const Rgba = targets.Rgba;
+pub const PreparedGlyph = prepared_mod.PreparedGlyph;
 
 const max_color_glyph_traversal_depth = 64;
 const max_embedded_bitmap_dimension = 16 * 1024;
@@ -822,15 +791,56 @@ pub const Rasterizer = struct {
     /// `samples_per_axis`. This is intended for glyph atlases and repeated UI
     /// drawing where the same glyph geometry is scanned many times.
     pub fn prepareGlyph(self: *Rasterizer, outline: *const glyph_mod.GlyphOutline, x: f32, baseline_y: f32, font_size: f32, units_per_em: u16) !PreparedGlyph {
-        var flattened = try std.ArrayList(Line).initCapacity(self.allocator, flattenedLineCapacity(outline.commands.items));
+        var flattened = try std.ArrayList(Line).initCapacity(
+            self.allocator,
+            outline_raster.lineCapacity(outline.commands.items),
+        );
         defer flattened.deinit(self.allocator);
         const scale = font_size / @as(f32, @floatFromInt(units_per_em));
-        flattenOutline(&flattened, outline, scale, x, baseline_y);
+        outline_raster.flatten(&flattened, outline, scale, x, baseline_y);
         const hint_size = self.hint_size_px orelse font_size;
-        alignSmallGlyphToPixelGrid(flattened.items, outline, scale, font_size, hint_size);
+        outline_raster.alignSmallGlyphToPixelGrid(
+            flattened.items,
+            outline,
+            scale,
+            font_size,
+            hint_size,
+        );
         return .{
             .prepared_fill = try prepared_scanline.prepare(self.allocator, flattened.items),
             .hint_size = hint_size,
+        };
+    }
+
+    /// Prepare a hinted outline whose coordinates are already pixels.
+    ///
+    /// The returned geometry bakes in only `x` and `baseline_y`; it never
+    /// applies font-size or units-per-em scaling, pixel alignment, or synthetic
+    /// small-glyph emboldening.
+    pub fn preparePixelOutline(
+        self: *Rasterizer,
+        outline: *const hinting_outline.PixelOutline,
+        x: f32,
+        baseline_y: f32,
+    ) !PreparedGlyph {
+        var flattened = try std.ArrayList(Line).initCapacity(
+            self.allocator,
+            outline_raster.lineCapacity(outline.commands.items),
+        );
+        defer flattened.deinit(self.allocator);
+        outline_raster.flattenPixelCommands(
+            &flattened,
+            outline.commands.items,
+            x,
+            baseline_y,
+        );
+        return .{
+            .prepared_fill = try prepared_scanline.prepare(
+                self.allocator,
+                flattened.items,
+            ),
+            // Hinted pixel geometry has already made its small-size decisions.
+            .hint_size = std.math.inf(f32),
         };
     }
 
@@ -846,7 +856,29 @@ pub const Rasterizer = struct {
     }
 
     pub fn renderGlyph(self: *Rasterizer, target: *RenderTarget, outline: *const glyph_mod.GlyphOutline, x: f32, baseline_y: f32, font_size: f32, units_per_em: u16) !void {
-        const flattened_capacity = flattenedLineCapacity(outline.commands.items);
+        return self.renderGlyphOriented(
+            target,
+            outline,
+            x,
+            baseline_y,
+            font_size,
+            units_per_em,
+            .upright,
+        );
+    }
+
+    fn renderGlyphOriented(
+        self: *Rasterizer,
+        target: *RenderTarget,
+        outline: *const glyph_mod.GlyphOutline,
+        x: f32,
+        baseline_y: f32,
+        font_size: f32,
+        units_per_em: u16,
+        orientation: outline_raster.Orientation,
+    ) !void {
+        const flattened_capacity =
+            outline_raster.lineCapacity(outline.commands.items);
         var inline_flattened: [128]Line = undefined;
         var flattened = if (flattened_capacity <= inline_flattened.len)
             std.ArrayList(Line).initBuffer(inline_flattened[0..])
@@ -854,13 +886,75 @@ pub const Rasterizer = struct {
             try std.ArrayList(Line).initCapacity(self.allocator, flattened_capacity);
         defer if (flattened_capacity > inline_flattened.len) flattened.deinit(self.allocator);
         const scale = font_size / @as(f32, @floatFromInt(units_per_em));
-        flattenOutline(&flattened, outline, scale, x, baseline_y);
+        outline_raster.flattenOriented(
+            &flattened,
+            outline,
+            scale,
+            x,
+            baseline_y,
+            orientation,
+        );
         const hint_size = self.hint_size_px orelse font_size;
-        alignSmallGlyphToPixelGrid(flattened.items, outline, scale, font_size, hint_size);
+        if (orientation == .upright) {
+            outline_raster.alignSmallGlyphToPixelGrid(
+                flattened.items,
+                outline,
+                scale,
+                font_size,
+                hint_size,
+            );
+        }
         try self.fillLines(target, flattened.items, .non_zero);
         if (self.embolden_small_glyphs and hint_size <= 20.0) {
             try self.emboldenSmallGlyph(target, flattened.items, hint_size);
         }
+    }
+
+    /// Draw an already grid-fitted pixel-space outline at caller placement.
+    pub fn renderPixelOutline(
+        self: *Rasterizer,
+        target: *RenderTarget,
+        outline: *const hinting_outline.PixelOutline,
+        x: f32,
+        baseline_y: f32,
+    ) !void {
+        return self.renderPixelOutlineOriented(
+            target,
+            outline,
+            x,
+            baseline_y,
+            .upright,
+        );
+    }
+
+    pub fn renderPixelOutlineOriented(
+        self: *Rasterizer,
+        target: *RenderTarget,
+        outline: *const hinting_outline.PixelOutline,
+        x: f32,
+        baseline_y: f32,
+        orientation: outline_raster.Orientation,
+    ) !void {
+        const flattened_capacity =
+            outline_raster.lineCapacity(outline.commands.items);
+        var inline_flattened: [128]Line = undefined;
+        var flattened = if (flattened_capacity <= inline_flattened.len)
+            std.ArrayList(Line).initBuffer(inline_flattened[0..])
+        else
+            try std.ArrayList(Line).initCapacity(
+                self.allocator,
+                flattened_capacity,
+            );
+        defer if (flattened_capacity > inline_flattened.len)
+            flattened.deinit(self.allocator);
+        outline_raster.flattenPixelCommandsOriented(
+            &flattened,
+            outline.commands.items,
+            x,
+            baseline_y,
+            orientation,
+        );
+        try self.fillLines(target, flattened.items, .non_zero);
     }
 
     fn emboldenPreparedGlyph(self: *Rasterizer, target: *RenderTarget, prepared: *const PreparedGlyph) !void {
@@ -869,8 +963,14 @@ pub const Rasterizer = struct {
         try self.emboldenBounds(target, bounds);
     }
 
-    pub fn renderRun(self: *Rasterizer, target: *RenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32) !void {
-        return try self.renderRunAtCoords(target, run, x, baseline_y, &.{});
+    pub fn renderRun(self: *Rasterizer, target: *RenderTarget, run: run_types.GlyphRun, x: f32, baseline_y: f32) !void {
+        return try self.renderRunAtCoords(
+            target,
+            run,
+            x,
+            baseline_y,
+            run.normalized_variation_coords,
+        );
     }
 
     pub fn renderFaceGlyph(
@@ -923,52 +1023,165 @@ pub const Rasterizer = struct {
         );
     }
 
-    pub fn renderRunAtCoords(self: *Rasterizer, target: *RenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32, normalized_variation_coords: []const f32) !void {
-        var pen_x = x;
+    pub fn renderRunAtCoords(self: *Rasterizer, target: *RenderTarget, run: run_types.GlyphRun, x: f32, baseline_y: f32, normalized_variation_coords: []const f32) !void {
+        var pen = run_geometry.Pen.init(x, baseline_y);
         const font = face_mod.backend.font(run.font);
+        const use_default_outline =
+            normalizedVariationCoordinatesAreDefault(normalized_variation_coords);
         for (run.glyphs) |position| {
-            try self.renderFaceGlyphAtCoords(
+            if (!position.isInlineObject()) {
+                var outline = if (use_default_outline)
+                    try font_raster.glyphOutline(font, self.allocator, position.glyph_id)
+                else
+                    try font_raster.glyphOutlineAtCoords(font, self.allocator, position.glyph_id, normalized_variation_coords);
+                defer outline.deinit();
+                const origin = pen.glyphOrigin(position);
+                try self.renderGlyphOriented(
+                    target,
+                    &outline,
+                    origin.x,
+                    origin.baseline_y,
+                    run.font_size,
+                    font.units_per_em,
+                    run_geometry.rasterOrientation(position),
+                );
+            }
+            pen.advance(position);
+        }
+    }
+
+    pub fn renderShapedText(self: *Rasterizer, target: *RenderTarget, shaped: run_types.ShapedText, x: f32, baseline_y: f32) !void {
+        for (shaped.runs) |run| {
+            const origin = run_geometry.offsetOrigin(
+                x,
+                baseline_y,
+                run.x_offset,
+                run.y_offset,
+            );
+            try self.renderRunAtCoords(
                 target,
-                font,
-                position.glyph_id,
-                run.font_size,
-                pen_x + position.x_offset,
-                baseline_y + position.y_offset,
+                run.glyphRun(shaped),
+                origin.x,
+                origin.baseline_y,
+                run.normalizedVariationCoords(shaped),
+            );
+        }
+    }
+
+    pub fn renderShapedTextAtCoords(self: *Rasterizer, target: *RenderTarget, shaped: run_types.ShapedText, x: f32, baseline_y: f32, normalized_variation_coords: []const f32) !void {
+        for (shaped.runs) |run| {
+            const origin = run_geometry.offsetOrigin(
+                x,
+                baseline_y,
+                run.x_offset,
+                run.y_offset,
+            );
+            try self.renderRunAtCoords(
+                target,
+                run.glyphRun(shaped),
+                origin.x,
+                origin.baseline_y,
                 normalized_variation_coords,
             );
-            pen_x += position.x_advance;
         }
     }
 
-    pub fn renderShapedText(self: *Rasterizer, target: *RenderTarget, shaped: layout.ShapedText, x: f32, baseline_y: f32) !void {
-        return try self.renderShapedTextAtCoords(target, shaped, x, baseline_y, &.{});
+    pub fn renderColorRun(self: *Rasterizer, target: *ColorRenderTarget, run: run_types.GlyphRun, x: f32, baseline_y: f32, palette_index: u16) !void {
+        return try self.renderColorRunAtCoords(
+            target,
+            run,
+            x,
+            baseline_y,
+            palette_index,
+            run.normalized_variation_coords,
+        );
     }
 
-    pub fn renderShapedTextAtCoords(self: *Rasterizer, target: *RenderTarget, shaped: layout.ShapedText, x: f32, baseline_y: f32, normalized_variation_coords: []const f32) !void {
-        for (shaped.runs) |run| {
-            try self.renderRunAtCoords(target, run.glyphRun(shaped), x + run.x_offset, baseline_y, normalized_variation_coords);
-        }
-    }
-
-    pub fn renderColorRun(self: *Rasterizer, target: *ColorRenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32, palette_index: u16) !void {
-        return try self.renderColorRunAtCoords(target, run, x, baseline_y, palette_index, &.{});
-    }
-
-    pub fn renderColorRunAtCoords(self: *Rasterizer, target: *ColorRenderTarget, run: layout.GlyphRun, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
-        var pen_x = x;
+    pub fn renderColorRunAtCoords(self: *Rasterizer, target: *ColorRenderTarget, run: run_types.GlyphRun, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
+        var pen = run_geometry.Pen.init(x, baseline_y);
         for (run.glyphs) |position| {
-            try self.renderColorGlyphAtCoords(target, face_mod.backend.font(run.font), position.glyph_id, run.font_size, pen_x + position.x_offset, baseline_y + position.y_offset, palette_index, normalized_variation_coords);
-            pen_x += position.x_advance;
+            if (!position.isInlineObject()) {
+                const origin = pen.glyphOrigin(position);
+                if (position.isSideways()) {
+                    var glyph_layer = try ColorRenderTarget.init(
+                        self.allocator,
+                        target.height,
+                        target.width,
+                    );
+                    defer glyph_layer.deinit();
+                    // Render the inverse-rotated target viewport. Its local
+                    // glyph origin is derived from the clockwise mapping
+                    // (x, y) -> (origin.x - y, origin.y + x).
+                    try self.renderColorGlyphAtCoords(
+                        &glyph_layer,
+                        face_mod.backend.font(run.font),
+                        position.glyph_id,
+                        run.font_size,
+                        origin.baseline_y,
+                        @as(f32, @floatFromInt(target.width)) - origin.x,
+                        palette_index,
+                        normalized_variation_coords,
+                    );
+                    composite_mod.blendClockwise(
+                        target.pixels,
+                        target.width,
+                        target.height,
+                        glyph_layer.pixels,
+                        glyph_layer.width,
+                        glyph_layer.height,
+                    );
+                } else {
+                    try self.renderColorGlyphAtCoords(
+                        target,
+                        face_mod.backend.font(run.font),
+                        position.glyph_id,
+                        run.font_size,
+                        origin.x,
+                        origin.baseline_y,
+                        palette_index,
+                        normalized_variation_coords,
+                    );
+                }
+            }
+            pen.advance(position);
         }
     }
 
-    pub fn renderColorShapedText(self: *Rasterizer, target: *ColorRenderTarget, shaped: layout.ShapedText, x: f32, baseline_y: f32, palette_index: u16) !void {
-        return try self.renderColorShapedTextAtCoords(target, shaped, x, baseline_y, palette_index, &.{});
+    pub fn renderColorShapedText(self: *Rasterizer, target: *ColorRenderTarget, shaped: run_types.ShapedText, x: f32, baseline_y: f32, palette_index: u16) !void {
+        for (shaped.runs) |run| {
+            const origin = run_geometry.offsetOrigin(
+                x,
+                baseline_y,
+                run.x_offset,
+                run.y_offset,
+            );
+            try self.renderColorRunAtCoords(
+                target,
+                run.glyphRun(shaped),
+                origin.x,
+                origin.baseline_y,
+                palette_index,
+                run.normalizedVariationCoords(shaped),
+            );
+        }
     }
 
-    pub fn renderColorShapedTextAtCoords(self: *Rasterizer, target: *ColorRenderTarget, shaped: layout.ShapedText, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
+    pub fn renderColorShapedTextAtCoords(self: *Rasterizer, target: *ColorRenderTarget, shaped: run_types.ShapedText, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
         for (shaped.runs) |run| {
-            try self.renderColorRunAtCoords(target, run.glyphRun(shaped), x + run.x_offset, baseline_y, palette_index, normalized_variation_coords);
+            const origin = run_geometry.offsetOrigin(
+                x,
+                baseline_y,
+                run.x_offset,
+                run.y_offset,
+            );
+            try self.renderColorRunAtCoords(
+                target,
+                run.glyphRun(shaped),
+                origin.x,
+                origin.baseline_y,
+                palette_index,
+                normalized_variation_coords,
+            );
         }
     }
 
@@ -986,7 +1199,7 @@ pub const Rasterizer = struct {
                     defer clipped.deinit();
                     try self.renderColorPaint(&clipped, font, paint, glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords);
                     applyColrClipBox(&clipped, clip, font.units_per_em, x, baseline_y, font_size);
-                    blendColorTarget(target, &clipped);
+                    composite_mod.blendPixels(target.pixels, clipped.pixels);
                 } else {
                     try self.renderColorPaint(target, font, paint, glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords);
                 }
@@ -1013,8 +1226,46 @@ pub const Rasterizer = struct {
                     return;
                 }
             }
-            if (try font.bitmapGlyphPng(glyph_id, font_size)) |bitmap| {
-                try self.renderEmbeddedPng(target, bitmap, font_size, x, baseline_y);
+            if (try font.compoundBitmapGlyphAlloc(
+                self.allocator,
+                glyph_id,
+                font_size,
+            )) |compound_value| {
+                var compound = compound_value;
+                defer compound.deinit();
+                try self.renderOwnedEmbeddedBitmap(
+                    target,
+                    compound,
+                    font_size,
+                    x,
+                    baseline_y,
+                );
+                return;
+            }
+            if (try font.bitmapGlyphData(glyph_id, font_size)) |bitmap| {
+                switch (bitmap) {
+                    .png => |png_glyph| try self.renderEmbeddedPng(
+                        target,
+                        png_glyph,
+                        font_size,
+                        x,
+                        baseline_y,
+                    ),
+                    .bgra => |bgra_glyph| try self.renderEmbeddedBgra(
+                        target,
+                        bgra_glyph,
+                        font_size,
+                        x,
+                        baseline_y,
+                    ),
+                    .mask => |mask_glyph| try self.renderEmbeddedMask(
+                        target,
+                        mask_glyph,
+                        font_size,
+                        x,
+                        baseline_y,
+                    ),
+                }
                 return;
             }
             // Bitmap-only emoji fonts often leave spacing/control glyphs out of
@@ -1102,8 +1353,10 @@ pub const Rasterizer = struct {
                 (@as(f32, @floatFromInt(bitmap.height)) +
                     @as(f32, @floatFromInt(bitmap.origin_offset_y))) * strike_scale,
         };
-        blendScaledRgba8(
-            target,
+        bitmap_raster.blendScaledRgba8(
+            target.pixels,
+            target.width,
+            target.height,
             rgba,
             @intCast(bitmap.width),
             @intCast(bitmap.height),
@@ -1111,6 +1364,111 @@ pub const Rasterizer = struct {
             top,
             strike_scale,
         );
+    }
+
+    fn renderEmbeddedMask(
+        self: *Rasterizer,
+        target: *ColorRenderTarget,
+        bitmap: font_mod.BitmapGlyphMask,
+        font_size: f32,
+        x: f32,
+        baseline_y: f32,
+    ) !void {
+        if (bitmap.ppem == 0) return error.BadSfnt;
+        const pixels = try bitmap.decodeAlloc(self.allocator);
+        defer self.allocator.free(pixels);
+        const strike_scale = font_size / @as(f32, @floatFromInt(bitmap.ppem));
+        if (!std.math.isFinite(strike_scale) or strike_scale <= 0) return error.InvalidBitmapSize;
+        const left = x + @as(f32, @floatFromInt(bitmap.origin_offset_x)) * strike_scale;
+        const top = baseline_y - @as(f32, @floatFromInt(bitmap.origin_offset_y)) * strike_scale;
+        bitmap_raster.blendScaledMask8(
+            target.pixels,
+            target.width,
+            target.height,
+            pixels,
+            bitmap.width,
+            bitmap.height,
+            left,
+            top,
+            strike_scale,
+        );
+    }
+
+    fn renderEmbeddedBgra(
+        self: *Rasterizer,
+        target: *ColorRenderTarget,
+        bitmap: font_mod.BitmapGlyphBgra,
+        font_size: f32,
+        x: f32,
+        baseline_y: f32,
+    ) !void {
+        _ = self;
+        if (bitmap.ppem == 0) return error.BadSfnt;
+        const strike_scale =
+            font_size / @as(f32, @floatFromInt(bitmap.ppem));
+        if (!std.math.isFinite(strike_scale) or strike_scale <= 0) {
+            return error.InvalidBitmapSize;
+        }
+        const left = x +
+            @as(f32, @floatFromInt(bitmap.origin_offset_x)) * strike_scale;
+        const top = baseline_y -
+            @as(f32, @floatFromInt(bitmap.origin_offset_y)) * strike_scale;
+        bitmap_raster.blendScaledPremultipliedBgra8(
+            target.pixels,
+            target.width,
+            target.height,
+            bitmap.data,
+            bitmap.width,
+            bitmap.height,
+            left,
+            top,
+            strike_scale,
+        );
+    }
+
+    fn renderOwnedEmbeddedBitmap(
+        self: *Rasterizer,
+        target: *ColorRenderTarget,
+        bitmap: font_mod.OwnedBitmapGlyphData,
+        font_size: f32,
+        x: f32,
+        baseline_y: f32,
+    ) !void {
+        _ = self;
+        if (bitmap.ppem == 0) return error.BadSfnt;
+        const strike_scale =
+            font_size / @as(f32, @floatFromInt(bitmap.ppem));
+        if (!std.math.isFinite(strike_scale) or strike_scale <= 0) {
+            return error.InvalidBitmapSize;
+        }
+        const left = x +
+            @as(f32, @floatFromInt(bitmap.origin_offset_x)) * strike_scale;
+        const top = baseline_y -
+            @as(f32, @floatFromInt(bitmap.origin_offset_y)) * strike_scale;
+        switch (bitmap.kind) {
+            .mask8 => bitmap_raster.blendScaledMask8(
+                target.pixels,
+                target.width,
+                target.height,
+                bitmap.data,
+                bitmap.width,
+                bitmap.height,
+                left,
+                top,
+                strike_scale,
+            ),
+            .premultiplied_bgra8 => bitmap_raster.blendScaledPremultipliedBgra8(
+                target.pixels,
+                target.width,
+                target.height,
+                bitmap.data,
+                bitmap.width,
+                bitmap.height,
+                left,
+                top,
+                strike_scale,
+            ),
+        }
     }
 
     fn renderColorPaint(self: *Rasterizer, target: *ColorRenderTarget, font: *const font_mod.Font, paint: font_mod.ColorPaint, fallback_glyph_id: glyph_mod.GlyphId, font_size: f32, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
@@ -1172,7 +1530,7 @@ pub const Rasterizer = struct {
                 defer mask.deinit();
                 try self.renderColorGlyphMask(&mask, &outline, x, baseline_y, font_size, font.units_per_em, transform);
                 applyMaskToColorTarget(&clipped, &mask);
-                blendColorTarget(target, &clipped);
+                composite_mod.blendPixels(target.pixels, clipped.pixels);
             },
             .layers => |layers| {
                 for (0..layers.layer_count) |offset| {
@@ -1200,7 +1558,7 @@ pub const Rasterizer = struct {
                     defer clipped.deinit();
                     try self.renderColorPaintTransformed(&clipped, font, child, colr_glyph.glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform, guard);
                     applyColrClipBoxTransformed(&clipped, clip, transform, font.units_per_em, x, baseline_y, font_size);
-                    blendColorTarget(target, &clipped);
+                    composite_mod.blendPixels(target.pixels, clipped.pixels);
                 } else {
                     try self.renderColorPaintTransformed(target, font, child, colr_glyph.glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform, guard);
                 }
@@ -1214,8 +1572,12 @@ pub const Rasterizer = struct {
                 const source_paint = try font.colorPaintChildAtCoords(composite.source, normalized_variation_coords);
                 try self.renderColorPaintTransformed(&backdrop, font, backdrop_paint, fallback_glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform, guard);
                 try self.renderColorPaintTransformed(&source, font, source_paint, fallback_glyph_id, font_size, x, baseline_y, palette_index, normalized_variation_coords, transform, guard);
-                compositeColorTargets(&source, &backdrop, composite.mode);
-                blendColorTarget(target, &backdrop);
+                composite_mod.compositePixels(
+                    source.pixels,
+                    backdrop.pixels,
+                    composite.mode,
+                );
+                composite_mod.blendPixels(target.pixels, backdrop.pixels);
             },
         }
     }
@@ -1270,7 +1632,8 @@ pub const Rasterizer = struct {
         if (std.meta.eql(transform, font_mod.ColorAffine.identity)) {
             return try self.renderGlyph(target, outline, x, baseline_y, font_size, units_per_em);
         }
-        const flattened_capacity = flattenedLineCapacity(outline.commands.items);
+        const flattened_capacity =
+            outline_raster.lineCapacity(outline.commands.items);
         var inline_flattened: [128]Line = undefined;
         var flattened = if (flattened_capacity <= inline_flattened.len)
             std.ArrayList(Line).initBuffer(inline_flattened[0..])
@@ -1278,7 +1641,14 @@ pub const Rasterizer = struct {
             try std.ArrayList(Line).initCapacity(self.allocator, flattened_capacity);
         defer if (flattened_capacity > inline_flattened.len) flattened.deinit(self.allocator);
         const scale = font_size / @as(f32, @floatFromInt(units_per_em));
-        flattenOutlineTransformed(&flattened, outline, transform, scale, x, baseline_y);
+        outline_raster.flattenTransformed(
+            &flattened,
+            outline,
+            transform,
+            scale,
+            x,
+            baseline_y,
+        );
         try self.fillLines(target, flattened.items, .non_zero);
     }
 
@@ -1444,34 +1814,21 @@ pub const Rasterizer = struct {
                 const expanded: u8 = @intCast(@min(@as(u16, 255), @as(u16, coverage) + 24));
                 const side: u8 = @intCast(@min(@as(u16, 255), @as(u16, coverage) * 3 / 5));
                 const vertical: u8 = @intCast(@min(@as(u16, 255), @as(u16, coverage) * 2 / 3));
-                target.blend(x, y, expanded);
-                if (x - 1 >= min_x) target.blend(x - 1, y, side);
-                if (x + 1 <= max_x) target.blend(x + 1, y, side);
-                if (y - 1 >= min_y) target.blend(x, y - 1, vertical);
-                if (y + 1 <= max_y) target.blend(x, y + 1, vertical);
+                targets.blendCoverage(target, x, y, expanded);
+                if (x - 1 >= min_x) {
+                    targets.blendCoverage(target, x - 1, y, side);
+                }
+                if (x + 1 <= max_x) {
+                    targets.blendCoverage(target, x + 1, y, side);
+                }
+                if (y - 1 >= min_y) {
+                    targets.blendCoverage(target, x, y - 1, vertical);
+                }
+                if (y + 1 <= max_y) {
+                    targets.blendCoverage(target, x, y + 1, vertical);
+                }
             }
         }
-    }
-};
-
-pub const PreparedGlyph = struct {
-    prepared_fill: prepared_scanline.PreparedFill,
-    hint_size: f32,
-
-    /// Whether retained real-font measurements predict a win over direct
-    /// `renderGlyph` in a repeated-render loop.
-    ///
-    /// Callers should branch once before entering the loop, not once per glyph
-    /// render. Tiny straight-sided glyphs are already optimized by the direct
-    /// stack-local path; prepared geometry pays off for curve-heavy or
-    /// multi-contour outlines.
-    pub fn recommendedForRepeatedRendering(self: *const PreparedGlyph) bool {
-        return self.prepared_fill.lines.len >= 16;
-    }
-
-    pub fn deinit(self: *PreparedGlyph) void {
-        self.prepared_fill.deinit();
-        self.* = undefined;
     }
 };
 
@@ -1583,391 +1940,6 @@ fn applyColrClipBoxTransformed(
             pixel.* = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
         }
     }
-}
-
-fn blendColorTarget(target: *ColorRenderTarget, source: *const ColorRenderTarget) void {
-    for (target.pixels[0..@min(target.pixels.len, source.pixels.len)], source.pixels) |*dst, src| {
-        blendPremultipliedPixel(dst, src);
-    }
-}
-
-fn blendPremultipliedPixel(dst: *Rgba, src: Rgba) void {
-    if (src.a == 0) return;
-    const inv_a = 255 - @as(u32, src.a);
-    // ColorRenderTarget stores premultiplied channels, so the source is added
-    // directly rather than multiplied by alpha a second time.
-    dst.r = @intCast(@min(@as(u32, 255), @as(u32, src.r) + (@as(u32, dst.r) * inv_a) / 255));
-    dst.g = @intCast(@min(@as(u32, 255), @as(u32, src.g) + (@as(u32, dst.g) * inv_a) / 255));
-    dst.b = @intCast(@min(@as(u32, 255), @as(u32, src.b) + (@as(u32, dst.b) * inv_a) / 255));
-    dst.a = @intCast(@min(@as(u32, 255), @as(u32, src.a) + (@as(u32, dst.a) * inv_a) / 255));
-}
-
-fn blendScaledRgba8(
-    target: *ColorRenderTarget,
-    source: []const u8,
-    source_width: usize,
-    source_height: usize,
-    left: f32,
-    top: f32,
-    scale: f32,
-) void {
-    std.debug.assert(source.len == source_width * source_height * 4);
-    if (source_width == 0 or source_height == 0 or scale <= 0) return;
-
-    const right = left + @as(f32, @floatFromInt(source_width)) * scale;
-    const bottom = top + @as(f32, @floatFromInt(source_height)) * scale;
-    if (!std.math.isFinite(left) or !std.math.isFinite(top) or
-        !std.math.isFinite(right) or !std.math.isFinite(bottom))
-    {
-        return;
-    }
-
-    // Clip in floating point before converting to integers. Besides avoiding
-    // work outside the target, this keeps absurd but finite placement values
-    // from overflowing an integer conversion.
-    const start_x_f = @max(@floor(left), 0.0);
-    const start_y_f = @max(@floor(top), 0.0);
-    const end_x_f = @min(@ceil(right), @as(f32, @floatFromInt(target.width)));
-    const end_y_f = @min(@ceil(bottom), @as(f32, @floatFromInt(target.height)));
-    if (end_x_f <= start_x_f or end_y_f <= start_y_f) return;
-
-    const start_x: usize = @intFromFloat(start_x_f);
-    const start_y: usize = @intFromFloat(start_y_f);
-    const end_x: usize = @intFromFloat(end_x_f);
-    const end_y: usize = @intFromFloat(end_y_f);
-    const inverse_scale = 1.0 / scale;
-
-    for (start_y..end_y) |dest_y| {
-        const source_y = ((@as(f32, @floatFromInt(dest_y)) + 0.5 - top) * inverse_scale) - 0.5;
-        const y0_float = @floor(source_y);
-        const y_fraction = source_y - y0_float;
-        const y0: i32 = @intFromFloat(y0_float);
-
-        for (start_x..end_x) |dest_x| {
-            const source_x = ((@as(f32, @floatFromInt(dest_x)) + 0.5 - left) * inverse_scale) - 0.5;
-            const x0_float = @floor(source_x);
-            const x_fraction = source_x - x0_float;
-            const x0: i32 = @intFromFloat(x0_float);
-
-            // Interpolate premultiplied samples. Interpolating straight RGB
-            // would pull arbitrary palette colors through transparent texels
-            // and produce dark/colored fringes around emoji silhouettes. An
-            // implicit transparent border also gives fractional placement the
-            // correct edge coverage instead of clamping a whole edge texel.
-            const top_sample = lerpPremultipliedColor(
-                premultipliedRgba8At(source, source_width, source_height, x0, y0),
-                premultipliedRgba8At(source, source_width, source_height, x0 + 1, y0),
-                x_fraction,
-            );
-            const bottom_sample = lerpPremultipliedColor(
-                premultipliedRgba8At(source, source_width, source_height, x0, y0 + 1),
-                premultipliedRgba8At(source, source_width, source_height, x0 + 1, y0 + 1),
-                x_fraction,
-            );
-            const sample = lerpPremultipliedColor(top_sample, bottom_sample, y_fraction);
-            blendPremultipliedPixel(&target.pixels[dest_y * @as(usize, target.width) + dest_x], sample);
-        }
-    }
-}
-
-fn premultipliedRgba8At(source: []const u8, width: usize, height: usize, x: i32, y: i32) Rgba {
-    if (x < 0 or y < 0) return .{ .r = 0, .g = 0, .b = 0, .a = 0 };
-    const ux: usize = @intCast(x);
-    const uy: usize = @intCast(y);
-    if (ux >= width or uy >= height) return .{ .r = 0, .g = 0, .b = 0, .a = 0 };
-    const rgba = source[(uy * width + ux) * 4 ..][0..4];
-    const alpha = @as(f32, @floatFromInt(rgba[3])) / 255.0;
-    return .{
-        .r = lerpPremultipliedByte(0, @floatFromInt(rgba[0]), alpha),
-        .g = lerpPremultipliedByte(0, @floatFromInt(rgba[1]), alpha),
-        .b = lerpPremultipliedByte(0, @floatFromInt(rgba[2]), alpha),
-        .a = rgba[3],
-    };
-}
-
-fn lerpPremultipliedColor(a: Rgba, b: Rgba, t: f32) Rgba {
-    return .{
-        .r = lerpPremultipliedByte(@floatFromInt(a.r), @floatFromInt(b.r), t),
-        .g = lerpPremultipliedByte(@floatFromInt(a.g), @floatFromInt(b.g), t),
-        .b = lerpPremultipliedByte(@floatFromInt(a.b), @floatFromInt(b.b), t),
-        .a = lerpPremultipliedByte(@floatFromInt(a.a), @floatFromInt(b.a), t),
-    };
-}
-
-fn lerpPremultipliedByte(a: f32, b: f32, t: f32) u8 {
-    return @intFromFloat(@round(std.math.clamp(a + (b - a) * t, 0, 255)));
-}
-
-fn compositeColorTargets(source: *const ColorRenderTarget, backdrop: *ColorRenderTarget, mode: font_mod.ColorPaint.CompositeMode) void {
-    for (source.pixels[0..@min(source.pixels.len, backdrop.pixels.len)], backdrop.pixels) |src, *dst| {
-        dst.* = compositeColorPixel(src, dst.*, mode);
-    }
-}
-
-const PremultipliedColor = struct {
-    r: f32,
-    g: f32,
-    b: f32,
-    a: f32,
-
-    fn fromRgba(pixel: Rgba) PremultipliedColor {
-        return .{
-            .r = @as(f32, @floatFromInt(pixel.r)) / 255.0,
-            .g = @as(f32, @floatFromInt(pixel.g)) / 255.0,
-            .b = @as(f32, @floatFromInt(pixel.b)) / 255.0,
-            .a = @as(f32, @floatFromInt(pixel.a)) / 255.0,
-        };
-    }
-
-    fn toRgba(self: PremultipliedColor) Rgba {
-        return .{
-            .r = floatUnitToByte(self.r),
-            .g = floatUnitToByte(self.g),
-            .b = floatUnitToByte(self.b),
-            .a = floatUnitToByte(self.a),
-        };
-    }
-
-    fn scale(self: PremultipliedColor, factor: f32) PremultipliedColor {
-        return .{
-            .r = self.r * factor,
-            .g = self.g * factor,
-            .b = self.b * factor,
-            .a = self.a * factor,
-        };
-    }
-
-    fn add(a: PremultipliedColor, b: PremultipliedColor) PremultipliedColor {
-        return .{
-            .r = a.r + b.r,
-            .g = a.g + b.g,
-            .b = a.b + b.b,
-            .a = a.a + b.a,
-        };
-    }
-};
-
-fn compositeColorPixel(src_pixel: Rgba, dst_pixel: Rgba, mode: font_mod.ColorPaint.CompositeMode) Rgba {
-    const src = PremultipliedColor.fromRgba(src_pixel);
-    const dst = PremultipliedColor.fromRgba(dst_pixel);
-    return switch (mode) {
-        .clear => Rgba{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .src => src_pixel,
-        .dest => dst_pixel,
-        // Match HarfBuzz's byte-domain Porter-Duff arithmetic exactly. Its
-        // alpha multiplication truncates each term before saturated addition;
-        // computing the equivalent expression in floats and rounding at the
-        // end differs by one for common semi-transparent inputs.
-        .src_over => compositePorterDuffBytes(src_pixel, dst_pixel, 255, 255 - src_pixel.a),
-        .dest_over => compositePorterDuffBytes(src_pixel, dst_pixel, 255 - dst_pixel.a, 255),
-        .src_in => compositePorterDuffBytes(src_pixel, dst_pixel, dst_pixel.a, 0),
-        .dest_in => compositePorterDuffBytes(src_pixel, dst_pixel, 0, src_pixel.a),
-        .src_out => compositePorterDuffBytes(src_pixel, dst_pixel, 255 - dst_pixel.a, 0),
-        .dest_out => compositePorterDuffBytes(src_pixel, dst_pixel, 0, 255 - src_pixel.a),
-        .src_atop => compositePorterDuffBytes(src_pixel, dst_pixel, dst_pixel.a, 255 - src_pixel.a),
-        .dest_atop => compositePorterDuffBytes(src_pixel, dst_pixel, 255 - dst_pixel.a, src_pixel.a),
-        .xor => compositePorterDuffBytes(src_pixel, dst_pixel, 255 - dst_pixel.a, 255 - src_pixel.a),
-        .plus => (PremultipliedColor{
-            .r = @min(1, src.r + dst.r),
-            .g = @min(1, src.g + dst.g),
-            .b = @min(1, src.b + dst.b),
-            .a = @min(1, src.a + dst.a),
-        }).toRgba(),
-        .screen, .overlay, .darken, .lighten, .color_dodge, .color_burn, .hard_light, .soft_light, .difference, .exclusion, .multiply => compositeSeparable(src, dst, mode),
-        .hsl_hue, .hsl_saturation, .hsl_color, .hsl_luminosity => compositeHsl(src, dst, mode),
-    };
-}
-
-fn compositePorterDuffBytes(src: Rgba, dst: Rgba, source_factor: u8, backdrop_factor: u8) Rgba {
-    const source = scaleRgbaByte(src, source_factor);
-    const backdrop = scaleRgbaByte(dst, backdrop_factor);
-    return .{
-        .r = saturatingAddByte(source.r, backdrop.r),
-        .g = saturatingAddByte(source.g, backdrop.g),
-        .b = saturatingAddByte(source.b, backdrop.b),
-        .a = saturatingAddByte(source.a, backdrop.a),
-    };
-}
-
-fn scaleRgbaByte(pixel: Rgba, factor: u8) Rgba {
-    return .{
-        .r = @intCast((@as(u16, pixel.r) * factor) / 255),
-        .g = @intCast((@as(u16, pixel.g) * factor) / 255),
-        .b = @intCast((@as(u16, pixel.b) * factor) / 255),
-        .a = @intCast((@as(u16, pixel.a) * factor) / 255),
-    };
-}
-
-fn saturatingAddByte(a: u8, b: u8) u8 {
-    return @intCast(@min(@as(u16, 255), @as(u16, a) + b));
-}
-
-fn compositeSeparable(src: PremultipliedColor, dst: PremultipliedColor, mode: font_mod.ColorPaint.CompositeMode) Rgba {
-    const source = unpremultipliedRgb(src);
-    const backdrop = unpremultipliedRgb(dst);
-    const blend = [3]f32{
-        separableBlend(source[0], backdrop[0], mode),
-        separableBlend(source[1], backdrop[1], mode),
-        separableBlend(source[2], backdrop[2], mode),
-    };
-    return compositeBlendResult(src, dst, source, backdrop, blend);
-}
-
-fn separableBlend(source: f32, backdrop: f32, mode: font_mod.ColorPaint.CompositeMode) f32 {
-    return switch (mode) {
-        .multiply => source * backdrop,
-        .screen => source + backdrop - source * backdrop,
-        .overlay => if (backdrop <= 0.5) 2 * source * backdrop else 1 - 2 * (1 - source) * (1 - backdrop),
-        .darken => @min(source, backdrop),
-        .lighten => @max(source, backdrop),
-        .color_dodge => if (backdrop <= 0) 0 else if (source >= 1) 1 else @min(1, backdrop / (1 - source)),
-        .color_burn => if (backdrop >= 1) 1 else if (source <= 0) 0 else 1 - @min(1, (1 - backdrop) / source),
-        .hard_light => if (source <= 0.5) 2 * source * backdrop else 1 - 2 * (1 - source) * (1 - backdrop),
-        .soft_light => softLight(source, backdrop),
-        .difference => @abs(source - backdrop),
-        .exclusion => source + backdrop - 2 * source * backdrop,
-        else => unreachable,
-    };
-}
-
-fn softLight(source: f32, backdrop: f32) f32 {
-    if (source <= 0.5) return backdrop - (1 - 2 * source) * backdrop * (1 - backdrop);
-    const d = if (backdrop <= 0.25)
-        ((16 * backdrop - 12) * backdrop + 4) * backdrop
-    else
-        @sqrt(backdrop);
-    return backdrop + (2 * source - 1) * (d - backdrop);
-}
-
-fn compositeHsl(src: PremultipliedColor, dst: PremultipliedColor, mode: font_mod.ColorPaint.CompositeMode) Rgba {
-    const source = unpremultipliedRgb(src);
-    const backdrop = unpremultipliedRgb(dst);
-    var blend = backdrop;
-    switch (mode) {
-        .hsl_hue => {
-            blend = source;
-            setSaturation(&blend, hslSaturation(backdrop));
-            setLuminosity(&blend, luminosity(backdrop));
-        },
-        .hsl_saturation => {
-            setSaturation(&blend, hslSaturation(source));
-            setLuminosity(&blend, luminosity(backdrop));
-        },
-        .hsl_color => {
-            blend = source;
-            setLuminosity(&blend, luminosity(backdrop));
-        },
-        .hsl_luminosity => setLuminosity(&blend, luminosity(source)),
-        else => unreachable,
-    }
-    return compositeBlendResult(src, dst, source, backdrop, blend);
-}
-
-fn unpremultipliedRgb(color: PremultipliedColor) [3]f32 {
-    if (color.a <= 0) return .{ 0, 0, 0 };
-    return .{ color.r / color.a, color.g / color.a, color.b / color.a };
-}
-
-fn compositeBlendResult(src: PremultipliedColor, dst: PremultipliedColor, source: [3]f32, backdrop: [3]f32, blend: [3]f32) Rgba {
-    const overlap = src.a * dst.a;
-    return (PremultipliedColor{
-        .r = overlap * blend[0] + src.a * (1 - dst.a) * source[0] + (1 - src.a) * dst.a * backdrop[0],
-        .g = overlap * blend[1] + src.a * (1 - dst.a) * source[1] + (1 - src.a) * dst.a * backdrop[1],
-        .b = overlap * blend[2] + src.a * (1 - dst.a) * source[2] + (1 - src.a) * dst.a * backdrop[2],
-        .a = src.a + dst.a - overlap,
-    }).toRgba();
-}
-
-fn luminosity(color: [3]f32) f32 {
-    return 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2];
-}
-
-fn hslSaturation(color: [3]f32) f32 {
-    return @max(color[0], @max(color[1], color[2])) - @min(color[0], @min(color[1], color[2]));
-}
-
-fn setLuminosity(color: *[3]f32, target: f32) void {
-    const delta = target - luminosity(color.*);
-    for (color) |*channel| channel.* += delta;
-    clipHslColor(color);
-}
-
-fn clipHslColor(color: *[3]f32) void {
-    const light = luminosity(color.*);
-    const minimum = @min(color[0], @min(color[1], color[2]));
-    const maximum = @max(color[0], @max(color[1], color[2]));
-    if (minimum < 0 and light > minimum) {
-        for (color) |*channel| channel.* = light + (channel.* - light) * light / (light - minimum);
-    }
-    if (maximum > 1 and maximum > light) {
-        for (color) |*channel| channel.* = light + (channel.* - light) * (1 - light) / (maximum - light);
-    }
-}
-
-fn setSaturation(color: *[3]f32, target: f32) void {
-    var order = [_]usize{ 0, 1, 2 };
-    for (1..order.len) |index| {
-        const current = order[index];
-        var destination = index;
-        while (destination > 0 and color[current] < color[order[destination - 1]]) : (destination -= 1) {
-            order[destination] = order[destination - 1];
-        }
-        order[destination] = current;
-    }
-    const minimum = order[0];
-    const middle = order[1];
-    const maximum = order[2];
-    if (color[maximum] > color[minimum]) {
-        color[middle] = (color[middle] - color[minimum]) * target / (color[maximum] - color[minimum]);
-        color[maximum] = target;
-    } else {
-        color[middle] = 0;
-        color[maximum] = 0;
-    }
-    color[minimum] = 0;
-}
-
-test "COLR composite modes match HarfBuzz premultiplied raster oracle" {
-    // Expected ARGB words come from HarfBuzz's current hb-raster-image.cc
-    // `composite_pixel` for these same premultiplied source/backdrop pixels.
-    const source = Rgba{ .r = 100, .g = 70, .b = 40, .a = 170 };
-    const backdrop = Rgba{ .r = 30, .g = 60, .b = 90, .a = 140 };
-    const expected = [_]u32{
-        0x00000000, 0xaa644628, 0x8c1e3c5a, 0xd86e5a46,
-        0xd84b5b6c, 0x5d362615, 0x5d14283c, 0x4c2d1f12,
-        0x2e0a141e, 0x8b403a33, 0xa941474e, 0x7a373330,
-        0xff828282, 0xd9767274, 0xd94f555a, 0xd94b5a46,
-        0xd96e5c6c, 0xd968787f, 0xd9373430, 0xd958554c,
-        0xd94f5861, 0xd95a3556, 0xd96a6166, 0xd943443e,
-        0xd96c543d, 0xd94e5b68, 0xd9695541, 0xd9506171,
-    };
-    for (expected, 0..) |expected_pixel, raw_mode| {
-        const mode: font_mod.ColorPaint.CompositeMode = @enumFromInt(raw_mode);
-        const actual = compositeColorPixel(source, backdrop, mode);
-        const actual_packed = (@as(u32, actual.a) << 24) |
-            (@as(u32, actual.r) << 16) |
-            (@as(u32, actual.g) << 8) |
-            actual.b;
-        try std.testing.expectEqual(expected_pixel, actual_packed);
-    }
-}
-
-test "COLR composite operator invariants cover transparent and opaque edges" {
-    const transparent = Rgba{ .r = 0, .g = 0, .b = 0, .a = 0 };
-    const red = Rgba{ .r = 255, .g = 0, .b = 0, .a = 255 };
-    const blue = Rgba{ .r = 0, .g = 0, .b = 255, .a = 255 };
-
-    try std.testing.expectEqual(red, compositeColorPixel(red, transparent, .src_over));
-    try std.testing.expectEqual(blue, compositeColorPixel(transparent, blue, .src_over));
-    try std.testing.expectEqual(red, compositeColorPixel(red, blue, .src));
-    try std.testing.expectEqual(blue, compositeColorPixel(red, blue, .dest));
-    try std.testing.expectEqual(transparent, compositeColorPixel(red, blue, .xor));
-    try std.testing.expectEqual(Rgba{ .r = 255, .g = 0, .b = 255, .a = 255 }, compositeColorPixel(red, blue, .plus));
-
-    // W3C's degenerate dodge/burn branches are backdrop-dominant. The order
-    // matters at exactly (source=1, backdrop=0) and (source=0, backdrop=1).
-    try std.testing.expectEqual(Rgba{ .r = 0, .g = 0, .b = 0, .a = 255 }, compositeColorPixel(red, Rgba{ .r = 0, .g = 0, .b = 0, .a = 255 }, .color_dodge));
-    try std.testing.expectEqual(Rgba{ .r = 255, .g = 255, .b = 255, .a = 255 }, compositeColorPixel(Rgba{ .r = 0, .g = 0, .b = 0, .a = 255 }, Rgba{ .r = 255, .g = 255, .b = 255, .a = 255 }, .color_burn));
 }
 
 fn applyMaskToColorTarget(target: *ColorRenderTarget, mask: *const RenderTarget) void {
@@ -2100,134 +2072,15 @@ const Point = glyph_mod.Point;
 const Line = scanline.Line;
 const FillRule = scanline.FillRule;
 
-fn alignSmallGlyphToPixelGrid(lines: []Line, outline: *const glyph_mod.GlyphOutline, scale: f32, font_size: f32, hint_size: f32) void {
-    if (hint_size > 20.0 or lines.len == 0) return;
-    var min_x = std.math.inf(f32);
-    var min_y = std.math.inf(f32);
-    var max_x = -std.math.inf(f32);
-    var max_y = -std.math.inf(f32);
-    for (lines) |line| {
-        min_x = @min(min_x, @min(line.a.x, line.b.x));
-        min_y = @min(min_y, @min(line.a.y, line.b.y));
-        max_x = @max(max_x, @max(line.a.x, line.b.x));
-        max_y = @max(max_y, @max(line.a.y, line.b.y));
-    }
-    if (!std.math.isFinite(min_x) or !std.math.isFinite(min_y) or !std.math.isFinite(max_x) or !std.math.isFinite(max_y)) return;
-    const dx = @round(min_x) - min_x;
-    const dy = @round(max_y) - max_y;
-
-    _ = outline;
-    _ = scale;
-    _ = font_size;
-    if (@abs(dx) < 0.001 and @abs(dy) < 0.001) return;
-    for (lines) |*line| {
-        line.a.x += dx;
-        line.b.x += dx;
-        line.a.y += dy;
-        line.b.y += dy;
-    }
-}
-
-fn outlineContourCount(outline: *const glyph_mod.GlyphOutline) usize {
-    var count: usize = 0;
-    for (outline.commands.items) |command| {
-        if (command == .move_to) count += 1;
-    }
-    return count;
-}
-
-fn flattenOutline(lines: *std.ArrayList(Line), outline: *const glyph_mod.GlyphOutline, scale: f32, x: f32, baseline_y: f32) void {
-    return flattenOutlineTransformed(lines, outline, .identity, scale, x, baseline_y);
-}
-
-fn flattenOutlineTransformed(
-    lines: *std.ArrayList(Line),
-    outline: *const glyph_mod.GlyphOutline,
-    transform: font_mod.ColorAffine,
-    scale: f32,
-    x: f32,
-    baseline_y: f32,
-) void {
-    var start: ?Point = null;
-    var current: ?Point = null;
-    for (outline.commands.items) |command| {
-        switch (command) {
-            .move_to => |p| {
-                const q = fontToPixel(transform.apply(p), scale, x, baseline_y);
-                start = q;
-                current = q;
-            },
-            .line_to => |p| {
-                const a = current orelse continue;
-                const b = fontToPixel(transform.apply(p), scale, x, baseline_y);
-                lines.appendAssumeCapacity(.{ .a = a, .b = b });
-                current = b;
-            },
-            .quad_to => |q| {
-                const a = current orelse continue;
-                const control = fontToPixel(transform.apply(q.control), scale, x, baseline_y);
-                const end = fontToPixel(transform.apply(q.end), scale, x, baseline_y);
-                const segments = curves.quadSegmentCount(a, control, end);
-                var prev = a;
-                for (1..segments + 1) |i| {
-                    const t = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(segments));
-                    const p = quadPoint(a, control, end, t);
-                    lines.appendAssumeCapacity(.{ .a = prev, .b = p });
-                    prev = p;
-                }
-                current = end;
-            },
-            .cubic_to => |c| {
-                const a = current orelse continue;
-                const c0 = fontToPixel(transform.apply(c.c0), scale, x, baseline_y);
-                const c1 = fontToPixel(transform.apply(c.c1), scale, x, baseline_y);
-                const end = fontToPixel(transform.apply(c.end), scale, x, baseline_y);
-                const segments = curves.cubicSegmentCount(a, c0, c1, end);
-                var prev = a;
-                for (1..segments + 1) |i| {
-                    const t = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(segments));
-                    const p = cubicPoint(a, c0, c1, end, t);
-                    lines.appendAssumeCapacity(.{ .a = prev, .b = p });
-                    prev = p;
-                }
-                current = end;
-            },
-            .close => {
-                if (current) |a| {
-                    if (start) |b| {
-                        lines.appendAssumeCapacity(.{ .a = a, .b = b });
-                    }
-                }
-                current = start;
-            },
-        }
-    }
-}
-
-fn flattenedLineCapacity(commands: []const glyph_mod.PathCommand) usize {
-    var result: usize = 0;
-    for (commands) |command| {
-        result += switch (command) {
-            .move_to => 0,
-            .line_to => 1,
-            .quad_to => 16,
-            .cubic_to => 24,
-            .close => 1,
-        };
-    }
-    return result;
-}
-
-fn fontToPixel(point: Point, scale: f32, x: f32, baseline_y: f32) Point {
-    return .{ .x = x + point.x * scale, .y = baseline_y - point.y * scale };
-}
-
 fn svgToPixel(point: Point, scale: f32, origin_x: f32, origin_y: f32) Point {
     return .{ .x = origin_x + point.x * scale, .y = origin_y + point.y * scale };
 }
 
 fn flattenSvgOutline(allocator: std.mem.Allocator, lines: *std.ArrayList(Line), outline: *const glyph_mod.GlyphOutline, transform: SvgTransform, scale: f32, origin_x: f32, origin_y: f32) !void {
-    try lines.ensureUnusedCapacity(allocator, flattenedLineCapacity(outline.commands.items));
+    try lines.ensureUnusedCapacity(
+        allocator,
+        outline_raster.lineCapacity(outline.commands.items),
+    );
     var start: ?Point = null;
     var current: ?Point = null;
     for (outline.commands.items) |command| {
@@ -4238,44 +4091,6 @@ fn normalizedVariationCoordinatesAreDefault(coords: []const f32) bool {
     return true;
 }
 
-test "small glyph alignment translates outline to pixel grid" {
-    var lines = [_]Line{
-        .{ .a = .{ .x = 2.3, .y = 4.2 }, .b = .{ .x = 7.3, .y = 4.2 } },
-        .{ .a = .{ .x = 7.3, .y = 4.2 }, .b = .{ .x = 7.3, .y = 9.7 } },
-    };
-    const outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{ .x_min = 0, .y_min = 0, .x_max = 500, .y_max = 500 }, 500, 0);
-    alignSmallGlyphToPixelGrid(&lines, &outline, 12.0 / 1000.0, 12, 12);
-    try std.testing.expect(@abs(lines[0].a.x - 2.0) < 0.001);
-    try std.testing.expect(@abs(lines[0].a.y - 4.5) < 0.001);
-    try std.testing.expect(@abs(lines[1].b.y - 10.0) < 0.001);
-}
-
-test "small multi-contour glyph alignment preserves outline height" {
-    var lines = [_]Line{
-        .{ .a = .{ .x = 2.3, .y = 4.2 }, .b = .{ .x = 7.3, .y = 4.2 } },
-        .{ .a = .{ .x = 7.3, .y = 4.2 }, .b = .{ .x = 7.3, .y = 9.7 } },
-    };
-    var outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{ .x_min = 0, .y_min = 0, .x_max = 500, .y_max = 500 }, 500, 0);
-    defer outline.deinit();
-    try outline.commands.append(std.testing.allocator, .{ .move_to = .{ .x = 0, .y = 0 } });
-    try outline.commands.append(std.testing.allocator, .{ .move_to = .{ .x = 1, .y = 1 } });
-    alignSmallGlyphToPixelGrid(&lines, &outline, 12.0 / 1000.0, 12, 12);
-    try std.testing.expect(@abs(lines[0].a.x - 2.0) < 0.001);
-    try std.testing.expect(@abs(lines[0].a.y - 4.5) < 0.001);
-    try std.testing.expect(@abs(lines[1].b.y - 10.0) < 0.001);
-    try std.testing.expect(@abs((lines[1].b.y - lines[0].a.y) - 5.5) < 0.001);
-}
-
-test "large glyph alignment leaves outline unchanged" {
-    var lines = [_]Line{
-        .{ .a = .{ .x = 2.3, .y = 4.2 }, .b = .{ .x = 7.3, .y = 9.7 } },
-    };
-    const outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{ .x_min = 0, .y_min = 0, .x_max = 500, .y_max = 500 }, 500, 0);
-    alignSmallGlyphToPixelGrid(&lines, &outline, 24.0 / 1000.0, 24, 24);
-    try std.testing.expect(@abs(lines[0].a.x - 2.3) < 0.001);
-    try std.testing.expect(@abs(lines[0].b.y - 9.7) < 0.001);
-}
-
 test "small glyph embolden can be disabled for native-weight UI text" {
     const allocator = std.testing.allocator;
     var outline = glyph_mod.GlyphOutline.init(allocator, 1, .{ .x_min = 0, .y_min = 0, .x_max = 700, .y_max = 700 }, 700, 0);
@@ -4336,6 +4151,45 @@ test "prepared glyph rendering matches direct rendering and is reusable" {
         try std.testing.expectEqualSlices(u8, direct.pixels, prepared_once.pixels);
         try std.testing.expectEqualSlices(u8, prepared_once.pixels, prepared_twice.pixels);
     }
+}
+
+test "prepared difference rows preserve overlapping non-zero contours" {
+    const allocator = std.testing.allocator;
+    var outline = glyph_mod.GlyphOutline.init(allocator, 1, .{
+        .x_min = 0,
+        .y_min = 0,
+        .x_max = 800,
+        .y_max = 300,
+    }, 800, 0);
+    defer outline.deinit();
+    for ([_]f32{ 100, 300 }) |left| {
+        try outline.commands.append(allocator, .{
+            .move_to = .{ .x = left, .y = 100 },
+        });
+        try outline.commands.append(allocator, .{
+            .line_to = .{ .x = left + 400, .y = 100 },
+        });
+        try outline.commands.append(allocator, .{
+            .line_to = .{ .x = left + 400, .y = 250 },
+        });
+        try outline.commands.append(allocator, .{
+            .line_to = .{ .x = left, .y = 250 },
+        });
+        try outline.commands.append(allocator, .close);
+    }
+
+    var direct = try RenderTarget.init(allocator, 20, 28);
+    defer direct.deinit();
+    var cached = try RenderTarget.init(allocator, 20, 28);
+    defer cached.deinit();
+    var rasterizer = Rasterizer.init(allocator);
+    rasterizer.samples_per_axis = 4;
+    rasterizer.embolden_small_glyphs = false;
+    var prepared = try rasterizer.prepareGlyph(&outline, 0, 24, 20, 1000);
+    defer prepared.deinit();
+    try rasterizer.renderGlyph(&direct, &outline, 0, 24, 20, 1000);
+    try rasterizer.renderPreparedGlyph(&cached, &prepared);
+    try std.testing.expectEqualSlices(u8, direct.pixels, cached.pixels);
 }
 
 test "prepared glyph preserves small-size embolden policy" {

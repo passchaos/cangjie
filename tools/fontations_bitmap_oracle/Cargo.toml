@@ -1,0 +1,11 @@
+[package]
+name = "fontations-bitmap-oracle"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# The coverage manifest pins the checkout revision and crate versions. This
+# relative path keeps the oracle offline and ensures it exercises that exact
+# local reference rather than whichever crates.io release is current.
+skrifa = { path = "../../../../Work/fontations/skrifa", default-features = false, features = ["std"] }

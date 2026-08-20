@@ -8,6 +8,12 @@ const std = @import("std");
 
 const font_mod = @import("../../font.zig");
 const Font = font_mod.Font;
+const attributes_mod = @import("attributes.zig");
+
+pub const Attributes = attributes_mod.Attributes;
+pub const Stretch = attributes_mod.Stretch;
+pub const Style = attributes_mod.Style;
+pub const Weight = attributes_mod.Weight;
 
 pub const Properties = struct {
     format: font_mod.FontFormat,
@@ -72,6 +78,11 @@ pub const Face = struct {
         };
     }
 
+    /// Return classification attributes for the default font instance.
+    pub fn attributes(self: *const Face) font_mod.FontError!Attributes {
+        return attributes_mod.read(&self.implementation);
+    }
+
     pub fn glyphs(self: *const Face) Glyphs {
         return .{ .implementation = &self.implementation };
     }
@@ -90,6 +101,128 @@ pub const Face = struct {
 
     pub fn color(self: *const Face) Color {
         return .{ .implementation = &self.implementation };
+    }
+
+    /// Execute TrueType `fpgm` and `prep` for one PPEM.
+    pub fn hintingInstance(
+        self: *const Face,
+        allocator: std.mem.Allocator,
+        ppem: u16,
+        target: font_mod.TrueTypeHintingTarget,
+    ) (font_mod.FontError || @import("../hinting/root.zig").Error)!font_mod.TrueTypeHintingInstance {
+        return self.implementation.hintingInstance(
+            allocator,
+            ppem,
+            target,
+        );
+    }
+
+    /// Execute TrueType size programs with explicit interpreter semantics.
+    pub fn hintingInstanceWithOptions(
+        self: *const Face,
+        allocator: std.mem.Allocator,
+        ppem: u16,
+        options: font_mod.TrueTypeHintingOptions,
+    ) (font_mod.FontError || @import("../hinting/root.zig").Error)!font_mod.TrueTypeHintingInstance {
+        return self.implementation.hintingInstanceWithOptions(
+            allocator,
+            ppem,
+            options,
+        );
+    }
+
+    /// Execute TrueType size programs at a complete normalized fvar location.
+    pub fn hintingInstanceAt(
+        self: *const Face,
+        allocator: std.mem.Allocator,
+        ppem: u16,
+        target: font_mod.TrueTypeHintingTarget,
+        normalized_coords: []const f32,
+    ) (font_mod.FontError || @import("../hinting/root.zig").Error)!font_mod.TrueTypeHintingInstance {
+        return self.implementation.hintingInstanceAt(
+            allocator,
+            ppem,
+            target,
+            normalized_coords,
+        );
+    }
+
+    /// Execute size programs at a location and explicit interpreter mode.
+    pub fn hintingInstanceAtWithOptions(
+        self: *const Face,
+        allocator: std.mem.Allocator,
+        ppem: u16,
+        options: font_mod.TrueTypeHintingOptions,
+        normalized_coords: []const f32,
+    ) (font_mod.FontError || @import("../hinting/root.zig").Error)!font_mod.TrueTypeHintingInstance {
+        return self.implementation.hintingInstanceAtWithOptions(
+            allocator,
+            ppem,
+            options,
+            normalized_coords,
+        );
+    }
+
+    /// Decode a simple or compound glyf into raw 26.6 point state.
+    ///
+    /// Glyph bytecode has not run; use the returned owner as the atomic input
+    /// to point-zone execution and pixel-path reconstruction.
+    pub fn hintingPointTransaction(
+        self: *const Face,
+        allocator: std.mem.Allocator,
+        instance: *const font_mod.TrueTypeHintingInstance,
+        glyph_id: @import("../../glyph.zig").GlyphId,
+    ) (font_mod.FontError || @import("../hinting/root.zig").Error)!font_mod.TrueTypePointTransaction {
+        return self.implementation.hintingPointTransaction(
+            allocator,
+            instance,
+            glyph_id,
+        );
+    }
+
+    /// Execute the transaction's glyph bytecode against this PPEM instance.
+    ///
+    /// The transaction and all mutable instance VM state commit together only
+    /// after a successful run.
+    pub fn executeHintingTransaction(
+        self: *const Face,
+        instance: *font_mod.TrueTypeHintingInstance,
+        transaction: *font_mod.TrueTypePointTransaction,
+    ) @import("../hinting/root.zig").Error!void {
+        if (transaction.face_identity != @intFromPtr(&self.implementation)) {
+            return error.StaleHintingInstance;
+        }
+        return instance.executeGlyph(
+            transaction,
+            .{
+                .context = &self.implementation,
+                .resolveFn = font_mod.resolveHintingComponentForExecution,
+            },
+        );
+    }
+
+    /// Construct a reusable CFF/CFF2 stem-hinting instance for one PPEM.
+    pub fn type2HintingInstance(
+        self: *const Face,
+        ppem: u16,
+    ) font_mod.Type2HintingError!font_mod.Type2HintingInstance {
+        return self.implementation.type2HintingInstance(ppem);
+    }
+
+    /// Decode and grid-fit one CFF/CFF2 outline at the requested location.
+    pub fn type2HintedOutline(
+        self: *const Face,
+        allocator: std.mem.Allocator,
+        instance: *const font_mod.Type2HintingInstance,
+        glyph_id: @import("../../glyph.zig").GlyphId,
+        normalized_coords: []const f32,
+    ) (font_mod.FontError || font_mod.Type2HintingError)!font_mod.TrueTypePixelOutline {
+        return self.implementation.type2HintedOutline(
+            allocator,
+            instance,
+            glyph_id,
+            normalized_coords,
+        );
     }
 };
 
@@ -111,6 +244,7 @@ pub const Cascade = struct {
 };
 
 pub const Glyphs = @import("views/glyphs.zig").View;
+pub const GlyphSession = @import("views/glyphs.zig").Session;
 pub const Metrics = @import("views/metrics.zig").View;
 pub const Names = @import("views/names.zig").View;
 pub const Variations = @import("views/variations.zig").View;

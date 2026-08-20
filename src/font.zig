@@ -9,6 +9,8 @@ const bin = @import("binary.zig");
 const cff_mod = @import("cff.zig");
 const cff2_mod = @import("opentype/cff2.zig");
 const cvar_mod = @import("opentype/cvar.zig");
+const hinting = @import("font/hinting/root.zig");
+const hinting_tricky = @import("font/hinting/tricky.zig");
 const glyph_mod = @import("glyph.zig");
 const gvar_mod = @import("opentype/gvar.zig");
 const gpos_mod = @import("gpos.zig");
@@ -18,6 +20,7 @@ const gasp_mod = @import("opentype/gasp.zig");
 const cmap_iter = @import("opentype/cmap_iter.zig");
 const cmap_variation = @import("opentype/cmap_variation.zig");
 const ift_mod = @import("opentype/ift.zig");
+const incremental_mod = @import("font/incremental/root.zig");
 const kerx_mod = @import("opentype/kerx.zig");
 const ltag_mod = @import("opentype/ltag.zig");
 const math_mod = @import("opentype/math.zig");
@@ -48,6 +51,7 @@ const kerning_tables = @import("font/tables/kerning/root.zig");
 const kern_mod = kerning_tables.kern;
 const layout_tables = @import("font/tables/layout/root.zig");
 const gdef_mod = layout_tables.gdef;
+const jstf_mod = layout_tables.jstf;
 const core_tables = @import("font/tables/core/root.zig");
 const head_mod = core_tables.head;
 const maxp_mod = core_tables.maxp;
@@ -101,6 +105,7 @@ pub const FontError = error{
     InvalidLoca,
     InvalidMetrics,
     InvalidBitmapSize,
+    InvalidMarkGlyphSet,
     CompoundDepthExceeded,
     InvalidName,
 } || cff_mod.CffError || gpos_mod.GposError || gsub_mod.GsubError || std.mem.Allocator.Error || error{EndOfStream};
@@ -137,6 +142,16 @@ pub const CvarTupleInfo = cvar_mod.TupleInfo;
 pub const TrueTypeProgramInfo = tt_program_mod.Info;
 pub const TrueTypeProgramInstructionInfo = tt_program_mod.Instruction;
 pub const TrueTypeProgramKind = tt_program_mod.Kind;
+pub const TrueTypeHintingInstance = hinting.Instance;
+pub const TrueTypeHintingTarget = hinting.Target;
+pub const TrueTypeHintingInterpreter = hinting.Interpreter;
+pub const TrueTypeHintingOptions = hinting.Options;
+pub const TrueTypeHintingError = hinting.Error;
+pub const TrueTypePointTransaction = hinting.PointTransaction;
+pub const TrueTypePixelOutline = hinting.PixelOutline;
+pub const Type2HintingInstance = hinting.type2.Instance;
+pub const Type2HintingError = hinting.type2.Error;
+pub const Type2HintProgram = hinting.type2.Program;
 pub const VarcInfo = varc_mod.Info;
 
 pub const FontTableInfo = struct {
@@ -249,6 +264,12 @@ pub const AnkrInfo = ankr_mod.Info;
 pub const BaseAxisInfo = base_mod.Axis;
 pub const BaseInfo = base_mod.Info;
 pub const BaseScriptInfo = base_mod.Script;
+pub const JstfInfo = jstf_mod.Info;
+pub const JstfLanguageInfo = jstf_mod.Language;
+pub const JstfLookupListInfo = jstf_mod.LookupList;
+pub const JstfMaxLookupInfo = jstf_mod.MaxLookup;
+pub const JstfPriorityInfo = jstf_mod.Priority;
+pub const JstfScriptInfo = jstf_mod.Script;
 
 pub const GaspRange = gasp_mod.Range;
 pub const GaspInfo = gasp_mod.Info;
@@ -273,6 +294,7 @@ pub const NameId = name_mod.NameId;
 pub const NameEncoding = name_mod.Encoding;
 pub const NameLanguageTagInfo = name_mod.LanguageTagInfo;
 pub const NameRecordInfo = name_mod.RecordInfo;
+pub const LocalizedName = name_mod.LocalizedString;
 
 pub const StyleAttributes = os2_mod.Style;
 pub const Os2Info = os2_mod.Info;
@@ -315,11 +337,17 @@ pub const ResolvedSvgGlyphDocument = svg_mod.ResolvedDocument;
 // Preserve the established public type identities while their implementation
 // and table grammar live in the focused embedded-bitmap module.
 pub const BitmapGlyphPng = bitmap_mod.GlyphPng;
+pub const BitmapGlyphBgra = bitmap_mod.GlyphBgra;
+pub const BitmapGlyphMask = bitmap_mod.GlyphMask;
+pub const BitmapGlyphData = bitmap_mod.GlyphData;
+pub const OwnedBitmapGlyphData = bitmap_mod.OwnedGlyphData;
 pub const BitmapGlyphInfo = bitmap_mod.GlyphInfo;
 pub const BitmapStrikeSource = bitmap_mod.StrikeSource;
 pub const BitmapStrikeInfo = bitmap_mod.StrikeInfo;
 
 pub const GlyphClass = gdef_mod.GlyphClass;
+pub const LigatureCaret = gdef_mod.LigatureCaret;
+pub const AttachmentPoint = gdef_mod.AttachmentPoint;
 
 const TableRecord = sfnt.Record;
 
@@ -599,12 +627,40 @@ fn resolveKerxOutlinePoint(
     } else null;
 }
 
+const LigatureCaretContourContext = struct {
+    font: *const Font,
+    allocator: std.mem.Allocator,
+};
+
+fn resolveLigatureCaretContourPoint(
+    opaque_context: *const anyopaque,
+    glyph_id: glyph_mod.GlyphId,
+    point_index: u16,
+    normalized_coords: []const f32,
+) gdef_mod.LigatureCaretError!?f32 {
+    const context: *const LigatureCaretContourContext =
+        @ptrCast(@alignCast(opaque_context));
+    const point = context.font.glyphContourPoint(
+        context.allocator,
+        glyph_id,
+        point_index,
+        normalized_coords,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.BadSfnt,
+    };
+    // Horizontal text uses the ordinary glyf origin (0, 0), so format 2's
+    // origin adjustment is exactly the point's x coordinate.
+    return if (point) |value| value.x else null;
+}
+
 pub const Font = struct {
     /// The font is a borrowed byte slice. Table records and cmap subtable
     /// descriptors below only point back into this slice, so the caller must
     /// keep `data` alive for the lifetime of the Font.
     data: []const u8,
     format: FontFormat,
+    scaler_type: u32 = 0x00010000,
     units_per_em: u16,
     index_to_loc_format: i16,
     glyph_count: u16,
@@ -630,6 +686,7 @@ pub const Font = struct {
     gdef: ?TableRecord,
     gpos: ?TableRecord,
     gsub: ?TableRecord,
+    jstf: ?TableRecord,
     ankr: ?TableRecord,
     feat: ?TableRecord,
     trak: ?TableRecord,
@@ -781,6 +838,7 @@ pub const Font = struct {
         const gdef = sfnt.find(records, "GDEF");
         const gpos = sfnt.find(records, "GPOS");
         const gsub = sfnt.find(records, "GSUB");
+        const jstf = sfnt.find(records, "JSTF");
         const ankr = sfnt.find(records, "ankr");
         const feat = sfnt.find(records, "feat");
         const trak = sfnt.find(records, "trak");
@@ -825,7 +883,9 @@ pub const Font = struct {
         const has_horizontal_metrics = hhea != null and hmtx != null;
         if ((hhea == null) != (hmtx == null)) return error.MissingTable;
         const has_glyf_outlines = glyf != null and loca != null;
-        const has_embedded_bitmaps = sbix != null or (cblc != null and cbdt != null);
+        const has_embedded_bitmaps = sbix != null or
+            (cblc != null and cbdt != null) or
+            (eblc != null and ebdt != null);
         const has_layout_tables = gsub != null or gpos != null;
         const format = try maxp_mod.selectFormat(
             data,
@@ -978,6 +1038,15 @@ pub const Font = struct {
         }
         if (gsub) |gsub_table| try gsub_mod.validateGlyphBoundsForShaping(data, gsub_table.offset, gsub_table.length, glyph_count);
         if (gpos) |gpos_table| try gpos_mod.validateGlyphBounds(data, gpos_table.offset, gpos_table.length, glyph_count);
+        if (jstf) |jstf_table| {
+            try jstf_mod.validate(
+                data,
+                jstf_table,
+                gsub,
+                gpos,
+                glyph_count,
+            );
+        }
         if (cpal) |cpal_table| {
             _ = cpal_mod.validate(
                 data,
@@ -1027,6 +1096,7 @@ pub const Font = struct {
         return .{
             .data = data,
             .format = format,
+            .scaler_type = scaler,
             .units_per_em = units_per_em,
             .index_to_loc_format = index_to_loc_format,
             .glyph_count = glyph_count,
@@ -1052,6 +1122,7 @@ pub const Font = struct {
             .gdef = gdef,
             .gpos = gpos,
             .gsub = gsub,
+            .jstf = jstf,
             .ankr = ankr,
             .feat = feat,
             .trak = trak,
@@ -1412,6 +1483,84 @@ pub const Font = struct {
         return try ift_mod.info(self.data, table.offset, table.length);
     }
 
+    /// Apply one table-keyed IFT patch and return a canonical owned SFNT.
+    ///
+    /// `expected_compatibility_id` comes from the selected patch-map entry. It
+    /// must match both this face's IFT table and the patch payload before any
+    /// Brotli stream is decoded.
+    pub fn applyTableKeyedPatchAlloc(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        expected_compatibility_id: [16]u8,
+        patch_data: []const u8,
+        max_output_size: usize,
+    ) (FontError || incremental_mod.table_keyed.Error)![]u8 {
+        const patch_map = (try self.iftPatchMapInfo()) orelse
+            return error.MissingTable;
+        if (!std.mem.eql(
+            u8,
+            &patch_map.compatibility_id,
+            &expected_compatibility_id,
+        )) return error.IncompatiblePatch;
+        const source_tables = try allocator.alloc(
+            incremental_mod.table_keyed.Table,
+            self.owned_tables.len,
+        );
+        defer allocator.free(source_tables);
+        for (source_tables, self.owned_tables) |*table, record| {
+            try sfnt.checksum.validate(self.data, record);
+            table.* = .{
+                .tag = record.tag,
+                .data = self.data[record.offset .. record.offset + record.length],
+            };
+        }
+        return incremental_mod.table_keyed.applyAlloc(
+            allocator,
+            self.scaler_type,
+            source_tables,
+            expected_compatibility_id,
+            patch_data,
+            max_output_size,
+        );
+    }
+
+    /// Atomically apply one IFT glyph-keyed patch group.
+    ///
+    /// Every patch is authenticated against the selected `IFT `/`IFTX`
+    /// compatibility id before decoding. `application_bits` are absolute bit
+    /// indexes in that patch's source table and are committed only if every
+    /// glyph-table reconstruction succeeds. The returned standalone SFNT is
+    /// owned by `allocator`; this borrowed face is never modified.
+    pub fn applyGlyphKeyedPatchesAlloc(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        patches: []const incremental_mod.glyph_keyed.Patch,
+        max_output_size: usize,
+    ) (FontError || incremental_mod.glyph_keyed.Error)![]u8 {
+        const ift_info = try self.iftPatchMapInfo();
+        const iftx_info = try self.iftxPatchMapInfo();
+        const source_tables = try allocator.alloc(
+            incremental_mod.sfnt_builder.Table,
+            self.owned_tables.len,
+        );
+        defer allocator.free(source_tables);
+        for (source_tables, self.owned_tables) |*table, record| {
+            try sfnt.checksum.validate(self.data, record);
+            table.* = .{
+                .tag = record.tag,
+                .data = self.data[record.offset .. record.offset + record.length],
+            };
+        }
+        return incremental_mod.glyph_keyed.applyAlloc(allocator, .{
+            .scaler = self.scaler_type,
+            .glyph_count = self.glyph_count,
+            .index_to_loc_format = self.index_to_loc_format,
+            .base_tables = source_tables,
+            .ift_info = ift_info,
+            .iftx_info = iftx_info,
+        }, patches, max_output_size);
+    }
+
     /// Read validated top-level metadata from the optional OpenType `VARC` table.
     pub fn varcInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?VarcInfo {
         const varc = self.varc orelse return null;
@@ -1466,6 +1615,444 @@ pub const Font = struct {
 
     pub fn freeTrueTypeProgramInfo(_: *const Font, allocator: std.mem.Allocator, info_value: TrueTypeProgramInfo) void {
         tt_program_mod.free(allocator, info_value);
+    }
+
+    /// Execute the embedded TrueType font and control-value programs for one
+    /// PPEM. Mutable VM state is owned by the result while fpgm/prep bytes stay
+    /// borrowed from this face.
+    ///
+    /// This compatibility constructor selects classic v35 semantics at the
+    /// default variation location. Use `hintingInstanceWithOptions` to select
+    /// v40 ClearType compatibility explicitly.
+    pub fn hintingInstance(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        ppem: u16,
+        target: TrueTypeHintingTarget,
+    ) (FontError || hinting.Error)!TrueTypeHintingInstance {
+        const axis_count = self.fvar_axis_count orelse 0;
+        var inline_default: [32]f32 = .{0} ** 32;
+        const default_location = if (axis_count <= inline_default.len)
+            inline_default[0..axis_count]
+        else
+            try allocator.alloc(f32, axis_count);
+        defer if (axis_count > inline_default.len)
+            allocator.free(default_location);
+        if (axis_count > inline_default.len) @memset(default_location, 0);
+        return self.hintingInstanceAt(
+            allocator,
+            ppem,
+            target,
+            default_location,
+        );
+    }
+
+    /// Execute embedded programs with explicit interpreter semantics.
+    pub fn hintingInstanceWithOptions(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        ppem: u16,
+        options: TrueTypeHintingOptions,
+    ) (FontError || hinting.Error)!TrueTypeHintingInstance {
+        const axis_count = self.fvar_axis_count orelse 0;
+        var inline_default: [32]f32 = .{0} ** 32;
+        const default_location = if (axis_count <= inline_default.len)
+            inline_default[0..axis_count]
+        else
+            try allocator.alloc(f32, axis_count);
+        defer if (axis_count > inline_default.len)
+            allocator.free(default_location);
+        if (axis_count > inline_default.len) @memset(default_location, 0);
+        return self.hintingInstanceAtWithOptions(
+            allocator,
+            ppem,
+            options,
+            default_location,
+        );
+    }
+
+    /// Execute fpgm/prep for one PPEM and a complete normalized fvar location.
+    pub fn hintingInstanceAt(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        ppem: u16,
+        target: TrueTypeHintingTarget,
+        normalized_coords: []const f32,
+    ) (FontError || hinting.Error)!TrueTypeHintingInstance {
+        return self.hintingInstanceAtWithOptions(
+            allocator,
+            ppem,
+            .{ .target = target },
+            normalized_coords,
+        );
+    }
+
+    /// Execute fpgm/prep at one normalized location and interpreter mode.
+    pub fn hintingInstanceAtWithOptions(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        ppem: u16,
+        options: TrueTypeHintingOptions,
+        normalized_coords: []const f32,
+    ) (FontError || hinting.Error)!TrueTypeHintingInstance {
+        if (self.format != .truetype) return error.UnsupportedGlyph;
+        const axis_count = self.fvar_axis_count orelse 0;
+        if (normalized_coords.len != axis_count) {
+            return error.InvalidHintOperand;
+        }
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        const head_info = try self.headInfo();
+        const maxp_info = try self.maxpInfo();
+        const cvt_data = if (self.cvt) |cvt| blk: {
+            try sfnt.checksum.validate(self.data, cvt);
+            _ = try validateCvtTable(cvt);
+            break :blk self.data[cvt.offset .. cvt.offset + cvt.length];
+        } else &.{};
+        const font_program = if (self.fpgm) |fpgm| blk: {
+            try sfnt.checksum.validate(self.data, fpgm);
+            try validateTrueTypeProgramTable(self.data, fpgm);
+            break :blk self.data[fpgm.offset .. fpgm.offset + fpgm.length];
+        } else &.{};
+        const control_value_program = if (self.prep) |prep| blk: {
+            try sfnt.checksum.validate(self.data, prep);
+            try validateTrueTypeProgramTable(self.data, prep);
+            break :blk self.data[prep.offset .. prep.offset + prep.length];
+        } else &.{};
+        const cvar_data = if (self.cvar) |cvar| blk: {
+            try sfnt.checksum.validate(self.data, cvar);
+            const cvt_value_count = cvt_data.len / 2;
+            try cvar_mod.validate(
+                self.data,
+                cvar.offset,
+                cvar.length,
+                axis_count,
+                cvt_value_count,
+            );
+            break :blk self.data[cvar.offset .. cvar.offset + cvar.length];
+        } else &.{};
+        return hinting.Instance.init(
+            allocator,
+            .{
+                .face_identity = @intFromPtr(self),
+                .units_per_em = head_info.units_per_em,
+                .font_program = font_program,
+                .control_value_program = control_value_program,
+                .control_value_data = cvt_data,
+                .normalized_coords = normalized_coords,
+                .control_value_variation_data = cvar_data,
+                .interpreter = options.interpreter,
+                .tricky = if (options.interpreter == .cleartype)
+                    try self.hasFreeTypeTrickyHinting(allocator)
+                else
+                    false,
+                .limits = .{
+                    .max_storage = maxp_info.max_storage orelse
+                        return error.BadSfnt,
+                    .max_function_defs = maxp_info.max_function_defs orelse
+                        return error.BadSfnt,
+                    .max_instruction_defs = maxp_info.max_instruction_defs orelse
+                        return error.BadSfnt,
+                    .max_stack_elements = maxp_info.max_stack_elements orelse
+                        return error.BadSfnt,
+                    .max_twilight_points = maxp_info.max_twilight_points orelse
+                        return error.BadSfnt,
+                    .max_component_depth = maxp_info.max_component_depth orelse
+                        return error.BadSfnt,
+                },
+            },
+            ppem,
+            options.target,
+        );
+    }
+
+    fn hasFreeTypeTrickyHinting(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+    ) (FontError || std.mem.Allocator.Error)!bool {
+        if (self.name) |name_table| {
+            const capacity = std.math.mul(
+                usize,
+                name_table.length,
+                2,
+            ) catch return error.OutOfMemory;
+            const family_buffer = try allocator.alloc(u8, capacity);
+            defer allocator.free(family_buffer);
+            const wws_only = if (self.os2) |os2| blk: {
+                try sfnt.checksum.validate(self.data, os2);
+                break :blk (try bin.readU16At(
+                    self.data,
+                    os2.offset + 62,
+                ) & 0x0100) != 0;
+            } else false;
+            const family = if (wws_only)
+                (try self.trickyFamilyName(
+                    .typographic_family,
+                    family_buffer,
+                )) orelse try self.trickyFamilyName(.family, family_buffer)
+            else
+                (try self.trickyFamilyName(
+                    .wws_family,
+                    family_buffer,
+                )) orelse
+                    (try self.trickyFamilyName(
+                        .typographic_family,
+                        family_buffer,
+                    )) orelse
+                    try self.trickyFamilyName(.family, family_buffer);
+            if (family) |value| {
+                if (hinting_tricky.familyMatches(value)) return true;
+            }
+        }
+        const records = [_]?TableRecord{ self.cvt, self.fpgm, self.prep };
+        var ids: [3]?hinting_tricky.TableId = .{ null, null, null };
+        for (records, &ids) |record, *id| {
+            if (record) |table| {
+                id.* = .{
+                    .checksum = try sfnt.checksum.table(self.data, table),
+                    .length = table.length,
+                };
+            }
+        }
+        return hinting_tricky.sfntIdsMatch(ids);
+    }
+
+    fn trickyFamilyName(
+        self: *const Font,
+        name_id: NameId,
+        out: []u8,
+    ) FontError!?[]const u8 {
+        return self.nameString(name_id, out) catch |err| switch (err) {
+            // FreeType leaves an undecodable family name unset and continues
+            // with table signatures; classification must not turn that
+            // compatibility fallback into an instance-construction failure.
+            error.InvalidName => null,
+            else => return err,
+        };
+    }
+
+    /// Decode one simple or compound glyf outline into an interpreter-bound
+    /// raw transaction suitable for atomic TrueType glyph-program execution.
+    pub fn hintingPointTransaction(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        instance: *const TrueTypeHintingInstance,
+        glyph_id: glyph_mod.GlyphId,
+    ) (FontError || hinting.Error)!TrueTypePointTransaction {
+        if (self.format != .truetype) return error.UnsupportedHintGlyph;
+        if (instance.source.face_identity != @intFromPtr(self)) {
+            return error.StaleHintingInstance;
+        }
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        // Revalidate the complete outline stack because the transaction
+        // exposes borrowed glyph bytecode and point topology to the VM.
+        const loca = self.loca orelse return error.MissingTable;
+        const glyf = self.glyf orelse return error.MissingTable;
+        try sfnt.checksum.validate(self.data, self.maxp);
+        try sfnt.checksum.validate(self.data, loca);
+        try sfnt.checksum.validate(self.data, glyf);
+        const limits = try (try self.maxpInfo()).trueTypeLimits();
+        try loca_mod.validate(
+            self.data,
+            loca,
+            glyf,
+            self.glyph_count,
+            self.index_to_loc_format,
+        );
+        try glyf_mod.validate(
+            allocator,
+            self.data,
+            loca,
+            glyf,
+            self.glyph_count,
+            self.index_to_loc_format,
+            .{
+                .max_points = limits.max_points,
+                .max_contours = limits.max_contours,
+                .max_component_elements = limits.max_component_elements,
+                .max_component_depth = limits.max_component_depth,
+            },
+        );
+        if (self.gvar) |gvar| {
+            try sfnt.checksum.validate(self.data, gvar);
+            try gvar_validation.validate(
+                self.data,
+                gvar,
+                self.glyph_count,
+                self.fvar_axis_count orelse return error.BadSfnt,
+                .{
+                    .loca = loca,
+                    .glyf = glyf,
+                    .index_to_loc_format = self.index_to_loc_format,
+                },
+            );
+        }
+        const data = try self.glyphData(glyph_id);
+        if (data.len == 0) return error.UnsupportedHintGlyph;
+        const contour_count = try bin.readI16At(data, 0);
+        const horizontal = try self.horizontalMetrics(glyph_id);
+        const bounds = try self.glyphBoundsFromParsedTables(glyph_id);
+        const vertical = (try self.verticalMetrics(glyph_id)) orelse
+            VerticalMetrics{
+                .advance_height = self.units_per_em,
+                .top_side_bearing = 0,
+            };
+        const metrics = hinting.outline.Metrics{
+            .bounds = bounds,
+            .advance_width = horizontal.advance_width,
+            .left_side_bearing = horizontal.left_side_bearing,
+            .vertical_advance = vertical.advance_height,
+            .top_side_bearing = vertical.top_side_bearing,
+        };
+        if (contour_count >= 0) {
+            const variation: ?hinting.outline.Variation =
+                if (self.gvar) |gvar| .{
+                    .data = self.data,
+                    .table_offset = gvar.offset,
+                    .table_length = gvar.length,
+                    .glyph_count = self.glyph_count,
+                    .axis_count = self.fvar_axis_count orelse
+                        return error.BadSfnt,
+                    .normalized_coords = instance.normalizedCoordinates(),
+                } else null;
+            var transaction = try hinting.outline.decodeSimple(
+                allocator,
+                @intFromPtr(self),
+                instance.target,
+                instance.source.interpreter,
+                glyph_id,
+                data,
+                @intCast(contour_count),
+                metrics,
+                instance.scale_16_16,
+                variation,
+            );
+            errdefer transaction.deinit();
+            transaction.normalized_coords = try allocator.dupe(
+                f32,
+                instance.normalizedCoordinates(),
+            );
+            if (transaction.variation) |*context| {
+                context.normalized_coords = transaction.normalized_coords;
+            }
+            transaction.hinting_enabled = instance.isEnabled();
+            transaction.backward_compatibility =
+                instance.usesBackwardCompatibility();
+            return transaction;
+        }
+        const variation: ?hinting.compound.Variation =
+            if (self.gvar) |gvar| .{
+                .data = self.data,
+                .table_offset = gvar.offset,
+                .table_length = gvar.length,
+                .glyph_count = self.glyph_count,
+                .axis_count = self.fvar_axis_count orelse
+                    return error.BadSfnt,
+                .normalized_coords = instance.normalizedCoordinates(),
+            } else null;
+        var transaction = try hinting.compound.decode(
+            allocator,
+            @intFromPtr(self),
+            instance.target,
+            instance.source.interpreter,
+            instance.isEnabled(),
+            instance.usesBackwardCompatibility(),
+            .{
+                .glyph_id = glyph_id,
+                .data = data,
+                .metrics = metrics,
+            },
+            instance.scale_16_16,
+            limits.max_component_depth,
+            .{
+                .context = self,
+                .resolveFn = resolveHintingComponent,
+            },
+            variation,
+        );
+        errdefer transaction.deinit();
+        transaction.normalized_coords = try allocator.dupe(
+            f32,
+            instance.normalizedCoordinates(),
+        );
+        if (transaction.variation) |*context| {
+            context.normalized_coords = transaction.normalized_coords;
+        }
+        return transaction;
+    }
+
+    /// Build a size-specific CFF/CFF2 hinting instance.
+    pub fn type2HintingInstance(
+        self: *const Font,
+        ppem: u16,
+    ) hinting.type2.Error!Type2HintingInstance {
+        return hinting.type2.Instance.init(ppem, self.units_per_em);
+    }
+
+    /// Execute CFF/CFF2 charstrings and retain their stem/mask program.
+    pub fn type2HintedOutline(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        instance: *const Type2HintingInstance,
+        glyph_id: glyph_mod.GlyphId,
+        normalized_coords: []const f32,
+    ) (FontError || hinting.type2.Error)!TrueTypePixelOutline {
+        if (instance.units_per_em != self.units_per_em) {
+            return error.InvalidHintScale;
+        }
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        const metrics = try self.horizontalMetricsAtCoordsForReadMode(
+            glyph_id,
+            normalized_coords,
+            .revalidate,
+        );
+        var outline = glyph_mod.GlyphOutline.init(
+            allocator,
+            glyph_id,
+            .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 },
+            metrics.advance_width,
+            metrics.left_side_bearing,
+        );
+        defer outline.deinit();
+        var program = hinting.type2.Program.init(allocator);
+        defer program.deinit();
+        if (self.cff2) |cff2| {
+            try sfnt.checksum.validate(self.data, cff2);
+            try validateCff2Table(self.data, cff2);
+            const bounds = (try cff2_mod.appendGlyphOutlineAtCoordsWithHints(
+                allocator,
+                self.data,
+                cff2.offset,
+                cff2.length,
+                glyph_id,
+                self.glyph_count,
+                normalized_coords,
+                &outline,
+                &program,
+            )) orelse return error.UnsupportedGlyph;
+            outline.bounds = cff_outline.boundsFromCff2(bounds);
+        } else if (self.cff) |cff| {
+            if (normalized_coords.len != 0 and
+                !normalizedVariationCoordinatesAreDefault(normalized_coords))
+            {
+                return error.UnsupportedGlyph;
+            }
+            try sfnt.checksum.validate(self.data, cff);
+            try validateCffGlyphCount(self.data, cff, self.glyph_count);
+            const data = self.data[cff.offset .. cff.offset + cff.length];
+            try cff_mod.appendGlyphOutlinePreparedWithHints(
+                allocator,
+                data,
+                self.cff_parsed orelse try cff_mod.parse(data),
+                &outline,
+                glyph_id,
+                &program,
+            );
+            outline.bounds = glyph_mod.boundsForCommands(outline.commands.items);
+        } else {
+            return error.UnsupportedGlyph;
+        }
+        return instance.hint(allocator, &outline, &program);
     }
 
     /// Read validated metadata from the optional OpenType `HVAR` table.
@@ -1599,6 +2186,56 @@ pub const Font = struct {
         mvar_mod.free(allocator, info_value);
     }
 
+    /// Resolve one MVAR metric tag at normalized coordinates. Unknown tags,
+    /// absent MVAR, and the 0xffff sentinel return null/zero without exposing
+    /// the ItemVariationStore grammar to high-level metric clients.
+    pub fn mvarDeltaAtCoords(
+        self: *const Font,
+        value_tag: [4]u8,
+        normalized_coords: []const f32,
+    ) FontError!?i32 {
+        const mvar = self.mvar orelse return null;
+        const fvar = self.fvar orelse return error.BadSfnt;
+        try sfnt.checksum.validate(self.data, fvar);
+        try fvar_mod.validate(self.data, fvar);
+        const fvar_info = try fvar_mod.info(self.data, fvar);
+        if (normalized_coords.len > fvar_info.axis_count) return error.BadSfnt;
+        try sfnt.checksum.validate(self.data, mvar);
+        try metric_variation_validation.validateMvar(
+            self.data,
+            mvar,
+            fvar_info.axis_count,
+        );
+        const header = try mvar_mod.header(self.data, mvar.offset, mvar.length);
+        const store_offset = header.item_variation_store_offset orelse return 0;
+        var low: usize = 0;
+        var high = header.value_record_count;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const record = try mvar_mod.valueRecordAt(self.data, mvar.offset, header, mid);
+            if (std.mem.order(u8, &record.value_tag, &value_tag) == .lt) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        if (low >= header.value_record_count) return null;
+        const record = try mvar_mod.valueRecordAt(self.data, mvar.offset, header, low);
+        if (!std.mem.eql(u8, &record.value_tag, &value_tag)) return null;
+        if (!record.hasVariationData()) return 0;
+        return try metric_variation_mod.itemVariationDelta(
+            self.data,
+            mvar.offset,
+            mvar.length,
+            store_offset,
+            .{
+                .outer = record.delta_set_outer_index,
+                .inner = record.delta_set_inner_index,
+            },
+            normalized_coords,
+        );
+    }
+
     /// Read validated metadata from the optional OpenType `VVAR` table.
     pub fn vvarInfo(self: *const Font, allocator: std.mem.Allocator) FontError!?VvarInfo {
         const vvar = (try self.metricVariationTableForRead(.vvar)) orelse return null;
@@ -1702,6 +2339,31 @@ pub const Font = struct {
 
     pub fn freeBaseInfo(_: *const Font, allocator: std.mem.Allocator, info_value: BaseInfo) void {
         base_mod.free(allocator, info_value);
+    }
+
+    /// Read validated OpenType `JSTF` scripts, languages, and priorities.
+    pub fn jstfInfo(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+    ) FontError!?JstfInfo {
+        const jstf = self.jstf orelse return null;
+        try sfnt.checksum.validate(self.data, jstf);
+        return try jstf_mod.info(
+            allocator,
+            self.data,
+            jstf,
+            self.gsub,
+            self.gpos,
+            self.glyph_count,
+        );
+    }
+
+    pub fn freeJstfInfo(
+        _: *const Font,
+        allocator: std.mem.Allocator,
+        info_value: JstfInfo,
+    ) void {
+        jstf_mod.free(allocator, info_value);
     }
 
     /// Borrow the raw bytes of an SFNT table by four-byte tag.
@@ -2885,6 +3547,35 @@ pub const Font = struct {
         try gpos_mod.collectAdjustmentsWithOptions(self.data, gpos.offset, gpos.length, glyphs, adjustments, allocator, gpos_options);
     }
 
+    fn collectJstfMaxAdjustmentsForShaping(
+        self: *const Font,
+        lookup_offsets: []const usize,
+        glyphs: []const glyph_mod.GlyphId,
+        adjustments: *std.ArrayList(gpos_mod.Adjustment),
+        allocator: std.mem.Allocator,
+        options: gpos_mod.LookupOptions,
+        gdef_metadata: GdefLookupMetadata,
+    ) FontError!void {
+        try self.validateGlyphRun(glyphs);
+        const jstf = self.jstf orelse return;
+        try sfnt.checksum.validate(self.data, jstf);
+        var gpos_options = options;
+        gpos_options.assume_validated = true;
+        gpos_options.lookup_accelerators = null;
+        gpos_options.selected_lookups = null;
+        gdef_metadata.applyToGposOptions(&gpos_options);
+        try gpos_mod.collectDetachedLookups(
+            self.data,
+            jstf.offset,
+            jstf.length,
+            lookup_offsets,
+            glyphs,
+            adjustments,
+            allocator,
+            gpos_options,
+        );
+    }
+
     fn selectGposLookupsForShaping(self: *const Font, allocator: std.mem.Allocator, options: gpos_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError![]u16 {
         const gpos = self.gpos orelse return try allocator.alloc(u16, 0);
         try sfnt.checksum.validate(self.data, gpos);
@@ -2998,6 +3689,23 @@ pub const Font = struct {
         const name = self.name orelse return null;
         try sfnt.checksum.validate(self.data, name);
         return try readNameString(self.data, name, @intFromEnum(name_id), out);
+    }
+
+    /// Enumerate every localized string for `name_id` in canonical table
+    /// order. The array is caller-owned and each payload borrows this Font.
+    pub fn localizedNames(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        name_id: NameId,
+    ) FontError![]LocalizedName {
+        const name = self.name orelse return try allocator.alloc(LocalizedName, 0);
+        try sfnt.checksum.validate(self.data, name);
+        return try name_mod.localizedStrings(
+            allocator,
+            self.data,
+            nameTableView(name),
+            @intFromEnum(name_id),
+        );
     }
 
     /// Enumerate raw SFNT name records in canonical table order.
@@ -3147,6 +3855,49 @@ pub const Font = struct {
         return @enumFromInt(class);
     }
 
+    /// Enumerate all valid glyph IDs assigned to one GDEF GlyphClassDef class.
+    ///
+    /// `.unclassified` is the complement of every explicit class assignment
+    /// across `0..glyph_count`; missing GDEF/ClassDef therefore returns all
+    /// glyph IDs for that class and an empty slice for the other classes.
+    pub fn glyphsInClass(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        requested: GlyphClass,
+    ) FontError![]glyph_mod.GlyphId {
+        try gdef_mod.validateGlyphClassValue(@intFromEnum(requested));
+        const gdef = self.gdef orelse
+            return self.glyphClassFallback(allocator, requested);
+        try sfnt.checksum.validate(self.data, gdef);
+        const gdef_header = try gdef_mod.header(self.data, gdef);
+        const offset = gdef_header.glyph_class_def_offset;
+        if (offset == 0) {
+            return self.glyphClassFallback(allocator, requested);
+        }
+        try gdef_mod.validateChildOffset(
+            offset,
+            gdef.length,
+            gdef_header.length,
+        );
+        try gdef_mod.validate(
+            self.data,
+            gdef,
+            self.glyph_count,
+            try self.gdefVariationAxisCount(gdef_header),
+        );
+        return gdef_mod.glyphsInClass(
+            allocator,
+            self.data[gdef.offset .. gdef.offset + gdef.length],
+            offset,
+            self.glyph_count,
+            requested,
+        ) catch |err| switch (err) {
+            error.BadSfnt => return error.BadSfnt,
+            error.EndOfStream => return error.EndOfStream,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+    }
+
     pub fn markAttachClass(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!u16 {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const gdef = self.gdef orelse return 0;
@@ -3165,6 +3916,201 @@ pub const Font = struct {
             mark_attach_class_def_offset,
             glyph_id,
         );
+    }
+
+    /// Return the GDEF AttachList contour-point indexes for one glyph.
+    ///
+    /// The returned slice is allocator-owned and remains sorted in authored
+    /// order. Missing GDEF/AttachList data and uncovered glyphs return an empty
+    /// slice.
+    pub fn attachmentPoints(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+    ) FontError![]AttachmentPoint {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const gdef = self.gdef orelse
+            return allocator.alloc(AttachmentPoint, 0);
+        try sfnt.checksum.validate(self.data, gdef);
+        const gdef_header = try gdef_mod.header(self.data, gdef);
+        const attach_list_offset = gdef_header.attach_list_offset;
+        if (attach_list_offset == 0) {
+            return allocator.alloc(AttachmentPoint, 0);
+        }
+        try gdef_mod.validateChildOffset(
+            attach_list_offset,
+            gdef.length,
+            gdef_header.length,
+        );
+        // This public reader retains the borrowed-byte lifecycle contract used
+        // by glyph classes and ligature carets: post-parse mutations cannot
+        // bypass maxp, Coverage, child-offset, or point-order validation.
+        try gdef_mod.validate(
+            self.data,
+            gdef,
+            self.glyph_count,
+            try self.gdefVariationAxisCount(gdef_header),
+        );
+        return gdef_mod.readAttachmentPoints(
+            allocator,
+            self.data[gdef.offset .. gdef.offset + gdef.length],
+            attach_list_offset,
+            glyph_id,
+        ) catch |err| switch (err) {
+            error.BadSfnt => return error.BadSfnt,
+            error.EndOfStream => return error.EndOfStream,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+    }
+
+    /// Return GDEF LigCaretList positions for one glyph.
+    ///
+    /// CaretValue format 1 uses its authored coordinate, format 2 resolves a
+    /// TrueType contour point at the requested variation instance, and format
+    /// 3 evaluates VariationIndex against GDEF 1.3's ItemVariationStore.
+    /// Ordinary Device deltas are PPEM-dependent and intentionally remain zero
+    /// in this resolution-independent font-unit API.
+    pub fn ligatureCarets(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+        normalized_coords: []const f32,
+    ) FontError![]LigatureCaret {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        const gdef = self.gdef orelse
+            return try allocator.alloc(LigatureCaret, 0);
+        try sfnt.checksum.validate(self.data, gdef);
+        const gdef_header = try gdef_mod.header(self.data, gdef);
+        const lig_caret_list_offset = gdef_header.lig_caret_list_offset;
+        if (lig_caret_list_offset == 0) {
+            return try allocator.alloc(LigatureCaret, 0);
+        }
+        try gdef_mod.validateChildOffset(
+            lig_caret_list_offset,
+            gdef.length,
+            gdef_header.length,
+        );
+        const table = self.data[gdef.offset .. gdef.offset + gdef.length];
+        const variation_axis_count =
+            try self.gdefVariationAxisCount(gdef_header);
+        // Revalidate the complete child grammar against maxp before lazy reads;
+        // Font borrows bytes and callers may mutate them after parse.
+        try gdef_mod.validate(
+            self.data,
+            gdef,
+            self.glyph_count,
+            variation_axis_count,
+        );
+        const context = LigatureCaretContourContext{
+            .font = self,
+            .allocator = allocator,
+        };
+        return gdef_mod.readLigatureCarets(
+            allocator,
+            table,
+            lig_caret_list_offset,
+            glyph_id,
+            .{
+                .normalized_coords = normalized_coords,
+                .item_variation_store_offset = if (gdef_header.item_variation_store_offset) |offset|
+                    if (offset == 0) null else @intCast(offset)
+                else
+                    null,
+                .contour_context = &context,
+                .resolve_contour_point = resolveLigatureCaretContourPoint,
+            },
+        ) catch |err| switch (err) {
+            error.UnavailableContourPoint, error.NonCanonicalCaretOrder => try allocator.alloc(LigatureCaret, 0),
+            error.BadSfnt => return error.BadSfnt,
+            error.EndOfStream => return error.EndOfStream,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+    }
+
+    fn gdefVariationAxisCount(
+        self: *const Font,
+        gdef_header: gdef_mod.Header,
+    ) FontError!?usize {
+        const offset =
+            gdef_header.item_variation_store_offset orelse return null;
+        if (offset == 0) return null;
+        const fvar = self.fvar orelse return error.BadSfnt;
+        try sfnt.checksum.validate(self.data, fvar);
+        return (try fvar_mod.info(self.data, fvar)).axis_count;
+    }
+
+    fn glyphClassFallback(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        requested: GlyphClass,
+    ) FontError![]glyph_mod.GlyphId {
+        if (requested != .unclassified) {
+            return allocator.alloc(glyph_mod.GlyphId, 0);
+        }
+        const glyphs = try allocator.alloc(
+            glyph_mod.GlyphId,
+            self.glyph_count,
+        );
+        for (glyphs, 0..) |*glyph_id, index| glyph_id.* = @intCast(index);
+        return glyphs;
+    }
+
+    pub fn markGlyphSetCount(self: *const Font) FontError!usize {
+        const resolved = try self.gdefMarkSetsView();
+        return if (resolved) |view|
+            try gdef_mod.markSetCount(view.table, view.offset)
+        else
+            0;
+    }
+
+    pub fn markGlyphSet(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        set_index: usize,
+    ) FontError![]glyph_mod.GlyphId {
+        const view = try self.gdefMarkSetsView() orelse
+            return error.InvalidMarkGlyphSet;
+        return gdef_mod.readMarkSet(
+            allocator,
+            view.table,
+            view.offset,
+            set_index,
+        ) catch |err| switch (err) {
+            error.InvalidMarkGlyphSet => return error.InvalidMarkGlyphSet,
+            error.BadSfnt => return error.BadSfnt,
+            error.EndOfStream => return error.EndOfStream,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+    }
+
+    const GdefMarkSetsView = struct {
+        table: []const u8,
+        offset: usize,
+    };
+
+    fn gdefMarkSetsView(self: *const Font) FontError!?GdefMarkSetsView {
+        const gdef = self.gdef orelse return null;
+        try sfnt.checksum.validate(self.data, gdef);
+        const gdef_header = try gdef_mod.header(self.data, gdef);
+        const offset =
+            gdef_header.mark_glyph_sets_def_offset orelse return null;
+        if (offset == 0) return null;
+        try gdef_mod.validateChildOffset(
+            offset,
+            gdef.length,
+            gdef_header.length,
+        );
+        try gdef_mod.validate(
+            self.data,
+            gdef,
+            self.glyph_count,
+            try self.gdefVariationAxisCount(gdef_header),
+        );
+        return .{
+            .table = self.data[gdef.offset .. gdef.offset + gdef.length],
+            .offset = offset,
+        };
     }
 
     fn markFilteringSets(self: *const Font, allocator: std.mem.Allocator) FontError!?[][]glyph_mod.GlyphId {
@@ -3905,7 +4851,10 @@ pub const Font = struct {
             strikes.appendAssumeCapacity(.{
                 .source = source,
                 .ppem = strike.ppem,
+                .ppem_x = strike.ppem_x,
                 .ppi = strike.ppi,
+                .bit_depth = strike.bit_depth,
+                .flags = strike.flags,
                 .start_glyph = strike.start_glyph,
                 .end_glyph = strike.end_glyph,
             });
@@ -4064,6 +5013,239 @@ pub const Font = struct {
             try sfnt.checksum.validate(self.data, ebdt);
             try validateCblcCbdtTables(self.data, eblc, ebdt, self.glyph_count);
             if (try bitmap_mod.cblc.glyphPng(self.data, bitmapTable(eblc), bitmapTable(ebdt), self.glyph_count, glyph_id, size_px, .eblc_ebdt)) |png| return png;
+        }
+        return null;
+    }
+
+    /// Return uncompressed premultiplied BGRA pixels from the preferred
+    /// 32-bpp EBDT/CBDT strike. The returned slice borrows the face bytes.
+    pub fn bitmapGlyphBgra(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+        size_px: f32,
+    ) FontError!?BitmapGlyphBgra {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try bitmap_mod.validateRequestSize(size_px);
+        if (self.cblc != null and self.cbdt != null) {
+            const cblc = self.cblc.?;
+            const cbdt = self.cbdt.?;
+            try sfnt.checksum.validate(self.data, cblc);
+            try sfnt.checksum.validate(self.data, cbdt);
+            try validateCblcCbdtTables(
+                self.data,
+                cblc,
+                cbdt,
+                self.glyph_count,
+            );
+            if (try bitmap_mod.cblc.glyphBgra(
+                self.data,
+                bitmapTable(cblc),
+                bitmapTable(cbdt),
+                self.glyph_count,
+                glyph_id,
+                size_px,
+                .cblc_cbdt,
+            )) |bgra| return bgra;
+        }
+        if (self.eblc != null and self.ebdt != null) {
+            const eblc = self.eblc.?;
+            const ebdt = self.ebdt.?;
+            try sfnt.checksum.validate(self.data, eblc);
+            try sfnt.checksum.validate(self.data, ebdt);
+            try validateCblcCbdtTables(
+                self.data,
+                eblc,
+                ebdt,
+                self.glyph_count,
+            );
+            if (try bitmap_mod.cblc.glyphBgra(
+                self.data,
+                bitmapTable(eblc),
+                bitmapTable(ebdt),
+                self.glyph_count,
+                glyph_id,
+                size_px,
+                .eblc_ebdt,
+            )) |bgra| return bgra;
+        }
+        return null;
+    }
+
+    /// Select one bitmap representation globally by strike size.
+    ///
+    /// This is the renderer-facing boundary for fonts that mix raw and PNG
+    /// strikes. The more specific accessors remain useful for inspection, but
+    /// must not be called in a fixed content-order to choose what to draw.
+    pub fn bitmapGlyphData(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+        size_px: f32,
+    ) FontError!?BitmapGlyphData {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try bitmap_mod.validateRequestSize(size_px);
+        if (self.sbix) |sbix| {
+            try sfnt.checksum.validate(self.data, sbix);
+            try validateSbixTable(
+                self.allocator,
+                self.data,
+                sbix,
+                self.glyph_count,
+            );
+            const strike_count =
+                try bitmap_mod.sbix.strikeCount(self.data, bitmapTable(sbix));
+            var best: ?BitmapGlyphPng = null;
+            for (0..strike_count) |strike_index| {
+                const strike = try bitmap_mod.sbix.strike(
+                    self.data,
+                    bitmapTable(sbix),
+                    self.glyph_count,
+                    strike_index,
+                );
+                if (try bitmap_mod.sbix.glyphPng(
+                    self.data,
+                    strike,
+                    glyph_id,
+                    self.glyph_count,
+                )) |candidate| {
+                    if (best == null or bitmap_mod.ppemIsPreferred(
+                        candidate.ppem,
+                        best.?.ppem,
+                        size_px,
+                    )) best = candidate;
+                }
+            }
+            if (best) |png_glyph| return .{ .png = png_glyph };
+        }
+        if (self.cblc != null and self.cbdt != null) {
+            const cblc = self.cblc.?;
+            const cbdt = self.cbdt.?;
+            try sfnt.checksum.validate(self.data, cblc);
+            try sfnt.checksum.validate(self.data, cbdt);
+            try validateCblcCbdtTables(
+                self.data,
+                cblc,
+                cbdt,
+                self.glyph_count,
+            );
+            if (try bitmap_mod.cblc.glyphData(
+                self.data,
+                bitmapTable(cblc),
+                bitmapTable(cbdt),
+                self.glyph_count,
+                glyph_id,
+                size_px,
+                .cblc_cbdt,
+            )) |glyph_data| return glyph_data;
+        }
+        if (self.eblc != null and self.ebdt != null) {
+            const eblc = self.eblc.?;
+            const ebdt = self.ebdt.?;
+            try sfnt.checksum.validate(self.data, eblc);
+            try sfnt.checksum.validate(self.data, ebdt);
+            try validateCblcCbdtTables(
+                self.data,
+                eblc,
+                ebdt,
+                self.glyph_count,
+            );
+            if (try bitmap_mod.cblc.glyphData(
+                self.data,
+                bitmapTable(eblc),
+                bitmapTable(ebdt),
+                self.glyph_count,
+                glyph_id,
+                size_px,
+                .eblc_ebdt,
+            )) |glyph_data| return glyph_data;
+        }
+        return null;
+    }
+
+    /// Flatten a compound EBDT/CBDT glyph from the preferred strike.
+    ///
+    /// Formats 8/9 reference other glyphs in the same strike and therefore
+    /// require allocator-owned pixels. Noncompound glyphs return null so the
+    /// borrowed `bitmapGlyphData` path remains allocation-free.
+    pub fn compoundBitmapGlyphAlloc(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+        size_px: f32,
+    ) FontError!?OwnedBitmapGlyphData {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try bitmap_mod.validateRequestSize(size_px);
+        if (self.cblc != null and self.cbdt != null) {
+            const cblc = self.cblc.?;
+            const cbdt = self.cbdt.?;
+            try sfnt.checksum.validate(self.data, cblc);
+            try sfnt.checksum.validate(self.data, cbdt);
+            try validateCblcCbdtTables(
+                self.data,
+                cblc,
+                cbdt,
+                self.glyph_count,
+            );
+            if (try bitmap_mod.cblc.compoundGlyphAlloc(
+                allocator,
+                self.data,
+                bitmapTable(cblc),
+                bitmapTable(cbdt),
+                self.glyph_count,
+                glyph_id,
+                size_px,
+                .cblc_cbdt,
+            )) |glyph_data| return glyph_data;
+        }
+        if (self.eblc != null and self.ebdt != null) {
+            const eblc = self.eblc.?;
+            const ebdt = self.ebdt.?;
+            try sfnt.checksum.validate(self.data, eblc);
+            try sfnt.checksum.validate(self.data, ebdt);
+            try validateCblcCbdtTables(
+                self.data,
+                eblc,
+                ebdt,
+                self.glyph_count,
+            );
+            if (try bitmap_mod.cblc.compoundGlyphAlloc(
+                allocator,
+                self.data,
+                bitmapTable(eblc),
+                bitmapTable(ebdt),
+                self.glyph_count,
+                glyph_id,
+                size_px,
+                .eblc_ebdt,
+            )) |glyph_data| return glyph_data;
+        }
+        return null;
+    }
+
+    /// Return raw 1/2/4/8-bpp EBDT/CBDT coverage from the preferred strike.
+    /// The payload borrows this face's source bytes; `decodeAlloc` expands it
+    /// to one 0...255 coverage byte per pixel.
+    pub fn bitmapGlyphMask(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+        size_px: f32,
+    ) FontError!?BitmapGlyphMask {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try bitmap_mod.validateRequestSize(size_px);
+        if (self.cblc != null and self.cbdt != null) {
+            const cblc = self.cblc.?;
+            const cbdt = self.cbdt.?;
+            try sfnt.checksum.validate(self.data, cblc);
+            try sfnt.checksum.validate(self.data, cbdt);
+            try validateCblcCbdtTables(self.data, cblc, cbdt, self.glyph_count);
+            if (try bitmap_mod.cblc.glyphMask(self.data, bitmapTable(cblc), bitmapTable(cbdt), self.glyph_count, glyph_id, size_px, .cblc_cbdt)) |mask| return mask;
+        }
+        if (self.eblc != null and self.ebdt != null) {
+            const eblc = self.eblc.?;
+            const ebdt = self.ebdt.?;
+            try sfnt.checksum.validate(self.data, eblc);
+            try sfnt.checksum.validate(self.data, ebdt);
+            try validateCblcCbdtTables(self.data, eblc, ebdt, self.glyph_count);
+            if (try bitmap_mod.cblc.glyphMask(self.data, bitmapTable(eblc), bitmapTable(ebdt), self.glyph_count, glyph_id, size_px, .eblc_ebdt)) |mask| return mask;
         }
         return null;
     }
@@ -4345,6 +5527,22 @@ pub const Font = struct {
         };
     }
 
+    fn glyphContourPoint(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+        point_index: usize,
+        normalized_coords: []const f32,
+    ) FontError!?glyph_mod.Point {
+        return self.glyphContourPointForReadMode(
+            allocator,
+            glyph_id,
+            point_index,
+            normalized_coords,
+            .revalidate,
+        );
+    }
+
     fn glyphContourPointForShaping(
         self: *const Font,
         allocator: std.mem.Allocator,
@@ -4352,12 +5550,36 @@ pub const Font = struct {
         point_index: usize,
         normalized_coords: []const f32,
     ) FontError!?glyph_mod.Point {
+        return self.glyphContourPointForReadMode(
+            allocator,
+            glyph_id,
+            point_index,
+            normalized_coords,
+            .parsed,
+        );
+    }
+
+    fn glyphContourPointForReadMode(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+        point_index: usize,
+        normalized_coords: []const f32,
+        read_mode: OutlineReadMode,
+    ) FontError!?glyph_mod.Point {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
         if (self.format != .truetype) return null;
+        if (read_mode.shouldRevalidate()) {
+            try self.validateContourPointTables(allocator);
+        }
         const data = try self.glyphData(glyph_id);
         if (data.len == 0) return null;
 
-        const metrics = try self.horizontalMetricsForReadMode(glyph_id, .parsed);
+        const metrics = try self.horizontalMetricsForReadMode(
+            glyph_id,
+            read_mode,
+        );
         const bounds = try self.glyphBoundsFromParsedTables(glyph_id);
         var outline = glyph_mod.GlyphOutline.init(
             allocator,
@@ -4385,10 +5607,60 @@ pub const Font = struct {
                 Transform.identity(),
                 0,
                 normalized_coords,
-                .parsed,
+                read_mode,
             );
         }
         return if (point_index < points.items.len) points.items[point_index] else null;
+    }
+
+    fn validateContourPointTables(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+    ) FontError!void {
+        const loca = self.loca orelse return error.MissingTable;
+        const glyf = self.glyf orelse return error.MissingTable;
+        try sfnt.checksum.validate(self.data, self.maxp);
+        try sfnt.checksum.validate(self.data, loca);
+        try sfnt.checksum.validate(self.data, glyf);
+        try maxp_mod.validate(self.data, self.maxp, self.format);
+        const limits =
+            try (try maxp_mod.info(self.data, self.maxp)).trueTypeLimits();
+        try loca_mod.validate(
+            self.data,
+            loca,
+            glyf,
+            self.glyph_count,
+            self.index_to_loc_format,
+        );
+        try glyf_mod.validate(
+            allocator,
+            self.data,
+            loca,
+            glyf,
+            self.glyph_count,
+            self.index_to_loc_format,
+            .{
+                .max_points = limits.max_points,
+                .max_contours = limits.max_contours,
+                .max_component_elements = limits.max_component_elements,
+                .max_component_depth = limits.max_component_depth,
+            },
+        );
+        if (self.gvar) |gvar| {
+            try sfnt.checksum.validate(self.data, gvar);
+            const axis_count = try self.fvarAxisCountForReadMode(.revalidate);
+            try gvar_validation.validate(
+                self.data,
+                gvar,
+                self.glyph_count,
+                axis_count,
+                .{
+                    .loca = loca,
+                    .glyf = glyf,
+                    .index_to_loc_format = self.index_to_loc_format,
+                },
+            );
+        }
     }
 
     fn glyphOutlineFromParsedTables(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, read_mode: OutlineReadMode) FontError!glyph_mod.GlyphOutline {
@@ -4822,6 +6094,44 @@ pub const Font = struct {
     }
 };
 
+fn resolveHintingComponent(
+    context: *const anyopaque,
+    glyph_id: glyph_mod.GlyphId,
+) hinting.Error!hinting.compound.Source {
+    const self: *const Font = @ptrCast(@alignCast(context));
+    if (glyph_id >= self.glyph_count) return error.BadSfnt;
+    const data = self.glyphData(glyph_id) catch return error.BadSfnt;
+    const horizontal = self.horizontalMetrics(glyph_id) catch
+        return error.BadSfnt;
+    const bounds = self.glyphBoundsFromParsedTables(glyph_id) catch
+        return error.BadSfnt;
+    const vertical = (self.verticalMetrics(glyph_id) catch
+        return error.BadSfnt) orelse VerticalMetrics{
+        .advance_height = self.units_per_em,
+        .top_side_bearing = 0,
+    };
+    return .{
+        .glyph_id = glyph_id,
+        .data = data,
+        .metrics = .{
+            .bounds = bounds,
+            .advance_width = horizontal.advance_width,
+            .left_side_bearing = horizontal.left_side_bearing,
+            .vertical_advance = vertical.advance_height,
+            .top_side_bearing = vertical.top_side_bearing,
+        },
+    };
+}
+
+/// Internal bridge used by the public face executor to materialize component
+/// glyph transactions without exposing parser storage through the public API.
+pub fn resolveHintingComponentForExecution(
+    context: *const anyopaque,
+    glyph_id: glyph_mod.GlyphId,
+) hinting.Error!hinting.compound.Source {
+    return resolveHintingComponent(context, glyph_id);
+}
+
 fn validateSbixTable(
     allocator: std.mem.Allocator,
     data: []const u8,
@@ -4890,6 +6200,7 @@ pub const shaping = struct {
     pub const applyAatSubstitutionForShaping = Font.applyAatSubstitutionForShaping;
     pub const applyMorxForShaping = Font.applyMorxForShaping;
     pub const collectGposAdjustmentsWithOptionsUsingGdefAfterProof = Font.collectGposAdjustmentsWithOptionsUsingGdefAfterProof;
+    pub const collectJstfMaxAdjustmentsForShaping = Font.collectJstfMaxAdjustmentsForShaping;
     pub const selectGposLookupsForShaping = Font.selectGposLookupsForShaping;
     pub const gposLookupAcceleratorsForShaping = Font.gposLookupAcceleratorsForShaping;
     pub const gdefLookupMetadataForShaping = Font.gdefLookupMetadataForShaping;

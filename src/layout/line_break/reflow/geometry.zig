@@ -9,6 +9,8 @@ const std = @import("std");
 const Font = @import("../../../font.zig").Font;
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const discretionary_hyphen = @import("../../discretionary_hyphen.zig");
+const inline_object = @import("../../inline_object/root.zig");
+const regions = @import("regions.zig");
 const run_types = @import("../../types/runs.zig");
 
 pub const BaselineMetrics = struct {
@@ -32,6 +34,34 @@ pub const RunRange = struct {
     len: usize,
 };
 
+pub fn resolvedLineInfo(
+    runs: anytype,
+    glyphs: []const GlyphPosition,
+    objects: []const inline_object.Object,
+    glyph_start: usize,
+    glyph_end: usize,
+    default_metrics: BaselineMetrics,
+    requested_line_height: ?f32,
+    recipe_minimum_line_height: ?f32,
+) LineRunInfo {
+    const effective_line_height = if (recipe_minimum_line_height) |minimum|
+        if (requested_line_height) |requested|
+            @max(minimum, requested)
+        else
+            minimum
+    else
+        requested_line_height;
+    return lineRunInfo(
+        runs,
+        glyphs,
+        objects,
+        glyph_start,
+        glyph_end,
+        default_metrics,
+        effective_line_height,
+    );
+}
+
 pub fn defaultBaselineMetrics(
     font: *const Font,
     font_size: f32,
@@ -50,6 +80,8 @@ pub fn defaultBaselineMetrics(
 
 pub fn lineRunInfo(
     runs: anytype,
+    glyphs: []const GlyphPosition,
+    objects: []const inline_object.Object,
     glyph_start: usize,
     glyph_end: usize,
     default_metrics: BaselineMetrics,
@@ -76,6 +108,15 @@ pub fn lineRunInfo(
         metrics.descent = @max(metrics.descent, run_metrics.descent);
         metrics.leading = @max(metrics.leading, run_metrics.leading);
     }
+    for (glyphs[glyph_start..glyph_end]) |glyph| {
+        if (!glyph.isInlineObject()) continue;
+        const object = inline_object.find(objects, glyph.cluster) orelse
+            continue;
+        if (object.kind != .in_flow) continue;
+        const object_metrics = inline_object.verticalMetrics(object);
+        metrics.ascent = @max(metrics.ascent, object_metrics.ascent);
+        metrics.descent = @max(metrics.descent, object_metrics.descent);
+    }
     const run_start_index = first_run orelse 0;
     return .{
         .run_start = run_start_index,
@@ -95,27 +136,6 @@ pub fn resolvedAlignment(options: anytype) @TypeOf(options.alignment) {
     };
 }
 
-pub fn lineIndent(line_index: usize, options: anytype) f32 {
-    if (line_index == 0) return @max(0, options.first_line_indent);
-    return 0;
-}
-
-pub fn lineWidthLimit(
-    line_index: usize,
-    max_width: f32,
-    options: anytype,
-) f32 {
-    return lineWidthLimitForIndent(
-        max_width,
-        lineIndent(line_index, options),
-    );
-}
-
-pub fn lineWidthLimitForIndent(max_width: f32, indent: f32) f32 {
-    if (!std.math.isFinite(max_width)) return max_width;
-    return @max(0, max_width - indent);
-}
-
 pub fn appendLine(
     buffer: anytype,
     glyph_start: usize,
@@ -126,11 +146,15 @@ pub fn appendLine(
     run_info: LineRunInfo,
     y: f32,
     alignment: anytype,
-    max_width: f32,
-    indent: f32,
+    region: regions.LineRegion,
+    justification_target: ?f32,
 ) !void {
-    const available_width = lineWidthLimitForIndent(max_width, indent);
-    const x = indent + alignedLineX(width, available_width, alignment);
+    const occupied_width = @min(width, region.width);
+    const x = region.x + alignedLineX(
+        occupied_width,
+        region.width,
+        alignment,
+    );
     const metrics = run_info.metrics;
     try buffer.lines.append(buffer.allocator, .{
         .glyph_start = glyph_start,
@@ -141,7 +165,14 @@ pub fn appendLine(
         .byte_len = byte_end - byte_start,
         .x = x,
         .y = y,
+        .indent = region.indent,
+        .region_x = region.x,
+        .region_width = region.width,
+        .region_inline_start = region.x,
+        .region_inline_size = region.width,
+        .resolved_alignment = alignment,
         .width = width,
+        .justification_target = justification_target,
         .height = metrics.lineHeight(),
         .baseline = metrics.ascent,
         .ascent = metrics.ascent,
@@ -181,21 +212,10 @@ pub fn defaultSpaceAdvance(glyphs: []const GlyphPosition) f32 {
     return 1;
 }
 
-pub fn tabAdvance(
-    current_width: f32,
-    tab_stop: f32,
-    fallback_advance: f32,
-) f32 {
-    if (tab_stop <= 0) return fallback_advance;
-    const stops_passed = @floor(current_width / tab_stop);
-    const next_stop = (stops_passed + 1) * tab_stop;
-    return @max(fallback_advance, next_stop - current_width);
-}
-
 pub fn spacingForGlyph(codepoint: u21, options: anytype) f32 {
     if (codepoint == '\n') return 0;
     if (codepoint == discretionary_hyphen.soft_hyphen) return 0;
-    if (codepoint == ' ' or codepoint == '\t') return options.word_spacing;
+    if (codepoint == ' ') return options.word_spacing;
     return options.letter_spacing;
 }
 

@@ -375,8 +375,11 @@ fn checkedPairArrayLength(pair_count: u32) types.Error!usize {
 
 test "CBLC bitmap index subtables reject decreasing image offsets" {
     const strike = Strike{
+        .ppem_x = 16,
         .ppem = 16,
         .ppi = 0,
+        .bit_depth = 1,
+        .flags = 1,
         .offset = 0,
         .index_tables_size = 0,
         .table_count = 0,
@@ -414,8 +417,11 @@ test "CBLC bitmap index subtables reject decreasing image offsets" {
 
 test "CBLC index subtable array validates ordering before returning a location" {
     const strike = Strike{
+        .ppem_x = 16,
         .ppem = 16,
         .ppi = 0,
+        .bit_depth = 1,
+        .flags = 1,
         .offset = 0,
         .index_tables_size = 40,
         .table_count = 2,
@@ -441,8 +447,11 @@ test "CBLC index subtable array validates ordering before returning a location" 
 
 test "CBLC format 4 sparse pairs validate every glyph record" {
     const strike = Strike{
+        .ppem_x = 16,
         .ppem = 16,
         .ppi = 0,
+        .bit_depth = 1,
+        .flags = 1,
         .offset = 0,
         .index_tables_size = 24,
         .table_count = 1,

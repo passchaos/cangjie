@@ -1,25 +1,33 @@
 //! Portable text, paragraph, locale, and range style records.
 
-const core = @import("../../../core.zig");
+const style = @import("../../../text/style/root.zig");
 
-pub const ByteRange = core.ByteRange;
-pub const CharRange = core.CharRange;
-pub const ClusterRange = core.ClusterRange;
-pub const GraphemeRange = core.GraphemeRange;
-pub const GlyphRange = core.GlyphRange;
-pub const GlyphCluster = core.GlyphCluster;
-pub const FontId = core.FontId;
-pub const FontWeight = core.FontWeight;
-pub const FontStyle = core.TextFontStyle;
-pub const Language = core.Language;
-pub const Locale = core.Locale;
-pub const Overflow = core.OverflowMode;
-pub const Paragraph = core.ParagraphStyle;
-pub const Span = core.StyleSpan;
-pub const Decoration = core.TextDecoration;
-pub const Metrics = core.TextMetrics;
-pub const Range = core.TextRange;
-pub const TextSpan = core.TextSpan;
-pub const Text = core.TextStyle;
-pub const VerticalAlign = core.VerticalAlign;
-pub const Wrap = core.WrapMode;
+pub const ByteRange = style.ByteRange;
+pub const CharRange = style.CharRange;
+pub const ClusterRange = style.ClusterRange;
+pub const GraphemeRange = style.GraphemeRange;
+pub const GlyphRange = style.GlyphRange;
+pub const GlyphCluster = style.GlyphCluster;
+pub const FontId = style.FontId;
+pub const FontWeight = style.FontWeight;
+pub const FontStyle = style.TextFontStyle;
+pub const Language = style.Language;
+pub const Locale = style.Locale;
+pub const Overflow = style.OverflowMode;
+pub const Paragraph = style.ParagraphStyle;
+pub const Span = style.StyleSpan;
+pub const Decoration = style.TextDecoration;
+pub const Metrics = style.TextMetrics;
+pub const Range = style.TextRange;
+pub const TextSpan = style.TextSpan;
+pub const Text = style.TextStyle;
+pub const VerticalAlign = style.VerticalAlign;
+pub const Wrap = style.WrapMode;
+pub const WordBreak = style.WordBreak;
+pub const OverflowWrap = style.OverflowWrap;
+pub const WhiteSpaceCollapse = style.WhiteSpaceCollapse;
+pub const LineBreakStrategy = style.LineBreakStrategy;
+pub const WritingMode =
+    @import("../../../shaping/pipeline/types.zig").WritingMode;
+pub const TextOrientation =
+    @import("../../../shaping/pipeline/types.zig").TextOrientation;

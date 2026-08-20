@@ -9,6 +9,8 @@ const ift = @import("../../../../opentype/ift.zig");
 pub const PatchMap = font.IftPatchMapInfo;
 pub const TablePatch = font.IftTableKeyedPatchInfo;
 pub const GlyphPatch = font.IftGlyphKeyedPatchInfo;
+pub const GlyphPatchSource = @import("../../../../font/incremental/glyph_keyed/root.zig").Source;
+pub const GlyphPatchInput = @import("../../../../font/incremental/glyph_keyed/root.zig").Patch;
 
 pub const Inspection = struct {
     face: *const face_mod.Face,
@@ -52,4 +54,36 @@ pub fn freeTablePatch(
 /// Parse a glyph-keyed patch. `brotli_stream` borrows `patch_data`.
 pub fn parseGlyphPatch(patch_data: []const u8) !GlyphPatch {
     return ift.glyphKeyedPatchInfo(patch_data, 0, patch_data.len);
+}
+
+pub fn applyTablePatchAlloc(
+    allocator: std.mem.Allocator,
+    face: *const face_mod.Face,
+    expected_compatibility_id: [16]u8,
+    patch_data: []const u8,
+    max_output_size: usize,
+) ![]u8 {
+    return face_mod.backend.font(face).applyTableKeyedPatchAlloc(
+        allocator,
+        expected_compatibility_id,
+        patch_data,
+        max_output_size,
+    );
+}
+
+/// Atomically apply a complete glyph-keyed patch group and return an owned
+/// standalone SFNT. The first supplied patch wins for duplicate table/glyph
+/// keys, matching Fontations. `application_bits` in each input are absolute
+/// bit indexes in its selected `IFT `/`IFTX` source table.
+pub fn applyGlyphPatchesAlloc(
+    allocator: std.mem.Allocator,
+    face: *const face_mod.Face,
+    patches: []const GlyphPatchInput,
+    max_output_size: usize,
+) ![]u8 {
+    return face_mod.backend.font(face).applyGlyphKeyedPatchesAlloc(
+        allocator,
+        patches,
+        max_output_size,
+    );
 }

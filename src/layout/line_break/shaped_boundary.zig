@@ -24,8 +24,11 @@ pub fn chooseOverflowBreak(
     index: usize,
     line_start: usize,
     last_break: ?usize,
+    emergency_enabled: bool,
+    preserve_discardable: bool,
 ) OverflowBreak {
-    if (isDiscardableBreak(glyphs[index].codepoint) and
+    if (!preserve_discardable and
+        isDiscardableBreak(glyphs[index].codepoint) and
         !outputBoundaryIsUnsafe(glyphs, index))
     {
         return .{ .index = index, .uses_current_discardable = true };
@@ -36,6 +39,12 @@ pub fn chooseOverflowBreak(
         {
             return .{ .index = break_index };
         }
+    }
+    if (!emergency_enabled) {
+        // With no legal earlier boundary, overflow is intentional. Consume
+        // the complete shaped stream instead of repeatedly reconsidering the
+        // same overfull atom as a fabricated line edge.
+        return .{ .index = glyphs.len, .defer_break = true };
     }
     return graphemeOverflowBreak(
         glyphs,
@@ -75,7 +84,7 @@ pub fn glyphClusterStart(glyph: GlyphPosition) usize {
 }
 
 pub fn glyphSourceEnd(glyph: GlyphPosition) usize {
-    return glyph.cluster + @max(glyph.source_byte_len, 1);
+    return glyph.sourceByteEnd();
 }
 
 pub fn byteEndForGlyphPrefix(
@@ -196,7 +205,12 @@ fn nextSafeOutputBoundary(
     return break_index;
 }
 
-fn outputBoundaryIsReusable(
+/// Whether an output boundary can be reused as an emergency paragraph break.
+///
+/// High-quality breakers enumerate the complete candidate graph instead of
+/// discovering only the first overflowing boundary. They must use exactly the
+/// same grapheme and shaping-safety predicate as greedy emergency wrapping.
+pub fn outputBoundaryIsReusable(
     glyphs: []const GlyphPosition,
     grapheme_clusters: []const unicode.GraphemeCluster,
     break_index: usize,
@@ -271,6 +285,8 @@ test "emergency breaks defer across unsafe positioning boundaries" {
         0,
         0,
         null,
+        true,
+        false,
     );
     try std.testing.expect(after_first.defer_break);
 
@@ -280,9 +296,45 @@ test "emergency breaks defer across unsafe positioning boundaries" {
         1,
         0,
         null,
+        true,
+        false,
     );
     try std.testing.expect(!after_second.defer_break);
     try std.testing.expectEqual(@as(usize, 2), after_second.index);
+}
+
+test "disabled emergency wrapping intentionally keeps overfull content" {
+    const glyphs = [_]GlyphPosition{
+        .{
+            .glyph_id = 1,
+            .codepoint = 'A',
+            .cluster = 0,
+            .source_byte_len = 1,
+            .x_advance = 16,
+        },
+        .{
+            .glyph_id = 1,
+            .codepoint = 'B',
+            .cluster = 1,
+            .source_byte_len = 1,
+            .x_advance = 16,
+        },
+    };
+    const clusters = [_]unicode.GraphemeCluster{
+        .{ .byte_start = 0, .byte_len = 1 },
+        .{ .byte_start = 1, .byte_len = 1 },
+    };
+    const selected = chooseOverflowBreak(
+        &glyphs,
+        &clusters,
+        0,
+        0,
+        null,
+        false,
+        false,
+    );
+    try std.testing.expect(selected.defer_break);
+    try std.testing.expectEqual(glyphs.len, selected.index);
 }
 
 test "deferred breaks never split multiple outputs of one source atom" {
@@ -329,6 +381,8 @@ test "deferred breaks never split multiple outputs of one source atom" {
         0,
         0,
         null,
+        true,
+        false,
     );
     try std.testing.expect(after_first.defer_break);
     try std.testing.expectEqual(@as(usize, 3), after_first.index);

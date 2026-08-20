@@ -139,6 +139,15 @@ pub fn modifiedCombiningClassForShaping(codepoint: u21) u8 {
     // and every shaping-specific override below is higher. Avoid searching the
     // generated CCC ranges for ASCII and Latin-1 text.
     if (codepoint < 0x0300) return 0;
+    // Ordinary Arabic letters and punctuation occupy the dense U+0600 block
+    // but have CCC=0. Only the disjoint authored mark ranges below can be
+    // non-zero, so reject the common paragraph text before the generated
+    // cross-Unicode binary search.
+    if (codepoint >= 0x0600 and codepoint <= 0x08ff and
+        !arabicCodepointMayHaveCombiningClass(codepoint))
+    {
+        return 0;
+    }
     // These script-specific overrides are part of HarfBuzz's normalization
     // contract. SAKOT and PADMA intentionally sort after ordinary tone/vowel
     // marks even though their canonical class is lower.
@@ -147,6 +156,19 @@ pub fn modifiedCombiningClassForShaping(codepoint: u21) u8 {
         0x0f39 => 127,
         else => modifiedCombiningClass(canonicalCombiningClass(codepoint)),
     };
+}
+
+fn arabicCodepointMayHaveCombiningClass(codepoint: u21) bool {
+    return (codepoint >= 0x0610 and codepoint <= 0x061a) or
+        (codepoint >= 0x064b and codepoint <= 0x065f) or
+        codepoint == 0x0670 or
+        (codepoint >= 0x06d6 and codepoint <= 0x06ed) or
+        (codepoint >= 0x07eb and codepoint <= 0x07f3) or
+        codepoint == 0x07fd or
+        (codepoint >= 0x0816 and codepoint <= 0x082d) or
+        (codepoint >= 0x0859 and codepoint <= 0x085b) or
+        (codepoint >= 0x0897 and codepoint <= 0x089f) or
+        (codepoint >= 0x08ca and codepoint <= 0x08ff);
 }
 
 fn modifiedCombiningClass(class: u8) u8 {

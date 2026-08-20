@@ -1918,3 +1918,14 @@ line-break analysis and restores directly into reusable output storage, so
 repeated widths do not redo Unicode boundary work or cache lookup/copy setup.
 This is an architectural workload win, not a claim that Cangjie's individual
 shaping or line-breaking stages already outperform every external reference.
+
+Modified combining-class lookup now rejects ordinary Arabic letters and
+punctuation before the generated cross-Unicode CCC search. Within
+U+0600..U+08FF only the disjoint authored mark ranges can have non-zero CCC.
+On the 200-byte Noto Kufi Arabic spacing row, fixed-CPU-30 A/B/B/A counters
+reduced retired instructions from `985.3M/989.3M` to `970.5M/969.7M` and
+branches from `167.1M/167.8M` to `163.5M/163.3M` per 1,000 layouts, with
+cycles down about `1.2--3.2%`. The 31-sample wall matrix moved from
+`270.25/264.70 µs` to `268.97/260.77 µs`; checksum `fb80f404e4d69aff`,
+144 glyphs, and six lines were unchanged. Latin spacing retired work also
+improved, and the complete HarfBuzz/HarfRust corpus parity umbrella passes.

@@ -3033,3 +3033,15 @@ shaping-performance superiority.
   Prepared rendering now beats Cangjie's repeated direct scanner on the same
   rows by about `14%` for `A`, `31%` for `g`, and `31%` for `é`, but still
   does not close the larger FreeType raster gap.
+- Runtime CFF1/CFF2 hinting now builds the FreeType-derived Type2 horizontal
+  hint map rather than applying independent rounded stem edges. It retains
+  hintmask/cntrmask state, variation-aware Private DICT blue zones, initial-map
+  placement, pair adjustment, overlap rejection, blue capture, and stem
+  locking in 16.16 before exposing 26.6-precise pixel paths. The installed
+  FreeType differential now passes STIX `A`, `H`, and `o` across 9/13/16 ppem
+  plus Cantarell variable-CFF2 `A` and `B` at normalized `-1` and `0.5`,
+  comparing every outline point/tag/contour and the grid-fitted advance. The
+  Cantarell gate also covers CFF2 Private DICT operator-23 `blend`, which is
+  distinct from the charstring blend opcode. This closes a concrete
+  Fontations/Skrifa outline-correctness gap, but no Type2 speed claim is made;
+  FreeType still leads the broader scan-conversion measurements above.

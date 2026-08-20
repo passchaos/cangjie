@@ -149,6 +149,9 @@ pub const TrueTypeHintingOptions = hinting.Options;
 pub const TrueTypeHintingError = hinting.Error;
 pub const TrueTypePointTransaction = hinting.PointTransaction;
 pub const TrueTypePixelOutline = hinting.PixelOutline;
+pub const Type2HintingInstance = hinting.type2.Instance;
+pub const Type2HintingError = hinting.type2.Error;
+pub const Type2HintProgram = hinting.type2.Program;
 pub const VarcInfo = varc_mod.Info;
 
 pub const FontTableInfo = struct {
@@ -1975,6 +1978,81 @@ pub const Font = struct {
             context.normalized_coords = transaction.normalized_coords;
         }
         return transaction;
+    }
+
+    /// Build a size-specific CFF/CFF2 hinting instance.
+    pub fn type2HintingInstance(
+        self: *const Font,
+        ppem: u16,
+    ) hinting.type2.Error!Type2HintingInstance {
+        return hinting.type2.Instance.init(ppem, self.units_per_em);
+    }
+
+    /// Execute CFF/CFF2 charstrings and retain their stem/mask program.
+    pub fn type2HintedOutline(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        instance: *const Type2HintingInstance,
+        glyph_id: glyph_mod.GlyphId,
+        normalized_coords: []const f32,
+    ) (FontError || hinting.type2.Error)!TrueTypePixelOutline {
+        if (instance.units_per_em != self.units_per_em) {
+            return error.InvalidHintScale;
+        }
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try validateNormalizedVariationCoordinateSlice(normalized_coords);
+        const metrics = try self.horizontalMetricsAtCoordsForReadMode(
+            glyph_id,
+            normalized_coords,
+            .revalidate,
+        );
+        var outline = glyph_mod.GlyphOutline.init(
+            allocator,
+            glyph_id,
+            .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 },
+            metrics.advance_width,
+            metrics.left_side_bearing,
+        );
+        defer outline.deinit();
+        var program = hinting.type2.Program.init(allocator);
+        defer program.deinit();
+        if (self.cff2) |cff2| {
+            try sfnt.checksum.validate(self.data, cff2);
+            try validateCff2Table(self.data, cff2);
+            const bounds = (try cff2_mod.appendGlyphOutlineAtCoordsWithHints(
+                allocator,
+                self.data,
+                cff2.offset,
+                cff2.length,
+                glyph_id,
+                self.glyph_count,
+                normalized_coords,
+                &outline,
+                &program,
+            )) orelse return error.UnsupportedGlyph;
+            outline.bounds = cff_outline.boundsFromCff2(bounds);
+        } else if (self.cff) |cff| {
+            if (normalized_coords.len != 0 and
+                !normalizedVariationCoordinatesAreDefault(normalized_coords))
+            {
+                return error.UnsupportedGlyph;
+            }
+            try sfnt.checksum.validate(self.data, cff);
+            try validateCffGlyphCount(self.data, cff, self.glyph_count);
+            const data = self.data[cff.offset .. cff.offset + cff.length];
+            try cff_mod.appendGlyphOutlinePreparedWithHints(
+                allocator,
+                data,
+                self.cff_parsed orelse try cff_mod.parse(data),
+                &outline,
+                glyph_id,
+                &program,
+            );
+            outline.bounds = glyph_mod.boundsForCommands(outline.commands.items);
+        } else {
+            return error.UnsupportedGlyph;
+        }
+        return instance.hint(allocator, &outline, &program);
     }
 
     /// Read validated metadata from the optional OpenType `HVAR` table.

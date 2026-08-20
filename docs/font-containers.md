@@ -127,6 +127,18 @@ gate, not proof of per-table semantic parity or superiority; those stronger
 claims require reference differential tests and same-host performance
 measurements.
 
+CFF1 and variable CFF2 outlines now expose reusable PPEM-specific Type2
+hinting instances. The charstring executor retains horizontal/vertical stems,
+hint masks, and counter masks; Private DICT parsing supplies variation-aware
+blue zones, family zones, BlueScale/Shift/Fuzz, and LanguageGroup. The native
+hint map uses FreeType-compatible 16.16 arithmetic, blue-zone capture, initial
+mapping, overlap rejection, pair adjustment, cross-mask stem locking, and
+26.6 output truncation. `zig build hinting-freetype-test` compares complete
+point/tag/contour/advance output for deployed STIX CFF1 glyphs at several
+sizes and Cantarell variable CFF2 glyphs at non-default locations. This closes
+the previously missing Skrifa `HintingInstance` CFF boundary; it is correctness
+evidence, not a CFF outline-performance superiority claim.
+
 The incremental-font surface also applies table-keyed `iftk` patches: it
 validates compatibility IDs and sorted offsets, supports shared-dictionary
 Brotli diffs plus replace/drop flags, ignores duplicate tags after the first

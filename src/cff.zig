@@ -1,5 +1,6 @@
 const std = @import("std");
 const glyph_mod = @import("glyph.zig");
+const type2_hint = @import("font/hinting/type2/root.zig");
 
 /// CFF support covers the Compact Font Format structures needed for OpenType
 /// CFF outlines: INDEX tables, top/private dictionaries, subroutines, and Type2
@@ -26,6 +27,7 @@ pub const Info = struct {
     local_subrs_offset: usize = 0,
     default_width_x: f32 = 0,
     nominal_width_x: f32 = 0,
+    hint_params: type2_hint.Params = .{},
 };
 
 pub const Parsed = struct {
@@ -116,10 +118,31 @@ pub fn appendGlyphOutline(allocator: std.mem.Allocator, data: []const u8, info: 
 }
 
 pub fn appendGlyphOutlinePrepared(allocator: std.mem.Allocator, data: []const u8, parsed: Parsed, outline: *glyph_mod.GlyphOutline, glyph_id: glyph_mod.GlyphId) CffError!void {
-    return try appendGlyphOutlinePreparedAt(allocator, data, parsed, outline, glyph_id, .{ .x = 0, .y = 0 }, 0);
+    return try appendGlyphOutlinePreparedAt(allocator, data, parsed, outline, glyph_id, .{ .x = 0, .y = 0 }, 0, null);
 }
 
-fn appendGlyphOutlinePreparedAt(allocator: std.mem.Allocator, data: []const u8, parsed: Parsed, outline: *glyph_mod.GlyphOutline, glyph_id: glyph_mod.GlyphId, origin: glyph_mod.Point, seac_depth: u8) CffError!void {
+/// Append CFF geometry while retaining the Type2 stem/mask program.
+pub fn appendGlyphOutlinePreparedWithHints(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    parsed: Parsed,
+    outline: *glyph_mod.GlyphOutline,
+    glyph_id: glyph_mod.GlyphId,
+    hints: *type2_hint.Program,
+) CffError!void {
+    return appendGlyphOutlinePreparedAt(
+        allocator,
+        data,
+        parsed,
+        outline,
+        glyph_id,
+        .{ .x = 0, .y = 0 },
+        0,
+        hints,
+    );
+}
+
+fn appendGlyphOutlinePreparedAt(allocator: std.mem.Allocator, data: []const u8, parsed: Parsed, outline: *glyph_mod.GlyphOutline, glyph_id: glyph_mod.GlyphId, origin: glyph_mod.Point, seac_depth: u8, hints: ?*type2_hint.Program) CffError!void {
     if (seac_depth > 2) return error.BadCff;
     if (glyph_id >= parsed.charstrings.count) return error.InvalidGlyph;
     const bytes = try parsed.charstrings.object(data, glyph_id);
@@ -127,6 +150,7 @@ fn appendGlyphOutlinePreparedAt(allocator: std.mem.Allocator, data: []const u8, 
         const fd_index = try fdSelectValue(data, parsed.fd_select.?, glyph_id, parsed.charstrings.count, fd_array.count);
         break :blk try parseCidFontDict(data, fd_array, fd_index);
     } else parsed.info;
+    if (hints) |program| program.hint_params = private.hint_params;
     var interpreter = Type2Interpreter{
         .allocator = allocator,
         .outline = outline,
@@ -137,16 +161,20 @@ fn appendGlyphOutlinePreparedAt(allocator: std.mem.Allocator, data: []const u8, 
         .local_subrs = if (private.local_subrs_offset != 0) try readIndex(data, private.local_subrs_offset) else null,
         .x = origin.x,
         .y = origin.y,
+        .hints = hints,
     };
     try interpreter.run(bytes);
+    // OpenType hmtx/HVAR remains the authoritative public advance. Private
+    // DICT charstring widths are still consumed to disambiguate Type2 operand
+    // stacks, but FreeType exposes the SFNT metric for OpenType faces.
     if (interpreter.seac) |seac| {
         const base = try standardCodeToGlyph(data, parsed.info, seac.base_code);
         const accent = try standardCodeToGlyph(data, parsed.info, seac.accent_code);
-        try appendGlyphOutlinePreparedAt(allocator, data, parsed, outline, base, origin, seac_depth + 1);
+        try appendGlyphOutlinePreparedAt(allocator, data, parsed, outline, base, origin, seac_depth + 1, hints);
         try appendGlyphOutlinePreparedAt(allocator, data, parsed, outline, accent, .{
             .x = origin.x + seac.adx,
             .y = origin.y + seac.ady,
-        }, seac_depth + 1);
+        }, seac_depth + 1, hints);
     }
 }
 
@@ -457,6 +485,10 @@ fn parsePrivateDict(dict: []const u8, info: *Info) CffError!void {
     var parser = DictParser.init(dict);
     while (try parser.next()) |entry| {
         switch (entry.operator) {
+            6 => try setBlueValues(&info.hint_params.blues, entry.operands),
+            7 => try setBlueValues(&info.hint_params.other_blues, entry.operands),
+            8 => try setBlueValues(&info.hint_params.family_blues, entry.operands),
+            9 => try setBlueValues(&info.hint_params.family_other_blues, entry.operands),
             19 => {
                 if (entry.operands.len < 1) return error.BadCff;
                 const relative_offset = try dictOffsetOperand(entry.operands, 0);
@@ -471,9 +503,36 @@ fn parsePrivateDict(dict: []const u8, info: *Info) CffError!void {
                 if (entry.operands.len < 1) return error.BadCff;
                 info.nominal_width_x = entry.operands[0];
             },
+            1209 => info.hint_params.blue_scale = try hintFixed(entry.operands),
+            1210 => info.hint_params.blue_shift = try hintFixed(entry.operands),
+            1211 => info.hint_params.blue_fuzz = try hintFixed(entry.operands),
+            1217 => info.hint_params.language_group = try hintInteger(entry.operands),
             else => {},
         }
     }
+}
+
+fn setBlueValues(
+    values: *type2_hint.params.BlueValues,
+    operands: []const f32,
+) CffError!void {
+    if ((operands.len & 1) != 0) return error.BadCff;
+    values.setDeltas(operands) catch return error.BadCff;
+}
+
+fn hintFixed(operands: []const f32) CffError!type2_hint.fixed.Fixed {
+    if (operands.len == 0 or !std.math.isFinite(operands[0])) return error.BadCff;
+    return type2_hint.fixed.Fixed.fromF32(operands[0]);
+}
+
+fn hintInteger(operands: []const f32) CffError!i32 {
+    if (operands.len == 0 or !std.math.isFinite(operands[0]) or
+        operands[0] != @trunc(operands[0])) return error.BadCff;
+    const value: f64 = operands[0];
+    if (value < std.math.minInt(i32) or value > std.math.maxInt(i32)) {
+        return error.BadCff;
+    }
+    return @intFromFloat(value);
 }
 
 fn dictOffsetOperand(operands: []const f32, index: usize) CffError!usize {
@@ -768,6 +827,34 @@ test "CFF Private DICT Subrs offset resolves to a Local Subrs INDEX" {
     try std.testing.expectError(error.BadCff, parseInfo(&subrs_points_into_private_dict));
 }
 
+test "CFF Private DICT decodes Type2 blue-zone parameters" {
+    var info = Info{
+        .charstrings_offset = 0,
+        .charstrings_count = 0,
+        .global_subrs_offset = 0,
+    };
+    // BlueValues deltas -15,15,536,11; OtherBlues -255,15; BlueScale
+    // 0.05; BlueShift 6; BlueFuzz 0; LanguageGroup 1.
+    try parsePrivateDict(&.{
+        124,  154,  248, 172, 150, 6,
+        251,  147,  154, 7,   30,  0x0a,
+        0x05, 0xff, 12,  9,   145, 12,
+        10,   139,  12,  11,  140, 12,
+        17,
+    }, &info);
+    try std.testing.expectEqual(@as(u8, 2), info.hint_params.blues.len);
+    try std.testing.expectEqual(@as(i32, -15 << 16), info.hint_params.blues.slice()[0][0].bits);
+    try std.testing.expectEqual(@as(i32, 547 << 16), info.hint_params.blues.slice()[1][1].bits);
+    try std.testing.expectEqual(@as(u8, 1), info.hint_params.other_blues.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.05), info.hint_params.blue_scale.toF32(), 0.00002);
+    try std.testing.expectEqual(@as(i32, 6 << 16), info.hint_params.blue_shift.bits);
+    try std.testing.expectEqual(@as(i32, 0), info.hint_params.blue_fuzz.bits);
+    try std.testing.expectEqual(@as(i32, 1), info.hint_params.language_group);
+
+    try std.testing.expectError(error.BadCff, parsePrivateDict(&.{ 140, 6 }, &info));
+    try std.testing.expectError(error.BadCff, parsePrivateDict(&.{ 30, 0xff, 12, 17 }, &info));
+}
+
 test "CFF Type2 hvcurveto and vhcurveto keep their implicit last axis" {
     var outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{
         .x_min = 0,
@@ -856,6 +943,39 @@ test "CFF Type2 charstrings require explicit endchar" {
     try interpreter.run(&.{0x0e}); // A complete empty glyph is still valid.
     try std.testing.expectError(error.BadCff, interpreter.run(&.{}));
     try std.testing.expectError(error.BadCff, interpreter.run(&.{139})); // Operand stack without an endchar.
+}
+
+test "CFF Type2 retains stem coordinates and mask command boundaries" {
+    var outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{
+        .x_min = 0,
+        .y_min = 0,
+        .x_max = 100,
+        .y_max = 100,
+    }, 100, 0);
+    defer outline.deinit();
+    var hints = type2_hint.Program.init(std.testing.allocator);
+    defer hints.deinit();
+    var interpreter = testInterpreter(&outline);
+    interpreter.hints = &hints;
+    // hstem 10..30; vstem 5..12; hintmask activates both; move and line.
+    try interpreter.run(&.{
+        149, 159,  1,
+        144, 146,  3,
+        19,  0xc0, 139,
+        139, 21,   149,
+        139, 5,    14,
+    });
+    try std.testing.expectEqualSlices(type2_hint.Stem, &.{
+        .{ .axis = .horizontal, .min = 10, .max = 30 },
+        .{ .axis = .vertical, .min = 5, .max = 12 },
+    }, hints.stems.items);
+    try std.testing.expectEqual(@as(usize, 1), hints.masks.items.len);
+    try std.testing.expectEqual(@as(usize, 0), hints.masks.items[0].path_command_index);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{0xc0},
+        hints.maskBytes(hints.masks.items[0]),
+    );
 }
 
 test "CFF Type2 endchar records validated seac operands" {
@@ -1037,6 +1157,7 @@ const Type2Interpreter = struct {
     width_seen: bool = false,
     width: f32 = 0,
     stem_count: usize = 0,
+    hints: ?*type2_hint.Program = null,
     nominal_width_x: f32,
     default_width_x: f32,
     cff_data: []const u8,
@@ -1077,7 +1198,8 @@ const Type2Interpreter = struct {
                 continue;
             }
             switch (b) {
-                1, 3, 18, 23 => self.readStems(),
+                1, 18 => try self.readStems(.horizontal),
+                3, 23 => try self.readStems(.vertical),
                 12 => {
                     if (offset >= bytes.len) return error.EndOfStream;
                     const escaped = bytes[offset];
@@ -1091,7 +1213,8 @@ const Type2Interpreter = struct {
                 8 => try self.rrcurveto(),
                 10 => if (try self.callSubr(self.local_subrs orelse return error.UnsupportedCff, depth + 1) == .endchar) return .endchar,
                 11 => return .@"return",
-                19, 20 => try self.readHintMask(bytes, &offset),
+                19 => try self.readHintMask(bytes, &offset, .hint),
+                20 => try self.readHintMask(bytes, &offset, .counter),
                 24 => try self.rcurveline(),
                 25 => try self.rlinecurve(),
                 26 => try self.vvcurveto(),
@@ -1191,7 +1314,7 @@ const Type2Interpreter = struct {
         self.width_seen = true;
     }
 
-    fn readStems(self: *Type2Interpreter) void {
+    fn readStems(self: *Type2Interpreter, axis: type2_hint.Axis) CffError!void {
         // Stem hints affect rasterization quality, but this outline extractor
         // only needs to count them so hintmask/cntrmask byte lengths are known.
         if (!self.width_seen and (self.stack_len & 1) == 1) {
@@ -1200,14 +1323,31 @@ const Type2Interpreter = struct {
             self.stack_len -= 1;
         }
         self.stem_count += self.stack_len / 2;
+        if (self.hints) |hints| {
+            hints.appendStems(axis, self.stack[0..self.stack_len]) catch |err|
+                return switch (err) {
+                    error.OutOfMemory => error.OutOfMemory,
+                    else => error.BadCff,
+                };
+        }
         self.width_seen = true;
         self.stack_len = 0;
     }
 
-    fn readHintMask(self: *Type2Interpreter, bytes: []const u8, offset: *usize) CffError!void {
-        self.readStems();
+    fn readHintMask(self: *Type2Interpreter, bytes: []const u8, offset: *usize, kind: type2_hint.MaskKind) CffError!void {
+        try self.readStems(.vertical);
         const mask_len = (self.stem_count + 7) / 8;
         if (mask_len > bytes.len - offset.*) return error.EndOfStream;
+        if (self.hints) |hints| {
+            hints.appendMask(
+                kind,
+                self.outline.commands.items.len,
+                bytes[offset.* .. offset.* + mask_len],
+            ) catch |err| return switch (err) {
+                error.OutOfMemory => error.OutOfMemory,
+                else => error.BadCff,
+            };
+        }
         offset.* += mask_len;
     }
 

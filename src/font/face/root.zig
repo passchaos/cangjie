@@ -200,6 +200,30 @@ pub const Face = struct {
             },
         );
     }
+
+    /// Construct a reusable CFF/CFF2 stem-hinting instance for one PPEM.
+    pub fn type2HintingInstance(
+        self: *const Face,
+        ppem: u16,
+    ) font_mod.Type2HintingError!font_mod.Type2HintingInstance {
+        return self.implementation.type2HintingInstance(ppem);
+    }
+
+    /// Decode and grid-fit one CFF/CFF2 outline at the requested location.
+    pub fn type2HintedOutline(
+        self: *const Face,
+        allocator: std.mem.Allocator,
+        instance: *const font_mod.Type2HintingInstance,
+        glyph_id: @import("../../glyph.zig").GlyphId,
+        normalized_coords: []const f32,
+    ) (font_mod.FontError || font_mod.Type2HintingError)!font_mod.TrueTypePixelOutline {
+        return self.implementation.type2HintedOutline(
+            allocator,
+            instance,
+            glyph_id,
+            normalized_coords,
+        );
+    }
 };
 
 /// An ordered fallback list. The slice and every face are borrowed.

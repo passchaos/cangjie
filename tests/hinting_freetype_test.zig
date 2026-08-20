@@ -1,4 +1,5 @@
-//! Differential TrueType hinted-outline gates against installed FreeType.
+//! Differential TrueType and CFF hinted-outline gates against installed
+//! FreeType.
 //!
 //! FreeType translates a hinted outline by `-pp1` before exposing the glyph
 //! slot. Cangjie's raw transaction retains pp1, so the comparison applies the
@@ -10,6 +11,13 @@ const cangjie = @import("cangjie");
 const ft = @import("freetype");
 
 const Fixture = struct {
+    path: []const u8,
+    codepoint: u21,
+    ppem: u16,
+    location: []const f32 = &.{},
+};
+
+const Type2Fixture = struct {
     path: []const u8,
     codepoint: u21,
     ppem: u16,
@@ -84,6 +92,41 @@ const fixtures = [_]Fixture{
     },
 };
 
+// STIXGeneral is a deployed CFF1 face with conventional Latin blue zones,
+// ghost hints, ordinary stem pairs, and glyph-local hint masks. Keeping more
+// than one size here is important: a coordinate match at a single PPEM can be
+// produced accidentally by ordinary scaling even when blue-zone suppression
+// and pair adjustment are missing.
+const type2_fixtures = [_]Type2Fixture{
+    .{
+        .path = "/usr/share/fonts/opentype/stix/STIXGeneral-Regular.otf",
+        .codepoint = 'A',
+        .ppem = 9,
+    },
+    .{
+        .path = "/usr/share/fonts/opentype/stix/STIXGeneral-Regular.otf",
+        .codepoint = 'H',
+        .ppem = 13,
+    },
+    .{
+        .path = "/usr/share/fonts/opentype/stix/STIXGeneral-Regular.otf",
+        .codepoint = 'o',
+        .ppem = 16,
+    },
+    .{
+        .path = "/home/passchaos/Work/fontations/fauntlet/test_fonts/Cantarell-VF.subset.otf",
+        .codepoint = 'A',
+        .ppem = 8,
+        .location = &.{-1},
+    },
+    .{
+        .path = "/home/passchaos/Work/fontations/fauntlet/test_fonts/Cantarell-VF.subset.otf",
+        .codepoint = 'B',
+        .ppem = 16,
+        .location = &.{0.5},
+    },
+};
+
 test "classic hinted outlines match FreeType v35" {
     for (fixtures) |fixture| {
         try compareFixture(fixture, .classic, .normal);
@@ -112,6 +155,149 @@ test "ClearType light target matches stable FreeType v40" {
     if (!try freeTypeVersionAtLeast(2, 14)) return error.SkipZigTest;
     for (fixtures) |fixture| {
         try compareFixture(fixture, .cleartype, .light);
+    }
+}
+
+test "CFF Type2 hinted outlines match FreeType" {
+    for (type2_fixtures) |fixture| try compareType2Fixture(fixture);
+}
+
+fn compareType2Fixture(fixture: Type2Fixture) !void {
+    const allocator = std.testing.allocator;
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        fixture.path,
+        allocator,
+        .limited(32 * 1024 * 1024),
+    );
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    const glyph_id = try face.glyphs().index(fixture.codepoint);
+    const instance = try face.type2HintingInstance(fixture.ppem);
+    var actual = try face.type2HintedOutline(
+        allocator,
+        &instance,
+        glyph_id,
+        fixture.location,
+    );
+    defer actual.deinit();
+    const expected = try freeTypeOutline(
+        allocator,
+        bytes,
+        glyph_id,
+        fixture.ppem,
+        fixture.location,
+        null,
+        .normal,
+    );
+    defer expected.deinit(allocator);
+    errdefer |err| std.debug.print(
+        "Type2 hint diff font={s} cp=U+{x} ppem={d}: {s}\n",
+        .{ fixture.path, fixture.codepoint, fixture.ppem, @errorName(err) },
+    );
+    try expectType2Commands(expected, actual.commands.items);
+    const actual_advance: i32 = @intFromFloat(@round(actual.advance_width * 64));
+    if (expected.advance != actual_advance) {
+        std.debug.print(
+            "Type2 advance ft={d} cj={d}\n",
+            .{ expected.advance, actual_advance },
+        );
+        return error.HintingMismatch;
+    }
+}
+
+fn expectType2Commands(
+    expected: FtOutline,
+    commands: []const cangjie.font.OutlineCommand,
+) !void {
+    var point_index: usize = 0;
+    var contour_index: usize = 0;
+    var contour_start: ?cangjie.font.OutlinePoint = null;
+    for (commands, 0..) |command, command_index| {
+        switch (command) {
+            .move_to => |point| {
+                if (point_index != 0 and
+                    (contour_index == 0 or
+                        point_index != @as(usize, expected.contours[contour_index - 1]) + 1))
+                {
+                    return error.HintingMismatch;
+                }
+                contour_start = point;
+                try expectType2Point(expected, point_index, point, 1, command_index);
+                point_index += 1;
+            },
+            .line_to => |point| {
+                try expectType2Point(expected, point_index, point, 1, command_index);
+                point_index += 1;
+            },
+            .cubic_to => |curve| {
+                try expectType2Point(expected, point_index, curve.c0, 2, command_index);
+                point_index += 1;
+                try expectType2Point(expected, point_index, curve.c1, 2, command_index);
+                point_index += 1;
+                // FT_Outline represents a closing cubic cyclically: when its
+                // endpoint equals the contour move, that endpoint is the
+                // already-present first point rather than a duplicate point.
+                const closes_to_start = command_index + 1 < commands.len and
+                    commands[command_index + 1] == .close and
+                    contour_start != null and std.meta.eql(contour_start.?, curve.end);
+                if (!closes_to_start) {
+                    try expectType2Point(expected, point_index, curve.end, 1, command_index);
+                    point_index += 1;
+                }
+            },
+            .quad_to => return error.HintingMismatch,
+            .close => {
+                if (contour_index >= expected.contours.len or point_index == 0 or
+                    point_index - 1 != expected.contours[contour_index])
+                {
+                    return error.HintingMismatch;
+                }
+                contour_index += 1;
+                contour_start = null;
+            },
+        }
+    }
+    try expectEqual(usize, expected.points.len, point_index);
+    try expectEqual(usize, expected.contours.len, contour_index);
+}
+
+fn expectType2Point(
+    expected: FtOutline,
+    index: usize,
+    actual: cangjie.font.OutlinePoint,
+    wanted_tag: u8,
+    command_index: usize,
+) !void {
+    if (index >= expected.points.len or
+        (expected.tags[index] & 3) != wanted_tag)
+    {
+        return error.HintingMismatch;
+    }
+    const actual_point = Point{
+        .x = @intFromFloat(@round(actual.x * 64)),
+        .y = @intFromFloat(@round(actual.y * 64)),
+    };
+    if (!std.meta.eql(expected.points[index], actual_point)) {
+        const lo = index - @min(index, 3);
+        const hi = @min(expected.points.len, index + 4);
+        std.debug.print("nearby FT points:\n", .{});
+        for (expected.points[lo..hi], expected.tags[lo..hi], lo..) |near, tag, near_index| {
+            std.debug.print("  {d}: ({d},{d}) tag={d}\n", .{ near_index, near.x, near.y, tag & 3 });
+        }
+        std.debug.print(
+            "Type2 command={d} point={d} ft=({d},{d}) cj=({d},{d})\n",
+            .{
+                command_index,
+                index,
+                expected.points[index].x,
+                expected.points[index].y,
+                actual_point.x,
+                actual_point.y,
+            },
+        );
+        return error.HintingMismatch;
     }
 }
 
@@ -277,18 +463,20 @@ fn freeTypeOutline(
     glyph_id: cangjie.font.GlyphId,
     ppem: u16,
     location: []const f32,
-    interpreter: cangjie.font.HintingInterpreter,
+    interpreter: ?cangjie.font.HintingInterpreter,
     target: Target,
 ) !FtOutline {
     var library: ft.FT_Library = null;
     if (ft.FT_Init_FreeType(&library) != 0) return error.FreeTypeFailed;
     defer _ = ft.FT_Done_FreeType(library);
-    const version: ft.FT_UInt = switch (interpreter) {
-        .classic => 35,
-        .cleartype => 40,
-    };
-    if (ft.cangjie_ft_select_interpreter(library, version) != 0) {
-        return error.FreeTypeInterpreterUnavailable;
+    if (interpreter) |selected| {
+        const version: ft.FT_UInt = switch (selected) {
+            .classic => 35,
+            .cleartype => 40,
+        };
+        if (ft.cangjie_ft_select_interpreter(library, version) != 0) {
+            return error.FreeTypeInterpreterUnavailable;
+        }
     }
     var face: ft.FT_Face = null;
     if (ft.FT_New_Memory_Face(

@@ -34,11 +34,15 @@ pub const HintingError = font_mod.TrueTypeHintingError;
 pub const HintingPointTransaction = font_mod.TrueTypePointTransaction;
 /// Path coordinates are pixels and must not be scaled by units-per-em again.
 pub const PixelOutline = font_mod.TrueTypePixelOutline;
+pub const Type2HintingInstance = font_mod.Type2HintingInstance;
+pub const Type2HintingError = font_mod.Type2HintingError;
 
 pub const GlyphId = glyph.GlyphId;
 pub const Bounds = glyph.Bounds;
 pub const Outline = glyph.GlyphOutline;
 pub const OutlineBuilder = glyph.OutlineBuilder;
+pub const OutlineCommand = glyph.PathCommand;
+pub const OutlinePoint = glyph.Point;
 pub const LigatureCaret = font_mod.LigatureCaret;
 pub const AttachmentPoint = font_mod.AttachmentPoint;
 

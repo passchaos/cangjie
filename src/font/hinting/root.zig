@@ -6,6 +6,7 @@
 //! pixel-space paths.
 
 pub const types = @import("types.zig");
+pub const type2 = @import("type2/root.zig");
 pub const compound = @import("compound.zig");
 pub const Instance = @import("instance.zig").Instance;
 pub const outline = @import("outline.zig");
@@ -28,4 +29,5 @@ test {
     _ = @import("outline.zig");
     _ = @import("tricky.zig");
     _ = @import("glyph/compatibility_tests.zig");
+    _ = type2;
 }

@@ -1,5 +1,6 @@
 const std = @import("std");
 const glyph_mod = @import("../../glyph.zig");
+const type2_hint = @import("../../font/hinting/type2/root.zig");
 
 pub const Error = error{BadSfnt} || std.mem.Allocator.Error;
 
@@ -73,11 +74,30 @@ pub fn bounds(comptime Context: type, context: *Context, bytes: []const u8) Erro
 }
 
 pub fn appendOutline(comptime Context: type, context: *Context, allocator: std.mem.Allocator, bytes: []const u8, outline: *glyph_mod.GlyphOutline) Error!BoundsInfo {
+    return appendOutlineWithHints(
+        Context,
+        context,
+        allocator,
+        bytes,
+        outline,
+        null,
+    );
+}
+
+pub fn appendOutlineWithHints(
+    comptime Context: type,
+    context: *Context,
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+    outline: *glyph_mod.GlyphOutline,
+    hints: ?*type2_hint.Program,
+) Error!BoundsInfo {
     var executor = BoundsExecutor(Context){
         .context = context,
         .vs_index = try contextInitialVariationStoreIndex(Context, context),
         .allocator = allocator,
         .outline = outline,
+        .hints = hints,
     };
     if (try executor.runCharString(bytes, 0) == .none) try executor.finishImplicitEndchar();
     return executor.bounds_info;
@@ -288,6 +308,7 @@ fn BoundsExecutor(comptime Context: type) type {
         vs_index: u16 = 0,
         allocator: ?std.mem.Allocator = null,
         outline: ?*glyph_mod.GlyphOutline = null,
+        hints: ?*type2_hint.Program = null,
         bounds_info: BoundsInfo = .{},
 
         const Self = @This();
@@ -323,8 +344,12 @@ fn BoundsExecutor(comptime Context: type) type {
         fn operator(self: *Self, bytes: []const u8, offset: *usize, b: u8, depth: u8) Error!Termination {
             self.bounds_info.scan.operator_count += 1;
             switch (b) {
-                1, 3, 18, 23 => {
-                    self.readStemHints();
+                1, 18 => {
+                    try self.readStemHints(.horizontal);
+                    return .none;
+                },
+                3, 23 => {
+                    try self.readStemHints(.vertical);
                     return .none;
                 },
                 4 => {
@@ -376,9 +401,19 @@ fn BoundsExecutor(comptime Context: type) type {
                     return .none;
                 },
                 19, 20 => {
-                    self.readStemHints();
+                    try self.readStemHints(.vertical);
                     const mask_len = (self.bounds_info.scan.stem_count + 7) / 8;
                     if (mask_len > bytes.len - offset.*) return error.BadSfnt;
+                    if (self.hints) |hints| {
+                        hints.appendMask(
+                            if (b == 19) .hint else .counter,
+                            if (self.outline) |outline| outline.commands.items.len else 0,
+                            bytes[offset.* .. offset.* + mask_len],
+                        ) catch |err| return switch (err) {
+                            error.OutOfMemory => error.OutOfMemory,
+                            else => error.BadSfnt,
+                        };
+                    }
                     offset.* += mask_len;
                     self.bounds_info.scan.hint_mask_count += 1;
                     return .none;
@@ -779,8 +814,22 @@ fn BoundsExecutor(comptime Context: type) type {
             try applyBlend(Context, self.context, &self.stack, &self.stack_len, target_count, region_count, self.vs_index);
         }
 
-        fn readStemHints(self: *Self) void {
+        fn readStemHints(self: *Self, axis: type2_hint.Axis) Error!void {
             self.bounds_info.scan.stem_count += self.stack_len / 2;
+            if (self.hints) |hints| {
+                var operands: [max_stack]f32 = undefined;
+                for (
+                    self.stack[0..self.stack_len],
+                    operands[0..self.stack_len],
+                ) |value, *out| {
+                    out.* = value.number;
+                }
+                hints.appendStems(axis, operands[0..self.stack_len]) catch |err|
+                    return switch (err) {
+                        error.OutOfMemory => error.OutOfMemory,
+                        else => error.BadSfnt,
+                    };
+            }
             self.clearStack();
         }
 
@@ -963,6 +1012,63 @@ test "CFF2 charstring scanner skips hint masks" {
     try std.testing.expectEqual(@as(usize, 2), parsed.stem_count);
     try std.testing.expectEqual(@as(usize, 1), parsed.hint_mask_count);
     try std.testing.expect(parsed.has_endchar);
+}
+
+test "CFF2 outline execution retains Type2 stems and masks" {
+    const Context = struct {
+        pub fn localSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+        pub fn globalSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+    };
+    var context = Context{};
+    var outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{
+        .x_min = 0,
+        .y_min = 0,
+        .x_max = 100,
+        .y_max = 100,
+    }, 100, 0);
+    defer outline.deinit();
+    var hints = type2_hint.Program.init(std.testing.allocator);
+    defer hints.deinit();
+    _ = try appendOutlineWithHints(
+        Context,
+        &context,
+        std.testing.allocator,
+        &.{ 149, 159, 1, 144, 146, 3, 19, 0xc0, 139, 139, 21 },
+        &outline,
+        &hints,
+    );
+    try std.testing.expectEqualSlices(type2_hint.Stem, &.{
+        .{ .axis = .horizontal, .min = 10, .max = 30 },
+        .{ .axis = .vertical, .min = 5, .max = 12 },
+    }, hints.stems.items);
+    try std.testing.expectEqual(@as(usize, 1), hints.masks.items.len);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{0xc0},
+        hints.maskBytes(hints.masks.items[0]),
+    );
+}
+
+test "CFF2 blend uses target-major region deltas" {
+    const Context = struct {
+        pub fn blendScalar(_: *@This(), _: u16, region: usize) Error!f32 {
+            return if (region == 0) 0.5 else 0.25;
+        }
+    };
+    var context = Context{};
+    var stack: [max_stack]Value = undefined;
+    // Defaults 10,20; target 0 deltas 4,-8; target 1 deltas -60,2.
+    const values = [_]f32{ 10, 20, 4, -8, -60, 2 };
+    for (values, 0..) |value, index| stack[index] = .{ .number = value, .integer = false };
+    var len: usize = values.len;
+    try applyBlend(Context, &context, &stack, &len, 2, 2, 0);
+    try std.testing.expectEqual(@as(usize, 2), len);
+    try std.testing.expectEqual(@as(f32, 10), stack[0].number);
+    try std.testing.expectEqual(@as(f32, -9.5), stack[1].number);
 }
 
 test "CFF2 charstring bounds tracks moves and lines" {

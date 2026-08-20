@@ -154,6 +154,27 @@ pub const Rasterizer = struct {
         return self.drawPixelOutline(target, &outline, x, baseline_y);
     }
 
+    /// Decode, Type2-grid-fit, and draw one CFF/CFF2 glyph.
+    pub fn drawType2HintedGlyph(
+        self: *Rasterizer,
+        target: *raster.RenderTarget,
+        face: *const face_mod.Face,
+        instance: *const font_mod.Type2HintingInstance,
+        glyph_id: glyph_mod.GlyphId,
+        normalized_coords: []const f32,
+        x: f32,
+        baseline_y: f32,
+    ) !void {
+        var outline = try face.type2HintedOutline(
+            self.implementation.allocator,
+            instance,
+            glyph_id,
+            normalized_coords,
+        );
+        defer outline.deinit();
+        return self.drawPixelOutline(target, &outline, x, baseline_y);
+    }
+
     fn drawHintedGlyphOriented(
         self: *Rasterizer,
         target: *raster.RenderTarget,

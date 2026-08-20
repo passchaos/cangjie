@@ -44,12 +44,13 @@ pub fn full(
     lookup_flag: u16,
     run: Options,
     skip_first_input_coverage: bool,
-) Error!?Regions {
+    result: *Regions,
+) Error!bool {
     if (position >= glyphs.len or
         !filtering.sourceFeatureAllowsGlyph(run, position) or
         filtering.lookupIgnoresGlyph(lookup_flag, run, glyphs[position]))
     {
-        return null;
+        return false;
     }
     if (subtable.input_count == 0 or
         subtable.input_count > max_region_glyphs or
@@ -59,7 +60,7 @@ pub fn full(
         return error.UnsupportedGsub;
     }
 
-    var result = Regions{
+    result.* = Regions{
         .input_count = subtable.input_count,
         .backtrack_count = subtable.backtrack_count,
         .lookahead_count = subtable.lookahead_count,
@@ -72,8 +73,8 @@ pub fn full(
         result.input[0..result.input_count],
         false,
         position,
-    )) return null;
-    if (skip_first_input_coverage and result.input[0] != position) return null;
+    )) return false;
+    if (skip_first_input_coverage and result.input[0] != position) return false;
     if (!try coveragesMatch(
         view,
         subtable,
@@ -81,7 +82,7 @@ pub fn full(
         result.inputSlice(),
         subtable.input_offsets_pos,
         if (skip_first_input_coverage) 1 else 0,
-    )) return null;
+    )) return false;
 
     if (!traversal.collectBacktrack(
         glyphs,
@@ -91,7 +92,7 @@ pub fn full(
         result.backtrack[0..result.backtrack_count],
         true,
         position,
-    )) return null;
+    )) return false;
     const lookahead_start = result.input[result.input_count - 1] + 1;
     if (!traversal.collectForward(
         glyphs,
@@ -101,7 +102,7 @@ pub fn full(
         result.lookahead[0..result.lookahead_count],
         true,
         position,
-    )) return null;
+    )) return false;
     if (!try coveragesMatch(
         view,
         subtable,
@@ -109,7 +110,7 @@ pub fn full(
         result.backtrackSlice(),
         subtable.backtrack_offsets_pos,
         0,
-    )) return null;
+    )) return false;
     if (!try coveragesMatch(
         view,
         subtable,
@@ -117,8 +118,8 @@ pub fn full(
         result.lookaheadSlice(),
         subtable.lookahead_offsets_pos,
         0,
-    )) return null;
-    return result;
+    )) return false;
+    return true;
 }
 
 fn coveragesMatch(

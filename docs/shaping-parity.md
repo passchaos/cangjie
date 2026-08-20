@@ -3058,6 +3058,17 @@ shaping-performance superiority.
   also reduced retired instructions/cycles, while SourceSerif's instruction
   count improved but its cycle sample regressed, so no broader Latin claim is
   made. All corpus checksums were unchanged.
+- ChainContextSubst format-3 now writes its three bounded physical-index
+  regions into caller scratch only after the matcher succeeds, rather than
+  returning the 1.5 KiB `Regions` value inside `!?Regions` on every failed
+  candidate. Direct and indexed paths share the same boolean/out-parameter
+  contract. Fixed-CPU-30 five-repeat counters reduced NotoSansDevanagari
+  `hi-words` retired instructions by `0.87%`, branches by `0.44%`, and
+  cycles by `0.52%`; Roboto and SourceSerif cycle counters improved about
+  `2.9%` and `2.8%` with effectively identical retired work. Amiri long
+  text retired instructions/branches fell about `1.2%/0.6%` and cycles were
+  flat. Interleaved wall-time samples were noisy under the active host load,
+  so only the stable counter result is retained. All checksums were unchanged.
 - Prepared 4x4 raster rows now accumulate full-pixel interiors as signed range
   differences and resolve them during the already-required blend walk. Exact
   sample-center tests remain at both span boundaries, while 1x1, 2x2, and

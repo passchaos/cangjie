@@ -57,7 +57,8 @@ pub fn at(
     lookup_flag: u16,
     run: Options,
 ) Error!model.ApplyResult {
-    const regions = try matching.full(
+    var regions: matching.Regions = undefined;
+    if (!try matching.full(
         view,
         parsed,
         glyphs.items,
@@ -65,7 +66,8 @@ pub fn at(
         lookup_flag,
         run,
         false,
-    ) orelse return .{};
+        &regions,
+    )) return .{};
     return commit.apply(
         Executor,
         view,
@@ -88,7 +90,8 @@ pub fn acceleratedAt(
     lookup_flag: u16,
     run: Options,
 ) Error!model.ApplyResult {
-    const regions = try matching.full(
+    var regions: matching.Regions = undefined;
+    if (!try matching.full(
         view,
         parsed,
         glyphs.items,
@@ -96,7 +99,8 @@ pub fn acceleratedAt(
         lookup_flag,
         run,
         true,
-    ) orelse return .{};
+        &regions,
+    )) return .{};
     return commit.apply(
         Executor,
         view,

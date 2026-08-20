@@ -296,6 +296,11 @@ pub fn one(
                 result.coverage_groups,
                 allocator,
             );
+        result.coverage_group_direct =
+            try glyph_groups.buildDirect(
+                result.coverage_groups,
+                allocator,
+            );
     }
     errdefer {
         glyph_groups.deinitGroups(
@@ -303,6 +308,7 @@ pub fn one(
             allocator,
         );
         allocator.free(result.coverage_group_slots);
+        allocator.free(result.coverage_group_direct);
     }
 
     if (chaining_subtables.len != 0 and chaining_pairs.items.len != 0) {

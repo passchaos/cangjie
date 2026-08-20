@@ -76,6 +76,41 @@ test "glyph group hash slots preserve hits misses and binary fallback" {
     try std.testing.expectEqualSlices(u16, &group_indices[3], fallback);
 }
 
+test "glyph group direct index preserves exact hits and misses" {
+    const allocator = std.testing.allocator;
+    var pairs = [_]accelerator.glyph_groups.Pair{
+        .{ .glyph = 3, .subtable_index = 0 },
+        .{ .glyph = 9, .subtable_index = 1 },
+    };
+    const groups = try accelerator.glyph_groups.buildGroups(&pairs, allocator);
+    defer accelerator.glyph_groups.deinitGroups(groups, allocator);
+    const direct = try accelerator.glyph_groups.buildDirect(groups, allocator);
+    defer allocator.free(direct);
+    try std.testing.expectEqualSlices(
+        u16,
+        &.{1},
+        accelerator.glyph_groups.findDirect(groups, &.{}, direct, 9).?,
+    );
+    try std.testing.expect(
+        accelerator.glyph_groups.findDirect(groups, &.{}, direct, 4) == null,
+    );
+    try std.testing.expect(
+        accelerator.glyph_groups.findDirect(groups, &.{}, direct, 10) == null,
+    );
+
+    var sparse_indices = [_][1]u16{.{0}};
+    const sparse_groups = [_]accelerator.glyph_groups.Group{.{
+        .glyph = accelerator.glyph_groups.max_direct_glyphs,
+        .subtable_indices = &sparse_indices[0],
+    }};
+    const omitted = try accelerator.glyph_groups.buildDirect(
+        &sparse_groups,
+        allocator,
+    );
+    defer allocator.free(omitted);
+    try std.testing.expectEqual(@as(usize, 0), omitted.len);
+}
+
 test "Coverage pairs expand ranges and reject malformed ordering" {
     var bytes = [_]u8{0} ** 16;
     writeU16(&bytes, 0, 2);

@@ -23,6 +23,10 @@ pub const Lookup = struct {
     coverage_digest: GlyphDigest = .{},
     coverage_groups: []const glyph_groups.Group = &.{},
     coverage_group_slots: []const u16 = &.{},
+    /// Exact glyph-id to one-based coverage-group mapping for compact fonts.
+    /// This avoids hashing or binary search in per-pair runtime traversal; an
+    /// empty slot still means the lookup does not cover that glyph.
+    coverage_group_direct: []const u16 = &.{},
     single_pos_subtables: []const SinglePositionSubtable = &.{},
     pair_pos_subtables: []const PairPositionSubtable = &.{},
     pair_pos_records: []const PairPositionRecord = &.{},
@@ -168,6 +172,7 @@ pub fn deinitLookupContents(
     for (lookups) |lookup| {
         glyph_groups.deinitGroups(lookup.coverage_groups, allocator);
         allocator.free(lookup.coverage_group_slots);
+        allocator.free(lookup.coverage_group_direct);
         allocator.free(lookup.single_pos_subtables);
         allocator.free(lookup.pair_pos_subtables);
         allocator.free(lookup.pair_pos_records);

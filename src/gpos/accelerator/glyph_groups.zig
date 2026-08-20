@@ -18,6 +18,7 @@ pub const Pair = struct {
 };
 
 pub const min_groups_for_hash = 8;
+pub const max_direct_glyphs = 4096;
 
 /// Append `(covered glyph, subtable index)` pairs from an indexed Coverage.
 pub fn appendCoveragePairs(
@@ -156,11 +157,48 @@ pub fn buildSlots(
     return slots;
 }
 
+pub fn buildDirect(
+    groups: []const Group,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error![]u16 {
+    // A dense 8 KiB ceiling is small beside the parsed font and replaces a
+    // hash probe for the common BMP-sized Latin/Indic glyph spaces. Large or
+    // sparse CJK/CID ids retain the existing bounded hash/binary indexes.
+    if (groups.len == 0 or groups.len > std.math.maxInt(u16)) {
+        return try allocator.alloc(u16, 0);
+    }
+    const last_glyph: usize = groups[groups.len - 1].glyph;
+    if (last_glyph >= max_direct_glyphs) return try allocator.alloc(u16, 0);
+    const direct = try allocator.alloc(u16, last_glyph + 1);
+    @memset(direct, 0);
+    for (groups, 0..) |group, group_index| {
+        direct[group.glyph] = @intCast(group_index + 1);
+    }
+    return direct;
+}
+
 pub fn find(
     groups: []const Group,
     slots: []const u16,
     glyph: GlyphId,
 ) ?[]const u16 {
+    return findDirect(groups, slots, &.{}, glyph);
+}
+
+pub fn findDirect(
+    groups: []const Group,
+    slots: []const u16,
+    direct: []const u16,
+    glyph: GlyphId,
+) ?[]const u16 {
+    if (direct.len != 0) {
+        if (glyph >= direct.len) return null;
+        const group_index = direct[glyph];
+        return if (group_index == 0)
+            null
+        else
+            groups[group_index - 1].subtable_indices;
+    }
     if (slots.len != 0) {
         var slot = hash(glyph) & (slots.len - 1);
         while (slots[slot] != 0) : (slot = (slot + 1) & (slots.len - 1)) {

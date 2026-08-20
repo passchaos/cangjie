@@ -10,6 +10,7 @@ test "lookup model releases its complete nested ownership graph" {
     lookups[0] = .{
         .coverage_groups = try ownedGroups(allocator, 10),
         .coverage_group_slots = try allocator.dupe(u16, &.{1}),
+        .coverage_group_direct = try allocator.dupe(u16, &.{1}),
         .single_pos_subtables = try allocator.alloc(
             accelerator.model.SinglePositionSubtable,
             1,

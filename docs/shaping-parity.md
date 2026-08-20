@@ -3239,3 +3239,13 @@ shaping-performance superiority.
   `en-words` improved by about `2.6%`, `1.6%`, and `8.7%`, respectively. Amiri
   long text and Devanagari retired work stayed within `0.05%`, with cycles noisy
   but approximately neutral. All four corpus checksums were unchanged.
+- Compact-font GPOS accelerators now build an exact glyph-id to coverage-group
+  side index once and use it in native PairPos traversal. The index is capped
+  at 4096 glyph ids (8 KiB); sparse CJK/CID lookups retain their bounded hash
+  or binary path. Fixed-CPU-30 A/B/B/A counters on Roboto `react-dom` reduced
+  retired instructions from `3.9027B/3.9017B` to `3.8913B/3.8914B` (about
+  `0.28%`) and branches by about `0.01%`; cycles improved in three of four
+  orders but remain frequency-sensitive. Roboto `en-words` instructions fell
+  about `0.14%`, while Devanagari and Amiri controls retained identical
+  checksums with effectively neutral retired work. The complete 672-row
+  HarfBuzz/HarfRust corpus umbrella passes unchanged.

@@ -102,9 +102,10 @@ fn collectLookupImpl(
                 first_index += 1;
                 continue;
             };
-        const candidates = glyph_groups.find(
+        const candidates = glyph_groups.findDirect(
             accelerator.coverage_groups,
             accelerator.coverage_group_slots,
+            accelerator.coverage_group_direct,
             glyphs[first_index],
         ) orelse {
             first_index += 1;

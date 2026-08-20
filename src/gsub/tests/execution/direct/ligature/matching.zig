@@ -206,6 +206,34 @@ test "accelerated and prefiltered matchers preserve component offsets" {
     );
 }
 
+test "accelerated first-component digest rejects absent glyphs safely" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 42;
+    writeLigatureSubtable(&bytes, 0, 1, &.{ 2, 3 }, 40);
+    const accelerated = try build.ligature.build(
+        .{
+            .data = &bytes,
+            .offset = 0,
+            .length = bytes.len,
+            .assume_validated = true,
+        },
+        0,
+        allocator,
+    );
+    defer ownership.deinitContents(allocator, &.{.{
+        .ligature_subst = accelerated,
+    }});
+
+    try std.testing.expect(accelerated.first_component_digest.mayHave(1));
+    // Digest collisions are allowed, so test a bounded absent glyph rather
+    // than assuming one particular hash bit is unique.
+    var absent: u16 = 2;
+    while (accelerated.first_component_digest.mayHave(absent)) : (absent += 1) {
+        try std.testing.expect(absent != std.math.maxInt(u16));
+    }
+    try std.testing.expect(ligature.setForGlyph(accelerated, absent) == null);
+}
+
 fn view(bytes: []const u8) table.View {
     return .{ .data = bytes, .offset = 0, .length = bytes.len };
 }

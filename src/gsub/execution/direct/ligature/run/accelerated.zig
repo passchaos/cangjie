@@ -85,6 +85,7 @@ fn applyKind(
         if (!filtering.sourceFeatureAllowsGlyph(run, glyph_index)) continue;
         const first = glyphs.items[glyph_index];
         if (filtering.lookupIgnoresGlyph(lookup_flag, run, first)) continue;
+        if (!ligature.first_component_digest.mayHave(first)) continue;
         const set = matching.setForGlyph(ligature, first) orelse continue;
         const found = if (prefilter_second)
             matching.acceleratedPrefilteredMatch(

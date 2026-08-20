@@ -3069,6 +3069,17 @@ shaping-performance superiority.
   text retired instructions/branches fell about `1.2%/0.6%` and cycles were
   flat. Interleaved wall-time samples were noisy under the active host load,
   so only the stable counter result is retained. All checksums were unchanged.
+- Accelerated LigatureSubst now tests each candidate glyph against the already
+  owned first-component digest before probing its exact LigatureSet hash. The
+  digest is only a necessary-condition rejector, so collisions still reach the
+  exact index and authored preference is unchanged. Fixed-CPU-30 five-repeat
+  counters reduced Devanagari `hi-words` cycles by `1.53%`, branches by
+  `0.05%`, and branch misses by `2.93%`; retired instructions changed by
+  `+0.02%`. Roboto cycles/instructions improved about `2.1%/0.09%`,
+  SourceSerif cycles improved about `3.6%` with `+0.08%` instructions, and
+  Amiri long text improved about `1.0%` in cycles/instructions and `0.6%`
+  in branches. Interleaved medians improved for the target and controls despite
+  substantial host outliers, and all checksums were unchanged.
 - Prepared 4x4 raster rows now accumulate full-pixel interiors as signed range
   differences and resolve them during the already-required blend walk. Exact
   sample-center tests remain at both span boundaries, while 1x1, 2x2, and

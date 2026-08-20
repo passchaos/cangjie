@@ -28,6 +28,36 @@ pub const View = struct {
         );
     }
 
+    pub fn palettes(
+        self: View,
+        allocator: std.mem.Allocator,
+    ) font_mod.FontError![]font_mod.PaletteInfo {
+        return font_mod.immutable_face_backend.colorPalettes(
+            self.implementation,
+            allocator,
+        );
+    }
+
+    pub fn paletteColors(
+        self: View,
+        allocator: std.mem.Allocator,
+        palette_index: u16,
+    ) font_mod.FontError![]font_mod.PaletteColor {
+        return font_mod.immutable_face_backend.paletteColors(
+            self.implementation,
+            allocator,
+            palette_index,
+        );
+    }
+
+    pub fn paletteSummary(
+        self: View,
+    ) font_mod.FontError!font_mod.PaletteSummary {
+        return font_mod.immutable_face_backend.paletteSummary(
+            self.implementation,
+        );
+    }
+
     pub fn paint(
         self: View,
         glyph_id: glyph_mod.GlyphId,

@@ -73,6 +73,51 @@ test "reads COLR layers and CPAL palette colors" {
     try std.testing.expectEqual(@as(usize, 0), missing_layers.len);
 }
 
+test "Face color view exposes palette collection and summary" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const Face = @import("../../../font/face/root.zig").Face;
+
+    const bytes = try test_font.buildColorTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try Face.parse(allocator, bytes);
+    defer face.deinit();
+
+    const palettes = try face.color().palettes(allocator);
+    defer allocator.free(palettes);
+    try std.testing.expectEqual(@as(usize, 1), palettes.len);
+    const colors = try face.color().paletteColors(allocator, 0);
+    defer allocator.free(colors);
+    try std.testing.expectEqual(@as(usize, 2), colors.len);
+    try std.testing.expectEqual(@as(u8, 255), colors[0].red);
+    const summary = try face.color().paletteSummary();
+    try std.testing.expectEqual(@as(u16, 1), summary.palette_count);
+    try std.testing.expectEqual(@as(u16, 2), summary.entry_count);
+    try std.testing.expectEqual(@as(u64, 0x1feff0102), summary.checksum);
+
+    const cpal_offset = try tableOffset(bytes, "CPAL");
+    bytes[cpal_offset + 18] ^= 1;
+    try std.testing.expectError(
+        error.BadSfnt,
+        face.implementation.paletteColor(0, 0),
+    );
+    try std.testing.expectEqual(
+        @as(u16, 1),
+        (try face.color().paletteSummary()).palette_count,
+    );
+}
+
+fn tableOffset(bytes: []const u8, tag: []const u8) !usize {
+    if (bytes.len < 12 or tag.len != 4) return error.InvalidFixture;
+    const table_count = std.mem.readInt(u16, bytes[4..6], .big);
+    for (0..table_count) |index| {
+        const record = 12 + index * 16;
+        if (!std.mem.eql(u8, bytes[record..][0..4], tag)) continue;
+        return std.mem.readInt(u32, bytes[record + 8 ..][0..4], .big);
+    }
+    return error.InvalidFixture;
+}
+
 test "reads COLR v1 PaintSolid metadata" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

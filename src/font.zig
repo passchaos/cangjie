@@ -362,6 +362,12 @@ pub const ColorLayer = colr_v0_mod.Layer;
 pub const PaletteColor = cpal_mod.Color;
 pub const PaletteInfo = cpal_mod.Palette;
 
+pub const PaletteSummary = struct {
+    palette_count: u16,
+    entry_count: u16,
+    checksum: u64,
+};
+
 // Keep the public color model stable while COLR parsers and renderers share a
 // focused type layer that does not depend on the Font implementation.
 pub const ColorClipBox = color_tables.model.ClipBox;
@@ -4661,6 +4667,92 @@ pub const Font = struct {
         );
     }
 
+    fn colorPalettesForImmutableFace(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+    ) FontError![]PaletteInfo {
+        const cpal = self.cpal orelse return try allocator.alloc(PaletteInfo, 0);
+        const layout = try cpal_mod.validateStructure(
+            self.data,
+            cpalTable(cpal),
+        );
+        return try cpal_mod.palettes(
+            allocator,
+            self.data,
+            cpalTable(cpal),
+            layout,
+        );
+    }
+
+    fn paletteColorsForImmutableFace(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        palette_index: u16,
+    ) FontError![]PaletteColor {
+        const cpal = self.cpal orelse return try allocator.alloc(PaletteColor, 0);
+        const layout = try cpal_mod.validateStructure(
+            self.data,
+            cpalTable(cpal),
+        );
+        return try cpal_mod.colors(
+            allocator,
+            self.data,
+            cpalTable(cpal),
+            layout,
+            palette_index,
+        );
+    }
+
+    fn paletteSummaryForImmutableFace(self: *const Font) FontError!PaletteSummary {
+        const cpal = self.cpal orelse return .{
+            .palette_count = 0,
+            .entry_count = 0,
+            .checksum = 0,
+        };
+        const table = cpalTable(cpal);
+        const layout = try cpal_mod.validateStructure(self.data, table);
+        var checksum: u64 = layout.palette_count;
+        for (0..layout.palette_count) |palette_index| {
+            _ = try bin.readU16At(
+                self.data,
+                table.offset + 12 + palette_index * 2,
+            );
+            checksum +%= palette_index;
+            checksum +%= layout.palette_entries;
+            if (layout.palette_types_offset != 0) {
+                checksum +%= try bin.readU32At(
+                    self.data,
+                    table.offset + layout.palette_types_offset + palette_index * 4,
+                );
+            }
+            if (layout.palette_labels_offset != 0) {
+                const label = try bin.readU16At(
+                    self.data,
+                    table.offset + layout.palette_labels_offset + palette_index * 2,
+                );
+                checksum +%= if (label == 0xffff) 0 else label;
+            }
+            for (0..layout.palette_entries) |color_index| {
+                const color = (try cpal_mod.color(
+                    self.data,
+                    table,
+                    layout,
+                    @intCast(palette_index),
+                    @intCast(color_index),
+                )).?;
+                checksum +%= @as(u32, color.red) |
+                    (@as(u32, color.green) << 8) |
+                    (@as(u32, color.blue) << 16) |
+                    (@as(u32, color.alpha) << 24);
+            }
+        }
+        return .{
+            .palette_count = layout.palette_count,
+            .entry_count = layout.palette_entries,
+            .checksum = checksum,
+        };
+    }
+
     pub fn paletteEntryLabels(self: *const Font, allocator: std.mem.Allocator) FontError![]?u16 {
         const cpal = self.cpal orelse return try allocator.alloc(?u16, 0);
         const layout = try self.validatedCpalLayout(cpal);
@@ -6623,6 +6715,9 @@ pub const immutable_face_backend = struct {
     pub const mapVariationCoordinate = Font.mapVariationCoordinateForImmutableFace;
     pub const variationInstances = Font.variationInstancesForImmutableFace;
     pub const variationSummary = Font.variationSummaryForImmutableFace;
+    pub const colorPalettes = Font.colorPalettesForImmutableFace;
+    pub const paletteColors = Font.paletteColorsForImmutableFace;
+    pub const paletteSummary = Font.paletteSummaryForImmutableFace;
     pub const horizontalHeaderInfo = struct {
         fn read(font: *const Font) FontError!MetricHeaderInfo {
             const hhea = font.hhea orelse return error.MissingTable;

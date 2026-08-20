@@ -33,9 +33,57 @@ fn main() {
         "glyph-name" => glyph_name(&font, glyph_id, &mut args),
         "attributes" => attributes(&font, &mut args),
         "variations" => variations(&font, &mut args),
+        "palettes" => palettes(&font, &mut args),
         "charmap" => charmap(&font, glyph_id, &mut args),
         _ => fail("unsupported mode"),
     }
+}
+
+fn palettes(font: &FontRef<'_>, args: &mut impl Iterator<Item = String>) {
+    let (iterations, samples) = repeated_args(args);
+    let mut values = Vec::with_capacity(samples);
+    let mut checksum = 0_u64;
+    for _ in 0..samples {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let palettes = font.color_palettes();
+            checksum = checksum.wrapping_add(u64::from(palettes.len()));
+            for index in 0..palettes.len() {
+                let palette = palettes.get(index).unwrap();
+                checksum = checksum
+                    .wrapping_add(u64::from(palette.index()))
+                    .wrapping_add(palette.colors().len() as u64)
+                    .wrapping_add(u64::from(
+                        palette.palette_type().map(|v| v.bits()).unwrap_or_default(),
+                    ))
+                    .wrapping_add(u64::from(
+                        palette.label().map(|id| id.to_u16()).unwrap_or_default(),
+                    ));
+                for color in palette.colors() {
+                    checksum = checksum.wrapping_add(
+                        u64::from(color.red())
+                            | (u64::from(color.green()) << 8)
+                            | (u64::from(color.blue()) << 16)
+                            | (u64::from(color.alpha()) << 24),
+                    );
+                }
+            }
+            black_box(palettes);
+        }
+        values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
+    }
+    values.sort_by(f64::total_cmp);
+    let palettes = font.color_palettes();
+    let entries = palettes
+        .get(0)
+        .map(|p| p.colors().len())
+        .unwrap_or_default();
+    println!(
+        "engine=skrifa\tmode=palettes\titerations={iterations}\tsamples={samples}\tmedian_ns_per_iter={:.3}\tpalettes={}\tentries={}\tchecksum={checksum:016x}",
+        values[values.len() / 2],
+        palettes.len(),
+        entries,
+    );
 }
 
 fn variations(font: &FontRef<'_>, args: &mut impl Iterator<Item = String>) {

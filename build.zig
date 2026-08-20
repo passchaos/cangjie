@@ -3672,6 +3672,17 @@ pub fn build(b: *std.Build) void {
     });
     bench_smoke_step.dependOn(&glyph_variations_smoke_cmd.step);
 
+    const glyph_palettes_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
+    glyph_palettes_smoke_cmd.addArgs(&.{
+        "--mode",       "palettes",
+        "--format",     "tsv",
+        "--builtin",    "minimal",
+        "--iterations", "1",
+        "--warmup",     "0",
+        "--samples",    "1",
+    });
+    bench_smoke_step.dependOn(&glyph_palettes_smoke_cmd.step);
+
     const glyph_freetype_outline_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
     glyph_freetype_outline_smoke_cmd.addArgs(&.{
         "--engine",     "freetype",

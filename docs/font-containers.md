@@ -266,3 +266,14 @@ Cangjie/Skrifa/Skrifa/Cangjie medians over one million reads were
 methods also reuse parse-time fvar proof, while their low-level `Font`
 counterparts retain checksum/name-reference revalidation. This is narrow
 variation-metadata evidence, not an overall Fontations performance claim.
+
+Skrifa's `ColorPalettes` boundary is now represented directly in the Face
+color view: callers can enumerate palette metadata and colors, or take a
+non-allocating complete summary. On the retained one-palette/two-entry CPAL
+fixture, both engines produce checksum `00000001feff0102` over collection
+length, palette index/count/type/label, and RGBA records. Fixed-CPU-30
+Cangjie/Skrifa/Skrifa/Cangjie medians over one million reads were
+`37.62/46.99/71.41/60.73 ns`; checksums were stable. Low-level scalar and
+owned CPAL APIs retain post-parse checksum/name-reference validation, while
+the immutable Face view reuses structural parse proof. This is narrow CPAL
+metadata evidence, not an overall Fontations performance claim.

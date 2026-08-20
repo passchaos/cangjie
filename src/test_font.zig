@@ -683,6 +683,13 @@ pub fn writeAttributeFixtures(
         .sub_path = "variations.ttf",
         .data = variation,
     });
+
+    const color = try buildColorTtf(allocator);
+    defer allocator.free(color);
+    try directory.writeFile(io, .{
+        .sub_path = "palettes.ttf",
+        .data = color,
+    });
 }
 
 fn embeddedSfntTable(bytes: []const u8, tag: *const [4]u8) ![]const u8 {

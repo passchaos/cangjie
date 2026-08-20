@@ -3045,3 +3045,17 @@ shaping-performance superiority.
   distinct from the charstring blend opcode. This closes a concrete
   Fontations/Skrifa outline-correctness gap, but no Type2 speed claim is made;
   FreeType still leads the broader scan-conversion measurements above.
+- Prepared geometry now caches the sorted edge intersections for all four
+  fixed 4x4 sample rows during `prepare`, so every repeated draw starts at
+  winding/span accumulation instead of rebuilding active edges and sorting the
+  same intersections. The immutable cache remains target-independent; target
+  clipping chooses a row subrange, and pathological coordinate spans decline
+  the cache and retain the bounded legacy scan. Other sampling densities keep
+  their former implementation. Fixed-CPU-30 B/A/A/B 21-sample medians for
+  Roboto 64 px reduced `A` from about `10,155`/`10,145` to
+  `8,308`/`8,218 ns` (about `18.5%`), `g` from `11,039`/`11,008` to
+  `9,074`/`9,060 ns` (about `17.7%`), and `é` from `8,171`/`8,179` to
+  `7,005`/`6,984 ns` (about `14.5%`). Interleaved counters reduced retired
+  instructions by about `15.7%`, `18.3%`, and `12.9%`, and cycles by about
+  `18.4%`, `18.3%`, and `14.7%`, respectively. All target checksums and the
+  retained direct/prepared 1/2/3/4-density differential are unchanged.

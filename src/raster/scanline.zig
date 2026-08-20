@@ -1,18 +1,15 @@
 const std = @import("std");
-const glyph_mod = @import("../glyph.zig");
+const RowAccumulator = @import("row_accumulator.zig").RowAccumulator;
+const scanline_types = @import("scanline_types.zig");
 
-pub const Point = glyph_mod.Point;
+pub const Point = scanline_types.Point;
 
 pub const Line = struct {
     a: Point,
     b: Point,
 };
 
-pub const Target = struct {
-    width: u32,
-    height: u32,
-    pixels: []u8,
-};
+pub const Target = scanline_types.Target;
 
 pub const Bounds = struct {
     min_x: i32,
@@ -76,12 +73,15 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
     if (row_width_i32 <= 0) return;
     const row_width: usize = @intCast(row_width_i32);
     var inline_coverage_counts: [512]u8 = undefined;
-    const coverage_counts = if (row_width <= inline_coverage_counts.len)
-        inline_coverage_counts[0..row_width]
-    else
-        try allocator.alloc(u8, row_width);
-    defer if (row_width > inline_coverage_counts.len) allocator.free(coverage_counts);
-    @memset(coverage_counts, 0);
+    var inline_coverage_differences: [513]i16 = undefined;
+    var row_accumulator = try RowAccumulator.init(
+        allocator,
+        row_width,
+        sample_axis == 4,
+        &inline_coverage_counts,
+        &inline_coverage_differences,
+    );
+    defer row_accumulator.deinit(allocator);
     var inline_prepared_lines: [128]PreparedFillLine = undefined;
     const prepared_storage = if (lines.len <= inline_prepared_lines.len)
         inline_prepared_lines[0..lines.len]
@@ -128,7 +128,7 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
                 else
                     .{ second_x, first_x, second.delta };
                 if (fill_rule == .even_odd or left_delta != 0) {
-                    if (coverSpanFinite(coverage_counts, min_x, max_x, sample_offsets, start_f, end_f)) |span| {
+                    if (row_accumulator.cover(min_x, max_x, sample_offsets, start_f, end_f)) |span| {
                         row_has_coverage = true;
                         row_min_x = @min(row_min_x, span.min_x);
                         row_max_x = @max(row_max_x, span.max_x);
@@ -154,7 +154,7 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
 
             if (intersections.len == 2 and @abs(intersections[1].x - intersections[0].x) > 0.000001) {
                 if (fill_rule == .even_odd or intersections[0].delta != 0) {
-                    if (coverSpanFinite(coverage_counts, min_x, max_x, sample_offsets, intersections[0].x, intersections[1].x)) |span| {
+                    if (row_accumulator.cover(min_x, max_x, sample_offsets, intersections[0].x, intersections[1].x)) |span| {
                         row_has_coverage = true;
                         row_min_x = @min(row_min_x, span.min_x);
                         row_max_x = @max(row_max_x, span.max_x);
@@ -173,7 +173,7 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
                         if (previous_x) |start_f| {
                             const end_f = current_x;
                             if (winding != 0) {
-                                if (coverSpanFinite(coverage_counts, min_x, max_x, sample_offsets, start_f, end_f)) |span| {
+                                if (row_accumulator.cover(min_x, max_x, sample_offsets, start_f, end_f)) |span| {
                                     row_has_coverage = true;
                                     row_min_x = @min(row_min_x, span.min_x);
                                     row_max_x = @max(row_max_x, span.max_x);
@@ -192,7 +192,7 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
                 .even_odd => {
                     var pair: usize = 0;
                     while (pair + 1 < intersections.len) : (pair += 2) {
-                        if (coverSpanFinite(coverage_counts, min_x, max_x, sample_offsets, intersections[pair].x, intersections[pair + 1].x)) |span| {
+                        if (row_accumulator.cover(min_x, max_x, sample_offsets, intersections[pair].x, intersections[pair + 1].x)) |span| {
                             row_has_coverage = true;
                             row_min_x = @min(row_min_x, span.min_x);
                             row_max_x = @max(row_max_x, span.max_x);
@@ -202,15 +202,14 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
             }
         }
         if (!row_has_coverage) continue;
-        var x = row_min_x;
-        while (x <= row_max_x) : (x += 1) {
-            const inside = coverage_counts[@intCast(x - min_x)];
-            if (inside == 0) continue;
-            blendUnchecked(target, x, y, coverage_lut[inside]);
-        }
-        const clear_start: usize = @intCast(row_min_x - min_x);
-        const clear_end: usize = @intCast(row_max_x - min_x + 1);
-        @memset(coverage_counts[clear_start..clear_end], 0);
+        row_accumulator.blendAndClear(
+            target,
+            min_x,
+            y,
+            row_min_x,
+            row_max_x,
+            coverage_lut,
+        );
     }
 }
 
@@ -240,14 +239,7 @@ pub fn boundsForTarget(target: Target, lines: []const Line) ?Bounds {
     return .{ .min_x = min_x, .min_y = min_y, .max_x = max_x, .max_y = max_y };
 }
 
-pub inline fn blendUnchecked(target: Target, x: i32, y: i32, coverage: u8) void {
-    const idx = @as(usize, @intCast(y)) * target.width + @as(usize, @intCast(x));
-    if (coverage == 255) {
-        target.pixels[idx] = 255;
-        return;
-    }
-    target.pixels[idx] = @max(target.pixels[idx], coverage);
-}
+pub const blendUnchecked = scanline_types.blendUnchecked;
 
 pub fn prepareFillLines(out: []PreparedFillLine, lines: []const Line) []PreparedFillLine {
     std.debug.assert(out.len >= lines.len);
@@ -421,90 +413,16 @@ test "small winding sorting networks preserve ascending intersections" {
     }
 }
 
-pub const CoveredSpan = struct {
-    min_x: i32,
-    max_x: i32,
-};
+pub const CoveredSpan = scanline_types.CoveredSpan;
 
 fn coverSpan(coverage_counts: []u8, min_x: i32, max_x: i32, sample_offsets: []const f32, start_f: f32, end_f: f32) ?CoveredSpan {
     if (!std.math.isFinite(start_f) or !std.math.isFinite(end_f)) return null;
     return coverSpanFinite(coverage_counts, min_x, max_x, sample_offsets, start_f, end_f);
 }
 
-pub fn coverSpanFinite(coverage_counts: []u8, min_x: i32, max_x: i32, sample_offsets: []const f32, start_f: f32, end_f: f32) ?CoveredSpan {
-    std.debug.assert(std.math.isFinite(start_f) and std.math.isFinite(end_f));
-    const start64: f64 = start_f;
-    const end64: f64 = end_f;
-    const min64: f64 = @floatFromInt(min_x);
-    const max64: f64 = @floatFromInt(max_x);
-    if (end64 <= start64) return null;
-    if (end64 <= min64 or start64 >= max64 + 1.0) return null;
-    // Off-target endpoints may be arbitrarily large but finite. Clamp those
-    // before integer conversion; overlapping endpoints are then guaranteed to
-    // be in the representable target range and need no generic saturation.
-    const x_start = if (start64 <= min64)
-        min_x
-    else
-        @as(i32, @intFromFloat(@floor(start64)));
-    // Pixel samples are strictly inside [x, x + 1), so the pixel beginning at
-    // ceil(end) can never pass the half-open `sample < end` test. Excluding it
-    // avoids one guaranteed-zero partial-pixel probe per span and keeps the
-    // row blend/clear range from inheriting that empty fringe.
-    const x_end = if (end64 >= max64 + 1.0)
-        max_x
-    else
-        @as(i32, @intFromFloat(@ceil(end64))) - 1;
-    const full_start = if (start64 <= min64)
-        min_x
-    else
-        @as(i32, @intFromFloat(@ceil(start64)));
-    const full_end = if (end64 >= max64 + 1.0)
-        max_x
-    else
-        @as(i32, @intFromFloat(@floor(end64))) - 1;
-    const full_coverage: u8 = @intCast(sample_offsets.len);
-
-    var x = x_start;
-    if (full_start <= full_end) {
-        while (x < full_start) : (x += 1) {
-            coverPartialPixelDispatch(coverage_counts, min_x, sample_offsets, start_f, end_f, x);
-        }
-        while (x <= full_end) : (x += 1) {
-            coverage_counts[@intCast(x - min_x)] += full_coverage;
-        }
-    }
-    while (x <= x_end) : (x += 1) {
-        coverPartialPixelDispatch(coverage_counts, min_x, sample_offsets, start_f, end_f, x);
-    }
-    return .{ .min_x = x_start, .max_x = x_end };
-}
-
-inline fn coverPartialPixelDispatch(coverage_counts: []u8, min_x: i32, sample_offsets: []const f32, start_f: f32, end_f: f32, x: i32) void {
-    if (sample_offsets.len == 4) {
-        coverPartialPixel4(coverage_counts, min_x, start_f, end_f, x);
-        return;
-    }
-    coverPartialPixel(coverage_counts, min_x, sample_offsets, start_f, end_f, x);
-}
-
-inline fn coverPartialPixel4(coverage_counts: []u8, min_x: i32, start_f: f32, end_f: f32, x: i32) void {
-    const base: f32 = @floatFromInt(x);
-    var count: u8 = 0;
-    count += @intFromBool(base + 0.125 >= start_f and base + 0.125 < end_f);
-    count += @intFromBool(base + 0.375 >= start_f and base + 0.375 < end_f);
-    count += @intFromBool(base + 0.625 >= start_f and base + 0.625 < end_f);
-    count += @intFromBool(base + 0.875 >= start_f and base + 0.875 < end_f);
-    coverage_counts[@intCast(x - min_x)] += count;
-}
-
-fn coverPartialPixel(coverage_counts: []u8, min_x: i32, sample_offsets: []const f32, start_f: f32, end_f: f32, x: i32) void {
-    for (sample_offsets) |sample_offset| {
-        const px = @as(f32, @floatFromInt(x)) + sample_offset;
-        if (px >= start_f and px < end_f) {
-            coverage_counts[@intCast(x - min_x)] += 1;
-        }
-    }
-}
+pub const coverSpanFinite = scanline_types.coverSpanFinite;
+const coverPartialPixel4 = scanline_types.coverPartialPixel4;
+const coverPartialPixel = scanline_types.coverPartialPixel;
 
 test "four-sample partial coverage matches the generic loop at boundaries" {
     const boundaries = [_]f32{

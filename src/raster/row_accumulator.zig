@@ -1,10 +1,10 @@
-//! Four-by-four prepared-raster row coverage accumulation.
+//! Shared four-by-four scanline row coverage accumulation.
 //!
 //! Full-pixel spans are stored as range differences and resolved during the
 //! required blend pass. Boundary pixels retain the exact sample-center test.
 
 const std = @import("std");
-const scanline = @import("../scanline.zig");
+const scanline = @import("scanline_types.zig");
 
 pub const Target = scanline.Target;
 

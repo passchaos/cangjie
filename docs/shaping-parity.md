@@ -3202,3 +3202,12 @@ shaping-performance superiority.
   to the preceding sorting-network binary, fixed-CPU-30 five-repeat counters
   reduced retired instructions by about `6.1%`, `4.7%`, and `4.5%`, and cycles
   by about `7.8%`, `3.1%`, and `3.0%`, respectively.
+- Direct 4×4 scanline accumulation now shares the prepared scanner's signed
+  range-difference accumulator instead of incrementing every interior pixel for
+  every sample span. `scanline_types.zig` owns the cycle-free target/span/blend
+  primitives shared by the direct scanner and accumulator; 1×1, 2×2, and 3×3
+  continue on the former count-array path. Roboto 64 px `A`, `g`, and `é` kept
+  byte-identical direct dirty-render output. Relative to `de71d1c`, fixed-CPU-30
+  five-repeat counters reduced instructions by about `16.7%`, `13.0%`, and
+  `13.5%`, branches by `11.8%`, `8.7%`, and `9.8%`, and cycles by roughly
+  `12.7%`, `10.4%`, and `11.7%`, respectively.

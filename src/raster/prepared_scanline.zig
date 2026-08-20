@@ -1,6 +1,6 @@
 const std = @import("std");
 const scanline = @import("scanline.zig");
-const RowAccumulator = @import("prepared/row_accumulator.zig").RowAccumulator;
+const RowAccumulator = @import("row_accumulator.zig").RowAccumulator;
 const CoverageCache = @import("prepared/coverage.zig").Cache;
 const coverage_cache = @import("prepared/coverage.zig");
 const shaping_sections = @import("../shaping_sections.zig");

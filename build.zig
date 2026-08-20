@@ -214,6 +214,16 @@ const retained_corpus_parity_gates = [_]struct {
         .text_file = "texts/fa-thelittleprince.txt",
         .direction = "rtl",
     },
+    .{
+        .font_file = "fonts/Roboto-Regular.ttf",
+        .text_file = "texts/react-dom.txt",
+        .direction = "ltr",
+    },
+    .{
+        .font_file = "fonts/SourceSerifVariable-Roman.ttf",
+        .text_file = "texts/react-dom.txt",
+        .direction = "ltr",
+    },
 };
 
 const retained_aots_parity_gates = [_]struct {

@@ -70,6 +70,15 @@ Bengali HarfBuzz in-house shaping
 subset that omits `hhea`/`hmtx` and `glyf`, exercising shape-only font parsing
 with HarfBuzz-compatible fallback advances, plus Arabic modifier-mark ordering
 fixtures with and without CGJ.
+The 24,709-line `react-dom.txt` source corpus is retained against both
+references as a distinct long mixed-code workload. Roboto produces 1,043,900
+glyphs with checksum `eafe0f780e6696cb`; SourceSerifVariable produces
+1,042,546 glyphs with checksum `3a6d8292bce55621`. A fixed-CPU-30 serial
+Cangjie/HarfBuzz/HarfBuzz/Cangjie timing matrix remained frequency-skewed but
+consistently exposed a deficit: Roboto measured `601.73/438.21` versus
+`363.76/332.51 ns/glyph`, and SourceSerif measured `438.97/618.12` versus
+`332.75/344.36 ns/glyph`. This code-shaped corpus is therefore an active
+HarfBuzz-relative performance target, not a Cangjie speed claim.
 It also retains focused Indic in-house rows including Bengali contextual `pres`
 at syllable boundaries.
 

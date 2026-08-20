@@ -1411,6 +1411,17 @@ The fixed-CPU-30 wall-clock B/A/A/B sample was frequency-skewed, while its
 checksums, 144 glyphs, and six lines remained identical; the matching Latin
 control stayed neutral at about `100 µs` with unchanged output.
 
+The script classifier now recognizes the disjoint primary Arabic block before
+walking the long supplementary-script chain. This preserves every existing
+Script value while avoiding dozens of unrelated range tests for the letters,
+marks, and punctuation that dominate ordinary Arabic text. On the same Arabic
+spacing row, five-repeat counters fell from `1.0457B` to `1.0224B`
+instructions, `177.21M` to `174.01M` branches, `346.1M` to `337.7M` cycles,
+and `1.238M` to `1.181M` branch misses per 1,000 layouts. Fixed-CPU wall-clock
+samples were again frequency-skewed, but checksum `fb80f404e4d69aff`, 144
+glyphs, and six lines stayed identical. The Latin spacing control retained
+checksum `024ab925eca26b11`, 105 glyphs, five lines, and no stable regression.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

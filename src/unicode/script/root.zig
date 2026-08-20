@@ -97,6 +97,12 @@ pub const Script = enum {
 };
 
 pub fn forCodepoint(codepoint: u21) Script {
+    // The primary Arabic block is disjoint from every earlier specialized
+    // script predicate. Keep it ahead of the long supplementary-script chain
+    // so ordinary Arabic letters and marks do not execute dozens of unrelated
+    // range tests during itemization. Other Arabic ranges remain at the
+    // overlap-sensitive classifier position below.
+    if (codepoint >= 0x0600 and codepoint <= 0x06ff) return .arabic;
     if ((codepoint >= 'A' and codepoint <= 'Z') or
         (codepoint >= 'a' and codepoint <= 'z') or
         ranges.isLatin(codepoint))
@@ -212,6 +218,17 @@ pub fn forCodepoint(codepoint: u21) Script {
     if (ranges.isVai(codepoint)) return .vai;
     if (isCommon(codepoint)) return .common;
     return .unknown;
+}
+
+test "primary Arabic block keeps the Arabic script fast path" {
+    const std = @import("std");
+    try std.testing.expectEqual(Script.arabic, forCodepoint(0x060c));
+    try std.testing.expectEqual(Script.arabic, forCodepoint(0x0627));
+    try std.testing.expectEqual(Script.arabic, forCodepoint(0x064b));
+    try std.testing.expectEqual(Script.arabic, forCodepoint(0x06ff));
+    // Adjacent non-Arabic scalars must retain their existing classifications.
+    try std.testing.expectEqual(Script.hebrew, forCodepoint(0x05d0));
+    try std.testing.expectEqual(Script.common, forCodepoint(' '));
 }
 
 /// Whether a scalar belongs to a script that applies Arabic-style positional

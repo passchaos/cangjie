@@ -446,10 +446,14 @@ pub fn coverSpanFinite(coverage_counts: []u8, min_x: i32, max_x: i32, sample_off
         min_x
     else
         @as(i32, @intFromFloat(@floor(start64)));
-    const x_end = if (end64 >= max64)
+    // Pixel samples are strictly inside [x, x + 1), so the pixel beginning at
+    // ceil(end) can never pass the half-open `sample < end` test. Excluding it
+    // avoids one guaranteed-zero partial-pixel probe per span and keeps the
+    // row blend/clear range from inheriting that empty fringe.
+    const x_end = if (end64 >= max64 + 1.0)
         max_x
     else
-        @as(i32, @intFromFloat(@ceil(end64)));
+        @as(i32, @intFromFloat(@ceil(end64))) - 1;
     const full_start = if (start64 <= min64)
         min_x
     else
@@ -539,6 +543,15 @@ test "finite cover span fast path matches defensive clipping" {
             try std.testing.expectEqual(defensive, fast);
         }
     }
+}
+
+test "covered span excludes the guaranteed-empty end pixel" {
+    var counts = [_]u8{0} ** 4;
+    try std.testing.expectEqual(
+        CoveredSpan{ .min_x = 0, .max_x = 1 },
+        coverSpanFinite(&counts, 0, 3, &sample_offsets_4, 0.25, 1.75).?,
+    );
+    try std.testing.expectEqualSlices(u8, &.{ 3, 3, 0, 0 }, &counts);
 }
 
 fn targetMaxPixelIndex(limit: u32) ?i32 {

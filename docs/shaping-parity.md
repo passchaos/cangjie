@@ -3193,3 +3193,12 @@ shaping-performance superiority.
   and `2.1%`, and branches by about `5.8%`, `6.1%`, and `3.3%`, respectively.
   Cycle reductions were about `0.7--1.6%` under substantial frequency noise,
   so this narrows but does not close the FreeType gap above.
+- Half-open horizontal sample semantics also make the pixel beginning at
+  `ceil(span_end)` unconditionally empty. Direct span accumulation now stops at
+  `ceil(span_end)-1` (with clipped target-end handling unchanged), avoiding one
+  zero partial-pixel probe and excluding its empty fringe from the row's later
+  blend/clear range. Roboto 64 px `A`, `g`, and `é` retained byte-identical
+  direct dirty-render output; 1×1, 2×2, and 3×3 controls did as well. Relative
+  to the preceding sorting-network binary, fixed-CPU-30 five-repeat counters
+  reduced retired instructions by about `6.1%`, `4.7%`, and `4.5%`, and cycles
+  by about `7.8%`, `3.1%`, and `3.0%`, respectively.

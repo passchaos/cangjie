@@ -113,6 +113,7 @@ fn buildClusterIndex(
     glyphs: anytype,
 ) ![]ClusterEntry {
     const entries = try allocator.alloc(ClusterEntry, glyphs.len);
+    var monotone = true;
     for (glyphs, entries, 0..) |glyph, *entry, glyph_index| {
         entry.* = .{
             .cluster = if (glyph.isAutomaticHyphen() and glyph_index != 0)
@@ -121,8 +122,15 @@ fn buildClusterIndex(
                 glyph.cluster,
             .glyph_index = glyph_index,
         };
+        if (glyph_index != 0 and
+            (entry.cluster < entries[glyph_index - 1].cluster or
+                (entry.cluster == entries[glyph_index - 1].cluster and
+                    entry.glyph_index < entries[glyph_index - 1].glyph_index)))
+        {
+            monotone = false;
+        }
     }
-    std.sort.heap(ClusterEntry, entries, {}, entryLessThan);
+    if (!monotone) std.sort.heap(ClusterEntry, entries, {}, entryLessThan);
     return entries;
 }
 
@@ -226,4 +234,24 @@ test "styled bidi permutation preserves equal-cluster output order" {
     );
     defer std.testing.allocator.free(order);
     try std.testing.expectEqualSlices(usize, &.{ 0, 2, 1 }, order);
+}
+
+test "styled bidi cluster index preserves an already monotone glyph stream" {
+    const Glyph = struct {
+        cluster: usize,
+        fn isAutomaticHyphen(_: @This()) bool {
+            return false;
+        }
+    };
+    const glyphs = [_]Glyph{
+        .{ .cluster = 0 },
+        .{ .cluster = 2 },
+        .{ .cluster = 2 },
+        .{ .cluster = 5 },
+    };
+    const entries = try buildClusterIndex(std.testing.allocator, &glyphs);
+    defer std.testing.allocator.free(entries);
+    for (entries, 0..) |entry, index| {
+        try std.testing.expectEqual(index, entry.glyph_index);
+    }
 }

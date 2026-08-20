@@ -1343,6 +1343,16 @@ about `1.45x` faster by geometric mean on this output-count-equivalent
 styled/spacing boundary. This is still one Latin style workload, not an
 overall Parley performance claim.
 
+The same spacing protocol over the 200-byte Noto Kufi Arabic sample produces
+144 glyphs and six lines in both engines. Cangjie initially measured
+`377.4/321.7 µs` versus Parley's retained `233.5/174.1 µs`. Styled bidi
+was heap-sorting its cluster index even when GSUB had already left the glyph
+stream in monotone cluster/index order. Detecting that order before sorting
+reduced Cangjie to `323.7/314.9 µs`; five-repeat counters reduced retired
+instructions by `9.5%`, branches by `2.5%`, cycles by `11.0%`, and
+branch misses by `15.4%`, with the output checksum unchanged. Arabic spacing
+still trails Parley, so this remains an active paragraph-performance gap.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

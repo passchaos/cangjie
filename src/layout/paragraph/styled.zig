@@ -25,7 +25,6 @@ const vertical_justification = @import("vertical_justification.zig");
 const vertical_align = @import("vertical_align.zig");
 const paragraph_types = @import("../types/paragraph.zig");
 const run_types = @import("../types/runs.zig");
-const styled_bidi = @import("../styled_bidi.zig");
 const styled_buffer = @import("../styled_buffer.zig");
 const styled_paragraph = @import("../styled_paragraph.zig");
 const context_output = @import("../../shaping/context/output.zig");
@@ -512,21 +511,15 @@ const Driver = struct {
             if (options.direction == .rtl) .rtl else .ltr,
         );
         defer paragraph.deinit();
-        const visual_order = try styled_bidi.visualPermutationResolved(
-            self.buffer.allocator,
-            paragraph,
-            self.buffer.lines.items,
-            self.buffer.glyphs.items,
-        );
-        defer self.buffer.allocator.free(visual_order);
-        try bidi_reorder.applyLinesResolved(
+        try bidi_reorder.applyLinesResolvedRecording(
             self.buffer,
             paragraph,
+            true,
         );
         try styled_buffer.reorderByPermutation(
             &self.styled.metadata,
             self.styled.allocator,
-            visual_order,
+            self.buffer.bidi_reorder_scratch.permutation.items,
         );
     }
 

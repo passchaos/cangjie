@@ -1356,6 +1356,23 @@ This adds real multi-span evidence: Latin remains a Cangjie win, Japanese is
 approximately tied, and Arabic multi-style layout remains the clearest Parley
 deficit. It is not an overall superiority claim.
 
+Styled bidi no longer recomputes a second line-local UAX #9 permutation solely
+for the glyph-parallel metadata sidecar. The ordinary glyph/run mapping now has
+a comptime-specialized recording mode that appends the exact old glyph index at
+its unique visual-output point; non-styled callers compile that path out. The
+styled driver consumes the retained permutation after the existing transactional
+reorder. On fixed CPU 30, five-repeat counters for Arabic alternating layout
+fell from `1.0686B` to `1.0302B` instructions, `180.37M` to `173.24M` branches,
+`364.1M` to `340.1M` cycles, and `1.361M` to `0.944M` branch misses per 1,000
+layouts. The Arabic spacing control similarly reduced instructions by `3.8%`,
+branches by `4.1%`, and cycles by `4.7%`; Latin alternating stayed neutral,
+while Japanese alternating improved from `520.91/486.99 µs` to
+`470.59/461.78 µs`. All target/control checksums, glyph counts, and line counts
+were unchanged. A fresh 2,000-iteration Arabic Cangjie/Parley/Parley/Cangjie
+matrix remained frequency-skewed (`270.38/290.93 µs` versus
+`183.82/242.08 µs`), so Arabic alternating is still recorded as a Parley
+deficit rather than a Cangjie win.
+
 The same spacing protocol over the 200-byte Noto Kufi Arabic sample produces
 144 glyphs and six lines in both engines. Cangjie initially measured
 `377.4/321.7 µs` versus Parley's retained `233.5/174.1 µs`. Styled bidi

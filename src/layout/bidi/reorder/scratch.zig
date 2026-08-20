@@ -22,6 +22,7 @@ pub const Scratch = struct {
     visual_run_indices: std.ArrayList(usize) = .empty,
     line_levels: std.ArrayList(u8) = .empty,
     visual_order: std.ArrayList(usize) = .empty,
+    permutation: std.ArrayList(usize) = .empty,
     bidi_storage: bidi_paragraph.Storage,
 
     pub fn init(allocator: std.mem.Allocator) Scratch {
@@ -30,6 +31,7 @@ pub const Scratch = struct {
 
     pub fn deinit(self: *Scratch, allocator: std.mem.Allocator) void {
         self.bidi_storage.deinit();
+        self.permutation.deinit(allocator);
         self.visual_order.deinit(allocator);
         self.line_levels.deinit(allocator);
         self.visual_run_indices.deinit(allocator);
@@ -85,6 +87,10 @@ pub const Scratch = struct {
             allocator,
             self.old_glyphs.items.len,
         );
+        try self.permutation.ensureTotalCapacity(
+            allocator,
+            self.old_glyphs.items.len,
+        );
     }
 
     /// Restore the exact logical lists if a later permutation step fails.
@@ -116,6 +122,7 @@ pub const Scratch = struct {
         self.visual_run_indices.clearRetainingCapacity();
         self.line_levels.clearRetainingCapacity();
         self.visual_order.clearRetainingCapacity();
+        self.permutation.clearRetainingCapacity();
     }
 };
 

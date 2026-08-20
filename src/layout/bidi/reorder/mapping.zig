@@ -58,6 +58,7 @@ pub fn buildClusterIndexInto(
 }
 
 pub fn appendItem(
+    comptime record_permutation: bool,
     allocator: std.mem.Allocator,
     glyphs: []const GlyphPosition,
     old_runs: anytype,
@@ -70,6 +71,7 @@ pub fn appendItem(
     item: unicode.BidiMapItem,
     out_glyphs: *std.ArrayList(GlyphPosition),
     out_run_indices: *std.ArrayList(usize),
+    out_permutation: if (record_permutation) *std.ArrayList(usize) else void,
 ) !void {
     const item_range =
         clusterRange(cluster_index, item.byte_start) orelse return;
@@ -84,6 +86,7 @@ pub fn appendItem(
                 continue;
             }
             try appendItemGlyph(
+                record_permutation,
                 allocator,
                 glyphs,
                 old_runs,
@@ -94,6 +97,7 @@ pub fn appendItem(
                 item,
                 out_glyphs,
                 out_run_indices,
+                out_permutation,
             );
         }
         return;
@@ -107,6 +111,7 @@ pub fn appendItem(
             continue;
         }
         try appendItemGlyph(
+            record_permutation,
             allocator,
             glyphs,
             old_runs,
@@ -117,11 +122,13 @@ pub fn appendItem(
             item,
             out_glyphs,
             out_run_indices,
+            out_permutation,
         );
     }
 }
 
 pub fn appendUnseen(
+    comptime record_permutation: bool,
     allocator: std.mem.Allocator,
     glyphs: []const GlyphPosition,
     old_runs: anytype,
@@ -132,10 +139,12 @@ pub fn appendUnseen(
     end: usize,
     out_glyphs: *std.ArrayList(GlyphPosition),
     out_run_indices: *std.ArrayList(usize),
+    out_permutation: if (record_permutation) *std.ArrayList(usize) else void,
 ) !void {
     for (start..@min(end, glyphs.len)) |glyph_index| {
         if (seen[glyph_index]) continue;
         try appendGlyph(
+            record_permutation,
             allocator,
             glyphs,
             old_runs,
@@ -146,6 +155,7 @@ pub fn appendUnseen(
             null,
             out_glyphs,
             out_run_indices,
+            out_permutation,
         );
     }
 }
@@ -178,6 +188,7 @@ fn clusterRange(
 }
 
 fn appendItemGlyph(
+    comptime record_permutation: bool,
     allocator: std.mem.Allocator,
     glyphs: []const GlyphPosition,
     old_runs: anytype,
@@ -188,6 +199,7 @@ fn appendItemGlyph(
     item: unicode.BidiMapItem,
     out_glyphs: *std.ArrayList(GlyphPosition),
     out_run_indices: *std.ArrayList(usize),
+    out_permutation: if (record_permutation) *std.ArrayList(usize) else void,
 ) !void {
     const glyph = glyphs[glyph_index];
     const visual_codepoint =
@@ -197,6 +209,7 @@ fn appendItemGlyph(
         else
             null;
     return try appendGlyph(
+        record_permutation,
         allocator,
         glyphs,
         old_runs,
@@ -207,10 +220,12 @@ fn appendItemGlyph(
         visual_codepoint,
         out_glyphs,
         out_run_indices,
+        out_permutation,
     );
 }
 
 fn appendGlyph(
+    comptime record_permutation: bool,
     allocator: std.mem.Allocator,
     glyphs: []const GlyphPosition,
     old_runs: anytype,
@@ -221,6 +236,7 @@ fn appendGlyph(
     visual_codepoint: ?u21,
     out_glyphs: *std.ArrayList(GlyphPosition),
     out_run_indices: *std.ArrayList(usize),
+    out_permutation: if (record_permutation) *std.ArrayList(usize) else void,
 ) !void {
     seen[glyph_index] = true;
     var glyph = glyphs[glyph_index];
@@ -241,6 +257,7 @@ fn appendGlyph(
     }
     try out_glyphs.append(allocator, glyph);
     try out_run_indices.append(allocator, glyph_run_indices[glyph_index]);
+    if (record_permutation) out_permutation.appendAssumeCapacity(glyph_index);
 }
 
 test "cluster index repairs non-monotone output" {

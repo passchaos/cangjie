@@ -70,6 +70,7 @@ pub fn apply(
 
     for (bidi_map.items) |item| {
         try mapping.appendItem(
+            false,
             buffer.allocator,
             old_glyphs,
             old_runs,
@@ -82,11 +83,13 @@ pub fn apply(
             item,
             &visual_glyphs,
             &visual_run_indices,
+            {},
         );
     }
     // GSUB ligatures or skipped variation selectors can make glyph count
     // differ from bidi scalar count. Preserve unmatched output in source order.
     try mapping.appendUnseen(
+        false,
         buffer.allocator,
         old_glyphs,
         old_runs,
@@ -97,6 +100,7 @@ pub fn apply(
         old_glyphs.len,
         &visual_glyphs,
         &visual_run_indices,
+        {},
     );
     if (visual_glyphs.items.len != old_glyphs.len) {
         return error.InvalidBidiMap;
@@ -221,6 +225,14 @@ pub fn applyLinesResolved(
     buffer: anytype,
     paragraph: unicode.BidiParagraph,
 ) !void {
+    return applyLinesResolvedRecording(buffer, paragraph, false);
+}
+
+pub fn applyLinesResolvedRecording(
+    buffer: anytype,
+    paragraph: unicode.BidiParagraph,
+    comptime record_permutation: bool,
+) !void {
     if (buffer.glyphs.items.len == 0 or buffer.lines.items.len == 0) {
         return;
     }
@@ -242,6 +254,7 @@ pub fn applyLinesResolved(
     const seen = scratch.seen.items;
     const visual_glyphs = &buffer.glyphs;
     const visual_run_indices = &scratch.visual_run_indices;
+    const permutation = if (record_permutation) &scratch.permutation else {};
 
     for (buffer.lines.items) |*line| {
         const visual_start = visual_glyphs.items.len;
@@ -287,6 +300,7 @@ pub fn applyLinesResolved(
                     scalar_index - scalar_start
                 ];
                 try mapping.appendItem(
+                    record_permutation,
                     buffer.allocator,
                     old_glyphs,
                     old_runs,
@@ -310,12 +324,14 @@ pub fn applyLinesResolved(
                     },
                     visual_glyphs,
                     visual_run_indices,
+                    permutation,
                 );
             }
         }
         // Keep unmatched outputs belonging to this line. Discarded wrapping
         // whitespace intentionally remains outside every visual line.
         try mapping.appendUnseen(
+            record_permutation,
             buffer.allocator,
             old_glyphs,
             old_runs,
@@ -326,6 +342,7 @@ pub fn applyLinesResolved(
             old_line_end,
             visual_glyphs,
             visual_run_indices,
+            permutation,
         );
         line.glyph_start = visual_start;
         line.glyph_len = visual_glyphs.items.len - visual_start;
@@ -333,6 +350,7 @@ pub fn applyLinesResolved(
 
     // Preserve outputs omitted from visual lines as a metadata-only suffix.
     try mapping.appendUnseen(
+        record_permutation,
         buffer.allocator,
         old_glyphs,
         old_runs,
@@ -343,8 +361,12 @@ pub fn applyLinesResolved(
         old_glyphs.len,
         visual_glyphs,
         visual_run_indices,
+        permutation,
     );
     if (visual_glyphs.items.len != old_glyphs.len) {
+        return error.InvalidBidiMap;
+    }
+    if (record_permutation and scratch.permutation.items.len != old_glyphs.len) {
         return error.InvalidBidiMap;
     }
 

@@ -111,7 +111,13 @@ fn run_once(
             builder.push_default(StyleProperty::LetterSpacing(0.75));
             builder.push_default(StyleProperty::WordSpacing(2.0));
         }
-        _ => panic!("style must be default or spacing"),
+        "alternating" => {
+            let split = text.ceil_char_boundary(text.len() / 2);
+            builder.push(StyleProperty::FontSize(18.0), split..);
+            builder.push(StyleProperty::LetterSpacing(0.75), split..);
+            builder.push(StyleProperty::WordSpacing(2.0), split..);
+        }
+        _ => panic!("style must be default, spacing, or alternating"),
     }
     builder.set_base_direction(match direction {
         "auto" => BaseDirection::Auto,

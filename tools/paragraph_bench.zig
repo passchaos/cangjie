@@ -118,7 +118,7 @@ pub fn main(init: std.process.Init) !void {
 
 const Phase = enum { layout, reflow };
 const Direction = enum { auto, ltr, rtl };
-const Style = enum { default, spacing };
+const Style = enum { default, spacing, alternating };
 
 fn benchmarkOnce(
     phase: Phase,
@@ -164,6 +164,47 @@ fn layoutOnce(
             .letter_spacing = 0.75,
             .word_spacing = 2.0,
         }};
+        return (try engine.layoutStyled(cascade, .{
+            .text = text,
+            .default_font_size = 16,
+            .spans = &spans,
+            .options = .{ .max_width = width, .direction = direction },
+        })).layout;
+    }
+    if (style == .alternating) {
+        const split = utf8BoundaryAtOrAfter(text, text.len / 2);
+        if (split == 0 or split == text.len) {
+            const spans = [_]cangjie.paragraph.StyledSpan{.{
+                .byte_start = 0,
+                .byte_len = text.len,
+                .style_index = 2,
+                .font_size = 18,
+                .letter_spacing = 0.75,
+                .word_spacing = 2.0,
+            }};
+            return (try engine.layoutStyled(cascade, .{
+                .text = text,
+                .default_font_size = 16,
+                .spans = &spans,
+                .options = .{ .max_width = width, .direction = direction },
+            })).layout;
+        }
+        const spans = [_]cangjie.paragraph.StyledSpan{
+            .{
+                .byte_start = 0,
+                .byte_len = split,
+                .style_index = 1,
+                .font_size = 16,
+            },
+            .{
+                .byte_start = split,
+                .byte_len = text.len - split,
+                .style_index = 2,
+                .font_size = 18,
+                .letter_spacing = 0.75,
+                .word_spacing = 2.0,
+            },
+        };
         return (try engine.layoutStyled(cascade, .{
             .text = text,
             .default_font_size = 16,
@@ -237,7 +278,16 @@ fn parseDirection(value: []const u8) !Direction {
 fn parseStyle(value: []const u8) !Style {
     if (std.mem.eql(u8, value, "default")) return .default;
     if (std.mem.eql(u8, value, "spacing")) return .spacing;
+    if (std.mem.eql(u8, value, "alternating")) return .alternating;
     return error.InvalidArguments;
+}
+
+fn utf8BoundaryAtOrAfter(text: []const u8, start: usize) usize {
+    var boundary = @min(start, text.len);
+    while (boundary < text.len and (text[boundary] & 0xc0) == 0x80) {
+        boundary += 1;
+    }
+    return boundary;
 }
 
 fn resolvedDirection(
@@ -256,7 +306,7 @@ fn resolvedDirection(
 
 fn usage() error{InvalidArguments} {
     std.debug.print(
-        "usage: paragraph-bench FONT TEXT ITERATIONS SAMPLES [WIDTH] [layout|reflow] [auto|ltr|rtl] [default|spacing]\n",
+        "usage: paragraph-bench FONT TEXT ITERATIONS SAMPLES [WIDTH] [layout|reflow] [auto|ltr|rtl] [default|spacing|alternating]\n",
         .{},
     );
     return error.InvalidArguments;

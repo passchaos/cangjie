@@ -1343,6 +1343,19 @@ about `1.45x` faster by geometric mean on this output-count-equivalent
 styled/spacing boundary. This is still one Latin style workload, not an
 overall Parley performance claim.
 
+The same benchmark pair now exposes an `alternating` attributed workload. Both
+runners split at the first UTF-8 boundary at or after the midpoint, keep the
+first half at 16 units, and apply 18-unit text plus 0.75 letter spacing and 2.0
+word spacing to the second half. A fixed-CPU-30, 1,000-iteration, 31-sample
+script expansion kept cross-engine glyph and line counts equal: Roboto Latin
+produced 105 glyphs/five lines at `99.94 µs` for Cangjie versus `161.93 µs`
+for Parley; Noto Kufi Arabic produced 144 glyphs/six lines at `301.64 µs`
+versus `242.78 µs`; and Noto Sans CJK JP produced 190 glyphs/18 lines at
+`481.13 µs` versus `477.65 µs`. Per-engine geometry checksums were stable.
+This adds real multi-span evidence: Latin remains a Cangjie win, Japanese is
+approximately tied, and Arabic multi-style layout remains the clearest Parley
+deficit. It is not an overall superiority claim.
+
 The same spacing protocol over the 200-byte Noto Kufi Arabic sample produces
 144 glyphs and six lines in both engines. Cangjie initially measured
 `377.4/321.7 µs` versus Parley's retained `233.5/174.1 µs`. Styled bidi

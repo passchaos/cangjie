@@ -89,6 +89,7 @@ pub fn init(
         .cff2 = null,
         .cmap_subtables = &.{},
         .selected_cmap_subtable = null,
+        .selected_cmap_groups = &.{},
         .owned_tables = &.{},
         .allocator = std.testing.allocator,
     };

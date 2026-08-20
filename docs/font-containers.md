@@ -140,8 +140,11 @@ reduced Roboto U+0041 from `107.42/106.52 ns` to `70.48/60.56 ns`. Skrifa
 measured `35.96/35.95 ns`, so charmap remains a measured Fontations deficit
 despite the roughly `1.7x` Cangjie improvement. A supplementary-plane format-12
 control likewise measured Cangjie at `53.49/57.44 ns` versus Skrifa at
-`31.58/29.47 ns`. This remaining gap is recorded explicitly rather than
-hidden behind the broader table-coverage manifest.
+`31.58/29.47 ns`. Cangjie now also decodes the selected immutable format
+8/12/13 group array once at face parse time; the same supplementary-plane row
+fell further to `44.01/44.05 ns`, preserving exact format-12/13 mapping tests.
+This remaining gap is recorded explicitly rather than hidden behind the broader
+table-coverage manifest.
 
 `docs/fontations-coverage.json` maps every public top-level table family in
 Fontations `read-fonts` 0.42.2, plus eight grouped Skrifa 0.45.2 capability

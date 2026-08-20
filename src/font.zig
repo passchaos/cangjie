@@ -730,6 +730,7 @@ pub const Font = struct {
     cff2: ?TableRecord,
     cmap_subtables: []CmapSubtable,
     selected_cmap_subtable: ?CmapSubtable,
+    selected_cmap_groups: []cmap_mod.SequentialGroup,
     owned_tables: []TableRecord,
     allocator: std.mem.Allocator,
 
@@ -1104,6 +1105,11 @@ pub const Font = struct {
                 selected_cmap_subtable = subtable;
             }
         }
+        const selected_cmap_groups = if (selected_cmap_subtable) |subtable|
+            try cmap_mod.decodeGroups(allocator, data, subtable)
+        else
+            try allocator.alloc(cmap_mod.SequentialGroup, 0);
+        errdefer allocator.free(selected_cmap_groups);
 
         return .{
             .data = data,
@@ -1175,6 +1181,7 @@ pub const Font = struct {
             .cff2 = cff2,
             .cmap_subtables = cmap_subtables,
             .selected_cmap_subtable = selected_cmap_subtable,
+            .selected_cmap_groups = selected_cmap_groups,
             .owned_tables = records,
             .allocator = allocator,
         };
@@ -1182,6 +1189,7 @@ pub const Font = struct {
 
     pub fn deinit(self: *Font) void {
         if (self.cff_parsed) |*parsed| parsed.deinit();
+        self.allocator.free(self.selected_cmap_groups);
         self.allocator.free(self.cmap_subtables);
         self.allocator.free(self.owned_tables);
         self.* = undefined;
@@ -2693,6 +2701,13 @@ pub const Font = struct {
             return error.UnsupportedCmap;
         if (cmap_mod.isMacintoshRoman(chosen)) {
             return self.glyphIndexInSubtable(chosen, codepoint);
+        }
+        if (self.selected_cmap_groups.len != 0) {
+            return cmap_mod.glyphFromGroups(
+                self.selected_cmap_groups,
+                codepoint,
+                chosen.format == 13,
+            );
         }
         return try cmap_mod.glyphValidated(self.data, chosen, codepoint);
     }

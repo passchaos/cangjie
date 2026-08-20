@@ -7,6 +7,90 @@ const formats = @import("../validation/formats.zig");
 pub const GlyphId = u16;
 pub const Error = error{ BadSfnt, EndOfStream, UnsupportedCmap };
 
+pub const SequentialGroup = struct {
+    start: u32,
+    end: u32,
+    start_glyph: u32,
+};
+
+/// Decode validated format 8/12/13 groups for immutable repeated lookup.
+pub fn decodeGroups(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    subtable: @import("../types.zig").Subtable,
+) (Error || std.mem.Allocator.Error)![]SequentialGroup {
+    const groups_offset: usize = switch (subtable.format) {
+        8 => formats.format8_groups_offset,
+        12, 13 => 16,
+        else => return allocator.alloc(SequentialGroup, 0),
+    };
+    const count = try bin.readU32At(
+        data,
+        subtable.offset + groups_offset - 4,
+    );
+    const groups = try allocator.alloc(SequentialGroup, count);
+    errdefer allocator.free(groups);
+    for (groups, 0..) |*group, index| {
+        const offset = subtable.offset + groups_offset + index * 12;
+        group.* = .{
+            .start = try bin.readU32At(data, offset),
+            .end = try bin.readU32At(data, offset + 4),
+            .start_glyph = try bin.readU32At(data, offset + 8),
+        };
+    }
+    return groups;
+}
+
+pub fn glyphFromGroups(
+    groups: []const SequentialGroup,
+    codepoint: u21,
+    constant: bool,
+) Error!GlyphId {
+    var low: usize = 0;
+    var high = groups.len;
+    while (low < high) {
+        const middle = low + (high - low) / 2;
+        const group = groups[middle];
+        if (codepoint < group.start) {
+            high = middle;
+        } else if (codepoint > group.end) {
+            low = middle + 1;
+        } else {
+            const delta = if (constant) 0 else @as(u32, codepoint) - group.start;
+            if (group.start_glyph > std.math.maxInt(u32) - delta) {
+                return error.BadSfnt;
+            }
+            const glyph_id = group.start_glyph + delta;
+            if (glyph_id > std.math.maxInt(GlyphId)) return error.BadSfnt;
+            return @intCast(glyph_id);
+        }
+    }
+    return 0;
+}
+
+test "decoded sequential groups preserve format 12 and 13 mapping" {
+    const sequential = [_]SequentialGroup{.{
+        .start = 0x10000,
+        .end = 0x10002,
+        .start_glyph = 10,
+    }};
+    try std.testing.expectEqual(@as(GlyphId, 12), try glyphFromGroups(
+        &sequential,
+        0x10002,
+        false,
+    ));
+    try std.testing.expectEqual(@as(GlyphId, 10), try glyphFromGroups(
+        &sequential,
+        0x10002,
+        true,
+    ));
+    try std.testing.expectEqual(@as(GlyphId, 0), try glyphFromGroups(
+        &sequential,
+        0xffff,
+        false,
+    ));
+}
+
 pub fn glyph(
     data: []const u8,
     subtable: @import("../types.zig").Subtable,

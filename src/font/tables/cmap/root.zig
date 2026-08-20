@@ -35,5 +35,8 @@ pub const format14RecordsEnd = validation.format14.recordsEnd;
 
 pub const glyph = lookup.glyph;
 pub const glyphValidated = @import("lookup/scalar.zig").glyphValidated;
+pub const SequentialGroup = @import("lookup/scalar.zig").SequentialGroup;
+pub const decodeGroups = @import("lookup/scalar.zig").decodeGroups;
+pub const glyphFromGroups = @import("lookup/scalar.zig").glyphFromGroups;
 pub const VariationResult = lookup.VariationResult;
 pub const variationGlyph = lookup.variationGlyph;

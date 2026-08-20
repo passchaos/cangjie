@@ -171,12 +171,22 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, g
         .charmap => try runCharmapIterations(font, options, iterations, checksum),
         .metrics => try runMetricsIterations(font, glyph_id, iterations, checksum),
         .global_metrics => try runGlobalMetricsIterations(font, iterations, checksum),
+        .family_name => try runFamilyNameIterations(allocator, font, iterations, checksum),
         .bitmap => try runBitmapIterations(font, glyph_id, options, iterations, checksum),
         .outline => try runOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
         .outline_session => try runOutlineSessionIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster => try runRasterIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_reuse => try runRasterReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_prepared => try runRasterPreparedIterations(allocator, font, glyph_id, options, iterations, checksum),
+    }
+}
+
+fn runFamilyNameIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, iterations: usize, checksum: *u64) !void {
+    var buffer: [256]u8 = undefined;
+    for (0..iterations) |_| {
+        const value = (try font.names().englishOrFirst(allocator, .family)) orelse return error.InvalidArguments;
+        const decoded = try value.decodeUtf8(&buffer);
+        for (decoded) |byte| checksum.* = checksum.* *% 0x100000001b3 ^ byte;
     }
 }
 

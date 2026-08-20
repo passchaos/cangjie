@@ -274,6 +274,73 @@ pub fn localizedStrings(
     return values;
 }
 
+/// Select en-US, then en, then language-neutral, then the first matching name.
+///
+/// This parser is intended for immutable faces whose complete name table was
+/// validated during `Face.parse`. It still bounds-checks every accessed record
+/// but does not allocate an intermediate array or repeat whole-table ordering
+/// and encoding validation.
+pub fn englishOrFirstParsed(
+    data: []const u8,
+    name: Table,
+    name_id: u16,
+) Error!?LocalizedString {
+    const table = try nameTableSlice(data, name);
+    const layout = try readNameTableLayout(table);
+    var best: ?LocalizedString = null;
+    var best_rank: u2 = 0;
+    for (0..layout.count) |index| {
+        const record = try readNameRecord(table, index);
+        if (record.name_id != name_id) continue;
+        const string_data = try nameRecordString(table, layout, record);
+        const value = LocalizedString{
+            .record = .{
+                .platform_id = record.platform_id,
+                .encoding_id = record.encoding_id,
+                .language_id = record.language_id,
+                .name_id = record.name_id,
+                .storage_offset = record.offset,
+                .string = string_data,
+                .encoding = if (isUtf16Name(record)) .utf16_be else .raw_bytes,
+            },
+            .language = try localizedLanguage(table, layout, record),
+        };
+        const rank = englishRank(value.language);
+        if (rank == 3) return value;
+        if (best == null or rank > best_rank) {
+            best = value;
+            best_rank = rank;
+        }
+    }
+    return best;
+}
+
+fn englishRank(language: ?LocalizedString.Language) u2 {
+    const value = language orelse return 1;
+    return switch (value) {
+        .static => |tag| if (std.mem.eql(u8, tag, "en-US"))
+            3
+        else if (std.mem.eql(u8, tag, "en"))
+            2
+        else
+            0,
+        .utf16_be => |tag| if (utf16BeAsciiEquals(tag, "en-US"))
+            3
+        else if (utf16BeAsciiEquals(tag, "en"))
+            2
+        else
+            0,
+    };
+}
+
+fn utf16BeAsciiEquals(data: []const u8, expected: []const u8) bool {
+    if (data.len != expected.len * 2) return false;
+    for (expected, 0..) |byte, index| {
+        if (data[index * 2] != 0 or data[index * 2 + 1] != byte) return false;
+    }
+    return true;
+}
+
 fn localizedLanguage(
     table: []const u8,
     layout: NameTableLayout,

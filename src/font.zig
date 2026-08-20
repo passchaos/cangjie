@@ -5255,6 +5255,32 @@ pub const Font = struct {
         return self.bitmapGlyphData(glyph_id, size_px);
     }
 
+    fn localizedNamesForImmutableFace(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        name_id: NameId,
+    ) FontError![]LocalizedName {
+        const name = self.name orelse return try allocator.alloc(LocalizedName, 0);
+        return try name_mod.localizedStrings(
+            allocator,
+            self.data,
+            nameTableView(name),
+            @intFromEnum(name_id),
+        );
+    }
+
+    fn englishOrFirstNameForImmutableFace(
+        self: *const Font,
+        name_id: NameId,
+    ) FontError!?LocalizedName {
+        const name = self.name orelse return null;
+        return try name_mod.englishOrFirstParsed(
+            self.data,
+            nameTableView(name),
+            @intFromEnum(name_id),
+        );
+    }
+
     /// Flatten a compound EBDT/CBDT glyph from the preferred strike.
     ///
     /// Formats 8/9 reference other glyphs in the same strike and therefore
@@ -6314,6 +6340,8 @@ pub const raster_backend = struct {
 /// borrowed bytes. Keeping this separate from ordinary glyph APIs makes the
 /// skipped post-parse mutation checks visible at every call site.
 pub const immutable_face_backend = struct {
+    pub const localizedNames = Font.localizedNamesForImmutableFace;
+    pub const englishOrFirstName = Font.englishOrFirstNameForImmutableFace;
     pub const headInfo = struct {
         fn read(font: *const Font) FontError!FontHeaderInfo {
             return head_mod.info(font.data, font.head);

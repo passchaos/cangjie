@@ -215,3 +215,13 @@ duplicate table/glyph keys with first-patch priority, and rebuilds the coupled
 specification. Unknown table tags are ignored. Application-bitmap bits are
 committed only after every supported table succeeds, and the operation returns
 a separately owned canonical SFNT without modifying the borrowed source face.
+
+Skrifa's localized-string selection is covered separately too. On the
+multilingual system Noto Sans, both engines choose the English-or-first family
+name `Noto Sans` with per-read checksum `76daabed9807bcc7`. Cangjie's original
+Face path allocated and materialized every matching localized record and
+revalidated the complete name table, measuring `3961.86/2881.41 ns` per read.
+The immutable Face now selects directly from the parse-proven table without an
+intermediate allocation; mutation-aware `Font.localizedNames` keeps its
+defensive checksum/validation contract. Post-fix Cangjie measured `62.10/52.30
+ns` versus Skrifa at `299.07/174.54 ns`, with the selected UTF-8 value unchanged.

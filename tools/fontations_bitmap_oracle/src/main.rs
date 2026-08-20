@@ -2,6 +2,7 @@ use skrifa::{
     bitmap::BitmapData,
     outline::{DrawSettings, OutlinePen},
     prelude::{LocationRef, Size},
+    string::StringId,
     FontRef, GlyphId, MetadataProvider,
 };
 use std::{env, fs, hint::black_box, process, time::Instant};
@@ -28,9 +29,41 @@ fn main() {
         "outline" => outline(&font, glyph_id, &mut args),
         "metrics" => metrics(&font, glyph_id, &mut args),
         "global-metrics" => global_metrics(&font, &mut args),
+        "family-name" => family_name(&font, &mut args),
         "charmap" => charmap(&font, glyph_id, &mut args),
         _ => fail("unsupported mode"),
     }
+}
+
+fn family_name(font: &FontRef<'_>, args: &mut impl Iterator<Item = String>) {
+    let (iterations, samples) = repeated_args(args);
+    let mut values = Vec::with_capacity(samples);
+    let mut checksum = 0_u64;
+    for _ in 0..samples {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let value = font
+                .localized_strings(StringId::FAMILY_NAME)
+                .english_or_first()
+                .map(|item| item.to_string())
+                .unwrap_or_default();
+            for byte in value.as_bytes() {
+                checksum = checksum.wrapping_mul(0x100000001b3) ^ u64::from(*byte);
+            }
+            black_box(&value);
+        }
+        values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
+    }
+    values.sort_by(f64::total_cmp);
+    let value = font
+        .localized_strings(StringId::FAMILY_NAME)
+        .english_or_first()
+        .map(|item| item.to_string())
+        .unwrap_or_default();
+    println!(
+        "engine=skrifa\tmode=family-name\titerations={iterations}\tsamples={samples}\tmedian_ns_per_iter={:.3}\tvalue={value:?}\tchecksum={checksum:016x}",
+        values[values.len() / 2],
+    );
 }
 
 fn global_metrics(font: &FontRef<'_>, args: &mut impl Iterator<Item = String>) {

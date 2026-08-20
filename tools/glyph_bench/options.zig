@@ -27,6 +27,7 @@ pub const Mode = enum {
     charmap,
     metrics,
     global_metrics,
+    family_name,
     bitmap,
     outline,
     outline_session,
@@ -38,6 +39,7 @@ pub const Mode = enum {
         if (std.mem.eql(u8, name, "charmap")) return .charmap;
         if (std.mem.eql(u8, name, "metrics")) return .metrics;
         if (std.mem.eql(u8, name, "global-metrics")) return .global_metrics;
+        if (std.mem.eql(u8, name, "family-name")) return .family_name;
         if (std.mem.eql(u8, name, "bitmap")) return .bitmap;
         if (std.mem.eql(u8, name, "outline")) return .outline;
         if (std.mem.eql(u8, name, "outline-session")) return .outline_session;
@@ -52,6 +54,7 @@ pub const Mode = enum {
             .charmap => "charmap",
             .metrics => "metrics",
             .global_metrics => "global-metrics",
+            .family_name => "family-name",
             .bitmap => "bitmap",
             .outline => "outline",
             .outline_session => "outline-session",

@@ -39,3 +39,4 @@ cargo run --release --manifest-path tools/fontations_bitmap_oracle/Cargo.toml --
 
 Repeated strike selection uses `bitmap-bench GLYPH_ID SIZE ITERATIONS SAMPLES`.
 Repeated global font metrics use `global-metrics 0 ITERATIONS SAMPLES`.
+Repeated English-or-first family names use `family-name 0 ITERATIONS SAMPLES`.

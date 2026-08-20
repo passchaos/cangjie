@@ -1353,6 +1353,24 @@ instructions by `9.5%`, branches by `2.5%`, cycles by `11.0%`, and
 branch misses by `15.4%`, with the output checksum unchanged. Arabic spacing
 still trails Parley, so this remains an active paragraph-performance gap.
 
+Styled bidi previously resolved the complete UAX #9 paragraph once to build
+the glyph-parallel metadata permutation and then resolved the identical text
+again inside the glyph/run transaction. Both consumers now share one immutable
+paragraph resolution while independently applying the exact same line-local
+L1/L2 mapping. On fixed CPU 30, a 1,000-iteration, 31-sample B/A/A/B run
+measured the preceding Cangjie build at `307.29/305.96 µs` and the shared
+resolution at `296.77/298.59 µs`, about a `3.0%` geometric-mean improvement.
+The Cangjie checksum remained `fb80f404e4d69aff` with 144 glyphs and six
+lines. Retired instructions fell from `1.151B` to `1.113B` and branches from
+`194.2M` to `187.7M` per 1,000-layout counter run; cycles fell about `1.8%`,
+while branch/cache misses remained noisy. The Latin spacing control stayed
+neutral at `110.48/108.71 µs` before and `109.78/108.70 µs` after with the
+same checksum and counts. Fresh matching Parley controls measured
+`225.66/229.24 µs` for Arabic and `160.76/160.61 µs` for Latin. Cangjie
+therefore remains about `30.5%` slower than Parley on this Arabic spacing row
+while retaining about a `1.47x` Latin lead; this narrows but does not close the
+active paragraph-performance gap.
+
 `cangjie.paragraph.buildGeometry` and `buildStyledGeometry` provide the missing
 platform-neutral accessibility bridge without introducing AccessKit or another
 platform tree model. The owned result enumerates logical-order spans split by

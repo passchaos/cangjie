@@ -14,6 +14,32 @@ pub fn visualPermutation(
     lines: anytype,
     glyphs: anytype,
 ) ![]usize {
+    var paragraph = try unicode.resolveBidiParagraph(
+        allocator,
+        text,
+        if (rtl) .rtl else .ltr,
+    );
+    defer paragraph.deinit();
+    return visualPermutationResolved(
+        allocator,
+        paragraph,
+        lines,
+        glyphs,
+    );
+}
+
+/// Build the styled sidecar permutation from an already-resolved paragraph.
+///
+/// Attributed paragraph layout also passes the same resolution to the glyph
+/// reorder transaction. Keeping this entry point separate avoids running the
+/// complete paragraph-wide UAX #9 resolver twice while leaving the standalone
+/// helper convenient for tests and callers that do not own a resolution.
+pub fn visualPermutationResolved(
+    allocator: std.mem.Allocator,
+    paragraph: unicode.BidiParagraph,
+    lines: anytype,
+    glyphs: anytype,
+) ![]usize {
     const cluster_index = try buildClusterIndex(allocator, glyphs);
     defer allocator.free(cluster_index);
     const seen = try allocator.alloc(bool, glyphs.len);
@@ -23,12 +49,6 @@ pub fn visualPermutation(
     var order = std.ArrayList(usize).empty;
     errdefer order.deinit(allocator);
     try order.ensureTotalCapacity(allocator, glyphs.len);
-    var paragraph = try unicode.resolveBidiParagraph(
-        allocator,
-        text,
-        if (rtl) .rtl else .ltr,
-    );
-    defer paragraph.deinit();
     for (lines) |line| {
         const line_start = line.glyph_start;
         const line_end = line.glyph_start + line.glyph_len;
@@ -234,6 +254,60 @@ test "styled bidi permutation preserves equal-cluster output order" {
     );
     defer std.testing.allocator.free(order);
     try std.testing.expectEqualSlices(usize, &.{ 0, 2, 1 }, order);
+}
+
+test "styled bidi permutation accepts a shared paragraph resolution" {
+    const Glyph = struct {
+        cluster: usize,
+
+        fn isAutomaticHyphen(_: @This()) bool {
+            return false;
+        }
+
+        fn isDiscretionaryHyphen(_: @This()) bool {
+            return false;
+        }
+    };
+    const Line = struct {
+        glyph_start: usize,
+        glyph_len: usize,
+        byte_start: usize,
+        byte_len: usize,
+    };
+    const text = "Aא";
+    const glyphs = [_]Glyph{
+        .{ .cluster = 0 },
+        .{ .cluster = 1 },
+        .{ .cluster = 1 },
+    };
+    const lines = [_]Line{.{
+        .glyph_start = 0,
+        .glyph_len = glyphs.len,
+        .byte_start = 0,
+        .byte_len = text.len,
+    }};
+    var paragraph = try unicode.resolveBidiParagraph(
+        std.testing.allocator,
+        text,
+        .ltr,
+    );
+    defer paragraph.deinit();
+    const shared = try visualPermutationResolved(
+        std.testing.allocator,
+        paragraph,
+        &lines,
+        &glyphs,
+    );
+    defer std.testing.allocator.free(shared);
+    const standalone = try visualPermutation(
+        std.testing.allocator,
+        text,
+        false,
+        &lines,
+        &glyphs,
+    );
+    defer std.testing.allocator.free(standalone);
+    try std.testing.expectEqualSlices(usize, standalone, shared);
 }
 
 test "styled bidi cluster index preserves an already monotone glyph stream" {

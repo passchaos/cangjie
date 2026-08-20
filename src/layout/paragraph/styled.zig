@@ -501,18 +501,22 @@ const Driver = struct {
             self.text,
             options.direction,
         )) return;
-        const visual_order = try styled_bidi.visualPermutation(
+        var paragraph = try unicode.resolveBidiParagraph(
             self.buffer.allocator,
             self.text,
-            options.direction == .rtl,
+            if (options.direction == .rtl) .rtl else .ltr,
+        );
+        defer paragraph.deinit();
+        const visual_order = try styled_bidi.visualPermutationResolved(
+            self.buffer.allocator,
+            paragraph,
             self.buffer.lines.items,
             self.buffer.glyphs.items,
         );
         defer self.buffer.allocator.free(visual_order);
-        try bidi_reorder.applyLines(
+        try bidi_reorder.applyLinesResolved(
             self.buffer,
-            self.text,
-            options.direction == .rtl,
+            paragraph,
         );
         try styled_buffer.reorderByPermutation(
             &self.styled.metadata,

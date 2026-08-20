@@ -208,6 +208,22 @@ pub fn applyLines(buffer: anytype, text: []const u8, rtl: bool) !void {
         base_direction,
     );
     defer paragraph.deinit();
+    return applyLinesResolved(buffer, paragraph);
+}
+
+/// Apply line-local visual order using a caller-owned UAX #9 resolution.
+///
+/// Styled layout needs the same immutable paragraph levels to permute its
+/// glyph-parallel metadata. Accepting that shared resolution avoids a second
+/// decode and paragraph-wide bidi pass; the ordinary entry point above still
+/// owns resolution for all other callers.
+pub fn applyLinesResolved(
+    buffer: anytype,
+    paragraph: unicode.BidiParagraph,
+) !void {
+    if (buffer.glyphs.items.len == 0 or buffer.lines.items.len == 0) {
+        return;
+    }
 
     const scratch = &buffer.bidi_reorder_scratch;
     try scratch.begin(

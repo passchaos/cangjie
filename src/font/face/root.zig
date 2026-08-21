@@ -103,6 +103,21 @@ pub const Face = struct {
         return .{ .implementation = &self.implementation };
     }
 
+    /// Bind one normalized variable-font location to all common glyph views.
+    ///
+    /// The location and face are borrowed. This removes repeated coordinate
+    /// plumbing across bounds, outlines, metrics, origins, and color paints
+    /// while keeping raw Face views available for callers that vary per glyph.
+    pub fn at(
+        self: *const Face,
+        normalized_coords: []const f32,
+    ) Instance {
+        return .{
+            .face = self,
+            .normalized_coords = normalized_coords,
+        };
+    }
+
     /// Execute TrueType `fpgm` and `prep` for one PPEM.
     pub fn hintingInstance(
         self: *const Face,
@@ -222,6 +237,96 @@ pub const Face = struct {
             instance,
             glyph_id,
             normalized_coords,
+        );
+    }
+};
+
+pub const Instance = struct {
+    face: *const Face,
+    normalized_coords: []const f32,
+
+    pub fn glyphs(self: Instance) InstanceGlyphs {
+        return .{ .instance = self };
+    }
+
+    pub fn metrics(self: Instance) InstanceMetrics {
+        return .{ .instance = self };
+    }
+
+    pub fn color(self: Instance) InstanceColor {
+        return .{ .instance = self };
+    }
+};
+
+pub const InstanceGlyphs = struct {
+    instance: Instance,
+
+    pub fn bounds(self: InstanceGlyphs, glyph_id: @import("../../glyph.zig").GlyphId) font_mod.FontError!@import("../../glyph.zig").Bounds {
+        return self.instance.face.glyphs().boundsAt(
+            glyph_id,
+            self.instance.normalized_coords,
+        );
+    }
+
+    pub fn extents(self: InstanceGlyphs, glyph_id: @import("../../glyph.zig").GlyphId) font_mod.FontError!@import("../../glyph.zig").Extents {
+        return self.instance.face.glyphs().extentsAt(
+            glyph_id,
+            self.instance.normalized_coords,
+        );
+    }
+
+    pub fn outline(
+        self: InstanceGlyphs,
+        allocator: std.mem.Allocator,
+        glyph_id: @import("../../glyph.zig").GlyphId,
+    ) font_mod.FontError!@import("../../glyph.zig").GlyphOutline {
+        return self.instance.face.glyphs().outlineAt(
+            allocator,
+            glyph_id,
+            self.instance.normalized_coords,
+        );
+    }
+};
+
+pub const InstanceMetrics = struct {
+    instance: Instance,
+
+    pub fn horizontal(self: InstanceMetrics, glyph_id: @import("../../glyph.zig").GlyphId) font_mod.FontError!font_mod.HorizontalMetricInfo {
+        return self.instance.face.metrics().horizontalAt(
+            glyph_id,
+            self.instance.normalized_coords,
+        );
+    }
+
+    pub fn vertical(self: InstanceMetrics, glyph_id: @import("../../glyph.zig").GlyphId) font_mod.FontError!?font_mod.VerticalMetrics {
+        return self.instance.face.metrics().verticalAt(
+            glyph_id,
+            self.instance.normalized_coords,
+        );
+    }
+
+    pub fn shapingVerticalOrigin(self: InstanceMetrics, glyph_id: @import("../../glyph.zig").GlyphId) font_mod.FontError!i32 {
+        return self.instance.face.metrics().shapingVerticalOrigin(
+            glyph_id,
+            self.instance.normalized_coords,
+        );
+    }
+};
+
+pub const InstanceColor = struct {
+    instance: Instance,
+
+    pub fn paint(self: InstanceColor, glyph_id: @import("../../glyph.zig").GlyphId) font_mod.FontError!?font_mod.ColorPaint {
+        return self.instance.face.color().paint(
+            glyph_id,
+            self.instance.normalized_coords,
+        );
+    }
+
+    pub fn clip(self: InstanceColor, glyph_id: @import("../../glyph.zig").GlyphId) font_mod.FontError!?font_mod.ColorClipBox {
+        return self.instance.face.color().clip(
+            glyph_id,
+            self.instance.normalized_coords,
         );
     }
 };

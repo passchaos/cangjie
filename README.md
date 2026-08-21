@@ -44,6 +44,20 @@ font-derived caches must be cleared before a face is destroyed.
 See `docs/text-pipeline.md` for the shaping/reflow architecture and
 `docs/font-containers.md` for owned web-font container loading.
 
+Variable-font clients can bind one normalized location once and reuse it
+across the common glyph views:
+
+```zig
+const instance = face.at(normalized_coords);
+const bounds = try instance.glyphs().bounds(glyph_id);
+const metrics = try instance.metrics().horizontal(glyph_id);
+var outline = try instance.glyphs().outline(allocator, glyph_id);
+defer outline.deinit();
+```
+
+The instance borrows both the face and coordinate slice. Raw `Face` views stay
+available when an application intentionally changes location per query.
+
 ## API organization
 
 The facade intentionally has no deprecated aliases. Unicode APIs are grouped

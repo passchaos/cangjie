@@ -257,6 +257,10 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(@hasDecl(Face, "parseIndex"));
     try std.testing.expect(@hasDecl(Face, "properties"));
     try std.testing.expect(@hasDecl(Face, "glyphs"));
+    try std.testing.expect(@hasDecl(Face, "at"));
+    try std.testing.expect(@hasDecl(cangjie.font.Instance, "glyphs"));
+    try std.testing.expect(@hasDecl(cangjie.font.Instance, "metrics"));
+    try std.testing.expect(@hasDecl(cangjie.font.Instance, "color"));
     try std.testing.expect(@hasDecl(Face, "metrics"));
     try std.testing.expect(@hasDecl(Face, "names"));
     try std.testing.expect(@hasDecl(Face, "variations"));
@@ -371,6 +375,30 @@ test "public facade uses domain names without legacy aliases" {
         cangjie.shaping.Glyph,
         "isSideways",
     ));
+}
+
+test "font instance binds normalized coordinates across views" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildGvarDeltaTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    const instance = face.at(&.{1});
+    try std.testing.expectEqual(
+        try face.glyphs().boundsAt(1, &.{1}),
+        try instance.glyphs().bounds(1),
+    );
+    try std.testing.expectEqual(
+        try face.glyphs().extentsAt(1, &.{1}),
+        try instance.glyphs().extents(1),
+    );
+    try std.testing.expectEqual(
+        try face.metrics().horizontalAt(1, &.{1}),
+        try instance.metrics().horizontal(1),
+    );
+    var outline = try instance.glyphs().outline(allocator, 1);
+    defer outline.deinit();
+    try std.testing.expect(outline.commands.items.len != 0);
 }
 
 test "concrete face views cover the normal application workflow" {

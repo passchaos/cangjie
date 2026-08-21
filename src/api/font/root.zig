@@ -9,6 +9,10 @@ const font_mod = @import("../../font.zig");
 const glyph = @import("../../glyph.zig");
 
 pub const Face = face.Face;
+pub const Instance = face.Instance;
+pub const InstanceGlyphs = face.InstanceGlyphs;
+pub const InstanceMetrics = face.InstanceMetrics;
+pub const InstanceColor = face.InstanceColor;
 pub const Properties = face.Properties;
 pub const Attributes = face.Attributes;
 pub const Stretch = face.Stretch;

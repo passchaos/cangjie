@@ -2493,6 +2493,28 @@ pub fn build(b: *std.Build) void {
         "tools/verify_fontations_coverage.py",
     });
     fontations_coverage_step.dependOn(&fontations_coverage_cmd.step);
+    const unicode_scripts_path = b.option(
+        []const u8,
+        "unicode-scripts",
+        "Unicode 17 Scripts.txt path for the script coverage audit",
+    );
+    const unicode_script_coverage_step = b.step(
+        "unicode-script-coverage",
+        "Verify the Unicode 17 shaping-script coverage frontier",
+    );
+    if (unicode_scripts_path) |path| {
+        const unicode_script_coverage_cmd = b.addSystemCommand(&.{
+            "python3",
+            "tools/unicode/script/verify_coverage.py",
+            path,
+        });
+        unicode_script_coverage_step.dependOn(&unicode_script_coverage_cmd.step);
+    } else {
+        const missing_unicode_scripts = b.addFail(
+            "unicode-script-coverage requires -Dunicode-scripts=/path/to/Scripts.txt",
+        );
+        unicode_script_coverage_step.dependOn(&missing_unicode_scripts.step);
+    }
     const enable_harfbuzz = b.option(bool, "enable-harfbuzz", "Build shape-bench with the HarfBuzz reference engine") orelse false;
     const harfbuzz_prefix = b.option([]const u8, "harfbuzz-prefix", "Prefix containing HarfBuzz include/ and lib/");
     const harfbuzz_include_dir = b.option([]const u8, "harfbuzz-include-dir", "Directory containing hb.h and hb-ot.h");
@@ -2791,10 +2813,10 @@ pub fn build(b: *std.Build) void {
             const font_path = b.fmt("{s}/{s}", .{ harfbuzz_aots_fonts, gate.font_file });
             const harfbuzz_parity_cmd = b.addRunArtifact(shape_bench_exe);
             harfbuzz_parity_cmd.addArgs(&.{
-                "--engine", "compare-harfbuzz",
-                "--font", font_path,
-                "--text", gate.text,
-                "--direction", "ltr",
+                "--engine",         "compare-harfbuzz",
+                "--font",           font_path,
+                "--text",           gate.text,
+                "--direction",      "ltr",
                 "--enable-feature", "test",
             });
             if (gate.no_positions) harfbuzz_parity_cmd.addArg("--no-positions");
@@ -2802,10 +2824,10 @@ pub fn build(b: *std.Build) void {
 
             const harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);
             harfrust_parity_cmd.addArgs(&.{
-                "--engine", "compare-harfrust",
-                "--font", font_path,
-                "--text", gate.text,
-                "--direction", "ltr",
+                "--engine",         "compare-harfrust",
+                "--font",           font_path,
+                "--text",           gate.text,
+                "--direction",      "ltr",
                 "--enable-feature", "test",
             });
             if (gate.no_positions) harfrust_parity_cmd.addArg("--no-positions");
@@ -2816,10 +2838,10 @@ pub fn build(b: *std.Build) void {
             inline for ([_][]const u8{ "compare-harfbuzz", "compare-harfrust" }) |engine| {
                 const parity_cmd = b.addRunArtifact(shape_bench_exe);
                 parity_cmd.addArgs(&.{
-                    "--engine", engine,
-                    "--font", font_path,
-                    "--text", gate.text,
-                    "--direction", "ltr",
+                    "--engine",       engine,
+                    "--font",         font_path,
+                    "--text",         gate.text,
+                    "--direction",    "ltr",
                     "--no-positions",
                 });
                 for (gate.ranges) |range| {
@@ -3224,18 +3246,18 @@ pub fn build(b: *std.Build) void {
 
         const kerx_format_0_cmd = b.addRunArtifact(shape_bench_exe);
         kerx_format_0_cmd.addArgs(&.{
-            "--builtin",            "kerx",
-            "--text",               "AA",
-            "--size",               "1000",
-            "--glyph-summary",      "--iterations",
-            "1",                    "--warmup",
-            "0",                    "--samples",
-            "1",                    "--expect-glyph-ids",
-            "1,1",                  "--expect-clusters",
-            "0,1",                  "--expect-x-advances",
-            "785,785",              "--expect-y-advances",
-            "0,0",                  "--expect-x-offsets",
-            "0,-15",                "--expect-y-offsets",
+            "--builtin",       "kerx",
+            "--text",          "AA",
+            "--size",          "1000",
+            "--glyph-summary", "--iterations",
+            "1",               "--warmup",
+            "0",               "--samples",
+            "1",               "--expect-glyph-ids",
+            "1,1",             "--expect-clusters",
+            "0,1",             "--expect-x-advances",
+            "785,785",         "--expect-y-advances",
+            "0,0",             "--expect-x-offsets",
+            "0,-15",           "--expect-y-offsets",
             "0,0",
         });
         shaping_aat_parity_smoke_step.dependOn(&kerx_format_0_cmd.step);
@@ -3265,72 +3287,72 @@ pub fn build(b: *std.Build) void {
         kerx_variation_half_expected.addArg("--font");
         kerx_variation_half_expected.addFileArg(kerx_variation_font);
         kerx_variation_half_expected.addArgs(&.{
-            "--text",               "AA",
-            "--size",               "1000",
-            "--variation",          "0.5",
-            "--glyph-summary",      "--iterations",
-            "1",                    "--warmup",
-            "0",                    "--samples",
-            "1",                    "--expect-glyph-ids",
-            "1,1",                  "--expect-clusters",
-            "0,1",                  "--expect-x-advances",
-            "780,780",              "--expect-y-advances",
-            "0,0",                  "--expect-x-offsets",
-            "0,-20",                "--expect-y-offsets",
+            "--text",          "AA",
+            "--size",          "1000",
+            "--variation",     "0.5",
+            "--glyph-summary", "--iterations",
+            "1",               "--warmup",
+            "0",               "--samples",
+            "1",               "--expect-glyph-ids",
+            "1,1",             "--expect-clusters",
+            "0,1",             "--expect-x-advances",
+            "780,780",         "--expect-y-advances",
+            "0,0",             "--expect-x-offsets",
+            "0,-20",           "--expect-y-offsets",
             "0,0",
         });
         shaping_aat_parity_smoke_step.dependOn(&kerx_variation_half_expected.step);
 
         const kerx_format_1_cmd = b.addRunArtifact(shape_bench_exe);
         kerx_format_1_cmd.addArgs(&.{
-            "--builtin",            "kerx-format-1",
-            "--text",               "AA",
-            "--size",               "1000",
-            "--glyph-summary",      "--iterations",
-            "1",                    "--warmup",
-            "0",                    "--samples",
-            "1",                    "--expect-glyph-ids",
-            "1,1",                  "--expect-clusters",
-            "0,1",                  "--expect-x-advances",
-            "770,800",              "--expect-y-advances",
-            "0,0",                  "--expect-x-offsets",
-            "-30,0",                "--expect-y-offsets",
+            "--builtin",       "kerx-format-1",
+            "--text",          "AA",
+            "--size",          "1000",
+            "--glyph-summary", "--iterations",
+            "1",               "--warmup",
+            "0",               "--samples",
+            "1",               "--expect-glyph-ids",
+            "1,1",             "--expect-clusters",
+            "0,1",             "--expect-x-advances",
+            "770,800",         "--expect-y-advances",
+            "0,0",             "--expect-x-offsets",
+            "-30,0",           "--expect-y-offsets",
             "0,0",
         });
         shaping_aat_parity_smoke_step.dependOn(&kerx_format_1_cmd.step);
 
         const kerx_format_2_cmd = b.addRunArtifact(shape_bench_exe);
         kerx_format_2_cmd.addArgs(&.{
-            "--builtin",            "kerx-format-2",
-            "--text",               "AA",
-            "--size",               "1000",
-            "--glyph-summary",      "--iterations",
-            "1",                    "--warmup",
-            "0",                    "--samples",
-            "1",                    "--expect-glyph-ids",
-            "1,1",                  "--expect-clusters",
-            "0,1",                  "--expect-x-advances",
-            "785,785",              "--expect-y-advances",
-            "0,0",                  "--expect-x-offsets",
-            "0,-15",                "--expect-y-offsets",
+            "--builtin",       "kerx-format-2",
+            "--text",          "AA",
+            "--size",          "1000",
+            "--glyph-summary", "--iterations",
+            "1",               "--warmup",
+            "0",               "--samples",
+            "1",               "--expect-glyph-ids",
+            "1,1",             "--expect-clusters",
+            "0,1",             "--expect-x-advances",
+            "785,785",         "--expect-y-advances",
+            "0,0",             "--expect-x-offsets",
+            "0,-15",           "--expect-y-offsets",
             "0,0",
         });
         shaping_aat_parity_smoke_step.dependOn(&kerx_format_2_cmd.step);
 
         const kerx_format_4_cmd = b.addRunArtifact(shape_bench_exe);
         kerx_format_4_cmd.addArgs(&.{
-            "--builtin",            "kerx-format-4",
-            "--text",               "AA",
-            "--size",               "1000",
-            "--glyph-summary",      "--iterations",
-            "1",                    "--warmup",
-            "0",                    "--samples",
-            "1",                    "--expect-glyph-ids",
-            "1,1",                  "--expect-clusters",
-            "0,1",                  "--expect-x-advances",
-            "800,800",              "--expect-y-advances",
-            "0,0",                  "--expect-x-offsets",
-            "0,-830",               "--expect-y-offsets",
+            "--builtin",       "kerx-format-4",
+            "--text",          "AA",
+            "--size",          "1000",
+            "--glyph-summary", "--iterations",
+            "1",               "--warmup",
+            "0",               "--samples",
+            "1",               "--expect-glyph-ids",
+            "1,1",             "--expect-clusters",
+            "0,1",             "--expect-x-advances",
+            "800,800",         "--expect-y-advances",
+            "0,0",             "--expect-x-offsets",
+            "0,-830",          "--expect-y-offsets",
             "0,25",
         });
         shaping_aat_parity_smoke_step.dependOn(&kerx_format_4_cmd.step);
@@ -3360,53 +3382,53 @@ pub fn build(b: *std.Build) void {
         kerx_format_4_outline_expected.addArg("--font");
         kerx_format_4_outline_expected.addFileArg(kerx_format_4_outline_font);
         kerx_format_4_outline_expected.addArgs(&.{
-            "--text",               "AA",
-            "--size",               "1000",
-            "--glyph-summary",      "--iterations",
-            "1",                    "--warmup",
-            "0",                    "--samples",
-            "1",                    "--expect-glyph-ids",
-            "1,1",                  "--expect-clusters",
-            "0,1",                  "--expect-x-advances",
-            "800,800",              "--expect-y-advances",
-            "0,0",                  "--expect-x-offsets",
-            "0,-450",               "--expect-y-offsets",
+            "--text",          "AA",
+            "--size",          "1000",
+            "--glyph-summary", "--iterations",
+            "1",               "--warmup",
+            "0",               "--samples",
+            "1",               "--expect-glyph-ids",
+            "1,1",             "--expect-clusters",
+            "0,1",             "--expect-x-advances",
+            "800,800",         "--expect-y-advances",
+            "0,0",             "--expect-x-offsets",
+            "0,-450",          "--expect-y-offsets",
             "0,0",
         });
         shaping_aat_parity_smoke_step.dependOn(&kerx_format_4_outline_expected.step);
 
         const kerx_format_4_ankr_cmd = b.addRunArtifact(shape_bench_exe);
         kerx_format_4_ankr_cmd.addArgs(&.{
-            "--builtin",            "kerx-format-4-ankr",
-            "--text",               "AA",
-            "--size",               "1000",
-            "--glyph-summary",      "--iterations",
-            "1",                    "--warmup",
-            "0",                    "--samples",
-            "1",                    "--expect-glyph-ids",
-            "1,1",                  "--expect-clusters",
-            "0,1",                  "--expect-x-advances",
-            "800,800",              "--expect-y-advances",
-            "0,0",                  "--expect-x-offsets",
-            "0,-800",               "--expect-y-offsets",
+            "--builtin",       "kerx-format-4-ankr",
+            "--text",          "AA",
+            "--size",          "1000",
+            "--glyph-summary", "--iterations",
+            "1",               "--warmup",
+            "0",               "--samples",
+            "1",               "--expect-glyph-ids",
+            "1,1",             "--expect-clusters",
+            "0,1",             "--expect-x-advances",
+            "800,800",         "--expect-y-advances",
+            "0,0",             "--expect-x-offsets",
+            "0,-800",          "--expect-y-offsets",
             "0,0",
         });
         shaping_aat_parity_smoke_step.dependOn(&kerx_format_4_ankr_cmd.step);
 
         const kerx_format_6_cmd = b.addRunArtifact(shape_bench_exe);
         kerx_format_6_cmd.addArgs(&.{
-            "--builtin",            "kerx-format-6",
-            "--text",               "AA",
-            "--size",               "1000",
-            "--glyph-summary",      "--iterations",
-            "1",                    "--warmup",
-            "0",                    "--samples",
-            "1",                    "--expect-glyph-ids",
-            "1,1",                  "--expect-clusters",
-            "0,1",                  "--expect-x-advances",
-            "785,785",              "--expect-y-advances",
-            "0,0",                  "--expect-x-offsets",
-            "0,-15",                "--expect-y-offsets",
+            "--builtin",       "kerx-format-6",
+            "--text",          "AA",
+            "--size",          "1000",
+            "--glyph-summary", "--iterations",
+            "1",               "--warmup",
+            "0",               "--samples",
+            "1",               "--expect-glyph-ids",
+            "1,1",             "--expect-clusters",
+            "0,1",             "--expect-x-advances",
+            "785,785",         "--expect-y-advances",
+            "0,0",             "--expect-x-offsets",
+            "0,-15",           "--expect-y-offsets",
             "0,0",
         });
         shaping_aat_parity_smoke_step.dependOn(&kerx_format_6_cmd.step);

@@ -3,6 +3,32 @@
 const std = @import("std");
 const unicode = @import("../unicode.zig");
 
+test "large Unicode 17 scripts select distinct OpenType primitives" {
+    const Case = struct {
+        scalar: u21,
+        script: unicode.Script,
+        tag: unicode.OpenTypeScriptTag,
+        reserved: u21,
+    };
+    const cases = [_]Case{
+        .{ .scalar = 0x17000, .script = .tangut, .tag = .tang, .reserved = 0x18dff },
+        .{ .scalar = 0x13440, .script = .egyptian_hieroglyphs, .tag = .egyp, .reserved = 0x13456 },
+        .{ .scalar = 0x12470, .script = .cuneiform, .tag = .xsux, .reserved = 0x12475 },
+        .{ .scalar = 0x1da75, .script = .signwriting, .tag = .sgnw, .reserved = 0x1da90 },
+        .{ .scalar = 0x16800, .script = .bamum, .tag = .bamu, .reserved = 0x16a39 },
+        .{ .scalar = 0x14400, .script = .anatolian_hieroglyphs, .tag = .hluw, .reserved = 0x14647 },
+        .{ .scalar = 0x16fe4, .script = .khitan_small_script, .tag = .kits, .reserved = 0x18cd6 },
+        .{ .scalar = 0x10760, .script = .linear_a, .tag = .lina, .reserved = 0x10737 },
+        .{ .scalar = 0x2800, .script = .braille, .tag = .brai, .reserved = 0x2900 },
+    };
+    for (cases) |case| {
+        try std.testing.expectEqual(case.script, unicode.scriptForCodepoint(case.scalar));
+        try std.testing.expectEqual(case.tag, unicode.openTypeScriptTag(case.script));
+        try std.testing.expectEqual(unicode.BidiClass.ltr, unicode.bidiClassForCodepoint(case.scalar));
+        try std.testing.expectEqual(unicode.Script.unknown, unicode.scriptForCodepoint(case.reserved));
+    }
+}
+
 test "Tagalog text selects Baybayin script primitives" {
     const allocator = std.testing.allocator;
     const text = "\u{1703}\u{1712}\u{1714} \u{171f}\u{1715}";

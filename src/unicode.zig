@@ -392,6 +392,15 @@ pub const OpenTypeScriptTag = enum(u32) {
     copt = tag("copt"),
     ogam = tag("ogam"),
     dupl = tag("dupl"),
+    tang = tag("tang"),
+    egyp = tag("egyp"),
+    xsux = tag("xsux"),
+    sgnw = tag("sgnw"),
+    bamu = tag("bamu"),
+    hluw = tag("hluw"),
+    kits = tag("kits"),
+    lina = tag("lina"),
+    brai = tag("brai"),
 };
 
 pub const ScriptTagCandidates = struct {
@@ -543,6 +552,15 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .coptic => .copt,
         .ogham => .ogam,
         .duployan => .dupl,
+        .tangut => .tang,
+        .egyptian_hieroglyphs => .egyp,
+        .cuneiform => .xsux,
+        .signwriting => .sgnw,
+        .bamum => .bamu,
+        .anatolian_hieroglyphs => .hluw,
+        .khitan_small_script => .kits,
+        .linear_a => .lina,
+        .braille => .brai,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -799,7 +817,7 @@ fn bidiClassFast(codepoint: u21) ?BidiClass {
 fn bidiClassForScript(script: Script) BidiClass {
     return switch (script) {
         .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .avestan, .imperial_aramaic, .old_south_arabian, .old_north_arabian, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .ugaritic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .tagalog, .hanunoo, .buhid, .tagbanwa, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .phags_pa, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .saurashtra, .rejang, .grantha, .limbu, .sharada, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .khudawadi, .tirhuta, .modi, .takri, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .ugaritic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .tagalog, .hanunoo, .buhid, .tagbanwa, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .phags_pa, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .saurashtra, .rejang, .grantha, .limbu, .sharada, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .khudawadi, .tirhuta, .modi, .takri, .nushu, .runic, .coptic, .ogham, .duployan, .tangut, .egyptian_hieroglyphs, .cuneiform, .signwriting, .bamum, .anatolian_hieroglyphs, .khitan_small_script, .linear_a, .braille => .ltr,
         else => .neutral,
     };
 }
@@ -1167,6 +1185,15 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .hiragana => .hiragana,
         .katakana => .katakana,
         .hangul => .hangul,
+        .tangut => .tangut,
+        .egyptian_hieroglyphs => .egyptian_hieroglyphs,
+        .cuneiform => .cuneiform,
+        .signwriting => .signwriting,
+        .bamum => .bamum,
+        .anatolian_hieroglyphs => .anatolian_hieroglyphs,
+        .khitan_small_script => .khitan_small_script,
+        .linear_a => .linear_a,
+        .braille => .braille,
         .tagalog => .tagalog,
         .hanunoo => .hanunoo,
         .buhid => .buhid,

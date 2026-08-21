@@ -1,0 +1,41 @@
+{
+  "unicode_version": "17.0.0",
+  "source_url": "https://www.unicode.org/Public/17.0.0/ucd/Scripts.txt",
+  "source_sha256": "9f5e50d3abaee7d6ce09480f325c706f485ae3240912527e651954d2d6b035bf",
+  "modeled_scripts": [
+    "Adlam", "Arabic", "Armenian", "Avestan", "Balinese",
+    "Bamum", "Batak", "Bengali", "Braille", "Brahmi", "Buginese",
+    "Buhid", "Canadian_Aboriginal", "Chakma", "Cham", "Cherokee",
+    "Common", "Coptic", "Cuneiform", "Cyrillic", "Duployan",
+    "Egyptian_Hieroglyphs", "Ethiopic", "Georgian", "Glagolitic",
+    "Grantha", "Gujarati", "Gurmukhi", "Han", "Hangul", "Hanunoo",
+    "Hebrew", "Hiragana", "Imperial_Aramaic", "Inherited", "Javanese",
+    "Kaithi", "Kannada", "Katakana", "Kayah_Li", "Khitan_Small_Script",
+    "Khmer", "Khudawadi", "Lao", "Latin", "Lepcha", "Limbu",
+    "Linear_A", "Lisu", "Malayalam", "Mandaic", "Marchen",
+    "Meetei_Mayek", "Meroitic_Cursive", "Meroitic_Hieroglyphs", "Modi",
+    "Mongolian", "Myanmar", "Newa", "Nko", "Nushu", "Ogham",
+    "Old_Italic", "Old_North_Arabian", "Old_Persian", "Old_South_Arabian",
+    "Oriya", "Phags_Pa", "Phoenician", "Rejang", "Runic", "Samaritan",
+    "Saurashtra", "Sharada", "SignWriting", "Sinhala", "Sundanese",
+    "Syriac", "Tagalog", "Tagbanwa", "Tai_Tham", "Takri", "Tamil",
+    "Tangut", "Thaana", "Thai", "Tibetan", "Tifinagh", "Tirhuta",
+    "Telugu", "Ugaritic", "Vai", "Yi", "Anatolian_Hieroglyphs"
+  ],
+  "newly_audited_large_scripts": [
+    "Tangut", "Egyptian_Hieroglyphs", "Cuneiform", "SignWriting",
+    "Bamum", "Anatolian_Hieroglyphs", "Khitan_Small_Script",
+    "Linear_A", "Braille"
+  ],
+  "expected_assigned_scalar_counts": {
+    "Tangut": 7059,
+    "Egyptian_Hieroglyphs": 5105,
+    "Cuneiform": 1234,
+    "SignWriting": 672,
+    "Bamum": 657,
+    "Anatolian_Hieroglyphs": 583,
+    "Khitan_Small_Script": 472,
+    "Linear_A": 341,
+    "Braille": 256
+  }
+}

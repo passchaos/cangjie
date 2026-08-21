@@ -12,6 +12,15 @@ pub const Script = enum {
     hiragana,
     katakana,
     hangul,
+    tangut,
+    egyptian_hieroglyphs,
+    cuneiform,
+    signwriting,
+    bamum,
+    anatolian_hieroglyphs,
+    khitan_small_script,
+    linear_a,
+    braille,
     tagalog,
     hanunoo,
     buhid,
@@ -164,7 +173,8 @@ pub fn kindForCodepoint(codepoint: u21, script: Script) Kind {
     if (isChakmaWordCodepoint(codepoint)) return .chakma;
     if (isNewaWordCodepoint(codepoint)) return .newa;
     return switch (script) {
-        .han, .yi, .nushu, .hiragana, .katakana, .hangul => .single,
+        .han, .yi, .nushu, .hiragana, .katakana, .hangul, .tangut, .egyptian_hieroglyphs, .cuneiform, .signwriting, .anatolian_hieroglyphs, .khitan_small_script, .linear_a, .braille => .single,
+        .bamum => .latin_number,
         .arabic => .arabic,
         .hebrew => .hebrew,
         .armenian => .armenian,

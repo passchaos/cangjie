@@ -183,6 +183,55 @@ pub fn isDuployan(codepoint: u21) bool {
     return codepoint >= 0x1bc00 and codepoint <= 0x1bc9f;
 }
 
+pub fn isTangut(codepoint: u21) bool {
+    return codepoint == 0x16fe0 or
+        (codepoint >= 0x17000 and codepoint <= 0x18aff) or
+        (codepoint >= 0x18d00 and codepoint <= 0x18d1e) or
+        (codepoint >= 0x18d80 and codepoint <= 0x18df2);
+}
+
+pub fn isEgyptianHieroglyphs(codepoint: u21) bool {
+    return (codepoint >= 0x13000 and codepoint <= 0x13455) or
+        (codepoint >= 0x13460 and codepoint <= 0x143fa);
+}
+
+pub fn isCuneiform(codepoint: u21) bool {
+    return (codepoint >= 0x12000 and codepoint <= 0x12399) or
+        (codepoint >= 0x12400 and codepoint <= 0x12474) or
+        (codepoint >= 0x12480 and codepoint <= 0x12543);
+}
+
+pub fn isSignWriting(codepoint: u21) bool {
+    return (codepoint >= 0x1d800 and codepoint <= 0x1da8b) or
+        (codepoint >= 0x1da9b and codepoint <= 0x1da9f) or
+        (codepoint >= 0x1daa1 and codepoint <= 0x1daaf);
+}
+
+pub fn isBamum(codepoint: u21) bool {
+    return (codepoint >= 0xa6a0 and codepoint <= 0xa6f7) or
+        (codepoint >= 0x16800 and codepoint <= 0x16a38);
+}
+
+pub fn isAnatolianHieroglyphs(codepoint: u21) bool {
+    return codepoint >= 0x14400 and codepoint <= 0x14646;
+}
+
+pub fn isKhitanSmallScript(codepoint: u21) bool {
+    return (codepoint >= 0x18b00 and codepoint <= 0x18cd5) or
+        codepoint == 0x18cff or
+        codepoint == 0x16fe4;
+}
+
+pub fn isLinearA(codepoint: u21) bool {
+    return (codepoint >= 0x10600 and codepoint <= 0x10736) or
+        (codepoint >= 0x10740 and codepoint <= 0x10755) or
+        (codepoint >= 0x10760 and codepoint <= 0x10767);
+}
+
+pub fn isBraille(codepoint: u21) bool {
+    return codepoint >= 0x2800 and codepoint <= 0x28ff;
+}
+
 pub fn isPhoenician(codepoint: u21) bool {
     return (codepoint >= 0x10900 and codepoint <= 0x1091b) or
         codepoint == 0x1091f;

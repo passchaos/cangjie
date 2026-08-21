@@ -97,6 +97,15 @@ pub const Script = enum {
     coptic,
     ogham,
     duployan,
+    tangut,
+    egyptian_hieroglyphs,
+    cuneiform,
+    signwriting,
+    bamum,
+    anatolian_hieroglyphs,
+    khitan_small_script,
+    linear_a,
+    braille,
     unknown,
 };
 
@@ -201,6 +210,15 @@ pub fn forCodepoint(codepoint: u21) Script {
     if (ranges.isRunic(codepoint)) return .runic;
     if (ranges.isOgham(codepoint)) return .ogham;
     if (ranges.isDuployan(codepoint)) return .duployan;
+    if (ranges.isTangut(codepoint)) return .tangut;
+    if (ranges.isEgyptianHieroglyphs(codepoint)) return .egyptian_hieroglyphs;
+    if (ranges.isCuneiform(codepoint)) return .cuneiform;
+    if (ranges.isSignWriting(codepoint)) return .signwriting;
+    if (ranges.isBamum(codepoint)) return .bamum;
+    if (ranges.isAnatolianHieroglyphs(codepoint)) return .anatolian_hieroglyphs;
+    if (ranges.isKhitanSmallScript(codepoint)) return .khitan_small_script;
+    if (ranges.isLinearA(codepoint)) return .linear_a;
+    if (ranges.isBraille(codepoint)) return .braille;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
 

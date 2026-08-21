@@ -324,3 +324,10 @@ unselected color bases disappear while layer GIDs remain stable. Setting
 program. COLRv1, bitmap strikes, SVG, and VARC remain rejected because their
 recursive paint/image/component closures require separate serializers rather
 than pretending a copied table is a valid subset.
+
+Validated SVG glyph documents can be retained independently as well. The
+subset resolves each document covering a retained GID, emits one sorted
+single-glyph SVG record, and writes resolved gzip content as ordinary validated
+XML. This avoids keeping a source record range that still advertises removed
+glyphs. `preserve_svg_documents=false` drops the table; bitmap strikes and
+VARC remain explicitly unsupported pending their own closure/rewrite logic.

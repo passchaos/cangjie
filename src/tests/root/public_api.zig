@@ -152,6 +152,9 @@ test "public facade uses domain names without legacy aliases" {
         @hasField(cangjie.font.subset.Options, "preserve_color_layers"),
     );
     try std.testing.expect(
+        @hasField(cangjie.font.subset.Options, "preserve_svg_documents"),
+    );
+    try std.testing.expect(
         @hasField(cangjie.paragraph.Options, "word_break"),
     );
     try std.testing.expect(

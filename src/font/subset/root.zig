@@ -39,6 +39,9 @@ pub const Options = struct {
     /// glyph. COLRv1 remains unsupported because its paint graph requires a
     /// distinct recursive closure and serializer.
     preserve_color_layers: bool = true,
+    /// Retain validated SVG documents that cover retained glyph IDs. Documents
+    /// are emitted as one-glyph records so removed IDs are never advertised.
+    preserve_svg_documents: bool = true,
 };
 
 pub const Result = struct {
@@ -78,6 +81,7 @@ const ModifiedTables = struct {
     glyf: []u8,
     loca: []u8,
     colr: ?[]u8,
+    svg: ?[]u8,
 
     fn deinit(self: *ModifiedTables) void {
         self.allocator.free(self.head);
@@ -85,6 +89,7 @@ const ModifiedTables = struct {
         self.allocator.free(self.glyf);
         self.allocator.free(self.loca);
         if (self.colr) |colr| self.allocator.free(colr);
+        if (self.svg) |svg| self.allocator.free(svg);
         self.* = undefined;
     }
 };
@@ -240,6 +245,7 @@ pub fn trueTypeAlloc(
         mappings,
         variation_mappings,
         has_colr_v0,
+        options.preserve_svg_documents and findTable(tables, "SVG ") != null,
         options.max_output_bytes,
     );
     defer modified.deinit();
@@ -261,6 +267,8 @@ pub fn trueTypeAlloc(
             modified.loca
         else if (std.mem.eql(u8, &table.tag, "COLR"))
             modified.colr orelse return error.InvalidFontSubset
+        else if (std.mem.eql(u8, &table.tag, "SVG "))
+            modified.svg orelse return error.InvalidFontSubset
         else
             (try core.tableData(table.tag)) orelse
                 return error.InvalidFontSubset;
@@ -300,8 +308,7 @@ fn validateOptions(options: Options) !void {
 fn validateTableProfile(tables: []const font_mod.FontTableInfo) !void {
     const unsupported = [_][4]u8{
         "CBDT".*, "CBLC".*, "EBDT".*, "EBLC".*,
-        "SVG ".*, "VARC".*, "bdat".*, "bloc".*,
-        "sbix".*,
+        "VARC".*, "bdat".*, "bloc".*, "sbix".*,
     };
     for (unsupported) |tag| {
         if (findTable(tables, &tag) != null) return error.UnsupportedFontSubset;
@@ -343,6 +350,11 @@ fn dropTable(tag: [4]u8, options: Options) bool {
     if (!options.preserve_color_layers and
         (std.mem.eql(u8, &tag, "COLR") or
             std.mem.eql(u8, &tag, "CPAL")))
+    {
+        return true;
+    }
+    if (!options.preserve_svg_documents and
+        std.mem.eql(u8, &tag, "SVG "))
     {
         return true;
     }
@@ -480,6 +492,7 @@ fn buildModifiedTables(
     mappings: []const Mapping,
     variation_mappings: []const VariationMapping,
     has_colr_v0: bool,
+    has_svg: bool,
     max_output_bytes: usize,
 ) !ModifiedTables {
     const core = core_api.inspect(face);
@@ -544,6 +557,16 @@ fn buildModifiedTables(
             return error.FontSubsetOutputLimitExceeded;
         }
     }
+    const svg = if (has_svg)
+        try buildSvgAlloc(allocator, face, retained)
+    else
+        null;
+    errdefer if (svg) |bytes| allocator.free(bytes);
+    if (svg) |bytes| {
+        if (bytes.len > max_output_bytes) {
+            return error.FontSubsetOutputLimitExceeded;
+        }
+    }
     return .{
         .allocator = allocator,
         .head = head,
@@ -551,7 +574,72 @@ fn buildModifiedTables(
         .glyf = glyf,
         .loca = loca,
         .colr = colr,
+        .svg = svg,
     };
+}
+
+const SvgRecord = struct {
+    glyph_id: GlyphId,
+    data: []const u8,
+};
+
+fn buildSvgAlloc(
+    allocator: std.mem.Allocator,
+    face: *const face_mod.Face,
+    retained: []const bool,
+) ![]u8 {
+    var records = std.ArrayList(SvgRecord).empty;
+    defer records.deinit(allocator);
+    var owned_payloads = std.ArrayList([]u8).empty;
+    defer {
+        for (owned_payloads.items) |payload| allocator.free(payload);
+        owned_payloads.deinit(allocator);
+    }
+    for (retained, 0..) |keep, glyph_index| {
+        if (!keep) continue;
+        var document = (try face.color().svg(
+            allocator,
+            @intCast(glyph_index),
+        )) orelse continue;
+        defer document.deinit();
+        // Preserve the original validated payload bytes when they are plain
+        // XML. Resolved gzip data is also safe to emit as ordinary XML and
+        // avoids retaining a compressed container with broader glyph ranges.
+        const payload = try allocator.dupe(u8, document.data);
+        errdefer allocator.free(payload);
+        try owned_payloads.append(allocator, payload);
+        try records.append(allocator, .{
+            .glyph_id = @intCast(glyph_index),
+            .data = payload,
+        });
+    }
+    if (records.items.len > std.math.maxInt(u16)) {
+        return error.FontSubsetOutputLimitExceeded;
+    }
+    const list_offset: usize = 10;
+    const records_bytes = try addChecked(2, records.items.len * 12);
+    var total_len = try addChecked(list_offset, records_bytes);
+    for (records.items) |record| total_len = try addChecked(total_len, record.data.len);
+    const output = try allocator.alloc(u8, total_len);
+    @memset(output, 0);
+    writeU16(output, 0, 0);
+    writeU32(output, 2, @intCast(list_offset));
+    writeU16(output, list_offset, @intCast(records.items.len));
+    var payload_offset = records_bytes;
+    for (records.items, 0..) |record, index| {
+        const entry = list_offset + 2 + index * 12;
+        writeU16(output, entry, record.glyph_id);
+        writeU16(output, entry + 2, record.glyph_id);
+        writeU32(output, entry + 4, @intCast(payload_offset));
+        writeU32(output, entry + 8, @intCast(record.data.len));
+        const absolute = list_offset + payload_offset;
+        @memcpy(output[absolute .. absolute + record.data.len], record.data);
+        payload_offset += record.data.len;
+    }
+    if (list_offset + payload_offset != output.len) {
+        return error.InvalidFontSubset;
+    }
+    return output;
 }
 
 const ColorBase = struct {

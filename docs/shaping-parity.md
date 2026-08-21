@@ -3286,3 +3286,14 @@ shaping-performance superiority.
   `173.07M/173.00M`; cycles improved about `1.3--1.7%`. Checksum
   `c53c50e3c7c8ca3f` was unchanged. Roboto `en-words` retained checksum
   `ca4dc411c23af197` with effectively identical retired work.
+- Staged GSUB feature application now selects its unfiltered inner loop once
+  per plan entry when the JSTF disabled-lookup set is empty. Previously every
+  admitted lookup repeated the same empty-slice branch before dispatch. The
+  filtered loop remains unchanged for actual JSTF suppression, and nested
+  contextual targets retain their dedicated disable enforcement. Fixed-CPU-30
+  A/B/B/A counters over two Devanagari `hi-words` passes changed retired
+  instructions from `1.0154B/1.0174B` to `1.0148B/1.0155B` and branches from
+  `173.10M/173.47M` to `173.09M/173.24M`; cycles improved in three of four
+  orders but remain frequency-sensitive. Checksum `c53c50e3c7c8ca3f` was
+  unchanged. Roboto `en-words` retained checksum `ca4dc411c23af197` with
+  neutral retired work and slightly lower cycles in both candidate passes.

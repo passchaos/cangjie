@@ -655,7 +655,14 @@ fn buildModifiedTables(
         }
     }
     const cbdt_cblc = if (has_cbdt)
-        try buildBitmapDataAlloc(allocator, face, "CBLC".*, "CBDT".*, retained)
+        try buildBitmapDataAlloc(
+            allocator,
+            face,
+            "CBLC".*,
+            "CBDT".*,
+            .cblc_cbdt,
+            retained,
+        )
     else
         null;
     errdefer if (cbdt_cblc) |pair| {
@@ -670,7 +677,14 @@ fn buildModifiedTables(
         }
     }
     const ebdt_eblc = if (has_ebdt)
-        try buildBitmapDataAlloc(allocator, face, "EBLC".*, "EBDT".*, retained)
+        try buildBitmapDataAlloc(
+            allocator,
+            face,
+            "EBLC".*,
+            "EBDT".*,
+            .eblc_ebdt,
+            retained,
+        )
     else
         null;
     errdefer if (ebdt_eblc) |pair| {
@@ -712,6 +726,7 @@ fn buildBitmapDataAlloc(
     face: *const face_mod.Face,
     comptime location_tag: [4]u8,
     comptime bitmap_tag: [4]u8,
+    source: @import("../tables/bitmap/types.zig").StrikeSource,
     retained: []const bool,
 ) !cbdt_subset.Pair {
     const core = core_api.inspect(face);
@@ -724,6 +739,7 @@ fn buildBitmapDataAlloc(
         location_data,
         bitmap_data,
         retained,
+        source,
     );
 }
 

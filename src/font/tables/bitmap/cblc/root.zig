@@ -269,8 +269,31 @@ pub fn compoundGlyphAlloc(
     return materialize.glyphAlloc(
         allocator,
         data,
-        data_table,
+        data[data_table.offset .. data_table.offset + data_table.length],
+        .{ .offset = 0, .length = data_table.length },
         selected,
+        source,
+    );
+}
+
+/// Flatten a caller-selected compound bitmap without repeating strike
+/// selection. This supports table-rewriting clients that already own a
+/// validated strike and glyph location.
+pub fn compoundGlyphInStrikeAlloc(
+    allocator: std.mem.Allocator,
+    location_data: []const u8,
+    bitmap_data: []const u8,
+    data_table: types.Table,
+    selected_strike: Strike,
+    location: GlyphLocation,
+    source: types.StrikeSource,
+) types.Error!?types.OwnedGlyphData {
+    return materialize.glyphAlloc(
+        allocator,
+        location_data,
+        bitmap_data,
+        data_table,
+        .{ .strike = selected_strike, .location = location },
         source,
     );
 }

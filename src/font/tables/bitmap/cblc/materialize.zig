@@ -15,7 +15,8 @@ const max_depth = 100; // Match FreeType's deployed compound-sbit guard.
 
 pub fn glyphAlloc(
     allocator: std.mem.Allocator,
-    data: []const u8,
+    location_data: []const u8,
+    bitmap_data: []const u8,
     data_table: types.Table,
     selected: cblc_types.SelectedGlyph,
     source: types.StrikeSource,
@@ -25,7 +26,8 @@ pub fn glyphAlloc(
     var path: [max_depth + 1]u16 = undefined;
     const rendered = try render(
         allocator,
-        data,
+        location_data,
+        bitmap_data,
         data_table,
         selected.strike,
         selected.location,
@@ -42,6 +44,10 @@ pub fn glyphAlloc(
         .origin_offset_y = rendered.metrics.bearing_y,
         .width = rendered.metrics.width,
         .height = rendered.metrics.height,
+        .advance = rendered.metrics.advance,
+        .vertical_origin_offset_x = if (rendered.metrics.vertical_bearing_x) |value| value else null,
+        .vertical_origin_offset_y = if (rendered.metrics.vertical_bearing_y) |value| value else null,
+        .vertical_advance = if (rendered.metrics.vertical_advance) |value| value else null,
         .kind = rendered.kind,
         .data = rendered.data,
     };
@@ -55,7 +61,8 @@ const Rendered = struct {
 
 fn render(
     allocator: std.mem.Allocator,
-    data: []const u8,
+    location_data: []const u8,
+    bitmap_data: []const u8,
     data_table: types.Table,
     strike: cblc_types.Strike,
     location: cblc_types.GlyphLocation,
@@ -64,7 +71,7 @@ fn render(
     depth: usize,
 ) types.Error!Rendered {
     if (depth > max_depth) return error.BadSfnt;
-    if (try data_mod.compound(data, data_table, location)) |compound| {
+    if (try data_mod.compound(bitmap_data, data_table, location)) |compound| {
         const pixel_count = std.math.mul(
             usize,
             compound.metrics.width,
@@ -80,14 +87,15 @@ fn render(
                 if (ancestor == component.glyph_id) return error.BadSfnt;
             }
             const child_location = (try index.glyphLocation(
-                data,
+                location_data,
                 strike,
                 component.glyph_id,
             )) orelse return error.BadSfnt;
             path[depth] = component.glyph_id;
             const child = try render(
                 allocator,
-                data,
+                location_data,
+                bitmap_data,
                 data_table,
                 strike,
                 child_location,
@@ -145,7 +153,7 @@ fn render(
     }
 
     if (try data_mod.glyphBgra(
-        data,
+        bitmap_data,
         data_table,
         strike,
         location,
@@ -158,7 +166,7 @@ fn render(
         };
     }
     if (try data_mod.glyphMask(
-        data,
+        bitmap_data,
         data_table,
         strike,
         location,

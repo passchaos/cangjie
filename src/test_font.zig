@@ -2760,16 +2760,18 @@ fn cbdtBgraTtfTables(
 }
 
 fn compoundEbdtTtfTables(allocator: std.mem.Allocator) ![]Table {
-    const tables = try allocator.alloc(Table, 8);
+    const tables = try allocator.alloc(Table, 10);
     errdefer allocator.free(tables);
     tables[0] = .{ .tag = "cmap", .data = try cmapTable(allocator) };
     tables[1] = .{ .tag = "EBDT", .data = try compoundEbdtTable(allocator) };
     tables[2] = .{ .tag = "EBLC", .data = try compoundEblcTable(allocator) };
-    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
-    tables[4] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 3) };
-    tables[5] = .{ .tag = "hmtx", .data = try hmtxTableWithColorGlyphs(allocator) };
-    tables[6] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 3) };
-    tables[7] = .{ .tag = "kern", .data = try kernTable(allocator) };
+    tables[3] = .{ .tag = "glyf", .data = try emptyGlyfTable(allocator, 3) };
+    tables[4] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[5] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 3) };
+    tables[6] = .{ .tag = "hmtx", .data = try hmtxTableWithColorGlyphs(allocator) };
+    tables[7] = .{ .tag = "loca", .data = try emptyLocaTable(allocator, 3) };
+    tables[8] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 3) };
+    tables[9] = .{ .tag = "kern", .data = try kernTable(allocator) };
     return tables;
 }
 

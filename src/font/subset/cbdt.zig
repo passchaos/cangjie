@@ -34,6 +34,7 @@ pub fn buildAlloc(
     location_data: []const u8,
     bitmap_data: []const u8,
     retained: []const bool,
+    source: bitmap.StrikeSource,
 ) !Pair {
     const location_table = bitmap.Table{ .offset = 0, .length = location_data.len };
     const strike_count = try bitmap.cblc.strikeCount(location_data, location_table);
@@ -63,9 +64,58 @@ pub fn buildAlloc(
                 strike,
                 @intCast(glyph_index),
             )) orelse continue;
-            if (!supportedImageFormat(location.image_format)) {
-                return error.UnsupportedFontSubset;
+            if (location.image_format == 8 or location.image_format == 9) {
+                var flattened = (try bitmap.cblc.compoundGlyphInStrikeAlloc(
+                    allocator,
+                    location_data,
+                    bitmap_data,
+                    .{ .offset = 0, .length = bitmap_data.len },
+                    strike,
+                    location,
+                    source,
+                )) orelse return error.InvalidFontSubset;
+                defer flattened.deinit();
+                const output_format: u16 = 6;
+                if (output.image_format != 0 and output.image_format != output_format) {
+                    return error.UnsupportedFontSubset;
+                }
+                output.image_format = output_format;
+                const image_len = try addChecked(8, flattened.data.len);
+                const image = try allocator.alloc(u8, image_len);
+                errdefer allocator.free(image);
+                if (flattened.height > std.math.maxInt(u8) or
+                    flattened.width > std.math.maxInt(u8) or
+                    flattened.origin_offset_x < std.math.minInt(i8) or
+                    flattened.origin_offset_x > std.math.maxInt(i8) or
+                    flattened.origin_offset_y < std.math.minInt(i8) or
+                    flattened.origin_offset_y > std.math.maxInt(i8) or
+                    flattened.advance > std.math.maxInt(u8) or
+                    (flattened.vertical_origin_offset_x != null and
+                        (flattened.vertical_origin_offset_x.? < std.math.minInt(i8) or
+                            flattened.vertical_origin_offset_x.? > std.math.maxInt(i8))) or
+                    (flattened.vertical_origin_offset_y != null and
+                        (flattened.vertical_origin_offset_y.? < std.math.minInt(i8) or
+                            flattened.vertical_origin_offset_y.? > std.math.maxInt(i8))) or
+                    (flattened.vertical_advance != null and
+                        flattened.vertical_advance.? > std.math.maxInt(u8)))
+                {
+                    return error.InvalidFontSubset;
+                }
+                try writeBigMetrics(image, 0, .{
+                    .height = @intCast(flattened.height),
+                    .width = @intCast(flattened.width),
+                    .bearing_x = @intCast(flattened.origin_offset_x),
+                    .bearing_y = @intCast(flattened.origin_offset_y),
+                    .advance = @intCast(flattened.advance),
+                    .vertical_bearing_x = if (flattened.vertical_origin_offset_x) |value| @intCast(value) else 0,
+                    .vertical_bearing_y = if (flattened.vertical_origin_offset_y) |value| @intCast(value) else 0,
+                    .vertical_advance = if (flattened.vertical_advance) |value| @intCast(value) else 0,
+                });
+                @memcpy(image[8..], flattened.data);
+                output.images[glyph_index] = image;
+                continue;
             }
+            if (!supportedImageFormat(location.image_format)) return error.UnsupportedFontSubset;
             if (location.offset > bitmap_data.len or
                 location.length > bitmap_data.len - location.offset)
             {

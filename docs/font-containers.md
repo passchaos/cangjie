@@ -346,6 +346,7 @@ The same path retains raw CBDT formats 1/2/6/7 and normalizes shared-metrics
 format 5 to equivalent bit-aligned format 7.
 `preserve_cbdt_png_strikes=false` drops all CBDT/CBLC strikes together. EBDT
 raw formats 1/2/5/6/7 use the same serializer and can be independently dropped
-with `preserve_ebdt_strikes=false`. Compound CBDT/EBDT records remain
-unsupported until their recursive component closure and serializer are equally
-strict.
+with `preserve_ebdt_strikes=false`. Compound CBDT/EBDT formats 8/9 are
+recursively flattened under the existing depth/cycle guard into self-contained
+format-6 masks or BGRA images, so removed component GIDs cannot leave dangling
+references in the subset.

@@ -341,7 +341,7 @@ test "preserve-GID subset rebuilds raw EBDT strikes" {
 
     const info = (try parsed.color().bitmapInfo(1, 12)) orelse
         return error.TestUnexpectedResult;
-    try std.testing.expectEqual(.eblc_ebdt, info.source);
+    try std.testing.expectEqual(@TypeOf(info.source).eblc_ebdt, info.source);
     try std.testing.expectEqual(@as(?u16, 1), info.image_format);
     try std.testing.expectEqual(@as(i16, 1), info.origin_offset_x);
     try std.testing.expectEqual(@as(i16, 9), info.origin_offset_y);
@@ -366,16 +366,37 @@ test "preserve-GID subset rebuilds raw EBDT strikes" {
     try std.testing.expect((try stripped_face.color().bitmapData(1, 12)) == null);
 }
 
-test "preserve-GID subset rejects compound EBDT strikes" {
+test "preserve-GID subset flattens compound EBDT strikes" {
     const allocator = std.testing.allocator;
     const source = try test_font.buildCompoundEbdtTtf(allocator);
     defer allocator.free(source);
     var face = try public.Face.parse(allocator, source);
     defer face.deinit();
-    try std.testing.expectError(
-        error.UnsupportedFontSubset,
-        public.subset.trueTypeAlloc(allocator, &face, &.{2}, .{}),
+    var subset = try public.subset.trueTypeAlloc(
+        allocator,
+        &face,
+        &.{2},
+        .{},
     );
+    defer subset.deinit();
+    var parsed = try public.Face.parse(allocator, subset.program);
+    defer parsed.deinit();
+
+    // The compound's two source components have already been composited into
+    // the parent canvas; the subset no longer depends on glyph 1's bitmap.
+    const data = (try parsed.color().bitmapData(2, 16)) orelse
+        return error.TestUnexpectedResult;
+    const mask = switch (data) {
+        .mask => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(?u16, 6), (try parsed.color().bitmapInfo(2, 16)).?.image_format);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 255, 0, 0, 0, 0, 0, 255, 0 },
+        mask.data,
+    );
+    try std.testing.expect((try parsed.color().bitmapData(1, 16)) == null);
 }
 
 test "preserve-GID subset rebuilds retained SVG documents" {

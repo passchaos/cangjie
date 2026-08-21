@@ -77,6 +77,10 @@ pub const OwnedGlyphData = struct {
     origin_offset_y: i16,
     width: u32,
     height: u32,
+    advance: u16,
+    vertical_origin_offset_x: ?i16,
+    vertical_origin_offset_y: ?i16,
+    vertical_advance: ?u16,
     kind: Kind,
     data: []u8,
 

@@ -232,6 +232,65 @@ pub fn isBraille(codepoint: u21) bool {
     return codepoint >= 0x2800 and codepoint <= 0x28ff;
 }
 
+pub fn isMendeKikakui(codepoint: u21) bool {
+    return (codepoint >= 0x1e800 and codepoint <= 0x1e8c4) or
+        (codepoint >= 0x1e8c7 and codepoint <= 0x1e8d6);
+}
+
+pub fn isLinearB(codepoint: u21) bool {
+    return (codepoint >= 0x10000 and codepoint <= 0x1000b) or
+        (codepoint >= 0x1000d and codepoint <= 0x10026) or
+        (codepoint >= 0x10028 and codepoint <= 0x1003a) or
+        (codepoint >= 0x1003c and codepoint <= 0x1003d) or
+        (codepoint >= 0x1003f and codepoint <= 0x1004d) or
+        (codepoint >= 0x10050 and codepoint <= 0x1005d) or
+        (codepoint >= 0x10080 and codepoint <= 0x100fa);
+}
+
+pub fn isMiao(codepoint: u21) bool {
+    return (codepoint >= 0x16f00 and codepoint <= 0x16f4a) or
+        (codepoint >= 0x16f4f and codepoint <= 0x16f87) or
+        (codepoint >= 0x16f8f and codepoint <= 0x16f9f);
+}
+
+pub fn isPahawhHmong(codepoint: u21) bool {
+    return (codepoint >= 0x16b00 and codepoint <= 0x16b45) or
+        (codepoint >= 0x16b50 and codepoint <= 0x16b61) or
+        (codepoint >= 0x16b63 and codepoint <= 0x16b77) or
+        (codepoint >= 0x16b7d and codepoint <= 0x16b8f);
+}
+
+pub fn isOldHungarian(codepoint: u21) bool {
+    return (codepoint >= 0x10c80 and codepoint <= 0x10cb2) or
+        (codepoint >= 0x10cc0 and codepoint <= 0x10cf2) or
+        (codepoint >= 0x10cfa and codepoint <= 0x10cff);
+}
+
+pub fn isCyproMinoan(codepoint: u21) bool {
+    return codepoint >= 0x12f90 and codepoint <= 0x12ff2;
+}
+
+pub fn isBhaiksuki(codepoint: u21) bool {
+    return (codepoint >= 0x11c00 and codepoint <= 0x11c08) or
+        (codepoint >= 0x11c0a and codepoint <= 0x11c36) or
+        (codepoint >= 0x11c38 and codepoint <= 0x11c45) or
+        (codepoint >= 0x11c50 and codepoint <= 0x11c6c);
+}
+
+pub fn isSiddham(codepoint: u21) bool {
+    return (codepoint >= 0x11580 and codepoint <= 0x115b5) or
+        (codepoint >= 0x115b8 and codepoint <= 0x115dd);
+}
+
+pub fn isMedefaidrin(codepoint: u21) bool {
+    return codepoint >= 0x16e40 and codepoint <= 0x16e9a;
+}
+
+pub fn isTangsa(codepoint: u21) bool {
+    return (codepoint >= 0x16a70 and codepoint <= 0x16abe) or
+        (codepoint >= 0x16ac0 and codepoint <= 0x16ac9);
+}
+
 pub fn isPhoenician(codepoint: u21) bool {
     return (codepoint >= 0x10900 and codepoint <= 0x1091b) or
         codepoint == 0x1091f;

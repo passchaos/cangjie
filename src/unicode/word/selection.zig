@@ -21,6 +21,16 @@ pub const Script = enum {
     khitan_small_script,
     linear_a,
     braille,
+    mende_kikakui,
+    linear_b,
+    miao,
+    pahawh_hmong,
+    old_hungarian,
+    cypro_minoan,
+    bhaiksuki,
+    siddham,
+    medefaidrin,
+    tangsa,
     tagalog,
     hanunoo,
     buhid,
@@ -173,8 +183,8 @@ pub fn kindForCodepoint(codepoint: u21, script: Script) Kind {
     if (isChakmaWordCodepoint(codepoint)) return .chakma;
     if (isNewaWordCodepoint(codepoint)) return .newa;
     return switch (script) {
-        .han, .yi, .nushu, .hiragana, .katakana, .hangul, .tangut, .egyptian_hieroglyphs, .cuneiform, .signwriting, .anatolian_hieroglyphs, .khitan_small_script, .linear_a, .braille => .single,
-        .bamum => .latin_number,
+        .han, .yi, .nushu, .hiragana, .katakana, .hangul, .tangut, .egyptian_hieroglyphs, .cuneiform, .signwriting, .anatolian_hieroglyphs, .khitan_small_script, .linear_a, .braille, .linear_b, .cypro_minoan => .single,
+        .bamum, .mende_kikakui, .miao, .pahawh_hmong, .old_hungarian, .bhaiksuki, .siddham, .medefaidrin, .tangsa => .latin_number,
         .arabic => .arabic,
         .hebrew => .hebrew,
         .armenian => .armenian,

@@ -106,6 +106,16 @@ pub const Script = enum {
     khitan_small_script,
     linear_a,
     braille,
+    mende_kikakui,
+    linear_b,
+    miao,
+    pahawh_hmong,
+    old_hungarian,
+    cypro_minoan,
+    bhaiksuki,
+    siddham,
+    medefaidrin,
+    tangsa,
     unknown,
 };
 
@@ -219,6 +229,16 @@ pub fn forCodepoint(codepoint: u21) Script {
     if (ranges.isKhitanSmallScript(codepoint)) return .khitan_small_script;
     if (ranges.isLinearA(codepoint)) return .linear_a;
     if (ranges.isBraille(codepoint)) return .braille;
+    if (ranges.isMendeKikakui(codepoint)) return .mende_kikakui;
+    if (ranges.isLinearB(codepoint)) return .linear_b;
+    if (ranges.isMiao(codepoint)) return .miao;
+    if (ranges.isPahawhHmong(codepoint)) return .pahawh_hmong;
+    if (ranges.isOldHungarian(codepoint)) return .old_hungarian;
+    if (ranges.isCyproMinoan(codepoint)) return .cypro_minoan;
+    if (ranges.isBhaiksuki(codepoint)) return .bhaiksuki;
+    if (ranges.isSiddham(codepoint)) return .siddham;
+    if (ranges.isMedefaidrin(codepoint)) return .medefaidrin;
+    if (ranges.isTangsa(codepoint)) return .tangsa;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
 

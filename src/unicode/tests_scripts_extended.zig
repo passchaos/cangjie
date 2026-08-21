@@ -29,6 +29,32 @@ test "large Unicode 17 scripts select distinct OpenType primitives" {
     }
 }
 
+test "next Unicode 17 script tranche selects OpenType and bidi primitives" {
+    const Case = struct {
+        scalar: u21,
+        script: unicode.Script,
+        tag: unicode.OpenTypeScriptTag,
+        bidi: unicode.BidiClass = .ltr,
+    };
+    const cases = [_]Case{
+        .{ .scalar = 0x1e800, .script = .mende_kikakui, .tag = .mend },
+        .{ .scalar = 0x10000, .script = .linear_b, .tag = .linb },
+        .{ .scalar = 0x16f00, .script = .miao, .tag = .plrd },
+        .{ .scalar = 0x16b00, .script = .pahawh_hmong, .tag = .hmng },
+        .{ .scalar = 0x10c80, .script = .old_hungarian, .tag = .hung, .bidi = .rtl },
+        .{ .scalar = 0x12f90, .script = .cypro_minoan, .tag = .cpmn },
+        .{ .scalar = 0x11c00, .script = .bhaiksuki, .tag = .bhks },
+        .{ .scalar = 0x11580, .script = .siddham, .tag = .sidd },
+        .{ .scalar = 0x16e40, .script = .medefaidrin, .tag = .medf },
+        .{ .scalar = 0x16a70, .script = .tangsa, .tag = .tnsa },
+    };
+    for (cases) |case| {
+        try std.testing.expectEqual(case.script, unicode.scriptForCodepoint(case.scalar));
+        try std.testing.expectEqual(case.tag, unicode.openTypeScriptTag(case.script));
+        try std.testing.expectEqual(case.bidi, unicode.bidiClassForCodepoint(case.scalar));
+    }
+}
+
 test "Tagalog text selects Baybayin script primitives" {
     const allocator = std.testing.allocator;
     const text = "\u{1703}\u{1712}\u{1714} \u{171f}\u{1715}";

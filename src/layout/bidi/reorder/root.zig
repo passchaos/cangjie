@@ -245,13 +245,9 @@ pub fn tryApplyPureRtlLinesWithParallel(
         const gap_len = logical_start - visual_start;
         if (gap_len != 0 and line.glyph_len != 0) {
             const Glyph = @TypeOf(glyphs[0]);
-            std.mem.rotate(
-                Glyph,
-                glyphs[visual_start..logical_end],
-                gap_len,
-            );
+            rotateRecords(Glyph, glyphs[visual_start..logical_end], gap_len);
             const Parallel = @TypeOf(parallel[0]);
-            std.mem.rotate(
+            rotateRecords(
                 Parallel,
                 parallel[visual_start..logical_end],
                 gap_len,
@@ -262,7 +258,7 @@ pub fn tryApplyPureRtlLinesWithParallel(
             font,
         );
         const Parallel = @TypeOf(parallel[0]);
-        std.mem.reverse(
+        bidi.reverseRecords(
             Parallel,
             parallel[visual_start .. visual_start + line.glyph_len],
         );
@@ -274,6 +270,12 @@ pub fn tryApplyPureRtlLinesWithParallel(
         visual_start += line.glyph_len;
     }
     return true;
+}
+
+fn rotateRecords(comptime T: type, items: []T, amount: usize) void {
+    bidi.reverseRecords(T, items[0..amount]);
+    bidi.reverseRecords(T, items[amount..]);
+    bidi.reverseRecords(T, items);
 }
 
 pub fn applyLines(buffer: anytype, text: []const u8, rtl: bool) !void {

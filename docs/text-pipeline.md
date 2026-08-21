@@ -1963,3 +1963,15 @@ retired-work reduction is the stable evidence. Checksum `fb80f404e4d69aff`,
 144 glyphs, and six lines remained identical; Latin and Arabic-with-digits
 controls retained their checksums and retired work because they do not enter
 the fast path.
+
+Pure-RTL in-place ordering now swaps complete glyph and metadata records
+through typed temporaries. `std.mem.reverse` falls back to a byte-at-a-time
+swap when a record is not power-of-two sized, so it did substantially more
+work for the 48-byte glyph records even though the permutation itself was
+already optimal. On fixed CPU 30, an A/B/B/A counter matrix over 5,000 Arabic
+spacing layouts reduced retired instructions from `4.5838B/4.5835B` to
+`4.3886B/4.3880B` (about `4.3%`) and branches from `739.6M/739.6M` to
+`733.1M/733.0M`; cycles fell by about `6%`. Checksum
+`fb80f404e4d69aff`, 144 glyphs, and six lines were unchanged. The Latin
+spacing control retained checksum `510135a8179bf5e4`, 105 glyphs, six lines,
+and neutral retired work because it does not enter bidi reversal.

@@ -97,7 +97,7 @@ pub fn applyPureRtlVisualOrderSlice(glyphs: anytype, font: ?*const Font) void {
         // the run and walks glyphs inside each cluster backwards.  For a
         // paragraph made only of RTL and neutral characters this is equivalent
         // to reversing the already-shaped glyph stream in place.
-        std.mem.reverse(Glyph, glyphs);
+        reverseRecords(Glyph, glyphs);
     }
     if (font) |face| {
         // Most Arabic/Hebrew runs contain no mirrored scalar. Avoid a binary
@@ -112,6 +112,21 @@ pub fn applyPureRtlVisualOrderSlice(glyphs: anytype, font: ?*const Font) void {
             glyph.codepoint = mirrored;
             glyph.glyph_id = mirrored_glyph;
         }
+    }
+}
+
+/// Reverse full records by value rather than through `std.mem.swap`'s byte
+/// loop. Glyph records are not power-of-two sized, so the generic standard
+/// routine cannot select its vector path; copying one record through a typed
+/// temporary gives LLVM the complete fixed-size move.
+pub fn reverseRecords(comptime T: type, items: []T) void {
+    var index: usize = 0;
+    const midpoint = items.len / 2;
+    while (index < midpoint) : (index += 1) {
+        const opposite = items.len - index - 1;
+        const temporary = items[index];
+        items[index] = items[opposite];
+        items[opposite] = temporary;
     }
 }
 

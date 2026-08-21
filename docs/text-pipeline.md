@@ -1168,12 +1168,11 @@ classification without adding runtime callbacks. Only the mark-classification
 test that intentionally exercises private root helpers remains in the Unicode
 root implementation.
 Unicode script identity and scalar classification live under
-`src/unicode/script/`: `root.zig` owns the public script type, overlap-sensitive
-classification order, and semantic policies such as Arabic-style joining
-eligibility, while `ranges.zig` contains only scalar-range facts. The public
-`unicode.Script` and `scriptForCodepoint` surface remains rooted in
-`src/unicode.zig`, so shaping and application code do not depend on internal
-block predicates.
+`src/unicode/script/`: `root.zig` owns the public script type and semantic
+policies such as Arabic-style joining eligibility, while `data.zig` decodes the
+generated exact Script-property page table. The public `unicode.Script` and
+`scriptForCodepoint` surface remains rooted in `src/unicode.zig`, so shaping
+and application code do not depend on the generated representation.
 Unicode mark policy is separated under `src/unicode/mark/`:
 `nonspacing.zig` is the generated Unicode 17 General_Category=Mn table,
 `spacing.zig` owns the supported visible dependent-sign/spacing-mark policy,

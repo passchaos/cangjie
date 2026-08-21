@@ -3338,3 +3338,17 @@ shaping-performance superiority.
   time remained frequency-bimodal, so the retained claim is the reduced work.
   HarfBuzz and HarfRust comparisons both pass all 10,000 lines with checksum
   `b01a5388ce792b49`.
+- Unicode Script classification now uses a generated, deduplicated Unicode 17
+  page table instead of the growing ordered predicate chain. The pinned
+  `Scripts.txt` verifier regenerates the committed table byte-for-byte and
+  exhaustively checks every assigned scalar for all 174 Script values; this
+  also fixes prior whole-block approximations for Common and Inherited
+  characters. Fixed-CPU-8 A/B/B/A counters over five full Devanagari
+  `hi-words` passes reduced retired instructions from
+  `2.99170B/2.99161B` to `2.94292B/2.94291B` (about `1.63%`) and branches
+  from `508.83M/508.82M` to `501.77M/501.77M` (about `1.39%`); cycles fell
+  from `1.19551B/1.19619B` to `1.18367B/1.17731B` (about `1.3%`). Output
+  checksum `33d837ee98745b5d` was unchanged. A same-host seven-sample comparison
+  still measured Cangjie near `1.407--1.410 us/glyph` versus HarfBuzz near
+  `0.997--1.001 us/glyph`, so the broader shaping-performance objective
+  remains open.

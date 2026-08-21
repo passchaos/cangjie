@@ -219,6 +219,13 @@ pub fn isLao(codepoint: u21) bool {
     return codepoint >= 0x0e81 and codepoint <= 0x0edf;
 }
 
+pub fn isTagalog(codepoint: u21) bool {
+    // Assigned Baybayin letters and dependent signs. U+1716..U+171E remain
+    // reserved and must not silently acquire `tglg` shaping semantics.
+    return (codepoint >= 0x1700 and codepoint <= 0x1715) or
+        codepoint == 0x171f;
+}
+
 pub fn isKhmer(codepoint: u21) bool {
     return (codepoint >= 0x1780 and codepoint <= 0x17ff) or
         (codepoint >= 0x19e0 and codepoint <= 0x19ff);

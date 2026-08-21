@@ -12,6 +12,7 @@ pub const Script = enum {
     hiragana,
     katakana,
     hangul,
+    tagalog,
     arabic,
     hebrew,
     armenian,
@@ -47,6 +48,7 @@ pub const Kind = enum {
     latin_number,
     lisu,
     vai,
+    tagalog,
     arabic,
     hebrew,
     syriac,
@@ -116,6 +118,7 @@ pub fn kindForCodepoint(codepoint: u21, script: Script) Kind {
     }
     if (isLisuWordCodepoint(codepoint)) return .lisu;
     if (isVaiWordCodepoint(codepoint)) return .vai;
+    if (isTagalogWordCodepoint(codepoint)) return .tagalog;
     if (isKhmerWordCodepoint(codepoint)) return .khmer;
     if (isMyanmarWordCodepoint(codepoint)) return .myanmar;
     if (isThaanaWordCodepoint(codepoint)) return .thaana;
@@ -177,6 +180,7 @@ pub fn kindForCodepoint(codepoint: u21, script: Script) Kind {
         .cham => .cham,
         .brahmi => .brahmi,
         .khudawadi, .tirhuta, .modi, .takri => .single,
+        .tagalog => .tagalog,
         else => .none,
     };
 }
@@ -194,6 +198,13 @@ fn isLisuWordCodepoint(codepoint: u21) bool {
     // base block plus U+11FB0 should group into normal space-delimited words.
     return (codepoint >= 0xa4d0 and codepoint <= 0xa4fd) or
         codepoint == 0x11fb0;
+}
+
+fn isTagalogWordCodepoint(codepoint: u21) bool {
+    // Anchor editor-word spans on Baybayin letters. Dependent signs attach
+    // through the generated Extend/SpacingMark properties after a word starts.
+    return (codepoint >= 0x1700 and codepoint <= 0x1711) or
+        codepoint == 0x171f;
 }
 
 fn isNewaWordCodepoint(codepoint: u21) bool {

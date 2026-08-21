@@ -41,6 +41,7 @@ pub const Script = enum {
     armenian,
     thai,
     lao,
+    tagalog,
     khmer,
     myanmar,
     devanagari,
@@ -142,6 +143,7 @@ pub fn forCodepoint(codepoint: u21) Script {
     if (ranges.isArabic(codepoint)) return .arabic;
     if (ranges.isThai(codepoint)) return .thai;
     if (ranges.isLao(codepoint)) return .lao;
+    if (ranges.isTagalog(codepoint)) return .tagalog;
     if (ranges.isKhmer(codepoint)) return .khmer;
     if (ranges.isMyanmar(codepoint)) return .myanmar;
     if (codepoint >= 0x0900 and codepoint <= 0x097f) return .devanagari;

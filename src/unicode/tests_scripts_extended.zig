@@ -3,6 +3,44 @@
 const std = @import("std");
 const unicode = @import("../unicode.zig");
 
+test "Tagalog text selects Baybayin script primitives" {
+    const allocator = std.testing.allocator;
+    const text = "\u{1703}\u{1712}\u{1714} \u{171f}\u{1715}";
+
+    const clusters = try unicode.itemizeGraphemeClusters(allocator, text);
+    defer allocator.free(clusters);
+    try std.testing.expectEqual(@as(usize, 3), clusters.len);
+    try std.testing.expectEqualStrings(
+        "\u{1703}\u{1712}\u{1714}",
+        text[clusters[0].byte_start..][0..clusters[0].byte_len],
+    );
+    try std.testing.expectEqualStrings(
+        "\u{171f}\u{1715}",
+        text[clusters[2].byte_start..][0..clusters[2].byte_len],
+    );
+
+    const runs = try unicode.itemizeScriptRuns(allocator, text);
+    defer allocator.free(runs);
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(unicode.Script.tagalog, runs[0].script);
+    try std.testing.expectEqual(unicode.OpenTypeScriptTag.tglg, unicode.openTypeScriptTag(unicode.scriptForCodepoint(0x1703)));
+    try std.testing.expectEqual(unicode.OpenTypeScriptTag.tglg, unicode.openTypeScriptTag(unicode.scriptForCodepoint(0x1715)));
+    try std.testing.expectEqual(unicode.Script.unknown, unicode.scriptForCodepoint(0x1716));
+    try std.testing.expectEqual(unicode.BidiClass.ltr, unicode.bidiClassForCodepoint(0x1703));
+
+    const words = try unicode.itemizeWordSegments(allocator, text);
+    defer allocator.free(words);
+    try std.testing.expectEqual(@as(usize, 2), words.len);
+    try std.testing.expectEqualStrings(
+        "\u{1703}\u{1712}\u{1714}",
+        text[words[0].byte_start..][0..words[0].byte_len],
+    );
+    try std.testing.expectEqualStrings(
+        "\u{171f}\u{1715}",
+        text[words[1].byte_start..][0..words[1].byte_len],
+    );
+}
+
 test "Rejang syllables keep signs and select Rejang OpenType script" {
     const allocator = std.testing.allocator;
 

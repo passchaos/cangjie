@@ -316,6 +316,7 @@ pub const OpenTypeScriptTag = enum(u32) {
     armn = tag("armn"),
     thai = tag("thai"),
     lao = tag("lao "),
+    tglg = tag("tglg"),
     khmr = tag("khmr"),
     qaag = tag("Qaag"),
     mym2 = tag("mym2"),
@@ -483,6 +484,7 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .armenian => .armn,
         .thai => .thai,
         .lao => .lao,
+        .tagalog => .tglg,
         .khmer => .khmr,
         .myanmar => .mym2,
         .devanagari => .dev2,
@@ -791,7 +793,7 @@ fn bidiClassFast(codepoint: u21) ?BidiClass {
 fn bidiClassForScript(script: Script) BidiClass {
     return switch (script) {
         .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .avestan, .imperial_aramaic, .old_south_arabian, .old_north_arabian, .meroitic_hieroglyphs, .meroitic_cursive => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .ugaritic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .phags_pa, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .saurashtra, .rejang, .grantha, .limbu, .sharada, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .khudawadi, .tirhuta, .modi, .takri, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .ugaritic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .tagalog, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .phags_pa, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .saurashtra, .rejang, .grantha, .limbu, .sharada, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .khudawadi, .tirhuta, .modi, .takri, .nushu, .runic, .coptic, .ogham, .duployan => .ltr,
         else => .neutral,
     };
 }
@@ -1159,6 +1161,7 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .hiragana => .hiragana,
         .katakana => .katakana,
         .hangul => .hangul,
+        .tagalog => .tagalog,
         .arabic => .arabic,
         .hebrew => .hebrew,
         .armenian => .armenian,

@@ -45,10 +45,10 @@ pub const Options = struct {
     preserve_svg_documents: bool = true,
     /// Retain Apple sbix PNG strikes.
     preserve_sbix_strikes: bool = true,
-    /// Retain CBDT PNG strikes (image formats 17/18/19). Rebuilt dense indexes
-    /// leave removed GIDs empty; format-19 shared metrics are embedded into
-    /// equivalent self-contained format-18 records. Raw bitmap and compound
-    /// images remain outside this bounded profile.
+    /// Retain standalone CBDT strikes (raw formats 1/2/5/6/7 and PNG formats
+    /// 17/18/19). Rebuilt dense indexes leave removed GIDs empty; shared
+    /// metrics are embedded into equivalent self-contained formats 7/18.
+    /// Compound bitmap images remain outside this bounded profile.
     preserve_cbdt_png_strikes: bool = true,
 };
 

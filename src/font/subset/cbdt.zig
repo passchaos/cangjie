@@ -1,9 +1,9 @@
-//! Bounded preserve-GID serialization for CBDT PNG strikes.
+//! Bounded preserve-GID serialization for standalone CBDT strikes.
 //!
-//! Image format 19 stores shared metrics in CBLC. The subset normalizes those
-//! records to self-contained format 18 images, allowing every retained strike
-//! to keep one dense, constant-time format-1 index even when selected GIDs are
-//! sparse. Empty offsets ensure removed glyphs are never advertised.
+//! Image formats 5 and 19 store shared metrics in CBLC. The subset normalizes
+//! those records to self-contained formats 7 and 18, allowing every retained
+//! strike to keep one dense, constant-time format-1 index even when selected
+//! GIDs are sparse. Empty offsets ensure removed glyphs are never advertised.
 
 const std = @import("std");
 
@@ -63,10 +63,7 @@ pub fn buildAlloc(
                 strike,
                 @intCast(glyph_index),
             )) orelse continue;
-            if (location.image_format != 17 and
-                location.image_format != 18 and
-                location.image_format != 19)
-            {
+            if (!supportedImageFormat(location.image_format)) {
                 return error.UnsupportedFontSubset;
             }
             if (location.offset > cbdt_data.len or
@@ -75,19 +72,27 @@ pub fn buildAlloc(
                 return error.InvalidFontSubset;
             }
 
-            // Format 18 is the self-contained BigGlyphMetrics equivalent of
-            // format 19. This normalization preserves every metric and avoids
-            // an index-format-2/5 sparsity trade-off in the generated font.
-            const output_format: u16 = if (location.image_format == 19) 18 else location.image_format;
+            // Formats 7 and 18 are the self-contained BigGlyphMetrics
+            // equivalents of formats 5 and 19. Normalizing to them preserves
+            // every metric and the format-5 bit-aligned row contract while
+            // avoiding an index-format-2/5 sparsity trade-off.
+            const output_format: u16 = switch (location.image_format) {
+                5 => 7,
+                19 => 18,
+                else => location.image_format,
+            };
             if (output.image_format != 0 and output.image_format != output_format) {
                 return error.UnsupportedFontSubset;
             }
             output.image_format = output_format;
-            const prefix_len: usize = if (location.image_format == 19) 8 else 0;
+            const prefix_len: usize = switch (location.image_format) {
+                5, 19 => 8,
+                else => 0,
+            };
             const image_len = try addChecked(prefix_len, location.length);
             const image = try allocator.alloc(u8, image_len);
             errdefer allocator.free(image);
-            if (location.image_format == 19) {
+            if (prefix_len != 0) {
                 try writeBigMetrics(
                     image,
                     0,
@@ -103,6 +108,13 @@ pub fn buildAlloc(
     }
 
     return serializeAlloc(allocator, strikes);
+}
+
+fn supportedImageFormat(image_format: u16) bool {
+    return switch (image_format) {
+        1, 2, 5, 6, 7, 17, 18, 19 => true,
+        else => false,
+    };
 }
 
 fn serializeAlloc(allocator: std.mem.Allocator, strikes: []const Strike) !Pair {

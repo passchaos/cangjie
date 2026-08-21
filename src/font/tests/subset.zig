@@ -276,6 +276,52 @@ test "preserve-GID subset rebuilds CBDT shared-metrics PNG strikes" {
     try std.testing.expect((try parsed.color().bitmapData(0, 16)) == null);
 }
 
+test "preserve-GID subset rebuilds every raw CBDT image format" {
+    const allocator = std.testing.allocator;
+    for ([_]u16{ 1, 2, 5, 6, 7 }) |source_format| {
+        const source = try test_font.buildCbdtBgraTtfWithFormat(
+            allocator,
+            source_format,
+        );
+        defer allocator.free(source);
+        var face = try public.Face.parse(allocator, source);
+        defer face.deinit();
+
+        var subset = try public.subset.trueTypeAlloc(
+            allocator,
+            &face,
+            &.{1},
+            .{},
+        );
+        defer subset.deinit();
+        var parsed = try public.Face.parse(allocator, subset.program);
+        defer parsed.deinit();
+
+        const info = (try parsed.color().bitmapInfo(1, 16)) orelse
+            return error.TestUnexpectedResult;
+        const expected_format: u16 = if (source_format == 5) 7 else source_format;
+        try std.testing.expectEqual(@as(?u16, expected_format), info.image_format);
+        try std.testing.expectEqual(@as(i16, 2), info.origin_offset_x);
+        try std.testing.expectEqual(@as(i16, 13), info.origin_offset_y);
+        try std.testing.expectEqual(@as(u32, 2), info.width);
+        try std.testing.expectEqual(@as(u32, 1), info.height);
+        try std.testing.expectEqual(@as(?u16, 12), info.advance);
+
+        const data = (try parsed.color().bitmapData(1, 16)) orelse
+            return error.TestUnexpectedResult;
+        const bgra = switch (data) {
+            .bgra => |value| value,
+            else => return error.TestUnexpectedResult,
+        };
+        try std.testing.expectEqualSlices(
+            u8,
+            &.{ 7, 13, 64, 128, 10, 20, 30, 255 },
+            bgra.data,
+        );
+        try std.testing.expect((try parsed.color().bitmapData(0, 16)) == null);
+    }
+}
+
 test "preserve-GID subset rebuilds retained SVG documents" {
     const allocator = std.testing.allocator;
     const source = try test_font.buildSvgTtf(allocator);

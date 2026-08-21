@@ -157,6 +157,45 @@ test "sixth Unicode 17 script tranche selects OpenType primitives" {
     }
 }
 
+test "seventh Unicode 17 script tranche selects OpenType and bidi primitives" {
+    const Case = struct {
+        scalar: u21,
+        script: unicode.Script,
+        tag: unicode.OpenTypeScriptTag,
+        text: []const u8,
+        bidi: unicode.BidiClass = .ltr,
+        reserved: ?u21 = null,
+    };
+    const cases = [_]Case{
+        .{ .scalar = 0x105c0, .script = .todhri, .tag = .todr, .text = "\u{105c0}\u{105c1}", .reserved = 0x105f4 },
+        .{ .scalar = 0x10ac0, .script = .manichaean, .tag = .mani, .text = "\u{10ac0}\u{10ac1}", .bidi = .rtl, .reserved = 0x10ae7 },
+        .{ .scalar = 0x16ea0, .script = .beria_erfe, .tag = .berf, .text = "\u{16ea0}\u{16ea1}", .reserved = 0x16eb9 },
+        .{ .scalar = 0x10d00, .script = .hanifi_rohingya, .tag = .rohg, .text = "\u{10d00}\u{10d01}", .bidi = .rtl, .reserved = 0x10d28 },
+        .{ .scalar = 0x102a0, .script = .carian, .tag = .cari, .text = "\u{102a0}\u{102a1}" },
+        .{ .scalar = 0x1c50, .script = .ol_chiki, .tag = .olck, .text = "\u{1c5a}\u{1c5b}" },
+        .{ .scalar = 0x10450, .script = .shavian, .tag = .shaw, .text = "\u{10450}\u{10451}" },
+        .{ .scalar = 0x10e80, .script = .yezidi, .tag = .yezi, .text = "\u{10e80}\u{10e81}", .bidi = .rtl, .reserved = 0x10eaa },
+        .{ .scalar = 0xa800, .script = .syloti_nagri, .tag = .sylo, .text = "\u{a800}\u{a801}", .reserved = 0xa82d },
+        .{ .scalar = 0x1e5d0, .script = .ol_onal, .tag = .onao, .text = "\u{1e5d0}\u{1e5d1}", .reserved = 0x1e5fb },
+    };
+    for (cases) |case| {
+        try std.testing.expectEqual(case.script, unicode.scriptForCodepoint(case.scalar));
+        try std.testing.expectEqual(case.tag, unicode.openTypeScriptTag(case.script));
+        try std.testing.expectEqual(case.bidi, unicode.bidiClassForCodepoint(case.scalar));
+        if (case.reserved) |scalar| {
+            try std.testing.expectEqual(unicode.Script.unknown, unicode.scriptForCodepoint(scalar));
+        }
+
+        // These less-common scripts deliberately use the editor's generic
+        // letter/number grouping until script-specific word tailoring exists.
+        const words = try unicode.itemizeWordSegments(std.testing.allocator, case.text);
+        defer std.testing.allocator.free(words);
+        try std.testing.expectEqual(@as(usize, 1), words.len);
+        try std.testing.expectEqual(@as(usize, 0), words[0].byte_start);
+        try std.testing.expectEqual(case.text.len, words[0].byte_len);
+    }
+}
+
 test "Tagalog text selects Baybayin script primitives" {
     const allocator = std.testing.allocator;
     const text = "\u{1703}\u{1712}\u{1714} \u{171f}\u{1715}";

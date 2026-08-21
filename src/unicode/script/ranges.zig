@@ -479,6 +479,52 @@ pub fn isCaucasianAlbanian(codepoint: u21) bool {
         codepoint == 0x1056f;
 }
 
+pub fn isTodhri(codepoint: u21) bool {
+    return codepoint >= 0x105c0 and codepoint <= 0x105f3;
+}
+
+pub fn isManichaean(codepoint: u21) bool {
+    return (codepoint >= 0x10ac0 and codepoint <= 0x10ae6) or
+        (codepoint >= 0x10aeb and codepoint <= 0x10af6);
+}
+
+pub fn isBeriaErfe(codepoint: u21) bool {
+    return (codepoint >= 0x16ea0 and codepoint <= 0x16eb8) or
+        (codepoint >= 0x16ebb and codepoint <= 0x16ed3);
+}
+
+pub fn isHanifiRohingya(codepoint: u21) bool {
+    return (codepoint >= 0x10d00 and codepoint <= 0x10d27) or
+        (codepoint >= 0x10d30 and codepoint <= 0x10d39);
+}
+
+pub fn isCarian(codepoint: u21) bool {
+    return codepoint >= 0x102a0 and codepoint <= 0x102d0;
+}
+
+pub fn isOlChiki(codepoint: u21) bool {
+    return codepoint >= 0x1c50 and codepoint <= 0x1c7f;
+}
+
+pub fn isShavian(codepoint: u21) bool {
+    return codepoint >= 0x10450 and codepoint <= 0x1047f;
+}
+
+pub fn isYezidi(codepoint: u21) bool {
+    return (codepoint >= 0x10e80 and codepoint <= 0x10ea9) or
+        (codepoint >= 0x10eab and codepoint <= 0x10ead) or
+        (codepoint >= 0x10eb0 and codepoint <= 0x10eb1);
+}
+
+pub fn isSylotiNagri(codepoint: u21) bool {
+    return codepoint >= 0xa800 and codepoint <= 0xa82c;
+}
+
+pub fn isOlOnal(codepoint: u21) bool {
+    return codepoint >= 0x1e5d0 and codepoint <= 0x1e5fa or
+        codepoint == 0x1e5ff;
+}
+
 pub fn isPhoenician(codepoint: u21) bool {
     return (codepoint >= 0x10900 and codepoint <= 0x1091b) or
         codepoint == 0x1091f;

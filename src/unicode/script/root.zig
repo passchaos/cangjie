@@ -146,6 +146,16 @@ pub const Script = enum {
     tai_yo,
     tolong_siki,
     caucasian_albanian,
+    todhri,
+    manichaean,
+    beria_erfe,
+    hanifi_rohingya,
+    carian,
+    ol_chiki,
+    shavian,
+    yezidi,
+    syloti_nagri,
+    ol_onal,
     unknown,
 };
 
@@ -299,6 +309,16 @@ pub fn forCodepoint(codepoint: u21) Script {
     if (ranges.isTaiYo(codepoint)) return .tai_yo;
     if (ranges.isTolongSiki(codepoint)) return .tolong_siki;
     if (ranges.isCaucasianAlbanian(codepoint)) return .caucasian_albanian;
+    if (ranges.isTodhri(codepoint)) return .todhri;
+    if (ranges.isManichaean(codepoint)) return .manichaean;
+    if (ranges.isBeriaErfe(codepoint)) return .beria_erfe;
+    if (ranges.isHanifiRohingya(codepoint)) return .hanifi_rohingya;
+    if (ranges.isCarian(codepoint)) return .carian;
+    if (ranges.isOlChiki(codepoint)) return .ol_chiki;
+    if (ranges.isShavian(codepoint)) return .shavian;
+    if (ranges.isYezidi(codepoint)) return .yezidi;
+    if (ranges.isSylotiNagri(codepoint)) return .syloti_nagri;
+    if (ranges.isOlOnal(codepoint)) return .ol_onal;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
 

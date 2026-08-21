@@ -1947,3 +1947,19 @@ were unchanged. The Latin spacing control retained checksum
 within 0.2% across A/B/B/A, as expected because that input never enters the
 fast path. Arabic spacing remains a Parley comparison gap until a stable,
 output-equivalent end-to-end matrix closes it.
+
+The pure-RTL line transaction also handles the glyph gaps left by discarded
+wrapping whitespace. It rotates each following line in front of its gap,
+then reverses the next visible line and its metadata in place; this matches the
+general UAX #9 transaction's compact visual ranges while keeping the omitted
+glyph suffix in logical order. Without this step, multi-line Arabic paragraphs
+correctly fell back to the general resolver and never exercised the intended
+fast path. Fixed-CPU-30 A/B/B/A counters over 5,000 Arabic spacing layouts
+reduced retired instructions from `4.8022B/4.8011B` to
+`4.5792B/4.5830B` (about `4.6%`) and branches from `809.0M/808.8M` to
+`738.9M/739.5M` (about `8.6%`). The longer wall matrix remained frequency
+sensitive (`261.41/283.34 µs` baseline, `264.64/261.70 µs` candidate), so the
+retired-work reduction is the stable evidence. Checksum `fb80f404e4d69aff`,
+144 glyphs, and six lines remained identical; Latin and Arabic-with-digits
+controls retained their checksums and retired work because they do not enter
+the fast path.

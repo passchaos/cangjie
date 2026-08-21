@@ -226,29 +226,52 @@ pub fn tryApplyPureRtlLinesWithParallel(
 
     // Validate every range before the first mutation. Falling back after a
     // partial reversal would violate the general path's logical-order input
-    // contract. A suffix omitted from visible lines is intentionally allowed:
-    // the general transaction preserves that suffix in source order too.
+    // contract. The general path appends discarded wrapping whitespace after
+    // the preceding visual line. Preserve that stable partition by rotating
+    // each following line in front of its gap before reversing only the line.
     var previous_end: usize = 0;
     for (buffer.lines.items) |line| {
         const line_end = std.math.add(usize, line.glyph_start, line.glyph_len) catch
             return false;
-        if (line.glyph_start != previous_end or line_end > glyphs.len) return false;
+        if (line.glyph_start < previous_end or line_end > glyphs.len) return false;
         previous_end = line_end;
     }
 
     const font = run_types.fontForBackend(run);
+    var visual_start: usize = 0;
     for (buffer.lines.items) |*line| {
-        const line_end = line.glyph_start + line.glyph_len;
+        const logical_start = line.glyph_start;
+        const logical_end = logical_start + line.glyph_len;
+        const gap_len = logical_start - visual_start;
+        if (gap_len != 0 and line.glyph_len != 0) {
+            const Glyph = @TypeOf(glyphs[0]);
+            std.mem.rotate(
+                Glyph,
+                glyphs[visual_start..logical_end],
+                gap_len,
+            );
+            const Parallel = @TypeOf(parallel[0]);
+            std.mem.rotate(
+                Parallel,
+                parallel[visual_start..logical_end],
+                gap_len,
+            );
+        }
         bidi.applyPureRtlVisualOrderSlice(
-            glyphs[line.glyph_start..line_end],
+            glyphs[visual_start .. visual_start + line.glyph_len],
             font,
         );
         const Parallel = @TypeOf(parallel[0]);
-        std.mem.reverse(Parallel, parallel[line.glyph_start..line_end]);
+        std.mem.reverse(
+            Parallel,
+            parallel[visual_start .. visual_start + line.glyph_len],
+        );
         // The sole run intersects every non-empty line and remains unchanged
         // globally, so rebuilding an O(glyph_count) ownership map is needless.
+        line.glyph_start = visual_start;
         line.run_start = 0;
         line.run_len = @intFromBool(line.glyph_len != 0);
+        visual_start += line.glyph_len;
     }
     return true;
 }

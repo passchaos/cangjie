@@ -49,7 +49,13 @@ test "pure RTL styled lines keep glyph metadata parallel" {
         );
     }
     try std.testing.expectEqual(@as(usize, 1), layout.runs.len);
+    var visible_glyphs: usize = 0;
     for (layout.lines) |line| {
+        // Wrapped spaces are retained outside the visible ranges. The pure
+        // RTL fast path must compact later lines across those logical gaps in
+        // exactly the same way as the general bidi transaction.
+        try std.testing.expectEqual(visible_glyphs, line.glyph_start);
+        visible_glyphs += line.glyph_len;
         try std.testing.expectEqual(@as(usize, 0), line.run_start);
         try std.testing.expectEqual(@as(usize, 1), line.run_len);
         const glyphs = line.glyphs(layout);
@@ -57,4 +63,5 @@ test "pure RTL styled lines keep glyph metadata parallel" {
             try std.testing.expect(current.cluster <= previous.cluster);
         }
     }
+    try std.testing.expect(visible_glyphs < layout.glyphs.len);
 }

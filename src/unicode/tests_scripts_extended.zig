@@ -81,6 +81,58 @@ test "third Unicode 17 script tranche selects OpenType and bidi primitives" {
     }
 }
 
+test "fourth Unicode 17 script tranche selects OpenType and bidi primitives" {
+    const Case = struct {
+        scalar: u21,
+        script: unicode.Script,
+        tag: unicode.OpenTypeScriptTag,
+        bidi: unicode.BidiClass = .ltr,
+    };
+    const cases = [_]Case{
+        .{ .scalar = 0x104b0, .script = .osage, .tag = .osge },
+        .{ .scalar = 0xaa80, .script = .tai_viet, .tag = .tavt },
+        .{ .scalar = 0x11a00, .script = .zanabazar_square, .tag = .zanb },
+        .{ .scalar = 0x1e100, .script = .nyiakeng_puachue_hmong, .tag = .hmnp },
+        .{ .scalar = 0x10570, .script = .vithkuqi, .tag = .vith },
+        .{ .scalar = 0x10d50, .script = .garay, .tag = .gara, .bidi = .rtl },
+        .{ .scalar = 0x10a10, .script = .kharoshthi, .tag = .khar, .bidi = .rtl },
+        .{ .scalar = 0x11700, .script = .ahom, .tag = .ahom },
+        .{ .scalar = 0x11200, .script = .khojki, .tag = .khoj },
+        .{ .scalar = 0x119a0, .script = .nandinagari, .tag = .nand },
+    };
+    for (cases) |case| {
+        try std.testing.expectEqual(case.script, unicode.scriptForCodepoint(case.scalar));
+        try std.testing.expectEqual(case.tag, unicode.openTypeScriptTag(case.script));
+        try std.testing.expectEqual(case.bidi, unicode.bidiClassForCodepoint(case.scalar));
+    }
+}
+
+test "fifth Unicode 17 script tranche selects OpenType and bidi primitives" {
+    const Case = struct {
+        scalar: u21,
+        script: unicode.Script,
+        tag: unicode.OpenTypeScriptTag,
+        bidi: unicode.BidiClass = .ltr,
+    };
+    const cases = [_]Case{
+        .{ .scalar = 0x104b0, .script = .osage, .tag = .osge },
+        .{ .scalar = 0xaa80, .script = .tai_viet, .tag = .tavt },
+        .{ .scalar = 0x11a00, .script = .zanabazar_square, .tag = .zanb },
+        .{ .scalar = 0x1e100, .script = .nyiakeng_puachue_hmong, .tag = .hmnp },
+        .{ .scalar = 0x10570, .script = .vithkuqi, .tag = .vith },
+        .{ .scalar = 0x10d50, .script = .garay, .tag = .gara, .bidi = .rtl },
+        .{ .scalar = 0x10a10, .script = .kharoshthi, .tag = .khar, .bidi = .rtl },
+        .{ .scalar = 0x11700, .script = .ahom, .tag = .ahom },
+        .{ .scalar = 0x11200, .script = .khojki, .tag = .khoj },
+        .{ .scalar = 0x119a0, .script = .nandinagari, .tag = .nand },
+    };
+    for (cases) |case| {
+        try std.testing.expectEqual(case.script, unicode.scriptForCodepoint(case.scalar));
+        try std.testing.expectEqual(case.tag, unicode.openTypeScriptTag(case.script));
+        try std.testing.expectEqual(case.bidi, unicode.bidiClassForCodepoint(case.scalar));
+    }
+}
+
 test "Tagalog text selects Baybayin script primitives" {
     const allocator = std.testing.allocator;
     const text = "\u{1703}\u{1712}\u{1714} \u{171f}\u{1715}";

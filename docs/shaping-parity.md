@@ -1800,6 +1800,20 @@ shaping-performance superiority.
 
 ## Near-Term Gaps
 
+- The public UTF-8 ranged-GSUB path now accepts variation selectors instead of
+  rejecting the complete request. Supported cmap format-14 sequences fold into
+  the base glyph while preserving the base cluster and full byte extent;
+  unsupported selectors remain GSUB-visible default-ignorables, follow the
+  requested grapheme/character cluster level, and are hidden, replaced by the
+  invisible glyph, or exposed through the not-found-selector diagnostic option
+  after shaping. A focused combined cmap14+GSUB fixture covers all three output
+  policies. Two production-font `f+FE00+i` ranged-feature probes also pass
+  in-process HarfBuzz parity: disabling `liga` on the base range retains three
+  glyphs (`80e2ac1352e1d7ea`), while disabling it only on the selector bytes
+  leaves the base-owned `fi` ligature and yields two glyphs
+  (`534f2ad3a98b676f`). Staged Arabic/Indic/Khmer/Myanmar ranged features remain
+  a separate open item because their authored feature pauses require integration
+  into the main shaper rather than replaying a generic post-pass.
 - Add a library-level HarfRust comparison runner. The `harfbuzz` `shape-bench`
   engine is now in-process, but the current `harfrust` engine remains a batch
   external-process baseline, not a fully fair in-process performance baseline.

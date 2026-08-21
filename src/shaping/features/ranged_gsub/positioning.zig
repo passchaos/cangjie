@@ -13,7 +13,9 @@ const GlyphPosition = @import("../../../layout/glyph_position.zig").GlyphPositio
 const context_output = @import("../../context/output.zig");
 const shaping_plan = @import("../../plan/root.zig");
 const run_metadata = @import("../../run_metadata.zig");
+const source_span = @import("../../pipeline/positioning/source_span.zig");
 const source_buffer = @import("source_buffer.zig");
+const unicode = @import("../../../unicode.zig");
 
 pub fn collect(
     font: *const Font,
@@ -67,10 +69,22 @@ pub fn collect(
         sources.glyph_ids.items.len,
     );
     @memset(sources.attachment_links.items, .{});
+    var output_indices = std.ArrayList(usize).empty;
+    defer output_indices.deinit(allocator);
+    try output_indices.resize(allocator, sources.glyph_ids.items.len);
+    @memset(output_indices.items, std.math.maxInt(usize));
+    var output_links = std.ArrayList(attachment.Link).empty;
+    defer output_links.deinit(allocator);
+    try output_links.ensureTotalCapacity(
+        allocator,
+        sources.glyph_ids.items.len,
+    );
     try layout_buffer.glyphs.ensureUnusedCapacity(
         allocator,
         sources.glyph_ids.items.len,
     );
+    const output_start = layout_buffer.glyphs.items.len;
+    const invisible_glyph_id = try font.glyphIndex(' ');
 
     var adjustment_cursor: usize = 0;
     for (sources.glyph_ids.items, 0..) |glyph_id, index| {
@@ -84,48 +98,119 @@ pub fn collect(
         {
             return error.InvalidShapingInput;
         }
-        const advance_width = try horizontalAdvance(
-            font,
-            metrics_cache,
-            glyph_id,
-            options.normalized_variation_coords,
-        );
         const adjustment = findAdjustment(
             sources.gpos_adjustments.items,
             index,
             &adjustment_cursor,
         );
-        const adjusted_advance: f32 = if (adjustment.x_advance_absolute)
+        const was_substituted = index < sources.glyph_substituted.items.len and
+            sources.glyph_substituted.items[index];
+        const codepoint = sources.codepoints.items[source];
+        const visible_not_found_selector =
+            options.not_found_variation_selector_glyph != null and
+            unicode.isVariationSelector(codepoint) and
+            !was_substituted;
+        const hide_default_ignorable =
+            unicode.isDefaultIgnorableForShaping(codepoint) and
+            !was_substituted and
+            !visible_not_found_selector;
+        if (hide_default_ignorable and
+            (options.remove_default_ignorables or invisible_glyph_id == 0))
+        {
+            continue;
+        }
+        const zero_advance = hide_default_ignorable or
+            visible_not_found_selector;
+        const advance_width = if (zero_advance)
+            0
+        else
+            try horizontalAdvance(
+                font,
+                metrics_cache,
+                glyph_id,
+                options.normalized_variation_coords,
+            );
+        const adjusted_advance: f32 = if (zero_advance)
+            0
+        else if (adjustment.x_advance_absolute)
             @floatFromInt(adjustment.x_advance)
         else
             @floatFromInt(
                 @as(i32, advance_width) +
                     @as(i32, adjustment.x_advance),
             );
+        const cluster_source = if (index < sources.glyph_clusters.items.len)
+            sources.glyph_clusters.items[index]
+        else
+            source;
+        const span = source_span.forGlyph(
+            index,
+            source,
+            cluster_source,
+            sources.source_byte_starts.items,
+            sources.source_byte_ends.items,
+            &sources.ligature_components,
+        ) orelse return error.InvalidShapingInput;
+        const output_index = layout_buffer.glyphs.items.len - output_start;
+        output_indices.items[index] = output_index;
         layout_buffer.glyphs.appendAssumeCapacity(GlyphPosition{
-            .glyph_id = glyph_id,
-            .codepoint = sources.codepoints.items[source],
-            .cluster = sources.source_byte_starts.items[source],
-            .source_byte_len = sources.source_byte_ends.items[source] -
-                sources.source_byte_starts.items[source],
+            .glyph_id = if (hide_default_ignorable)
+                invisible_glyph_id
+            else
+                glyph_id,
+            .synthetic_glyph_id = if (visible_not_found_selector)
+                options.not_found_variation_selector_glyph
+            else
+                null,
+            .codepoint = codepoint,
+            .cluster = span.start,
+            .source_byte_len = span.end - span.start,
             .flags = .{
                 .unsafe_to_break_before = sources.unsafe_glyphs.isUnsafeBefore(index) or
                     sources.source_boundaries.isUnsafeBeforeByte(
-                        sources.source_byte_starts.items[source],
+                        span.start,
                     ),
             },
             .x_advance = adjusted_advance * scale,
-            .y_advance = @as(f32, @floatFromInt(adjustment.y_advance)) * scale,
-            .x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) * scale,
-            .y_offset = (@as(f32, @floatFromInt(adjustment.y_placement)) +
-                @as(f32, @floatFromInt(adjustment.attachment_cross_offset))) * scale,
+            .y_advance = if (zero_advance)
+                0
+            else
+                @as(f32, @floatFromInt(adjustment.y_advance)) * scale,
+            .x_offset = if (zero_advance)
+                0
+            else
+                @as(f32, @floatFromInt(adjustment.x_placement)) * scale,
+            .y_offset = if (zero_advance)
+                0
+            else
+                (@as(f32, @floatFromInt(adjustment.y_placement)) +
+                    @as(f32, @floatFromInt(adjustment.attachment_cross_offset))) * scale,
         });
         sources.attachment_links.items[index] = attachmentLink(adjustment);
+        output_links.appendAssumeCapacity(.{});
+    }
+    for (sources.attachment_links.items, 0..) |link, input_index| {
+        const output_index = output_indices.items[input_index];
+        if (output_index == std.math.maxInt(usize) or
+            output_index >= output_links.items.len)
+        {
+            continue;
+        }
+        const parent = link.parent_index orelse {
+            output_links.items[output_index] = link;
+            continue;
+        };
+        if (parent >= output_indices.items.len) continue;
+        const output_parent = output_indices.items[parent];
+        if (output_parent == std.math.maxInt(usize)) continue;
+        var mapped = link;
+        mapped.parent_index = output_parent;
+        output_links.items[output_index] = mapped;
     }
     attachment.propagateOffsets(
         GlyphPosition,
-        layout_buffer.glyphs.items[layout_buffer.glyphs.items.len - sources.glyph_ids.items.len ..],
-        sources.attachment_links.items,
+        layout_buffer.glyphs.items[output_start..],
+        output_links.items,
         .forward,
         .horizontal,
     );
@@ -137,13 +222,16 @@ pub fn collect(
         const kern = try font_shaping.kernLookupForShaping(
             font,
         );
-        for (layout_buffer.glyphs.items[layout_buffer.glyphs.items.len - sources.glyph_ids.items.len ..], 0..) |*glyph, index| {
+        for (sources.glyph_ids.items, 0..) |glyph_id, index| {
             if (index == 0) continue;
+            const output_index = output_indices.items[index];
+            if (output_index == std.math.maxInt(usize)) continue;
             const value = try kern.kerning(
                 sources.glyph_ids.items[index - 1],
-                sources.glyph_ids.items[index],
+                glyph_id,
             );
-            glyph.x_advance += @as(f32, @floatFromInt(value)) * scale;
+            layout_buffer.glyphs.items[output_start + output_index]
+                .x_advance += @as(f32, @floatFromInt(value)) * scale;
         }
     }
 }

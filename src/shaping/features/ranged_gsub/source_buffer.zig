@@ -10,6 +10,7 @@ const ligature_provenance = @import("../../../ligature_provenance.zig");
 const ranges_mod = @import("ranges.zig");
 const run_metadata = @import("../../run_metadata.zig");
 const cluster_safety = @import("../../cluster_safety.zig");
+const ClusterLevel = @import("../../../shaping_metadata.zig").ClusterLevel;
 const unicode = @import("../../../unicode.zig");
 
 pub const Buffer = struct {
@@ -53,6 +54,7 @@ pub const Buffer = struct {
         glyph_index_cache: ?*GlyphIndexCache,
         allocator: std.mem.Allocator,
         text: []const u8,
+        cluster_level: ?ClusterLevel,
     ) !void {
         self.text_byte_len = text.len;
         try self.glyph_ids.ensureUnusedCapacity(allocator, text.len);
@@ -71,11 +73,50 @@ pub const Buffer = struct {
         while (iterator.i < text.len) {
             const byte_start = iterator.i;
             const codepoint = iterator.nextCodepoint() orelse break;
-            // Variation-selector folding must update source extents and cmap14
-            // identity together. The first ranged API rejects that case rather
-            // than retaining a subtly different cluster contract.
             if (unicode.isVariationSelector(codepoint)) {
-                return error.UnsupportedFeatureRanges;
+                if (self.glyph_ids.items.len == 0) continue;
+                const base_source = self.codepoints.items.len - 1;
+                const variant = try font.variationGlyphIndex(
+                    self.codepoints.items[base_source],
+                    codepoint,
+                );
+                // cmap14 consumes a supported selector into the preceding
+                // source atom. The merged atom still begins at the base byte,
+                // so HarfBuzz-style feature ranges address it by that cluster.
+                if (variant) |glyph_id| {
+                    self.glyph_ids.items[self.glyph_ids.items.len - 1] =
+                        glyph_id;
+                    self.source_byte_ends.items[base_source] = iterator.i;
+                    continue;
+                }
+                // Unsupported selectors remain explicit default-ignorable
+                // GSUB inputs. They own their UTF-8 byte range while sharing
+                // the base cluster at grapheme cluster levels, exactly as the
+                // ordinary shaping source pipeline does.
+                self.source_byte_ends.items[base_source] = iterator.i;
+                const selector_glyph = if (glyph_index_cache) |cache|
+                    try cache.glyphIndex(font, codepoint)
+                else
+                    try font.glyphIndex(codepoint);
+                const source = self.codepoints.items.len;
+                self.glyph_ids.appendAssumeCapacity(selector_glyph);
+                self.codepoints.appendAssumeCapacity(codepoint);
+                self.source_byte_starts.appendAssumeCapacity(byte_start);
+                self.source_byte_ends.appendAssumeCapacity(iterator.i);
+                self.glyph_sources.appendAssumeCapacity(source);
+                self.glyph_clusters.appendAssumeCapacity(
+                    if ((cluster_level == null or
+                        cluster_level.?.groupsGraphemes()) and
+                        self.glyph_clusters.items.len != 0)
+                        self.glyph_clusters.items[
+                            self.glyph_clusters.items.len - 1
+                        ]
+                    else
+                        source,
+                );
+                self.glyph_substituted.appendAssumeCapacity(false);
+                self.ligature_components.infos.appendAssumeCapacity(.{});
+                continue;
             }
             const glyph_id = if (glyph_index_cache) |cache|
                 try cache.glyphIndex(font, codepoint)

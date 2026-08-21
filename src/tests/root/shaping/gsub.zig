@@ -127,6 +127,106 @@ test "applies GSUB feature values by UTF-8 source byte range" {
     );
 }
 
+test "ranged GSUB preserves variation-selector cmap and cluster semantics" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const bytes = try test_font.buildVariationSelectorFeatureGsubTtf(
+        allocator,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+
+    // U+FE0F has a non-default cmap14 mapping for A. Although the range also
+    // covers the selector bytes, the supported sequence is one base-owned
+    // source atom and must not receive the glyph-1 `sups` substitution.
+    const supported = try TextShaper.shapeUtf8WithGsubFeatureRanges(
+        &font,
+        &layout_buffer,
+        "A\xEF\xB8\x8F",
+        20,
+        &.{.{
+            .tag = openTypeTag("sups"),
+            .value = 1,
+            .byte_start = 1,
+            .byte_end = 4,
+        }},
+        .{},
+    );
+    try std.testing.expectEqual(@as(usize, 1), supported.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 3), supported.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(usize, 0), supported.glyphs[0].cluster);
+    try std.testing.expectEqual(@as(usize, 4), supported.glyphs[0].source_byte_len);
+
+    // U+FE00 is unsupported by cmap14. Keep it available to GSUB, then hide
+    // the untouched default-ignorable from output while retaining the base's
+    // full grapheme source extent.
+    const unsupported = try TextShaper.shapeUtf8WithGsubFeatureRanges(
+        &font,
+        &layout_buffer,
+        "A\xEF\xB8\x80",
+        20,
+        &.{.{
+            .tag = openTypeTag("sups"),
+            .value = 1,
+            .byte_start = 0,
+            .byte_end = 1,
+        }},
+        .{},
+    );
+    try std.testing.expectEqual(@as(usize, 1), unsupported.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 2), unsupported.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(usize, 0), unsupported.glyphs[0].cluster);
+    try std.testing.expectEqual(@as(usize, 4), unsupported.glyphs[0].source_byte_len);
+
+    const visible = try TextShaper.shapeUtf8WithGsubFeatureRanges(
+        &font,
+        &layout_buffer,
+        "A\xEF\xB8\x80",
+        20,
+        &.{.{
+            .tag = openTypeTag("sups"),
+            .value = 1,
+            .byte_start = 0,
+            .byte_end = 1,
+        }},
+        .{ .not_found_variation_selector_glyph = 23 },
+    );
+    try std.testing.expectEqual(@as(usize, 2), visible.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 2), visible.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(u32, 23), visible.glyphs[1].outputGlyphId());
+    try std.testing.expectEqual(@as(f32, 0), visible.glyphs[1].x_advance);
+    try std.testing.expectEqual(@as(usize, 0), visible.glyphs[1].cluster);
+    try std.testing.expectEqual(@as(usize, 4), visible.glyphs[1].source_byte_len);
+
+    const character_clusters = try TextShaper.shapeUtf8WithGsubFeatureRanges(
+        &font,
+        &layout_buffer,
+        "A\xEF\xB8\x80",
+        20,
+        &.{.{
+            .tag = openTypeTag("sups"),
+            .value = 1,
+            .byte_start = 1,
+            .byte_end = 4,
+        }},
+        .{
+            .cluster_level = .monotone_characters,
+            .not_found_variation_selector_glyph = 23,
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 2), character_clusters.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 1), character_clusters.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(usize, 0), character_clusters.glyphs[0].cluster);
+    try std.testing.expectEqual(@as(usize, 4), character_clusters.glyphs[0].source_byte_len);
+    try std.testing.expectEqual(@as(u32, 23), character_clusters.glyphs[1].outputGlyphId());
+    try std.testing.expectEqual(@as(usize, 1), character_clusters.glyphs[1].cluster);
+    try std.testing.expectEqual(@as(usize, 3), character_clusters.glyphs[1].source_byte_len);
+}
+
 test "rejects invalid or stage-specific GSUB feature ranges" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

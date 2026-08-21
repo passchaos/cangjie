@@ -1312,6 +1312,20 @@ pub fn buildScriptFeatureGsubTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try scriptFeatureGsubTtfTables(allocator));
 }
 
+pub fn buildVariationSelectorFeatureGsubTtf(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const tables = try scriptFeatureGsubTtfTables(allocator);
+    for (tables) |*table| {
+        if (std.mem.eql(u8, table.tag, "cmap")) {
+            allocator.free(table.data);
+            table.data = try cmapFormat14VariationTable(allocator);
+            break;
+        }
+    }
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
 pub fn buildScriptFeatureGsubVisualTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try scriptFeatureGsubVisualTtfTables(allocator));
 }

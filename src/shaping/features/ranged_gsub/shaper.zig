@@ -96,7 +96,13 @@ fn shapeValidated(
     buffer.clear();
     var sources = source_buffer.Buffer{};
     defer sources.deinit(buffer.allocator);
-    try sources.build(font, glyph_index_cache, buffer.allocator, text);
+    try sources.build(
+        font,
+        glyph_index_cache,
+        buffer.allocator,
+        text,
+        options.cluster_level,
+    );
     try overrides.buildOrdinary(
         buffer.allocator,
         &sources.ordinary_overrides,
@@ -178,7 +184,6 @@ fn validateInput(
     if (options.writing_mode.isVertical() or
         options.direction != .ltr or
         options.script_position != .normal or
-        options.not_found_variation_selector_glyph != null or
         options.context_before.len != 0 or
         options.context_after.len != 0)
     {

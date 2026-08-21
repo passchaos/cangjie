@@ -139,6 +139,7 @@ fn validateRequirements(
     }
     if (!require_source_features and
         !require_source_syllables and
+        run.user_feature == null and
         run.source_codepoints == null)
     {
         return;
@@ -154,11 +155,15 @@ fn validateRequirements(
         run.source_syllables orelse return error.InvalidShapingInput
     else
         &.{};
+    const user_values = if (run.user_feature) |user| user.values else &.{};
     for (sources.items) |source| {
         if (require_source_features and source >= features.len) {
             return error.InvalidShapingInput;
         }
         if (require_source_syllables and source >= syllables.len) {
+            return error.InvalidShapingInput;
+        }
+        if (run.user_feature != null and source >= user_values.len) {
             return error.InvalidShapingInput;
         }
         if (run.source_codepoints) |codepoints| {

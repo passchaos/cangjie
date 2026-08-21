@@ -88,6 +88,33 @@ test "source filtering handles raw tags compact masks and syllables" {
     );
 }
 
+test "user ranges and script candidates independently enable cursors" {
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2, 3 });
+    const half_mask = feature.sourceMaskForTag(0x68616c66).?;
+    const script_candidates = [_]u32{ half_mask, half_mask, 0, 0 };
+    const user_values = [_]u32{ 0, 1, 1, 0 };
+    const user_feature = filtering.UserFeature{
+        .values = &user_values,
+        .tag = 0x68616c66,
+    };
+    const run = filtering.Options{
+        .glyph_source_indices = &sources,
+        .source_features = &script_candidates,
+        .user_feature = &user_feature,
+        .active_source_feature_mask = half_mask,
+    };
+
+    // HarfBuzz applies user masks before the Indic shaper adds candidates. A
+    // ranged zero therefore does not remove source 0's automatic candidate,
+    // while source 2 is admitted by the user range alone.
+    try std.testing.expect(filtering.scriptOrUserFeatureAllowsGlyph(run, 0));
+    try std.testing.expect(filtering.scriptOrUserFeatureAllowsGlyph(run, 1));
+    try std.testing.expect(filtering.scriptOrUserFeatureAllowsGlyph(run, 2));
+    try std.testing.expect(!filtering.scriptOrUserFeatureAllowsGlyph(run, 3));
+}
+
 test "context filtering preserves substituted joiners CGJ and Mongolian FVS rules" {
     const glyphs = [_]u16{ 10, 11, 12 };
     var sources = std.ArrayList(usize).empty;

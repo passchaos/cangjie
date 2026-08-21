@@ -15,6 +15,12 @@ const unicode = @import("../../unicode.zig");
 
 pub const Direction = enum { ltr, rtl };
 
+pub const UserFeature = struct {
+    values: []const u32,
+    tag: u32,
+    value: u32 = 1,
+};
+
 pub const Options = struct {
     script_tag: unicode.OpenTypeScriptTag = .dflt,
     language_tag: unicode.OpenTypeLanguageTag = .dflt,
@@ -40,6 +46,9 @@ pub const Options = struct {
     source_boundaries: ?*cluster_safety.SourceBoundaries = null,
     /// Source-level feature assignment used by ranged and joining features.
     source_features: ?[]const u32 = null,
+    /// User feature-range eligibility, kept independent from script-shaper
+    /// candidate masks. A staged lookup must satisfy both when both are set.
+    user_feature: ?*const UserFeature = null,
     active_source_feature: ?u32 = null,
     active_source_feature_mask: u32 = 0,
     active_feature_value: u32 = 1,

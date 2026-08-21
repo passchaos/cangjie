@@ -211,6 +211,7 @@ fn applyScratchFallback(
     scratch_run.glyph_stage_substituted = null;
     scratch_run.ligature_components = null;
     scratch_run.source_features = null;
+    scratch_run.user_feature = null;
     scratch_run.active_source_feature = null;
     scratch_run.active_source_feature_mask = 0;
     try generic_lookup.apply(

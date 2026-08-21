@@ -6,10 +6,12 @@
 const feature = @import("../feature/root.zig");
 const GlyphId = @import("../../glyph.zig").GlyphId;
 const options = @import("options.zig");
+const shaping_sections = @import("../../shaping_sections.zig");
 const unicode = @import("../../unicode.zig");
 
 pub const Error = error{BadGsub};
 pub const Options = options.Options;
+pub const UserFeature = options.UserFeature;
 
 pub inline fn lookupIgnoresGlyph(
     lookup_flag: u16,
@@ -76,6 +78,29 @@ pub fn sourceFeatureAllowsGlyph(run: Options, glyph_index: usize) bool {
     }
     const active = run.active_source_feature orelse return false;
     return assigned == active;
+}
+
+/// Combine script-shaper candidate eligibility with a user feature value.
+///
+/// Ordinary shaping deliberately keeps calling `sourceFeatureAllowsGlyph` so
+/// adding rare ranged-script support cannot add a branch to every GSUB lookup.
+/// HarfBuzz applies user masks first and lets the Indic shaper add candidate
+/// bits afterward, so either source can enable the lookup cursor; a ranged zero
+/// does not erase an automatic shaper candidate. Contextual inputs continue to
+/// use only lookup visibility rules.
+pub noinline fn scriptOrUserFeatureAllowsGlyph(
+    run: Options,
+    glyph_index: usize,
+) linksection(shaping_sections.isolated_hotpaths) bool {
+    const script_scoped = run.active_source_feature_mask != 0 or
+        run.active_source_feature != null;
+    if (script_scoped and sourceFeatureAllowsGlyph(run, glyph_index)) {
+        return true;
+    }
+    const user = run.user_feature orelse return !script_scoped;
+    const source = sourceForGlyph(run, glyph_index);
+    return source < user.values.len and
+        user.values[source] == user.value;
 }
 
 pub fn sourceCodepointForGlyph(

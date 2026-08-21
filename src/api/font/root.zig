@@ -40,6 +40,7 @@ pub const Type2HintingInstance = font_mod.Type2HintingInstance;
 pub const Type2HintingError = font_mod.Type2HintingError;
 
 pub const GlyphId = glyph.GlyphId;
+pub const GlyphExtents = glyph.Extents;
 pub const Bounds = glyph.Bounds;
 pub const Outline = glyph.GlyphOutline;
 pub const OutlineBuilder = glyph.OutlineBuilder;

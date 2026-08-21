@@ -78,6 +78,25 @@ pub const View = struct {
         );
     }
 
+    /// Return outline extents in HarfBuzz's bearing/width/height convention.
+    pub fn extents(
+        self: View,
+        glyph_id: glyph_mod.GlyphId,
+    ) font_mod.FontError!glyph_mod.Extents {
+        return glyph_mod.extentsForBounds(try self.bounds(glyph_id));
+    }
+
+    pub fn extentsAt(
+        self: View,
+        glyph_id: glyph_mod.GlyphId,
+        normalized_coords: []const f32,
+    ) font_mod.FontError!glyph_mod.Extents {
+        return glyph_mod.extentsForBounds(try self.boundsAt(
+            glyph_id,
+            normalized_coords,
+        ));
+    }
+
     pub fn outline(
         self: View,
         allocator: std.mem.Allocator,
@@ -212,4 +231,33 @@ pub const Session = struct {
             normalized_coords,
         );
     }
+
+    pub fn extents(
+        self: Session,
+        glyph_id: glyph_mod.GlyphId,
+    ) font_mod.FontError!glyph_mod.Extents {
+        return glyph_mod.extentsForBounds(
+            try font_mod.immutable_face_backend.glyphBounds(
+                self.implementation,
+                glyph_id,
+            ),
+        );
+    }
 };
+
+test "glyph extents use HarfBuzz bearing signs" {
+    try std.testing.expectEqual(
+        glyph_mod.Extents{
+            .x_bearing = -10,
+            .y_bearing = 80,
+            .width = 40,
+            .height = -100,
+        },
+        glyph_mod.extentsForBounds(.{
+            .x_min = -10,
+            .y_min = -20,
+            .x_max = 30,
+            .y_max = 80,
+        }),
+    );
+}

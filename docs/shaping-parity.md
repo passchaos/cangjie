@@ -2124,7 +2124,10 @@ shaping-performance superiority.
   expected-output gate because current HarfBuzz returns only the vector's first
   member for non-default coordinates.
 
-  The `shape-bench` now has a `--show-extents` summary surface, and the
+  The public `font.Glyphs.extents`/`extentsAt` and reusable-session extents
+  surface now expose the same bearing/width/negative-height convention used by
+  HarfBuzz, rather than leaving that conversion private to the benchmark.
+  `shape-bench --show-extents` consumes this public boundary. The
   `color-fonts.tests` CBDT and sbix rows are retained against in-process
   HarfBuzz extents (`0,2179,2963,-2789` and `0,1898,2555,-2405`). The HarfRust
   CLI still reports zero color-glyph extents for these rows, so the retained

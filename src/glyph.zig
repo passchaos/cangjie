@@ -14,6 +14,27 @@ pub const Bounds = struct {
     y_max: i16,
 };
 
+/// HarfBuzz-compatible glyph extents in font units.
+///
+/// `x_bearing`/`y_bearing` identify the top-left ink corner in the OpenType
+/// coordinate system; width grows right and height grows down, so ordinary
+/// upright outlines have a negative height.
+pub const Extents = struct {
+    x_bearing: i32,
+    y_bearing: i32,
+    width: i32,
+    height: i32,
+};
+
+pub fn extentsForBounds(bounds: Bounds) Extents {
+    return .{
+        .x_bearing = bounds.x_min,
+        .y_bearing = bounds.y_max,
+        .width = @as(i32, bounds.x_max) - @as(i32, bounds.x_min),
+        .height = @as(i32, bounds.y_min) - @as(i32, bounds.y_max),
+    };
+}
+
 pub const PathCommand = union(enum) {
     move_to: Point,
     line_to: Point,

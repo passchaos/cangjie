@@ -412,7 +412,7 @@ fn glyphExtents(allocator: std.mem.Allocator, font: *const cangjie.font.Face, fo
     const values = try allocator.alloc(i32, glyphs.len * 4);
     for (glyphs, 0..) |glyph, index| {
         const base = index * 4;
-        const bounds = font.glyphs().boundsAt(@intCast(glyph.glyph_id), normalized_variation_coords) catch {
+        const extents = font.glyphs().extentsAt(@intCast(glyph.glyph_id), normalized_variation_coords) catch {
             if (try bitmapGlyphExtents(font, glyph.glyph_id, font_size, values[base..][0..4])) continue;
             values[base + 0] = 0;
             values[base + 1] = 0;
@@ -420,13 +420,13 @@ fn glyphExtents(allocator: std.mem.Allocator, font: *const cangjie.font.Face, fo
             values[base + 3] = 0;
             continue;
         };
-        if (bounds.x_min == bounds.x_max and bounds.y_min == bounds.y_max) {
+        if (extents.width == 0 and extents.height == 0) {
             if (try bitmapGlyphExtents(font, glyph.glyph_id, font_size, values[base..][0..4])) continue;
         }
-        values[base + 0] = bounds.x_min;
-        values[base + 1] = bounds.y_max;
-        values[base + 2] = @as(i32, bounds.x_max) - @as(i32, bounds.x_min);
-        values[base + 3] = @as(i32, bounds.y_min) - @as(i32, bounds.y_max);
+        values[base + 0] = extents.x_bearing;
+        values[base + 1] = extents.y_bearing;
+        values[base + 2] = extents.width;
+        values[base + 3] = extents.height;
     }
     return values;
 }

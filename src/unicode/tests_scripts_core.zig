@@ -573,7 +573,7 @@ test "Kayah Li syllables keep marks and select Kayah Li OpenType script" {
     try std.testing.expectEqual(unicode.OpenTypeScriptTag.kali, unicode.openTypeScriptTag(unicode.scriptForCodepoint(0xa926)));
     try std.testing.expectEqual(unicode.OpenTypeScriptTag.kali, unicode.openTypeScriptTag(unicode.scriptForCodepoint(0xa92f)));
     try std.testing.expectEqual(unicode.BidiClass.ltr, unicode.bidiClassForCodepoint(0xa90a));
-    try std.testing.expectEqual(unicode.BidiClass.ltr, unicode.bidiClassForCodepoint(0xa92e));
+    try std.testing.expectEqual(unicode.BidiClass.neutral, unicode.bidiClassForCodepoint(0xa92e));
 
     const words = try unicode.itemizeWordSegments(allocator, text);
     defer allocator.free(words);

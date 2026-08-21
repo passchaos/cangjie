@@ -9,6 +9,7 @@ test "large Unicode 17 scripts select distinct OpenType primitives" {
         script: unicode.Script,
         tag: unicode.OpenTypeScriptTag,
         reserved: u21,
+        reserved_script: unicode.Script = .unknown,
     };
     const cases = [_]Case{
         .{ .scalar = 0x17000, .script = .tangut, .tag = .tang, .reserved = 0x18dff },
@@ -19,13 +20,13 @@ test "large Unicode 17 scripts select distinct OpenType primitives" {
         .{ .scalar = 0x14400, .script = .anatolian_hieroglyphs, .tag = .hluw, .reserved = 0x14647 },
         .{ .scalar = 0x16fe4, .script = .khitan_small_script, .tag = .kits, .reserved = 0x18cd6 },
         .{ .scalar = 0x10760, .script = .linear_a, .tag = .lina, .reserved = 0x10737 },
-        .{ .scalar = 0x2800, .script = .braille, .tag = .brai, .reserved = 0x2900 },
+        .{ .scalar = 0x2800, .script = .braille, .tag = .brai, .reserved = 0x2900, .reserved_script = .common },
     };
     for (cases) |case| {
         try std.testing.expectEqual(case.script, unicode.scriptForCodepoint(case.scalar));
         try std.testing.expectEqual(case.tag, unicode.openTypeScriptTag(case.script));
         try std.testing.expectEqual(unicode.BidiClass.ltr, unicode.bidiClassForCodepoint(case.scalar));
-        try std.testing.expectEqual(unicode.Script.unknown, unicode.scriptForCodepoint(case.reserved));
+        try std.testing.expectEqual(case.reserved_script, unicode.scriptForCodepoint(case.reserved));
     }
 }
 
@@ -182,6 +183,7 @@ test "seventh Unicode 17 script tranche selects OpenType and bidi primitives" {
         try std.testing.expectEqual(case.script, unicode.scriptForCodepoint(case.scalar));
         try std.testing.expectEqual(case.tag, unicode.openTypeScriptTag(case.script));
         try std.testing.expectEqual(case.bidi, unicode.bidiClassForCodepoint(case.scalar));
+        try std.testing.expectEqual(case.bidi, unicode.openTypeScriptHorizontalDirection(case.tag).?);
         if (case.reserved) |scalar| {
             try std.testing.expectEqual(unicode.Script.unknown, unicode.scriptForCodepoint(scalar));
         }
@@ -194,6 +196,66 @@ test "seventh Unicode 17 script tranche selects OpenType and bidi primitives" {
         try std.testing.expectEqual(@as(usize, 0), words[0].byte_start);
         try std.testing.expectEqual(case.text.len, words[0].byte_len);
     }
+}
+
+test "final Unicode 17 script tranche selects OpenType bidi and word primitives" {
+    const Case = struct {
+        scalar: u21,
+        script: unicode.Script,
+        tag: unicode.OpenTypeScriptTag,
+        text: []const u8,
+        bidi: unicode.BidiClass = .ltr,
+    };
+    const cases = [_]Case{
+        .{ .scalar = 0x0370, .script = .greek, .tag = .grek, .text = "\u{0370}\u{0371}" },
+        .{ .scalar = 0x0900, .script = .devanagari, .tag = .dev2, .text = "\u{0915}\u{0916}" },
+        .{ .scalar = 0x11bc0, .script = .sunuwar, .tag = .sunu, .text = "\u{11bc0}\u{11bc1}" },
+        .{ .scalar = 0x16a40, .script = .mro, .tag = .mroo, .text = "\u{16a40}\u{16a41}" },
+        .{ .scalar = 0x10350, .script = .old_permic, .tag = .perm, .text = "\u{10350}\u{10351}" },
+        .{ .scalar = 0x1e4d0, .script = .nag_mundari, .tag = .nagm, .text = "\u{1e4d0}\u{1e4d1}" },
+        .{ .scalar = 0x10f30, .script = .sogdian, .tag = .sogd, .text = "\u{10f30}\u{10f31}", .bidi = .rtl },
+        .{ .scalar = 0x10500, .script = .elbasan, .tag = .elba, .text = "\u{10500}\u{10501}" },
+        .{ .scalar = 0x10880, .script = .nabataean, .tag = .nbat, .text = "\u{10880}\u{10881}", .bidi = .rtl },
+        .{ .scalar = 0x10f00, .script = .old_sogdian, .tag = .sogo, .text = "\u{10f00}\u{10f01}", .bidi = .rtl },
+        .{ .scalar = 0x10480, .script = .osmanya, .tag = .osma, .text = "\u{10480}\u{10481}" },
+        .{ .scalar = 0x11150, .script = .mahajani, .tag = .mahj, .text = "\u{11150}\u{11151}" },
+        .{ .scalar = 0x11280, .script = .multani, .tag = .mult, .text = "\u{11280}\u{11282}" },
+        .{ .scalar = 0x16ad0, .script = .bassa_vah, .tag = .bass, .text = "\u{16ad0}\u{16ad1}" },
+        .{ .scalar = 0x110d0, .script = .sora_sompeng, .tag = .sora, .text = "\u{110d0}\u{110d1}" },
+        .{ .scalar = 0x1950, .script = .tai_le, .tag = .tale, .text = "\u{1950}\u{1951}" },
+        .{ .scalar = 0x10860, .script = .palmyrene, .tag = .palm, .text = "\u{10860}\u{10861}", .bidi = .rtl },
+        .{ .scalar = 0x1e290, .script = .toto, .tag = .toto, .text = "\u{1e290}\u{1e291}" },
+        .{ .scalar = 0x10b40, .script = .inscriptional_parthian, .tag = .prti, .text = "\u{10b40}\u{10b41}", .bidi = .rtl },
+        .{ .scalar = 0x10280, .script = .lycian, .tag = .lyci, .text = "\u{10280}\u{10281}" },
+        .{ .scalar = 0x10b80, .script = .psalter_pahlavi, .tag = .phlp, .text = "\u{10b80}\u{10b81}", .bidi = .rtl },
+        .{ .scalar = 0x10fb0, .script = .chorasmian, .tag = .chrs, .text = "\u{10fb0}\u{10fb1}", .bidi = .rtl },
+        .{ .scalar = 0x10330, .script = .gothic, .tag = .goth, .text = "\u{10330}\u{10331}" },
+        .{ .scalar = 0x10b60, .script = .inscriptional_pahlavi, .tag = .phli, .text = "\u{10b60}\u{10b61}", .bidi = .rtl },
+        .{ .scalar = 0x10920, .script = .lydian, .tag = .lydi, .text = "\u{10920}\u{10921}", .bidi = .rtl },
+        .{ .scalar = 0x108e0, .script = .hatran, .tag = .hatr, .text = "\u{108e0}\u{108e1}", .bidi = .rtl },
+        .{ .scalar = 0x10f70, .script = .old_uyghur, .tag = .ougr, .text = "\u{10f70}\u{10f71}", .bidi = .rtl },
+        .{ .scalar = 0x10940, .script = .sidetic, .tag = .sidt, .text = "\u{10940}\u{10941}" },
+        .{ .scalar = 0x11ee0, .script = .makasar, .tag = .maka, .text = "\u{11ee0}\u{11ee1}" },
+        .{ .scalar = 0x10fe0, .script = .elymaic, .tag = .elym, .text = "\u{10fe0}\u{10fe1}", .bidi = .rtl },
+    };
+    for (cases) |case| {
+        try std.testing.expectEqual(case.script, unicode.scriptForCodepoint(case.scalar));
+        try std.testing.expectEqual(case.tag, unicode.openTypeScriptTag(case.script));
+        try std.testing.expectEqual(case.bidi, unicode.bidiClassForCodepoint(case.scalar));
+        try std.testing.expectEqual(case.bidi, unicode.openTypeScriptHorizontalDirection(case.tag).?);
+
+        const words = try unicode.itemizeWordSegments(std.testing.allocator, case.text);
+        defer std.testing.allocator.free(words);
+        try std.testing.expectEqual(@as(usize, 1), words.len);
+        try std.testing.expectEqual(case.text.len, words[0].byte_len);
+    }
+
+    // Former whole-block approximations now preserve Common/Inherited scalars
+    // rather than assigning them to the surrounding shaping script.
+    try std.testing.expectEqual(unicode.Script.common, unicode.scriptForCodepoint(0x0374));
+    try std.testing.expectEqual(unicode.Script.inherited, unicode.scriptForCodepoint(0x0951));
+    try std.testing.expectEqual(unicode.Script.devanagari, unicode.scriptForCodepoint(0xa8e0));
+    try std.testing.expectEqual(unicode.Script.devanagari, unicode.scriptForCodepoint(0x11b09));
 }
 
 test "Tagalog text selects Baybayin script primitives" {
@@ -715,7 +777,7 @@ test "Lisu letters select Lisu script primitives" {
 test "Nushu characters select Nushu script and ideographic layout primitives" {
     const allocator = std.testing.allocator;
 
-    const text = "\u{1b170}\u{1b171} \u{1b2ff}";
+    const text = "\u{1b170}\u{1b171} \u{1b2fb}";
     const runs = try unicode.itemizeScriptRuns(allocator, text);
     defer allocator.free(runs);
 
@@ -724,7 +786,7 @@ test "Nushu characters select Nushu script and ideographic layout primitives" {
     try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
     try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
     try std.testing.expectEqual(unicode.OpenTypeScriptTag.nshu, unicode.openTypeScriptTag(unicode.scriptForCodepoint(0x1b170)));
-    try std.testing.expectEqual(unicode.OpenTypeScriptTag.nshu, unicode.openTypeScriptTag(unicode.scriptForCodepoint(0x1b2ff)));
+    try std.testing.expectEqual(unicode.OpenTypeScriptTag.nshu, unicode.openTypeScriptTag(unicode.scriptForCodepoint(0x1b2fb)));
     try std.testing.expectEqual(unicode.BidiClass.ltr, unicode.bidiClassForCodepoint(0x1b170));
 
     const words = try unicode.itemizeWordSegments(allocator, text);
@@ -733,9 +795,9 @@ test "Nushu characters select Nushu script and ideographic layout primitives" {
     try std.testing.expectEqual(@as(usize, 3), words.len);
     try std.testing.expectEqualStrings("\u{1b170}", text[words[0].byte_start..][0..words[0].byte_len]);
     try std.testing.expectEqualStrings("\u{1b171}", text[words[1].byte_start..][0..words[1].byte_len]);
-    try std.testing.expectEqualStrings("\u{1b2ff}", text[words[2].byte_start..][0..words[2].byte_len]);
+    try std.testing.expectEqualStrings("\u{1b2fb}", text[words[2].byte_start..][0..words[2].byte_len]);
 
-    const breaks = try unicode.itemizeLineBreaks(allocator, "\u{1b170}\u{1b171}\u{1b2ff}");
+    const breaks = try unicode.itemizeLineBreaks(allocator, "\u{1b170}\u{1b171}\u{1b2fb}");
     defer allocator.free(breaks);
 
     try std.testing.expectEqual(@as(usize, 3), breaks.len);
@@ -785,7 +847,7 @@ test "Coptic text selects Coptic script primitives across blocks" {
     try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
     try std.testing.expectEqual(unicode.OpenTypeScriptTag.copt, unicode.openTypeScriptTag(unicode.scriptForCodepoint(0x03e2)));
     try std.testing.expectEqual(unicode.OpenTypeScriptTag.copt, unicode.openTypeScriptTag(unicode.scriptForCodepoint(0x2c81)));
-    try std.testing.expectEqual(unicode.OpenTypeScriptTag.copt, unicode.openTypeScriptTag(unicode.scriptForCodepoint(0x102e1)));
+    try std.testing.expectEqual(unicode.OpenTypeScriptTag.dflt, unicode.openTypeScriptTag(unicode.scriptForCodepoint(0x102e1)));
     try std.testing.expectEqual(unicode.BidiClass.ltr, unicode.bidiClassForCodepoint(0x2c81));
 
     const clusters = try unicode.itemizeGraphemeClusters(allocator, text);
@@ -843,7 +905,7 @@ test "Duployan text selects Duployan script primitives" {
     try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
     try std.testing.expectEqual(unicode.OpenTypeScriptTag.dupl, unicode.openTypeScriptTag(unicode.scriptForCodepoint(0x1bc02)));
     try std.testing.expectEqual(unicode.OpenTypeScriptTag.dupl, unicode.openTypeScriptTag(unicode.scriptForCodepoint(0x1bc9f)));
-    try std.testing.expectEqual(unicode.Script.unknown, unicode.scriptForCodepoint(0x1bca0));
+    try std.testing.expectEqual(unicode.Script.common, unicode.scriptForCodepoint(0x1bca0));
     try std.testing.expectEqual(unicode.BidiClass.ltr, unicode.bidiClassForCodepoint(0x1bc02));
 
     const words = try unicode.itemizeWordSegments(allocator, text);

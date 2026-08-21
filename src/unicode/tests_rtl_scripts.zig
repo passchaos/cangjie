@@ -217,7 +217,7 @@ test "Arabic presentation forms keep Arabic script and RTL direction" {
     try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
     try std.testing.expectEqual(unicode.OpenTypeScriptTag.arab, unicode.openTypeScriptTag(unicode.scriptForCodepoint(0xfedf)));
     try std.testing.expectEqual(unicode.BidiClass.rtl, unicode.bidiClassForCodepoint(0xfedf));
-    try std.testing.expectEqual(unicode.Script.unknown, unicode.scriptForCodepoint(0xfeff));
+    try std.testing.expectEqual(unicode.Script.common, unicode.scriptForCodepoint(0xfeff));
     try std.testing.expectEqual(unicode.BidiClass.neutral, unicode.bidiClassForCodepoint(0xfeff));
 }
 
@@ -388,9 +388,9 @@ test "Syriac text selects Syriac script and RTL shaping direction" {
     try std.testing.expectEqual(@as(usize, 0), runs[0].byte_start);
     try std.testing.expectEqual(@as(usize, text.len), runs[0].byte_len);
     try std.testing.expectEqual(unicode.OpenTypeScriptTag.syrc, unicode.openTypeScriptTag(unicode.scriptForCodepoint(0x072b)));
-    try std.testing.expectEqual(unicode.OpenTypeScriptTag.syrc, unicode.openTypeScriptTag(unicode.scriptForCodepoint(0x086d)));
+    try std.testing.expectEqual(unicode.OpenTypeScriptTag.dflt, unicode.openTypeScriptTag(unicode.scriptForCodepoint(0x086d)));
     try std.testing.expectEqual(unicode.BidiClass.rtl, unicode.bidiClassForCodepoint(0x072b));
-    try std.testing.expectEqual(unicode.BidiClass.rtl, unicode.bidiClassForCodepoint(0x086d));
+    try std.testing.expectEqual(unicode.BidiClass.neutral, unicode.bidiClassForCodepoint(0x086d));
 }
 
 test "Syriac words keep pointing marks but exclude native punctuation" {

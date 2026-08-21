@@ -77,9 +77,9 @@ test "detects scripts and itemizes script runs" {
     try std.testing.expectEqual(@as(usize, 5), runs[0].byte_len);
     try std.testing.expectEqual(Script.han, runs[1].script);
     try std.testing.expectEqual(@as(usize, 5), runs[1].byte_start);
-    try std.testing.expectEqual(@as(usize, 6), runs[1].byte_len);
+    try std.testing.expectEqual(@as(usize, 8), runs[1].byte_len);
     try std.testing.expectEqual(Script.arabic, runs[2].script);
-    try std.testing.expectEqual(@as(usize, 11), runs[2].byte_start);
+    try std.testing.expectEqual(@as(usize, 13), runs[2].byte_start);
 
     const combining_runs = try itemizeScriptRuns(allocator, "a\u{0301}ب");
     defer allocator.free(combining_runs);

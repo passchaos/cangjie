@@ -1650,7 +1650,7 @@ per-byte fallback/cache loop.
 
 ## Generated Data And Reproducibility
 
-The deliberately partial shaping-script classifier has a pinned Unicode 17
+The shaping-script classifier has a pinned Unicode 17
 coverage frontier. Verify it against the authoritative Script property with:
 
 ```sh
@@ -1660,10 +1660,17 @@ tools/unicode/script/verify_coverage.py path/to/Scripts.txt
 The manifest lives at `tools/unicode/script/coverage.json`; the expected
 `Scripts.txt` SHA-256 is
 `9f5e50d3abaee7d6ce09480f325c706f485ae3240912527e651954d2d6b035bf`.
-It distinguishes explicitly modeled scripts from remaining gaps instead of
-presenting a hand-maintained enum as complete Unicode coverage. The current
-frontier models 144 of Unicode 17's 174 Script values; generated tests exhaust
-every assigned scalar of the 59 largest recently audited scripts.
+Regenerate the compact runtime table with:
+
+```sh
+tools/unicode/script/generate_data.py \
+  path/to/Scripts.txt src/unicode/script/data.bin
+```
+
+It distinguishes explicitly modeled scripts from gaps rather than inferring
+coverage from a hand-maintained enum. The current frontier models all 174
+Unicode 17 Script values; generated tests exhaust every assigned scalar of
+every script, including Common and Inherited.
 
 The Unicode 17 line-break property blob is generated with:
 

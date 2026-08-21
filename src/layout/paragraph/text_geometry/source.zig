@@ -96,15 +96,29 @@ pub fn ownerForRange(
 
 pub fn collectWordStarts(
     allocator: std.mem.Allocator,
-    text: []const u8,
+    ranges: []const @import("records.zig").SelectionRange,
 ) ![]usize {
     var result = std.ArrayList(usize).empty;
     errdefer result.deinit(allocator);
+    try result.ensureTotalCapacity(allocator, ranges.len);
+    for (ranges) |range| result.appendAssumeCapacity(range.byte_start);
+    return result.toOwnedSlice(allocator);
+}
+
+pub fn collectWordRanges(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+) ![]@import("records.zig").SelectionRange {
+    const SelectionRange = @import("records.zig").SelectionRange;
+    var result = std.ArrayList(SelectionRange).empty;
+    errdefer result.deinit(allocator);
     var iterator = try unicode.wordSegments(text);
     while (iterator.next()) |segment| {
-        if (segment.is_word) {
-            try result.append(allocator, segment.byte_start);
-        }
+        if (!segment.is_word) continue;
+        try result.append(allocator, .{
+            .byte_start = segment.byte_start,
+            .byte_end = segment.byte_start + segment.byte_len,
+        });
     }
     return result.toOwnedSlice(allocator);
 }

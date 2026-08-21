@@ -16,11 +16,13 @@ pub const TextGeometry = struct {
     lines: []records.Line,
     spans: []records.Span,
     graphemes: []records.Grapheme,
+    words: []records.SelectionRange,
     word_starts: []usize,
     visual_caret_stops: []records.VisualCaretStop,
 
     pub fn deinit(self: *TextGeometry) void {
         self.allocator.free(self.word_starts);
+        self.allocator.free(self.words);
         self.allocator.free(self.graphemes);
         self.allocator.free(self.spans);
         self.allocator.free(self.lines);
@@ -62,6 +64,29 @@ pub const TextGeometry = struct {
         range: records.SelectionRange,
     ) selection.Error![]records.SelectionFragment {
         return selection.build(allocator, self.geometryView(), range);
+    }
+
+    /// Resolve the UAX #29 word containing `byte_offset`.
+    ///
+    /// Punctuation and whitespace return null. At a boundary, the word that
+    /// starts at the offset wins; callers can pass the preceding offset when
+    /// they intentionally want the word on the other side. The returned visual
+    /// fragments are allocator-owned because bidi can split one logical word.
+    pub fn wordAt(
+        self: TextGeometry,
+        allocator: std.mem.Allocator,
+        byte_offset: usize,
+    ) !?records.WordGeometry {
+        if (byte_offset > self.source_byte_len) return null;
+        const range = wordRangeAt(self, byte_offset) orelse return null;
+        return .{
+            .range = range,
+            .fragments = try selection.build(
+                allocator,
+                self.geometryView(),
+                range,
+            ),
+        };
     }
 
     pub fn nextVisualCaret(
@@ -123,3 +148,19 @@ pub const TextGeometry = struct {
         };
     }
 };
+
+fn wordRangeAt(
+    geometry: TextGeometry,
+    byte_offset: usize,
+) ?records.SelectionRange {
+    for (geometry.words) |range| {
+        if (byte_offset == range.byte_start or
+            (byte_offset > range.byte_start and byte_offset < range.byte_end) or
+            (byte_offset == range.byte_end and
+                range.byte_end == geometry.source_byte_len))
+        {
+            return range;
+        }
+    }
+    return null;
+}

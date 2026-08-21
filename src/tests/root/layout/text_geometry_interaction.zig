@@ -346,3 +346,57 @@ test "vertical caret navigation clamps preferred x on unequal lines" {
         ) == null,
     );
 }
+
+test "text geometry resolves UAX words and wrapped visual fragments" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const text = "AAA AAA";
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const layout = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&fonts),
+        &layout_buffer,
+        text,
+        20,
+        .{ .max_width = 30 },
+    );
+    var geometry = try paragraph.buildGeometry(
+        allocator,
+        text,
+        layout,
+        .{},
+    );
+    defer geometry.deinit();
+
+    var first = (try geometry.wordAt(allocator, 1)).?;
+    defer first.deinit(allocator);
+    try std.testing.expectEqual(
+        paragraph.TextGeometrySelectionRange{
+            .byte_start = 0,
+            .byte_end = 3,
+        },
+        first.range,
+    );
+    try std.testing.expectEqual(@as(usize, 1), first.fragments.len);
+
+    try std.testing.expect((try geometry.wordAt(allocator, 3)) == null);
+
+    var second = (try geometry.wordAt(allocator, 4)).?;
+    defer second.deinit(allocator);
+    try std.testing.expectEqual(
+        paragraph.TextGeometrySelectionRange{
+            .byte_start = 4,
+            .byte_end = text.len,
+        },
+        second.range,
+    );
+    try std.testing.expectEqual(@as(usize, 1), second.fragments.len);
+    try std.testing.expect(second.fragments[0].line_index >
+        first.fragments[0].line_index);
+    try std.testing.expect((try geometry.wordAt(allocator, text.len + 1)) == null);
+}

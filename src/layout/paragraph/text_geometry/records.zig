@@ -37,6 +37,21 @@ pub const SelectionRange = struct {
     byte_end: usize,
 };
 
+/// One logical word segment and its visual paragraph geometry.
+///
+/// The byte range follows UAX #29 and is always a complete grapheme range. A
+/// bidi word can occupy more than one visual rectangle, so callers receive a
+/// fragment slice rather than a single bounding box.
+pub const WordGeometry = struct {
+    range: SelectionRange,
+    fragments: []SelectionFragment,
+
+    pub fn deinit(self: *WordGeometry, allocator: @import("std").mem.Allocator) void {
+        allocator.free(self.fragments);
+        self.* = undefined;
+    }
+};
+
 /// One physically contiguous selected fragment on a visual line.
 ///
 /// A logical selection can produce several fragments on one line when bidi

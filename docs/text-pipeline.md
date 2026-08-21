@@ -1860,6 +1860,15 @@ Future changes must preserve these rules:
 - Generated Unicode data carries a version and must be updated together with
   its conformance fixture.
 
+`paragraph.TextGeometry.wordAt` now exposes the UAX #29 word-selection
+primitive needed by editor integrations. It returns the exact logical UTF-8
+range plus allocator-owned visual fragments, so wrapped or bidi-discontiguous
+words do not collapse into a misleading bounding box. Punctuation, whitespace,
+out-of-range offsets, and truncated-away words return null. This complements
+the existing affinity-aware caret, hit-test, selection, visual-caret, and
+cross-line navigation surface while keeping editing policy outside the layout
+owner.
+
 ## Next Structural Steps
 
 1. Extend the existing HarfBuzz-compatible shaping-boundary flags only when a

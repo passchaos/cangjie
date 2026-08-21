@@ -68,7 +68,9 @@ fn buildInternal(
     defer allocator.free(source_graphemes);
     const owners = try source.buildOwners(allocator, layout);
     defer allocator.free(owners);
-    const word_start_bytes = try source.collectWordStarts(allocator, text);
+    const words = try source.collectWordRanges(allocator, text);
+    errdefer allocator.free(words);
+    const word_start_bytes = try source.collectWordStarts(allocator, words);
     defer allocator.free(word_start_bytes);
 
     var output_lines = std.ArrayList(types.Line).empty;
@@ -206,6 +208,7 @@ fn buildInternal(
         .lines = owned_lines,
         .spans = owned_spans,
         .graphemes = owned_graphemes,
+        .words = words,
         .word_starts = owned_word_starts,
         .visual_caret_stops = owned_visual_carets,
     };

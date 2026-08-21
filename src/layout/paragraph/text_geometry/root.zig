@@ -9,6 +9,7 @@ pub const CaretPosition = types.CaretPosition;
 pub const CaretGeometry = types.CaretGeometry;
 pub const SelectionRange = types.SelectionRange;
 pub const SelectionFragment = types.SelectionFragment;
+pub const WordGeometry = types.WordGeometry;
 pub const SelectionError = @import("selection.zig").Error;
 pub const VisualCaretStop = types.VisualCaretStop;
 pub const FontRun = types.FontRun;

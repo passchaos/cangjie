@@ -88,6 +88,7 @@ pub const TextGeometryCaretPosition = text_geometry.CaretPosition;
 pub const TextGeometryCaret = text_geometry.CaretGeometry;
 pub const TextGeometrySelectionRange = text_geometry.SelectionRange;
 pub const TextGeometrySelectionFragment = text_geometry.SelectionFragment;
+pub const TextGeometryWord = text_geometry.WordGeometry;
 pub const TextGeometrySelectionError = text_geometry.SelectionError;
 pub const TextGeometryVisualCaretStop = text_geometry.VisualCaretStop;
 

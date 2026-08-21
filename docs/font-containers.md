@@ -315,3 +315,12 @@ drops records that target removed glyphs.
 `preserve_unicode_variation_sequences=false` emits a format-12-only cmap. The
 combined fixture verifies U+0041+FE0F non-default glyph 3 and U+0042+FE0F
 default semantics after reparsing the emitted subset.
+
+COLRv0/CPAL is now an optional preserve-GID subset profile too. When enabled,
+the subset retains only color base records selected by the requested glyph
+set, copies their palette-indexed layer records, and keeps CPAL unchanged;
+unselected color bases disappear while layer GIDs remain stable. Setting
+`preserve_color_layers=false` drops COLR and CPAL together for a monochrome
+program. COLRv1, bitmap strikes, SVG, and VARC remain rejected because their
+recursive paint/image/component closures require separate serializers rather
+than pretending a copied table is a valid subset.

@@ -34,7 +34,6 @@ test "preserve-GID TrueType subset closes compound components" {
     defer allocator.free(source);
     var face = try public.Face.parse(allocator, source);
     defer face.deinit();
-
     var subset = try public.subset.trueTypeAlloc(
         allocator,
         &face,
@@ -99,7 +98,6 @@ test "preserve-GID subset rebuilds retained cmap14 sequences" {
     defer allocator.free(source);
     var face = try public.Face.parse(allocator, source);
     defer face.deinit();
-
     var subset = try public.subset.trueTypeAlloc(
         allocator,
         &face,
@@ -180,7 +178,7 @@ test "preserve-GID TrueType subset validates limits and unsupported profiles" {
         }),
     );
 
-    const color = try test_font.buildColorTtf(allocator);
+    const color = try test_font.buildColorV1Ttf(allocator);
     defer allocator.free(color);
     var color_face = try public.Face.parse(allocator, color);
     defer color_face.deinit();
@@ -188,6 +186,53 @@ test "preserve-GID TrueType subset validates limits and unsupported profiles" {
         error.UnsupportedFontSubset,
         public.subset.trueTypeAlloc(allocator, &color_face, &.{1}, .{}),
     );
+}
+
+test "preserve-GID subset closes COLRv0 layer glyphs" {
+    const allocator = std.testing.allocator;
+    const source = try test_font.buildColorTtf(allocator);
+    defer allocator.free(source);
+    var face = try public.Face.parse(allocator, source);
+    defer face.deinit();
+    const source_layers = try face.color().layers(allocator, 1);
+    defer allocator.free(source_layers);
+    try std.testing.expectEqual(@as(usize, 2), source_layers.len);
+
+    var subset = try public.subset.trueTypeAlloc(
+        allocator,
+        &face,
+        &.{1},
+        .{},
+    );
+    defer subset.deinit();
+    try std.testing.expectEqualSlices(
+        u16,
+        &.{ 0, 1 },
+        subset.retained_glyphs,
+    );
+    var parsed = try public.Face.parse(allocator, subset.program);
+    defer parsed.deinit();
+    const layers = try parsed.color().layers(allocator, 1);
+    defer allocator.free(layers);
+    try std.testing.expectEqual(@as(usize, 2), layers.len);
+    try std.testing.expectEqual(@as(u16, 1), layers[0].glyph_id);
+    try std.testing.expectEqual(@as(u16, 1), layers[1].glyph_id);
+
+    var monochrome = try public.subset.trueTypeAlloc(
+        allocator,
+        &face,
+        &.{1},
+        .{ .preserve_color_layers = false },
+    );
+    defer monochrome.deinit();
+    var monochrome_face = try public.Face.parse(
+        allocator,
+        monochrome.program,
+    );
+    defer monochrome_face.deinit();
+    const no_layers = try monochrome_face.color().layers(allocator, 1);
+    defer allocator.free(no_layers);
+    try std.testing.expectEqual(@as(usize, 0), no_layers.len);
 }
 
 test "preserve-GID TrueType subset is leak free under allocation failure" {

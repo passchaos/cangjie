@@ -35,6 +35,10 @@ pub const Options = struct {
     preserve_variations: bool = true,
     /// Rebuild retained cmap format-14 default/non-default UVS records.
     preserve_unicode_variation_sequences: bool = true,
+    /// Retain COLRv0 base/layer records and close over every referenced layer
+    /// glyph. COLRv1 remains unsupported because its paint graph requires a
+    /// distinct recursive closure and serializer.
+    preserve_color_layers: bool = true,
 };
 
 pub const Result = struct {
@@ -73,12 +77,14 @@ const ModifiedTables = struct {
     cmap: []u8,
     glyf: []u8,
     loca: []u8,
+    colr: ?[]u8,
 
     fn deinit(self: *ModifiedTables) void {
         self.allocator.free(self.head);
         self.allocator.free(self.cmap);
         self.allocator.free(self.glyf);
         self.allocator.free(self.loca);
+        if (self.colr) |colr| self.allocator.free(colr);
         self.* = undefined;
     }
 };
@@ -112,6 +118,11 @@ pub fn trueTypeAlloc(
     const tables = try core.tables(allocator);
     defer allocator.free(tables);
     try validateTableProfile(tables);
+    const has_colr_v0 = try validateColorProfile(
+        face,
+        tables,
+        options.preserve_color_layers,
+    );
     const glyf_info = findTable(tables, "glyf") orelse
         return error.UnsupportedFontSubset;
 
@@ -151,6 +162,21 @@ pub fn trueTypeAlloc(
     var cursor: usize = 0;
     while (cursor < closure.items.len) : (cursor += 1) {
         const glyph_id = closure.items[cursor];
+        if (has_colr_v0) {
+            const layers = try face.color().layers(allocator, glyph_id);
+            defer allocator.free(layers);
+            for (layers) |layer| {
+                if (try retainGlyph(
+                    allocator,
+                    &retained_ids,
+                    retained,
+                    layer.glyph_id,
+                    options,
+                )) {
+                    try closure.append(allocator, layer.glyph_id);
+                }
+            }
+        }
         const glyph_data = try glyphBytes(
             glyf_source,
             glyf_info.offset,
@@ -213,6 +239,7 @@ pub fn trueTypeAlloc(
         retained,
         mappings,
         variation_mappings,
+        has_colr_v0,
         options.max_output_bytes,
     );
     defer modified.deinit();
@@ -223,7 +250,7 @@ pub fn trueTypeAlloc(
     );
     defer payloads.deinit(allocator);
     for (tables) |table| {
-        if (dropTable(table.tag, options.preserve_variations)) continue;
+        if (dropTable(table.tag, options)) continue;
         const data = if (std.mem.eql(u8, &table.tag, "head"))
             modified.head
         else if (std.mem.eql(u8, &table.tag, "cmap"))
@@ -232,6 +259,8 @@ pub fn trueTypeAlloc(
             modified.glyf
         else if (std.mem.eql(u8, &table.tag, "loca"))
             modified.loca
+        else if (std.mem.eql(u8, &table.tag, "COLR"))
+            modified.colr orelse return error.InvalidFontSubset
         else
             (try core.tableData(table.tag)) orelse
                 return error.InvalidFontSubset;
@@ -270,8 +299,9 @@ fn validateOptions(options: Options) !void {
 
 fn validateTableProfile(tables: []const font_mod.FontTableInfo) !void {
     const unsupported = [_][4]u8{
-        "CBDT".*, "CBLC".*, "COLR".*, "EBDT".*, "EBLC".*,
-        "SVG ".*, "VARC".*, "bdat".*, "bloc".*, "sbix".*,
+        "CBDT".*, "CBLC".*, "EBDT".*, "EBLC".*,
+        "SVG ".*, "VARC".*, "bdat".*, "bloc".*,
+        "sbix".*,
     };
     for (unsupported) |tag| {
         if (findTable(tables, &tag) != null) return error.UnsupportedFontSubset;
@@ -286,7 +316,22 @@ fn validateTableProfile(tables: []const font_mod.FontTableInfo) !void {
     }
 }
 
-fn dropTable(tag: [4]u8, preserve_variations: bool) bool {
+fn validateColorProfile(
+    face: *const face_mod.Face,
+    tables: []const font_mod.FontTableInfo,
+    preserve: bool,
+) !bool {
+    if (!preserve or findTable(tables, "COLR") == null) return false;
+    const colr = (try core_api.inspect(face).tableData("COLR".*)) orelse
+        return error.InvalidFontSubset;
+    if (colr.len < 2) return error.InvalidFontSubset;
+    if (try bin.readU16At(colr, 0) != 0) {
+        return error.UnsupportedFontSubset;
+    }
+    return true;
+}
+
+fn dropTable(tag: [4]u8, options: Options) bool {
     // A modified font cannot retain its source digital signature or incremental
     // transfer maps. The latter describe patches against the original bytes.
     if (std.mem.eql(u8, &tag, "DSIG") or
@@ -295,7 +340,13 @@ fn dropTable(tag: [4]u8, preserve_variations: bool) bool {
     {
         return true;
     }
-    if (preserve_variations) return false;
+    if (!options.preserve_color_layers and
+        (std.mem.eql(u8, &tag, "COLR") or
+            std.mem.eql(u8, &tag, "CPAL")))
+    {
+        return true;
+    }
+    if (options.preserve_variations) return false;
     // Dropping the complete variation family turns the emitted program into
     // its default static instance. Never retain gvar/HVAR without fvar (or
     // vice versa): a partial set would expose coordinates with inconsistent
@@ -428,6 +479,7 @@ fn buildModifiedTables(
     retained: []const bool,
     mappings: []const Mapping,
     variation_mappings: []const VariationMapping,
+    has_colr_v0: bool,
     max_output_bytes: usize,
 ) !ModifiedTables {
     const core = core_api.inspect(face);
@@ -482,13 +534,88 @@ fn buildModifiedTables(
     errdefer allocator.free(cmap);
     if (cmap.len > max_output_bytes)
         return error.FontSubsetOutputLimitExceeded;
+    const colr = if (has_colr_v0)
+        try buildColrV0Alloc(allocator, face, retained)
+    else
+        null;
+    errdefer if (colr) |bytes| allocator.free(bytes);
+    if (colr) |bytes| {
+        if (bytes.len > max_output_bytes) {
+            return error.FontSubsetOutputLimitExceeded;
+        }
+    }
     return .{
         .allocator = allocator,
         .head = head,
         .cmap = cmap,
         .glyf = glyf,
         .loca = loca,
+        .colr = colr,
     };
+}
+
+const ColorBase = struct {
+    glyph_id: GlyphId,
+    first_layer: u16,
+    layer_count: u16,
+};
+
+fn buildColrV0Alloc(
+    allocator: std.mem.Allocator,
+    face: *const face_mod.Face,
+    retained: []const bool,
+) ![]u8 {
+    var bases = std.ArrayList(ColorBase).empty;
+    defer bases.deinit(allocator);
+    var layers = std.ArrayList(font_mod.ColorLayer).empty;
+    defer layers.deinit(allocator);
+    for (retained, 0..) |keep, glyph_index| {
+        if (!keep) continue;
+        const glyph_layers = try face.color().layers(
+            allocator,
+            @intCast(glyph_index),
+        );
+        defer allocator.free(glyph_layers);
+        if (glyph_layers.len == 0) continue;
+        if (layers.items.len > std.math.maxInt(u16) or
+            glyph_layers.len > std.math.maxInt(u16) - layers.items.len)
+        {
+            return error.FontSubsetOutputLimitExceeded;
+        }
+        try bases.append(allocator, .{
+            .glyph_id = @intCast(glyph_index),
+            .first_layer = @intCast(layers.items.len),
+            .layer_count = @intCast(glyph_layers.len),
+        });
+        try layers.appendSlice(allocator, glyph_layers);
+    }
+    if (bases.items.len > std.math.maxInt(u16) or
+        layers.items.len > std.math.maxInt(u16))
+    {
+        return error.FontSubsetOutputLimitExceeded;
+    }
+    const base_offset: usize = 14;
+    const layer_offset = try addChecked(base_offset, bases.items.len * 6);
+    const total_len = try addChecked(layer_offset, layers.items.len * 4);
+    const output = try allocator.alloc(u8, total_len);
+    @memset(output, 0);
+    writeU16(output, 0, 0);
+    writeU16(output, 2, @intCast(bases.items.len));
+    writeU32(output, 4, @intCast(base_offset));
+    writeU32(output, 8, @intCast(layer_offset));
+    writeU16(output, 12, @intCast(layers.items.len));
+    for (bases.items, 0..) |base, index| {
+        const offset = base_offset + index * 6;
+        writeU16(output, offset, base.glyph_id);
+        writeU16(output, offset + 2, base.first_layer);
+        writeU16(output, offset + 4, base.layer_count);
+    }
+    for (layers.items, 0..) |layer, index| {
+        const offset = layer_offset + index * 4;
+        writeU16(output, offset, layer.glyph_id);
+        writeU16(output, offset + 2, layer.palette_index);
+    }
+    return output;
 }
 
 fn buildCmapAlloc(

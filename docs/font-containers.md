@@ -321,9 +321,11 @@ the subset retains only color base records selected by the requested glyph
 set, copies their palette-indexed layer records, and keeps CPAL unchanged;
 unselected color bases disappear while layer GIDs remain stable. Setting
 `preserve_color_layers=false` drops COLR and CPAL together for a monochrome
-program. COLRv1, bitmap strikes, SVG, and VARC remain rejected because their
-recursive paint/image/component closures require separate serializers rather
-than pretending a copied table is a valid subset.
+program. COLRv1 preserve-GID subsetting keeps the validated Paint/Layer/clip
+and variation graph at its original offsets while compacting the fixed-width
+BaseGlyphPaintRecord directory; selected roots and every referenced GID remain
+stable. PaintGlyph and PaintColrGlyph targets participate in retained-glyph
+closure. VARC remains rejected pending its own recursive serializer.
 
 Validated SVG glyph documents can be retained independently as well. The
 subset resolves each document covering a retained GID, emits one sorted

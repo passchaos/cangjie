@@ -16,7 +16,7 @@ const types = @import("types.zig");
 /// both Composite children. `visitor.visit` runs after those proofs and before
 /// descendants, so it can safely inspect the complete current record while
 /// retaining its own narrow semantic state.
-fn walk(
+pub fn walk(
     data: []const u8,
     table: types.Table,
     offset: usize,

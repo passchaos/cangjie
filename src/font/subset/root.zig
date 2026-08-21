@@ -11,6 +11,7 @@ const std = @import("std");
 const bin = @import("../../binary.zig");
 const core_api = @import("../../api/font/metadata/core/root.zig");
 const cbdt_subset = @import("cbdt.zig");
+const colr_v1_subset = @import("colr_v1.zig");
 const face_mod = @import("../face/root.zig");
 const compound = @import("../tables/truetype/glyf/compound.zig");
 const font_mod = @import("../../font.zig");
@@ -202,17 +203,40 @@ pub fn trueTypeAlloc(
     while (cursor < closure.items.len) : (cursor += 1) {
         const glyph_id = closure.items[cursor];
         if (has_colr_v0) {
-            const layers = try face.color().layers(allocator, glyph_id);
-            defer allocator.free(layers);
-            for (layers) |layer| {
-                if (try retainGlyph(
+            const colr = (try core.tableData("COLR".*)) orelse
+                return error.InvalidFontSubset;
+            if (try bin.readU16At(colr, 0) == 1) {
+                const references = try colr_v1_subset.referencesAlloc(
                     allocator,
-                    &retained_ids,
-                    retained,
-                    layer.glyph_id,
-                    options,
-                )) {
-                    try closure.append(allocator, layer.glyph_id);
+                    colr,
+                    glyph_id,
+                    maxp.glyph_count,
+                );
+                defer allocator.free(references);
+                for (references) |reference| {
+                    if (try retainGlyph(
+                        allocator,
+                        &retained_ids,
+                        retained,
+                        reference,
+                        options,
+                    )) {
+                        try closure.append(allocator, reference);
+                    }
+                }
+            } else {
+                const layers = try face.color().layers(allocator, glyph_id);
+                defer allocator.free(layers);
+                for (layers) |layer| {
+                    if (try retainGlyph(
+                        allocator,
+                        &retained_ids,
+                        retained,
+                        layer.glyph_id,
+                        options,
+                    )) {
+                        try closure.append(allocator, layer.glyph_id);
+                    }
                 }
             }
         }
@@ -389,7 +413,8 @@ fn validateColorProfile(
     const colr = (try core_api.inspect(face).tableData("COLR".*)) orelse
         return error.InvalidFontSubset;
     if (colr.len < 2) return error.InvalidFontSubset;
-    if (try bin.readU16At(colr, 0) != 0) {
+    const version = try bin.readU16At(colr, 0);
+    if (version != 0 and version != 1) {
         return error.UnsupportedFontSubset;
     }
     return true;
@@ -625,7 +650,7 @@ fn buildModifiedTables(
     if (cmap.len > max_output_bytes)
         return error.FontSubsetOutputLimitExceeded;
     const colr = if (has_colr_v0)
-        try buildColrV0Alloc(allocator, face, retained)
+        try buildColrAlloc(allocator, face, retained)
     else
         null;
     errdefer if (colr) |bytes| allocator.free(bytes);
@@ -899,6 +924,21 @@ const ColorBase = struct {
     first_layer: u16,
     layer_count: u16,
 };
+
+fn buildColrAlloc(
+    allocator: std.mem.Allocator,
+    face: *const face_mod.Face,
+    retained: []const bool,
+) ![]u8 {
+    const source = (try core_api.inspect(face).tableData("COLR".*)) orelse
+        return error.InvalidFontSubset;
+    if (source.len < 2) return error.InvalidFontSubset;
+    return switch (try bin.readU16At(source, 0)) {
+        0 => buildColrV0Alloc(allocator, face, retained),
+        1 => colr_v1_subset.buildAlloc(allocator, source, retained),
+        else => error.UnsupportedFontSubset,
+    };
+}
 
 fn buildColrV0Alloc(
     allocator: std.mem.Allocator,

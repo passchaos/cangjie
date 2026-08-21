@@ -18,6 +18,7 @@ pub const colorLineRange = core.colorLineRange;
 pub const usesVariableColorLine = core.usesVariableColorLine;
 pub const colorStopSize = core.colorStopSize;
 pub const validateGraph = walker.validate;
+pub const walkGraph = walker.walk;
 pub const walkAll = walker.walkAll;
 pub const walkAllWithForbiddenRange = walker.walkAllWithForbiddenRange;
 

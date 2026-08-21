@@ -203,10 +203,13 @@ test "preserve-GID TrueType subset validates limits and unsupported profiles" {
     defer allocator.free(color);
     var color_face = try public.Face.parse(allocator, color);
     defer color_face.deinit();
-    try std.testing.expectError(
-        error.UnsupportedFontSubset,
-        public.subset.trueTypeAlloc(allocator, &color_face, &.{1}, .{}),
+    var color_subset = try public.subset.trueTypeAlloc(
+        allocator,
+        &color_face,
+        &.{1},
+        .{},
     );
+    defer color_subset.deinit();
 }
 
 test "preserve-GID subset rebuilds CBDT PNG strikes" {
@@ -397,6 +400,48 @@ test "preserve-GID subset flattens compound EBDT strikes" {
         mask.data,
     );
     try std.testing.expect((try parsed.color().bitmapData(1, 16)) == null);
+}
+
+test "preserve-GID subset retains COLRv1 paint graphs and referenced glyphs" {
+    const allocator = std.testing.allocator;
+    const Fixture = struct {
+        build: *const fn (std.mem.Allocator) anyerror![]u8,
+        expected_root: std.meta.Tag(public.metadata.color.Paint),
+    };
+    const fixtures = [_]Fixture{
+        .{ .build = test_font.buildColorV1Ttf, .expected_root = .solid },
+        .{ .build = test_font.buildColorV1GlyphTtf, .expected_root = .glyph },
+        .{ .build = test_font.buildColorV1LayersTtf, .expected_root = .layers },
+        .{ .build = test_font.buildColorV1PaintColrGlyphTtf, .expected_root = .glyph },
+    };
+    for (fixtures) |fixture| {
+        const source = try fixture.build(allocator);
+        defer allocator.free(source);
+        var face = try public.Face.parse(allocator, source);
+        defer face.deinit();
+        var subset = try public.subset.trueTypeAlloc(allocator, &face, &.{1}, .{});
+        defer subset.deinit();
+        var parsed = try public.Face.parse(allocator, subset.program);
+        defer parsed.deinit();
+
+        const paint = (try parsed.color().paint(1, &.{})) orelse
+            return error.TestUnexpectedResult;
+        try std.testing.expectEqual(fixture.expected_root, std.meta.activeTag(paint));
+        _ = try parsed.color().paint(0, &.{});
+        // PaintGlyph and PaintColrGlyph references participate in subset
+        // closure even when their glyph has no cmap mapping of its own.
+        switch (paint) {
+            .glyph => |glyph_paint| try std.testing.expect(
+                subset.retained_glyphs[subset.retained_glyphs.len - 1] >=
+                    glyph_paint.glyph_id,
+            ),
+            .colr_glyph => |colr_glyph| try std.testing.expect(
+                subset.retained_glyphs[subset.retained_glyphs.len - 1] >=
+                    colr_glyph.glyph_id,
+            ),
+            else => {},
+        }
+    }
 }
 
 test "preserve-GID subset rebuilds retained SVG documents" {

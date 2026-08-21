@@ -306,3 +306,12 @@ default-instance program can set `preserve_variations=false`; the entire
 coupled variation family is then removed together rather than emitting a
 partially variable font. A focused gvar fixture proves both the retained
 non-default outline and the stripped zero-axis/default-outline result.
+
+The subset cmap builder also retains Unicode variation sequences by default.
+It reconstructs sorted platform-0/encoding-5 format-14 records beside the
+selected format-12 cmap, preserves both default UVS ranges and explicit
+non-default glyph mappings whose resulting GID remains in the closure, and
+drops records that target removed glyphs.
+`preserve_unicode_variation_sequences=false` emits a format-12-only cmap. The
+combined fixture verifies U+0041+FE0F non-default glyph 3 and U+0042+FE0F
+default semantics after reparsing the emitted subset.

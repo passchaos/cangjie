@@ -93,6 +93,47 @@ test "preserve-GID TrueType subset keeps or strips variation families" {
     try std.testing.expectEqual(default, try static_face.glyphs().bounds(1));
 }
 
+test "preserve-GID subset rebuilds retained cmap14 sequences" {
+    const allocator = std.testing.allocator;
+    const source = try test_font.buildVariationSelectorCmapTtf(allocator);
+    defer allocator.free(source);
+    var face = try public.Face.parse(allocator, source);
+    defer face.deinit();
+
+    var subset = try public.subset.trueTypeAlloc(
+        allocator,
+        &face,
+        &.{ 2, 3 },
+        .{},
+    );
+    defer subset.deinit();
+    var parsed = try public.Face.parse(allocator, subset.program);
+    defer parsed.deinit();
+    try std.testing.expectEqual(
+        @as(?public.metadata.core.VariationSequenceKind, .non_default),
+        try parsed.glyphs().variationKind('A', 0xfe0f),
+    );
+    try std.testing.expectEqual(
+        @as(?public.metadata.core.VariationSequenceKind, .default),
+        try parsed.glyphs().variationKind('B', 0xfe0f),
+    );
+    try std.testing.expectEqual(@as(u16, 3), try parsed.glyphs().indexForVariation('A', 0xfe0f));
+
+    var stripped = try public.subset.trueTypeAlloc(
+        allocator,
+        &face,
+        &.{ 2, 3 },
+        .{ .preserve_unicode_variation_sequences = false },
+    );
+    defer stripped.deinit();
+    var stripped_face = try public.Face.parse(allocator, stripped.program);
+    defer stripped_face.deinit();
+    try std.testing.expectEqual(
+        @as(?public.metadata.core.VariationSequenceKind, null),
+        try stripped_face.glyphs().variationKind('A', 0xfe0f),
+    );
+}
+
 test "preserve-GID TrueType subset validates limits and unsupported profiles" {
     const allocator = std.testing.allocator;
     const source = try test_font.buildCompoundPointMatchTtf(allocator);

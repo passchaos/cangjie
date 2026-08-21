@@ -33,6 +33,8 @@ pub const Options = struct {
     /// contract leaves glyph domains stable, so these tables remain valid for
     /// retained glyphs while empty unretained outlines are unreachable by cmap.
     preserve_variations: bool = true,
+    /// Rebuild retained cmap format-14 default/non-default UVS records.
+    preserve_unicode_variation_sequences: bool = true,
 };
 
 pub const Result = struct {
@@ -51,6 +53,13 @@ pub const Result = struct {
 const Mapping = struct {
     codepoint: u21,
     glyph_id: GlyphId,
+};
+
+const VariationMapping = struct {
+    selector: u21,
+    codepoint: u21,
+    glyph_id: GlyphId,
+    kind: font_mod.VariationSequenceKind,
 };
 
 const TablePayload = struct {
@@ -184,6 +193,16 @@ pub fn trueTypeAlloc(
         options.max_cmap_mappings,
     );
     defer allocator.free(mappings);
+    const variation_mappings = if (options.preserve_unicode_variation_sequences)
+        try selectedVariationMappingsAlloc(
+            allocator,
+            face,
+            retained,
+            options.max_cmap_mappings,
+        )
+    else
+        try allocator.alloc(VariationMapping, 0);
+    defer allocator.free(variation_mappings);
 
     var modified = try buildModifiedTables(
         allocator,
@@ -193,6 +212,7 @@ pub fn trueTypeAlloc(
         locations,
         retained,
         mappings,
+        variation_mappings,
         options.max_output_bytes,
     );
     defer modified.deinit();
@@ -356,6 +376,49 @@ fn selectedMappingsAlloc(
     return try mappings.toOwnedSlice(allocator);
 }
 
+fn selectedVariationMappingsAlloc(
+    allocator: std.mem.Allocator,
+    face: *const face_mod.Face,
+    retained: []const bool,
+    max_mappings: usize,
+) ![]VariationMapping {
+    const font = &face.implementation;
+    const selectors = try font.variationSelectors(allocator);
+    defer allocator.free(selectors);
+    var output = std.ArrayList(VariationMapping).empty;
+    errdefer output.deinit(allocator);
+    var scanned: usize = 0;
+    for (selectors) |selector| {
+        const codepoints = try font.variationCodepointsForSelector(
+            allocator,
+            selector,
+        );
+        defer allocator.free(codepoints);
+        for (codepoints) |codepoint| {
+            scanned += 1;
+            if (scanned > max_mappings) {
+                return error.FontSubsetCmapLimitExceeded;
+            }
+            const kind = (try font.variationSequenceKind(
+                codepoint,
+                selector,
+            )) orelse continue;
+            const glyph_id = try font.glyphIndexWithVariation(
+                codepoint,
+                selector,
+            );
+            if (glyph_id >= retained.len or !retained[glyph_id]) continue;
+            try output.append(allocator, .{
+                .selector = selector,
+                .codepoint = codepoint,
+                .glyph_id = glyph_id,
+                .kind = kind,
+            });
+        }
+    }
+    return output.toOwnedSlice(allocator);
+}
+
 fn buildModifiedTables(
     allocator: std.mem.Allocator,
     face: *const face_mod.Face,
@@ -364,6 +427,7 @@ fn buildModifiedTables(
     locations: []const font_mod.GlyphLocationInfo,
     retained: []const bool,
     mappings: []const Mapping,
+    variation_mappings: []const VariationMapping,
     max_output_bytes: usize,
 ) !ModifiedTables {
     const core = core_api.inspect(face);
@@ -410,7 +474,11 @@ fn buildModifiedTables(
     writeU32(loca, locations.len * 4, @intCast(cursor));
     if (cursor != glyf.len) return error.InvalidFontSubset;
 
-    const cmap = try buildCmapAlloc(allocator, mappings);
+    const cmap = try buildCmapAlloc(
+        allocator,
+        mappings,
+        variation_mappings,
+    );
     errdefer allocator.free(cmap);
     if (cmap.len > max_output_bytes)
         return error.FontSubsetOutputLimitExceeded;
@@ -423,7 +491,11 @@ fn buildModifiedTables(
     };
 }
 
-fn buildCmapAlloc(allocator: std.mem.Allocator, mappings: []const Mapping) ![]u8 {
+fn buildCmapAlloc(
+    allocator: std.mem.Allocator,
+    mappings: []const Mapping,
+    variation_mappings: []const VariationMapping,
+) ![]u8 {
     var group_count: usize = 0;
     for (mappings, 0..) |mapping, index| {
         if (index == 0 or
@@ -436,16 +508,31 @@ fn buildCmapAlloc(allocator: std.mem.Allocator, mappings: []const Mapping) ![]u8
     const group_bytes = std.math.mul(usize, group_count, 12) catch
         return error.FontSubsetOutputLimitExceeded;
     const subtable_len = try addChecked(16, group_bytes);
-    const total_len = try addChecked(12, subtable_len);
+    const format14_len = try format14Length(variation_mappings);
+    const encoding_count: usize = if (format14_len == 0) 1 else 2;
+    const directory_len = try addChecked(4, encoding_count * 8);
+    const total_len = try addChecked(
+        try addChecked(directory_len, subtable_len),
+        format14_len,
+    );
     if (total_len > std.math.maxInt(u32) or group_count > std.math.maxInt(u32))
         return error.FontSubsetOutputLimitExceeded;
     const bytes = try allocator.alloc(u8, total_len);
     @memset(bytes, 0);
-    writeU16(bytes, 2, 1);
-    writeU16(bytes, 4, 3);
-    writeU16(bytes, 6, 10);
-    writeU32(bytes, 8, 12);
-    const sub = 12;
+    writeU16(bytes, 2, @intCast(encoding_count));
+    if (format14_len != 0) {
+        writeU16(bytes, 4, 0);
+        writeU16(bytes, 6, 5);
+        writeU32(bytes, 8, @intCast(directory_len + subtable_len));
+        writeU16(bytes, 12, 3);
+        writeU16(bytes, 14, 10);
+        writeU32(bytes, 16, @intCast(directory_len));
+    } else {
+        writeU16(bytes, 4, 3);
+        writeU16(bytes, 6, 10);
+        writeU32(bytes, 8, @intCast(directory_len));
+    }
+    const sub = directory_len;
     writeU16(bytes, sub, 12);
     writeU32(bytes, sub + 4, @intCast(subtable_len));
     writeU32(bytes, sub + 12, @intCast(group_count));
@@ -468,7 +555,98 @@ fn buildCmapAlloc(allocator: std.mem.Allocator, mappings: []const Mapping) ![]u8
         group_index += 1;
         index = end;
     }
+    if (format14_len != 0) {
+        try writeFormat14(
+            bytes[directory_len + subtable_len ..],
+            variation_mappings,
+        );
+    }
     return bytes;
+}
+
+fn format14Length(mappings: []const VariationMapping) !usize {
+    if (mappings.len == 0) return 0;
+    var selector_count: usize = 0;
+    var default_count: usize = 0;
+    var non_default_count: usize = 0;
+    var previous_selector: ?u21 = null;
+    for (mappings) |mapping| {
+        if (previous_selector == null or previous_selector.? != mapping.selector) {
+            selector_count += 1;
+            previous_selector = mapping.selector;
+        }
+        switch (mapping.kind) {
+            .default => default_count += 1,
+            .non_default => non_default_count += 1,
+        }
+    }
+    return try addChecked(
+        try addChecked(10, selector_count * 11),
+        try addChecked(
+            if (default_count == 0) 0 else 4 + default_count * 4,
+            if (non_default_count == 0) 0 else 4 + non_default_count * 5,
+        ),
+    );
+}
+
+fn writeFormat14(bytes: []u8, mappings: []const VariationMapping) !void {
+    const total_len = try format14Length(mappings);
+    if (bytes.len != total_len) return error.InvalidFontSubset;
+    @memset(bytes, 0);
+    writeU16(bytes, 0, 14);
+    writeU32(bytes, 2, @intCast(total_len));
+
+    var selector_count: usize = 0;
+    var index: usize = 0;
+    while (index < mappings.len) {
+        selector_count += 1;
+        const selector = mappings[index].selector;
+        while (index < mappings.len and mappings[index].selector == selector) {
+            index += 1;
+        }
+    }
+    writeU32(bytes, 6, @intCast(selector_count));
+    var payload = 10 + selector_count * 11;
+    index = 0;
+    var record_index: usize = 0;
+    while (index < mappings.len) : (record_index += 1) {
+        const start = index;
+        const selector = mappings[index].selector;
+        while (index < mappings.len and mappings[index].selector == selector) {
+            index += 1;
+        }
+        const record = 10 + record_index * 11;
+        writeU24(bytes, record, selector);
+        var default_count: usize = 0;
+        var non_default_count: usize = 0;
+        for (mappings[start..index]) |mapping| switch (mapping.kind) {
+            .default => default_count += 1,
+            .non_default => non_default_count += 1,
+        };
+        if (default_count != 0) {
+            writeU32(bytes, record + 3, @intCast(payload));
+            writeU32(bytes, payload, @intCast(default_count));
+            payload += 4;
+            for (mappings[start..index]) |mapping| {
+                if (mapping.kind != .default) continue;
+                writeU24(bytes, payload, mapping.codepoint);
+                bytes[payload + 3] = 0;
+                payload += 4;
+            }
+        }
+        if (non_default_count != 0) {
+            writeU32(bytes, record + 7, @intCast(payload));
+            writeU32(bytes, payload, @intCast(non_default_count));
+            payload += 4;
+            for (mappings[start..index]) |mapping| {
+                if (mapping.kind != .non_default) continue;
+                writeU24(bytes, payload, mapping.codepoint);
+                writeU16(bytes, payload + 3, mapping.glyph_id);
+                payload += 5;
+            }
+        }
+    }
+    if (payload != bytes.len) return error.InvalidFontSubset;
 }
 
 fn serializeSfntAlloc(
@@ -563,6 +741,12 @@ fn align4Checked(value: usize) !usize {
 
 fn writeU16(bytes: []u8, offset: usize, value: u16) void {
     std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
+}
+
+fn writeU24(bytes: []u8, offset: usize, value: u32) void {
+    bytes[offset] = @truncate(value >> 16);
+    bytes[offset + 1] = @truncate(value >> 8);
+    bytes[offset + 2] = @truncate(value);
 }
 
 fn writeI16(bytes: []u8, offset: usize, value: i16) void {

@@ -3263,3 +3263,14 @@ shaping-performance superiority.
   and branches improved slightly because its generic shaper does not call the
   new batch API, so the difference is code-layout neutral/noise rather than a
   claimed Latin algorithmic gain.
+- Cached feature-plan traversal now owns the single top-level disabled-lookup
+  check. The contextual record executor no longer repeats the same binary
+  search before dispatching every already-admitted top-level lookup; nested
+  SequenceLookupRecord paths continue to enforce the JSTF disable set in their
+  dedicated executor. Fixed-CPU-30 A/B/B/A counters over two full Devanagari
+  `hi-words` passes reduced retired instructions from `1.0190B/1.0198B` to
+  `1.0155B/1.0160B` (about `0.36%`) and branches from `174.2M/174.4M` to
+  `173.1M/173.2M` (about `0.66%`); cycles fell about `1.2--7.0%` under the
+  active frequency noise. Checksum `c53c50e3c7c8ca3f` was unchanged. Roboto
+  `en-words` retained checksum `ca4dc411c23af197` and improved retired
+  instructions/branches in both candidate passes.

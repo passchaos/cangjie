@@ -688,7 +688,10 @@ const ContextualRecordExecutor = struct {
         options: LookupOptions,
         run_digest_cache: *runtime_prefilter.Cache,
     ) (GsubError || std.mem.Allocator.Error)!void {
-        if (lookup_order.contains(options.disabled_lookups, lookup_index)) return;
+        // Feature-plan and whole-run traversals filter disabled top-level
+        // lookups before invoking this executor. Contextual nested dispatch is
+        // handled by `execution/contextual/nested`, which applies the same JSTF
+        // disable set before it reaches a target lookup.
         return applyLookupWithIndex(
             table,
             lookup_offset,

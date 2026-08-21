@@ -30,7 +30,8 @@ pub fn entry(
     }
     for (plan_entry.lookups, plan_entry.lookup_offsets) |index, offset| {
         if (index >= lookup_count) return error.BadGsub;
-        if (lookup_order.contains(run.disabled_lookups, index)) continue;
+        if (run.disabled_lookups.len != 0 and
+            lookup_order.contains(run.disabled_lookups, index)) continue;
         try Executor.applyLookup(
             view,
             offset,

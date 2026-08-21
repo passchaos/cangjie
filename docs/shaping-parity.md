@@ -3362,3 +3362,11 @@ shaping-performance superiority.
   about `3.0%` in this order, but the broader wall-time samples were noisy, so
   only the retired-work reduction is claimed. Corpus checksum
   `33d837ee98745b5d` remained unchanged.
+- The same prefilter now also selects an unfiltered loop once when
+  `LookupFlag == 0`, instead of repeating an always-false ignore-glyph branch
+  for every glyph. A filtered-mark regression preserves the exceptional path.
+  Fixed-CPU-8 A/B/B/A counters over five Devanagari `hi-words` passes reduced
+  retired instructions from `2.93871B/2.93854B` to
+  `2.93474B/2.93466B` (about `0.14%`); branches stayed effectively flat.
+  Cycles were frequency-bimodal, so no cycle claim is made, and checksum
+  `33d837ee98745b5d` remained unchanged.

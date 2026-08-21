@@ -2,6 +2,7 @@
 
 const std = @import("std");
 
+const axes = @import("../axes.zig");
 const interaction = @import("interaction.zig");
 const records = @import("records.zig");
 const selection = @import("selection.zig");
@@ -107,6 +108,120 @@ pub const TextGeometry = struct {
         y: f32,
     ) ?records.CaretGeometry {
         return interaction.hitTest(self.interactionView(), x, y);
+    }
+
+    pub fn cursorAt(
+        self: TextGeometry,
+        position: records.CaretPosition,
+    ) ?records.Cursor {
+        const resolved = self.caret(position) orelse return null;
+        return .{ .position = resolved.position };
+    }
+
+    pub fn cursorFromPoint(
+        self: TextGeometry,
+        x: f32,
+        y: f32,
+    ) ?records.Cursor {
+        const resolved = self.hitTest(x, y) orelse return null;
+        return .{ .position = resolved.position };
+    }
+
+    pub fn cursorGeometry(
+        self: TextGeometry,
+        cursor: records.Cursor,
+    ) ?records.CaretGeometry {
+        return self.caret(cursor.position);
+    }
+
+    pub fn cursorNextVisual(
+        self: TextGeometry,
+        cursor: records.Cursor,
+    ) ?records.Cursor {
+        const resolved = self.nextVisualCaret(cursor.position) orelse
+            return null;
+        return .{
+            .position = resolved.position,
+            .preferred_inline = cursor.preferred_inline,
+        };
+    }
+
+    pub fn cursorPreviousVisual(
+        self: TextGeometry,
+        cursor: records.Cursor,
+    ) ?records.Cursor {
+        const resolved = self.previousVisualCaret(cursor.position) orelse
+            return null;
+        return .{
+            .position = resolved.position,
+            .preferred_inline = cursor.preferred_inline,
+        };
+    }
+
+    pub fn cursorNextVisualWord(
+        self: TextGeometry,
+        cursor: records.Cursor,
+    ) ?records.Cursor {
+        const resolved = self.nextVisualWord(cursor.position) orelse
+            return null;
+        return .{
+            .position = resolved.position,
+            .preferred_inline = cursor.preferred_inline,
+        };
+    }
+
+    pub fn cursorPreviousVisualWord(
+        self: TextGeometry,
+        cursor: records.Cursor,
+    ) ?records.Cursor {
+        const resolved = self.previousVisualWord(cursor.position) orelse
+            return null;
+        return .{
+            .position = resolved.position,
+            .preferred_inline = cursor.preferred_inline,
+        };
+    }
+
+    pub fn cursorNextLine(
+        self: TextGeometry,
+        cursor: records.Cursor,
+    ) ?records.Cursor {
+        const current = self.caret(cursor.position) orelse return null;
+        const preferred = cursor.preferred_inline orelse
+            axes.inlineCoordinate(
+                self.writing_mode,
+                current.rect.x,
+                current.rect.y,
+            );
+        const resolved = self.nextLineCaret(
+            current.position,
+            preferred,
+        ) orelse return null;
+        return .{
+            .position = resolved.position,
+            .preferred_inline = preferred,
+        };
+    }
+
+    pub fn cursorPreviousLine(
+        self: TextGeometry,
+        cursor: records.Cursor,
+    ) ?records.Cursor {
+        const current = self.caret(cursor.position) orelse return null;
+        const preferred = cursor.preferred_inline orelse
+            axes.inlineCoordinate(
+                self.writing_mode,
+                current.rect.x,
+                current.rect.y,
+            );
+        const resolved = self.previousLineCaret(
+            current.position,
+            preferred,
+        ) orelse return null;
+        return .{
+            .position = resolved.position,
+            .preferred_inline = preferred,
+        };
     }
 
     /// Build allocator-owned visual fragments for one exact logical UTF-8

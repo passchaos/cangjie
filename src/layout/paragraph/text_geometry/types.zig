@@ -7,6 +7,7 @@ pub const Direction = records.Direction;
 pub const Affinity = records.Affinity;
 pub const CaretPosition = records.CaretPosition;
 pub const CaretGeometry = records.CaretGeometry;
+pub const Cursor = records.Cursor;
 pub const SelectionRange = records.SelectionRange;
 pub const SelectionFragment = records.SelectionFragment;
 pub const WordGeometry = records.WordGeometry;

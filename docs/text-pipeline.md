@@ -1880,6 +1880,11 @@ alignment, bounds, and previous/next-on-line relationships. Lines retain
 explicit `none`/`soft`/`hard` break semantics. Platform bridges can therefore
 populate AccessKit, UIA, AT-SPI, or native equivalents without borrowing a
 reusable shaping buffer or reconstructing source ownership from glyph order.
+`TextGeometryCursor` is the corresponding small editor value: it owns a source
+position plus optional preferred inline coordinate, while TextGeometry methods
+resolve geometry and perform visual character, visual word, and cross-line
+movement. Applications no longer need to manually thread affinity and
+preferred-x/y state through the lower-level caret primitives.
 
 ## Next Structural Steps
 

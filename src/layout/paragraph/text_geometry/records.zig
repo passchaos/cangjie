@@ -31,6 +31,17 @@ pub const CaretGeometry = struct {
     rect: paragraph_types.TextRect,
 };
 
+/// Stateful editor cursor over an immutable TextGeometry owner.
+///
+/// The value stores only source position and preferred inline coordinate; all
+/// geometry is resolved against the borrowed owner on demand. Keeping this
+/// small lets applications maintain anchor/focus cursors without copying or
+/// retaining platform-specific accessibility nodes.
+pub const Cursor = struct {
+    position: CaretPosition,
+    preferred_inline: ?f32 = null,
+};
+
 /// Half-open logical UTF-8 source range used by selection geometry.
 pub const SelectionRange = struct {
     byte_start: usize,

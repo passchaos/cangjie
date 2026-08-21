@@ -53,6 +53,15 @@ test "text geometry affinity distinguishes both sides of a soft wrap" {
     try std.testing.expectEqual(@as(usize, 1), downstream.line_index);
     try std.testing.expect(upstream.rect.y < downstream.rect.y);
 
+    const upstream_cursor = geometry.cursorAt(upstream.position).?;
+    const next_cursor = geometry.cursorNextVisual(upstream_cursor).?;
+    try std.testing.expectEqual(downstream.position, next_cursor.position);
+    const line_cursor = geometry.cursorNextLine(upstream_cursor).?;
+    try std.testing.expectEqual(@as(usize, 1), geometry.cursorGeometry(line_cursor).?.line_index);
+    try std.testing.expect(line_cursor.preferred_inline != null);
+    const restored_cursor = geometry.cursorPreviousLine(line_cursor).?;
+    try std.testing.expectEqual(upstream.position, restored_cursor.position);
+
     const second_line_hit = geometry.hitTest(
         downstream.rect.x,
         downstream.rect.y + 1,

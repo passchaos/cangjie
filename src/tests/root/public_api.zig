@@ -138,6 +138,12 @@ test "public facade uses domain names without legacy aliases" {
         @hasField(cangjie.paragraph.TextGeometryWord, "fragments"),
     );
     try std.testing.expect(
+        @hasField(cangjie.paragraph.TextGeometryCursor, "position"),
+    );
+    try std.testing.expect(
+        @hasDecl(cangjie.paragraph.TextGeometry, "cursorNextLine"),
+    );
+    try std.testing.expect(
         @hasField(cangjie.paragraph.TextGeometryAccessibilityRun, "text"),
     );
     try std.testing.expect(

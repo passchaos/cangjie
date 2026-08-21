@@ -7,6 +7,7 @@ pub const Direction = types.Direction;
 pub const Affinity = types.Affinity;
 pub const CaretPosition = types.CaretPosition;
 pub const CaretGeometry = types.CaretGeometry;
+pub const Cursor = types.Cursor;
 pub const SelectionRange = types.SelectionRange;
 pub const SelectionFragment = types.SelectionFragment;
 pub const WordGeometry = types.WordGeometry;

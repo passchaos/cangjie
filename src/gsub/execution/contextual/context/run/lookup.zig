@@ -30,7 +30,7 @@ pub fn apply(
     while (position < glyphs.items.len) {
         var next_position = position + 1;
         defer position = next_position;
-        if (!filtering.sourceFeatureAllowsGlyph(run, position) or
+        if (!filtering.lookupCursorAllowsGlyph(run, position) or
             filtering.lookupIgnoresGlyph(
                 lookup_flag,
                 run,

@@ -62,7 +62,7 @@ pub fn applyParsedAt(
     run: Options,
 ) Error!bool {
     if (position >= glyphs.items.len or
-        !filtering.sourceFeatureAllowsGlyph(run, position))
+        !filtering.lookupCursorAllowsGlyph(run, position))
     {
         return false;
     }

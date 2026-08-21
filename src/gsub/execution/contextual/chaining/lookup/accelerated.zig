@@ -36,7 +36,7 @@ pub fn apply(
         // The union digest is a permissive first-input proof. Exact group and
         // pair indexes below preserve authored subtable order.
         if (!sidecar.chaining_input_digest.mayHave(current)) continue;
-        if (!filtering.sourceFeatureAllowsGlyph(run, position)) continue;
+        if (!filtering.lookupCursorAllowsGlyph(run, position)) continue;
         if (filtering.lookupIgnoresGlyph(lookup_flag, run, current)) continue;
 
         const group = accelerator.index.chaining.find(

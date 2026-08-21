@@ -103,6 +103,16 @@ pub noinline fn scriptOrUserFeatureAllowsGlyph(
         user.values[source] == user.value;
 }
 
+pub inline fn lookupCursorAllowsGlyph(
+    run: Options,
+    glyph_index: usize,
+) bool {
+    if (run.use_user_feature_at_cursor) {
+        return scriptOrUserFeatureAllowsGlyph(run, glyph_index);
+    }
+    return sourceFeatureAllowsGlyph(run, glyph_index);
+}
+
 pub fn sourceCodepointForGlyph(
     run: Options,
     glyph_index: usize,

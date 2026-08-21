@@ -30,7 +30,7 @@ pub fn apply(
     var component_offsets: [model.max_components]usize = undefined;
     var glyph_index: usize = 0;
     while (glyph_index < glyphs.items.len) : (glyph_index += 1) {
-        if (!filtering.sourceFeatureAllowsGlyph(run, glyph_index)) continue;
+        if (!filtering.lookupCursorAllowsGlyph(run, glyph_index)) continue;
         _ = try applyAtWithHeader(
             view,
             subtable_offset,

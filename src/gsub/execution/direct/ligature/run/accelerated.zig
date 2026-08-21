@@ -82,7 +82,7 @@ fn applyKind(
     var component_offsets: [model.max_components]usize = undefined;
     var glyph_index: usize = 0;
     while (glyph_index < glyphs.items.len) : (glyph_index += 1) {
-        if (!filtering.sourceFeatureAllowsGlyph(run, glyph_index)) continue;
+        if (!filtering.lookupCursorAllowsGlyph(run, glyph_index)) continue;
         const first = glyphs.items[glyph_index];
         if (filtering.lookupIgnoresGlyph(lookup_flag, run, first)) continue;
         if (!ligature.first_component_digest.mayHave(first)) continue;

@@ -49,6 +49,10 @@ pub const Options = struct {
     /// User feature-range eligibility, kept independent from script-shaper
     /// candidate masks. A staged lookup must satisfy both when both are set.
     user_feature: ?*const UserFeature = null,
+    /// Rare staged-range execution chooses the union predicate below at lookup
+    /// cursors. Ordinary shaping leaves this false and retains its branch-free
+    /// source-only eligibility path.
+    use_user_feature_at_cursor: bool = false,
     active_source_feature: ?u32 = null,
     active_source_feature_mask: u32 = 0,
     active_feature_value: u32 = 1,

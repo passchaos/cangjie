@@ -95,7 +95,7 @@ fn applyAcceleratedAt(
     run: Options,
 ) Error!void {
     const glyph = glyphs.items[position];
-    if (!filtering.sourceFeatureAllowsGlyph(run, position) or
+    if (!filtering.lookupCursorAllowsGlyph(run, position) or
         filtering.lookupIgnoresGlyph(lookup_flag, run, glyph))
     {
         return;

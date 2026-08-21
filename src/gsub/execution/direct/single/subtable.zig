@@ -53,7 +53,7 @@ pub fn applyWithMatched(
         if (matched) |items| {
             if (items[glyph_index]) continue;
         }
-        if (!filtering.sourceFeatureAllowsGlyph(run, glyph_index)) continue;
+        if (!filtering.lookupCursorAllowsGlyph(run, glyph_index)) continue;
         if (filtering.lookupIgnoresGlyph(lookup_flag, run, glyph.*)) continue;
         const coverage = try table.coverage.index(
             view,

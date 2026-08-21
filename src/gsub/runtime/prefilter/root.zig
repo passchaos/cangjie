@@ -65,7 +65,7 @@ pub fn digest(
 ) GlyphDigest {
     var result = GlyphDigest.empty();
     for (glyphs, 0..) |glyph, glyph_index| {
-        if (!filtering.sourceFeatureAllowsGlyph(run, glyph_index)) continue;
+        if (!filtering.lookupCursorAllowsGlyph(run, glyph_index)) continue;
         if (filtering.lookupIgnoresGlyph(lookup_flag, run, glyph)) continue;
         result.add(glyph);
     }
@@ -133,7 +133,7 @@ fn chainingCoverageLookupMayMatchByScan(
                 subtable_offset,
             ) orelse continue;
         for (glyphs, 0..) |glyph, glyph_index| {
-            if (!filtering.sourceFeatureAllowsGlyph(run, glyph_index)) {
+            if (!filtering.lookupCursorAllowsGlyph(run, glyph_index)) {
                 continue;
             }
             if (filtering.lookupIgnoresGlyph(lookup_flag, run, glyph)) continue;

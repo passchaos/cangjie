@@ -87,7 +87,7 @@ fn applyKind(
 
     var glyph_index: usize = 0;
     while (glyph_index < glyphs.items.len) {
-        if (!filtering.sourceFeatureAllowsGlyph(run, glyph_index) or
+        if (!filtering.lookupCursorAllowsGlyph(run, glyph_index) or
             filtering.lookupIgnoresGlyph(
                 lookup_flag,
                 run,

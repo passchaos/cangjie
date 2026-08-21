@@ -163,7 +163,7 @@ fn eligible(
     run: Options,
 ) bool {
     return position < glyphs.len and
-        filtering.sourceFeatureAllowsGlyph(run, position) and
+        filtering.lookupCursorAllowsGlyph(run, position) and
         !filtering.lookupIgnoresGlyph(
             lookup_flag,
             run,

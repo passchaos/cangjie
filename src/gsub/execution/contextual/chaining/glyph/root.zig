@@ -54,7 +54,7 @@ pub noinline fn at(
     run: Options,
 ) linksection(shaping_sections.isolated_hotpaths) Error!model.ApplyResult {
     if (position >= glyphs.items.len or
-        !filtering.sourceFeatureAllowsGlyph(run, position) or
+        !filtering.lookupCursorAllowsGlyph(run, position) or
         filtering.lookupIgnoresGlyph(
             lookup_flag,
             run,

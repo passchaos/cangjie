@@ -26,7 +26,7 @@ pub fn apply(
     while (position < glyphs.items.len) {
         var next_position = position + 1;
         defer position = next_position;
-        if (!filtering.sourceFeatureAllowsGlyph(run, position)) continue;
+        if (!filtering.lookupCursorAllowsGlyph(run, position)) continue;
         if (filtering.lookupIgnoresGlyph(
             lookup_flag,
             run,

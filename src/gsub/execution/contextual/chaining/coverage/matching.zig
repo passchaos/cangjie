@@ -47,7 +47,7 @@ pub fn full(
     result: *Regions,
 ) Error!bool {
     if (position >= glyphs.len or
-        !filtering.sourceFeatureAllowsGlyph(run, position) or
+        !filtering.lookupCursorAllowsGlyph(run, position) or
         filtering.lookupIgnoresGlyph(lookup_flag, run, glyphs[position]))
     {
         return false;

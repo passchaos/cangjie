@@ -62,7 +62,7 @@ pub fn entries(
     run: Options,
 ) void {
     for (glyphs.items, 0..) |*glyph, glyph_index| {
-        if (!filtering.sourceFeatureAllowsGlyph(run, glyph_index)) continue;
+        if (!filtering.lookupCursorAllowsGlyph(run, glyph_index)) continue;
         if (filtering.lookupIgnoresGlyph(lookup_flag, run, glyph.*)) continue;
         const mapping = entryForGlyph(mappings, glyph.*) orelse continue;
         glyph.* = mapping.to;

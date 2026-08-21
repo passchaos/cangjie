@@ -26,7 +26,7 @@ pub fn applyAt(
     run: Options,
 ) Error!model.ApplyResult {
     if (position >= glyphs.items.len or
-        !filtering.sourceFeatureAllowsGlyph(run, position) or
+        !filtering.lookupCursorAllowsGlyph(run, position) or
         filtering.lookupIgnoresGlyph(
             lookup_flag,
             run,

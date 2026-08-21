@@ -1662,8 +1662,8 @@ The manifest lives at `tools/unicode/script/coverage.json`; the expected
 `9f5e50d3abaee7d6ce09480f325c706f485ae3240912527e651954d2d6b035bf`.
 It distinguishes explicitly modeled scripts from remaining gaps instead of
 presenting a hand-maintained enum as complete Unicode coverage. The current
-frontier models 124 of Unicode 17's 174 Script values; generated tests exhaust
-every assigned scalar of the 39 largest recently audited scripts.
+frontier models 134 of Unicode 17's 174 Script values; generated tests exhaust
+every assigned scalar of the 49 largest recently audited scripts.
 
 The Unicode 17 line-break property blob is generated with:
 

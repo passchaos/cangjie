@@ -136,6 +136,16 @@ pub const Script = enum {
     ahom,
     khojki,
     nandinagari,
+    gunjala_gondi,
+    dogra,
+    wancho,
+    gurung_khema,
+    kirat_rai,
+    pau_cin_hau,
+    cypriot,
+    tai_yo,
+    tolong_siki,
+    caucasian_albanian,
     unknown,
 };
 
@@ -279,6 +289,16 @@ pub fn forCodepoint(codepoint: u21) Script {
     if (ranges.isAhom(codepoint)) return .ahom;
     if (ranges.isKhojki(codepoint)) return .khojki;
     if (ranges.isNandinagari(codepoint)) return .nandinagari;
+    if (ranges.isGunjalaGondi(codepoint)) return .gunjala_gondi;
+    if (ranges.isDogra(codepoint)) return .dogra;
+    if (ranges.isWancho(codepoint)) return .wancho;
+    if (ranges.isGurungKhema(codepoint)) return .gurung_khema;
+    if (ranges.isKiratRai(codepoint)) return .kirat_rai;
+    if (ranges.isPauCinHau(codepoint)) return .pau_cin_hau;
+    if (ranges.isCypriot(codepoint)) return .cypriot;
+    if (ranges.isTaiYo(codepoint)) return .tai_yo;
+    if (ranges.isTolongSiki(codepoint)) return .tolong_siki;
+    if (ranges.isCaucasianAlbanian(codepoint)) return .caucasian_albanian;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
 

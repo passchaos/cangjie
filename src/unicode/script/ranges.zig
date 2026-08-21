@@ -425,6 +425,60 @@ pub fn isNandinagari(codepoint: u21) bool {
         (codepoint >= 0x119da and codepoint <= 0x119e4);
 }
 
+pub fn isGunjalaGondi(codepoint: u21) bool {
+    return (codepoint >= 0x11d60 and codepoint <= 0x11d65) or
+        (codepoint >= 0x11d67 and codepoint <= 0x11d68) or
+        (codepoint >= 0x11d6a and codepoint <= 0x11d8e) or
+        (codepoint >= 0x11d90 and codepoint <= 0x11d91) or
+        (codepoint >= 0x11d93 and codepoint <= 0x11d98) or
+        (codepoint >= 0x11da0 and codepoint <= 0x11da9);
+}
+
+pub fn isDogra(codepoint: u21) bool {
+    return codepoint >= 0x11800 and codepoint <= 0x1183b;
+}
+
+pub fn isWancho(codepoint: u21) bool {
+    return codepoint >= 0x1e2c0 and codepoint <= 0x1e2f9 or
+        codepoint == 0x1e2ff;
+}
+
+pub fn isGurungKhema(codepoint: u21) bool {
+    return codepoint >= 0x16100 and codepoint <= 0x16139;
+}
+
+pub fn isKiratRai(codepoint: u21) bool {
+    return codepoint >= 0x16d40 and codepoint <= 0x16d79;
+}
+
+pub fn isPauCinHau(codepoint: u21) bool {
+    return codepoint >= 0x11ac0 and codepoint <= 0x11af8;
+}
+
+pub fn isCypriot(codepoint: u21) bool {
+    return (codepoint >= 0x10800 and codepoint <= 0x10805) or
+        codepoint == 0x10808 or
+        (codepoint >= 0x1080a and codepoint <= 0x10835) or
+        (codepoint >= 0x10837 and codepoint <= 0x10838) or
+        codepoint == 0x1083c or codepoint == 0x1083f;
+}
+
+pub fn isTaiYo(codepoint: u21) bool {
+    return (codepoint >= 0x1e6c0 and codepoint <= 0x1e6de) or
+        (codepoint >= 0x1e6e0 and codepoint <= 0x1e6f5) or
+        codepoint == 0x1e6fe or codepoint == 0x1e6ff;
+}
+
+pub fn isTolongSiki(codepoint: u21) bool {
+    return (codepoint >= 0x11db0 and codepoint <= 0x11ddb) or
+        (codepoint >= 0x11de0 and codepoint <= 0x11de9);
+}
+
+pub fn isCaucasianAlbanian(codepoint: u21) bool {
+    return (codepoint >= 0x10530 and codepoint <= 0x10563) or
+        codepoint == 0x1056f;
+}
+
 pub fn isPhoenician(codepoint: u21) bool {
     return (codepoint >= 0x10900 and codepoint <= 0x1091b) or
         codepoint == 0x1091f;

@@ -126,6 +126,16 @@ pub const Script = enum {
     masaram_gondi,
     old_turkic,
     dives_akuru,
+    osage,
+    tai_viet,
+    zanabazar_square,
+    nyiakeng_puachue_hmong,
+    vithkuqi,
+    garay,
+    kharoshthi,
+    ahom,
+    khojki,
+    nandinagari,
     unknown,
 };
 
@@ -259,6 +269,16 @@ pub fn forCodepoint(codepoint: u21) Script {
     if (ranges.isMasaramGondi(codepoint)) return .masaram_gondi;
     if (ranges.isOldTurkic(codepoint)) return .old_turkic;
     if (ranges.isDivesAkuru(codepoint)) return .dives_akuru;
+    if (ranges.isOsage(codepoint)) return .osage;
+    if (ranges.isTaiViet(codepoint)) return .tai_viet;
+    if (ranges.isZanabazarSquare(codepoint)) return .zanabazar_square;
+    if (ranges.isNyiakengPuachueHmong(codepoint)) return .nyiakeng_puachue_hmong;
+    if (ranges.isVithkuqi(codepoint)) return .vithkuqi;
+    if (ranges.isGaray(codepoint)) return .garay;
+    if (ranges.isKharoshthi(codepoint)) return .kharoshthi;
+    if (ranges.isAhom(codepoint)) return .ahom;
+    if (ranges.isKhojki(codepoint)) return .khojki;
+    if (ranges.isNandinagari(codepoint)) return .nandinagari;
     if (codepoint >= 0x3040 and codepoint <= 0x309f) return .hiragana;
     if (codepoint >= 0x30a0 and codepoint <= 0x30ff) return .katakana;
 

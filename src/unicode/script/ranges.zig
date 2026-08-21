@@ -358,6 +358,73 @@ pub fn isDivesAkuru(codepoint: u21) bool {
         (codepoint >= 0x11950 and codepoint <= 0x11959);
 }
 
+pub fn isOsage(codepoint: u21) bool {
+    return (codepoint >= 0x104b0 and codepoint <= 0x104d3) or
+        (codepoint >= 0x104d8 and codepoint <= 0x104fb);
+}
+
+pub fn isTaiViet(codepoint: u21) bool {
+    return (codepoint >= 0xaa80 and codepoint <= 0xaac2) or
+        (codepoint >= 0xaadb and codepoint <= 0xaadf);
+}
+
+pub fn isZanabazarSquare(codepoint: u21) bool {
+    return codepoint >= 0x11a00 and codepoint <= 0x11a47;
+}
+
+pub fn isNyiakengPuachueHmong(codepoint: u21) bool {
+    return (codepoint >= 0x1e100 and codepoint <= 0x1e12c) or
+        (codepoint >= 0x1e130 and codepoint <= 0x1e13d) or
+        (codepoint >= 0x1e140 and codepoint <= 0x1e149) or
+        codepoint == 0x1e14e or codepoint == 0x1e14f;
+}
+
+pub fn isVithkuqi(codepoint: u21) bool {
+    return (codepoint >= 0x10570 and codepoint <= 0x1057a) or
+        (codepoint >= 0x1057c and codepoint <= 0x1058a) or
+        (codepoint >= 0x1058c and codepoint <= 0x10592) or
+        (codepoint >= 0x10594 and codepoint <= 0x10595) or
+        (codepoint >= 0x10597 and codepoint <= 0x105a1) or
+        (codepoint >= 0x105a3 and codepoint <= 0x105b1) or
+        (codepoint >= 0x105b3 and codepoint <= 0x105b9) or
+        (codepoint >= 0x105bb and codepoint <= 0x105bc);
+}
+
+pub fn isGaray(codepoint: u21) bool {
+    return (codepoint >= 0x10d40 and codepoint <= 0x10d65) or
+        (codepoint >= 0x10d69 and codepoint <= 0x10d85) or
+        (codepoint >= 0x10d8e and codepoint <= 0x10d8f);
+}
+
+pub fn isKharoshthi(codepoint: u21) bool {
+    return (codepoint >= 0x10a00 and codepoint <= 0x10a03) or
+        (codepoint >= 0x10a05 and codepoint <= 0x10a06) or
+        (codepoint >= 0x10a0c and codepoint <= 0x10a13) or
+        (codepoint >= 0x10a15 and codepoint <= 0x10a17) or
+        (codepoint >= 0x10a19 and codepoint <= 0x10a35) or
+        (codepoint >= 0x10a38 and codepoint <= 0x10a3a) or
+        codepoint == 0x10a3f or
+        (codepoint >= 0x10a40 and codepoint <= 0x10a48) or
+        (codepoint >= 0x10a50 and codepoint <= 0x10a58);
+}
+
+pub fn isAhom(codepoint: u21) bool {
+    return (codepoint >= 0x11700 and codepoint <= 0x1171a) or
+        (codepoint >= 0x1171d and codepoint <= 0x1172b) or
+        (codepoint >= 0x11730 and codepoint <= 0x11746);
+}
+
+pub fn isKhojki(codepoint: u21) bool {
+    return (codepoint >= 0x11200 and codepoint <= 0x11211) or
+        (codepoint >= 0x11213 and codepoint <= 0x11241);
+}
+
+pub fn isNandinagari(codepoint: u21) bool {
+    return (codepoint >= 0x119a0 and codepoint <= 0x119a7) or
+        (codepoint >= 0x119aa and codepoint <= 0x119d7) or
+        (codepoint >= 0x119da and codepoint <= 0x119e4);
+}
+
 pub fn isPhoenician(codepoint: u21) bool {
     return (codepoint >= 0x10900 and codepoint <= 0x1091b) or
         codepoint == 0x1091f;

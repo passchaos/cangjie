@@ -3274,3 +3274,15 @@ shaping-performance superiority.
   active frequency noise. Checksum `c53c50e3c7c8ca3f` was unchanged. Roboto
   `en-words` retained checksum `ca4dc411c23af197` and improved retired
   instructions/branches in both candidate passes.
+- Accelerated chaining class matching now compares its lazily decoded class
+  window directly with the authored class sequence. The old path first copied
+  as many as 192 classes into a stack vector, hashed the vector, and then
+  walked it again with `mem.eql`; direct comparison exits at the first mismatch
+  and materializes no temporary sequence. The implementation stays in the
+  flattened `chaining/class/matching.zig` module rather than adding another
+  nested matcher file. Fixed-CPU-30 A/B/B/A counters over two Devanagari
+  `hi-words` passes reduced retired instructions from `1.0155B/1.0148B` to
+  `1.0152B/1.0148B` and branches from `173.12M/173.01M` to
+  `173.07M/173.00M`; cycles improved about `1.3--1.7%`. Checksum
+  `c53c50e3c7c8ca3f` was unchanged. Roboto `en-words` retained checksum
+  `ca4dc411c23af197` with effectively identical retired work.

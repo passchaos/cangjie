@@ -4,7 +4,6 @@
 //! family at the class-executor level avoids a deep `matching/*` subtree while
 //! preserving the existing direct and prepared entry points.
 
-const std = @import("std");
 const accelerator = @import("../../../../accelerator/root.zig");
 const Options = @import("../../../../runtime/options.zig").Options;
 const class_context = @import("../../../../../opentype/class_context.zig");
@@ -92,31 +91,30 @@ fn acceleratedCandidate(
         rule.lookahead_count,
     )) == null) return false;
 
-    var actual: [window.max_region_glyphs * 3]u16 = undefined;
-    var actual_count: usize = 0;
+    // Classes are already decoded lazily by `Window`. Compare them directly
+    // in authored sequence order instead of materializing a 192-entry stack
+    // vector, hashing it, then walking it again with `mem.eql`.
+    var expected_index: usize = rule.classes_start;
     for (0..backtrack_count) |index| {
-        actual[actual_count] =
+        const actual =
             (try candidate_window.backtrackClassAt(index)) orelse return false;
-        actual_count += 1;
+        if (parsed.classes[expected_index] != actual) return false;
+        expected_index += 1;
     }
     for (1..rule.input_count) |index| {
-        actual[actual_count] =
+        const actual =
             (try candidate_window.inputClassAt(index)) orelse return false;
-        actual_count += 1;
+        if (parsed.classes[expected_index] != actual) return false;
+        expected_index += 1;
     }
     for (0..rule.lookahead_count) |index| {
-        actual[actual_count] = (try candidate_window.lookaheadClassAt(
+        const actual = (try candidate_window.lookaheadClassAt(
             rule.input_count,
             index,
         )) orelse return false;
-        actual_count += 1;
+        if (parsed.classes[expected_index] != actual) return false;
+        expected_index += 1;
     }
-
-    const actual_classes = actual[0..actual_count];
-    if (rule.hash != class_context.sequenceHash(actual_classes)) return false;
-    const expected =
-        parsed.classes[rule.classes_start .. rule.classes_start + actual_count];
-    if (!std.mem.eql(u16, expected, actual_classes)) return false;
 
     result.set(
         candidate_window,

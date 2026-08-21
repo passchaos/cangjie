@@ -344,6 +344,8 @@ format-18 records by embedding its BigGlyphMetrics with every retained image.
 Removed GIDs receive empty offsets without adding a linear index-subtable scan.
 The same path retains raw CBDT formats 1/2/6/7 and normalizes shared-metrics
 format 5 to equivalent bit-aligned format 7.
-`preserve_cbdt_png_strikes=false` drops all CBDT/CBLC strikes together.
-Compound CBDT records and EBDT remain unsupported until their component and
-table serializers are equally strict.
+`preserve_cbdt_png_strikes=false` drops all CBDT/CBLC strikes together. EBDT
+raw formats 1/2/5/6/7 use the same serializer and can be independently dropped
+with `preserve_ebdt_strikes=false`. Compound CBDT/EBDT records remain
+unsupported until their recursive component closure and serializer are equally
+strict.

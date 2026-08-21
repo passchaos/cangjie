@@ -50,6 +50,9 @@ pub const Options = struct {
     /// metrics are embedded into equivalent self-contained formats 7/18.
     /// Compound bitmap images remain outside this bounded profile.
     preserve_cbdt_png_strikes: bool = true,
+    /// Retain standalone EBDT strikes (raw formats 1/2/5/6/7). Rebuilt dense
+    /// indexes leave removed GIDs empty and normalize shared metrics.
+    preserve_ebdt_strikes: bool = true,
 };
 
 pub const Result = struct {
@@ -106,6 +109,8 @@ const ModifiedTables = struct {
     sbix: ?[]u8,
     cbdt: ?[]u8,
     cblc: ?[]u8,
+    ebdt: ?[]u8,
+    eblc: ?[]u8,
 
     fn deinit(self: *ModifiedTables) void {
         self.allocator.free(self.head);
@@ -117,6 +122,8 @@ const ModifiedTables = struct {
         if (self.sbix) |sbix| self.allocator.free(sbix);
         if (self.cbdt) |cbdt| self.allocator.free(cbdt);
         if (self.cblc) |cblc| self.allocator.free(cblc);
+        if (self.ebdt) |ebdt| self.allocator.free(ebdt);
+        if (self.eblc) |eblc| self.allocator.free(eblc);
         self.* = undefined;
     }
 };
@@ -277,6 +284,9 @@ pub fn trueTypeAlloc(
         options.preserve_cbdt_png_strikes and
             findTable(tables, "CBLC") != null and
             findTable(tables, "CBDT") != null,
+        options.preserve_ebdt_strikes and
+            findTable(tables, "EBLC") != null and
+            findTable(tables, "EBDT") != null,
         options.max_output_bytes,
     );
     defer modified.deinit();
@@ -306,6 +316,10 @@ pub fn trueTypeAlloc(
             modified.cbdt orelse return error.InvalidFontSubset
         else if (std.mem.eql(u8, &table.tag, "CBLC"))
             modified.cblc orelse return error.InvalidFontSubset
+        else if (std.mem.eql(u8, &table.tag, "EBDT"))
+            modified.ebdt orelse return error.InvalidFontSubset
+        else if (std.mem.eql(u8, &table.tag, "EBLC"))
+            modified.eblc orelse return error.InvalidFontSubset
         else
             (try core.tableData(table.tag)) orelse
                 return error.InvalidFontSubset;
@@ -346,17 +360,16 @@ fn validateTableProfile(
     tables: []const font_mod.FontTableInfo,
     _: Options,
 ) !void {
-    const unsupported = [_][4]u8{
-        "EBDT".*, "EBLC".*,
-        "VARC".*, "bdat".*,
-        "bloc".*,
-    };
+    const unsupported = [_][4]u8{ "VARC".*, "bdat".*, "bloc".* };
     for (unsupported) |tag| {
         if (findTable(tables, &tag) != null) return error.UnsupportedFontSubset;
     }
     const has_cbdt = findTable(tables, "CBDT") != null;
     const has_cblc = findTable(tables, "CBLC") != null;
     if (has_cbdt != has_cblc) return error.UnsupportedFontSubset;
+    const has_ebdt = findTable(tables, "EBDT") != null;
+    const has_eblc = findTable(tables, "EBLC") != null;
+    if (has_ebdt != has_eblc) return error.UnsupportedFontSubset;
     if (findTable(tables, "glyf") == null or
         findTable(tables, "loca") == null or
         findTable(tables, "head") == null or
@@ -410,6 +423,12 @@ fn dropTable(tag: [4]u8, options: Options) bool {
     if (!options.preserve_cbdt_png_strikes and
         (std.mem.eql(u8, &tag, "CBDT") or
             std.mem.eql(u8, &tag, "CBLC")))
+    {
+        return true;
+    }
+    if (!options.preserve_ebdt_strikes and
+        (std.mem.eql(u8, &tag, "EBDT") or
+            std.mem.eql(u8, &tag, "EBLC")))
     {
         return true;
     }
@@ -550,6 +569,7 @@ fn buildModifiedTables(
     has_svg: bool,
     has_sbix: bool,
     has_cbdt: bool,
+    has_ebdt: bool,
     max_output_bytes: usize,
 ) !ModifiedTables {
     const core = core_api.inspect(face);
@@ -635,7 +655,7 @@ fn buildModifiedTables(
         }
     }
     const cbdt_cblc = if (has_cbdt)
-        try buildCbdtPngAlloc(allocator, face, retained)
+        try buildBitmapDataAlloc(allocator, face, "CBLC".*, "CBDT".*, retained)
     else
         null;
     errdefer if (cbdt_cblc) |pair| {
@@ -643,6 +663,21 @@ fn buildModifiedTables(
         allocator.free(pair.cblc);
     };
     if (cbdt_cblc) |pair| {
+        if (pair.cbdt.len > max_output_bytes or
+            pair.cblc.len > max_output_bytes)
+        {
+            return error.FontSubsetOutputLimitExceeded;
+        }
+    }
+    const ebdt_eblc = if (has_ebdt)
+        try buildBitmapDataAlloc(allocator, face, "EBLC".*, "EBDT".*, retained)
+    else
+        null;
+    errdefer if (ebdt_eblc) |pair| {
+        allocator.free(pair.cbdt);
+        allocator.free(pair.cblc);
+    };
+    if (ebdt_eblc) |pair| {
         if (pair.cbdt.len > max_output_bytes or
             pair.cblc.len > max_output_bytes)
         {
@@ -660,6 +695,8 @@ fn buildModifiedTables(
         .sbix = sbix,
         .cbdt = if (cbdt_cblc) |pair| pair.cbdt else null,
         .cblc = if (cbdt_cblc) |pair| pair.cblc else null,
+        .ebdt = if (ebdt_eblc) |pair| pair.cbdt else null,
+        .eblc = if (ebdt_eblc) |pair| pair.cblc else null,
     };
 }
 
@@ -670,20 +707,22 @@ const SbixImage = struct {
     data: []const u8,
 };
 
-fn buildCbdtPngAlloc(
+fn buildBitmapDataAlloc(
     allocator: std.mem.Allocator,
     face: *const face_mod.Face,
+    comptime location_tag: [4]u8,
+    comptime bitmap_tag: [4]u8,
     retained: []const bool,
 ) !cbdt_subset.Pair {
     const core = core_api.inspect(face);
-    const cblc_data = (try core.tableData("CBLC".*)) orelse
+    const location_data = (try core.tableData(location_tag)) orelse
         return error.InvalidFontSubset;
-    const cbdt_data = (try core.tableData("CBDT".*)) orelse
+    const bitmap_data = (try core.tableData(bitmap_tag)) orelse
         return error.InvalidFontSubset;
     return cbdt_subset.buildAlloc(
         allocator,
-        cblc_data,
-        cbdt_data,
+        location_data,
+        bitmap_data,
         retained,
     );
 }

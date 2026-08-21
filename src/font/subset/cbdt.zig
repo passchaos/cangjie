@@ -1,4 +1,4 @@
-//! Bounded preserve-GID serialization for standalone CBDT strikes.
+//! Bounded preserve-GID serialization for standalone CBDT/EBDT strikes.
 //!
 //! Image formats 5 and 19 store shared metrics in CBLC. The subset normalizes
 //! those records to self-contained formats 7 and 18, allowing every retained
@@ -31,12 +31,12 @@ const Strike = struct {
 
 pub fn buildAlloc(
     allocator: std.mem.Allocator,
-    cblc_data: []const u8,
-    cbdt_data: []const u8,
+    location_data: []const u8,
+    bitmap_data: []const u8,
     retained: []const bool,
 ) !Pair {
-    const location_table = bitmap.Table{ .offset = 0, .length = cblc_data.len };
-    const strike_count = try bitmap.cblc.strikeCount(cblc_data, location_table);
+    const location_table = bitmap.Table{ .offset = 0, .length = location_data.len };
+    const strike_count = try bitmap.cblc.strikeCount(location_data, location_table);
     const strikes = try allocator.alloc(Strike, strike_count);
     var built: usize = 0;
     defer {
@@ -46,7 +46,7 @@ pub fn buildAlloc(
 
     for (strikes, 0..) |*output, strike_index| {
         const strike = try bitmap.cblc.strike(
-            cblc_data,
+            location_data,
             location_table,
             @intCast(retained.len),
             strike_index,
@@ -59,15 +59,15 @@ pub fn buildAlloc(
         for (retained, 0..) |keep, glyph_index| {
             if (!keep) continue;
             const location = (try bitmap.cblc.glyphLocationInStrike(
-                cblc_data,
+                location_data,
                 strike,
                 @intCast(glyph_index),
             )) orelse continue;
             if (!supportedImageFormat(location.image_format)) {
                 return error.UnsupportedFontSubset;
             }
-            if (location.offset > cbdt_data.len or
-                location.length > cbdt_data.len - location.offset)
+            if (location.offset > bitmap_data.len or
+                location.length > bitmap_data.len - location.offset)
             {
                 return error.InvalidFontSubset;
             }
@@ -101,7 +101,7 @@ pub fn buildAlloc(
             }
             @memcpy(
                 image[prefix_len..],
-                cbdt_data[location.offset .. location.offset + location.length],
+                bitmap_data[location.offset .. location.offset + location.length],
             );
             output.images[glyph_index] = image;
         }

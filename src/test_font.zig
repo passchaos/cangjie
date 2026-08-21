@@ -856,6 +856,17 @@ pub fn buildSbixDupePngTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try sbixDupePngTtfTables(allocator));
 }
 
+pub fn buildOutlineSbixDupePngTtf(allocator: std.mem.Allocator) ![]u8 {
+    const base = try sbixDupePngTtfTables(allocator);
+    const tables = try allocator.alloc(Table, base.len + 2);
+    errdefer allocator.free(tables);
+    @memcpy(tables[0..base.len], base);
+    allocator.free(base);
+    tables[base.len] = .{ .tag = "glyf", .data = try glyfTable(allocator) };
+    tables[base.len + 1] = .{ .tag = "loca", .data = try locaTable(allocator) };
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
 pub fn buildEbdtBitmapTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try ebdtBitmapTtfTables(allocator));
 }

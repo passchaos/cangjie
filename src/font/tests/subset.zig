@@ -220,6 +220,42 @@ test "preserve-GID subset rebuilds retained SVG documents" {
     try std.testing.expect((try stripped_face.color().svg(allocator, 1)) == null);
 }
 
+test "preserve-GID subset rebuilds retained sbix strikes" {
+    const allocator = std.testing.allocator;
+    const source = try test_font.buildOutlineSbixDupePngTtf(allocator);
+    defer allocator.free(source);
+    var face = try public.Face.parse(allocator, source);
+    defer face.deinit();
+
+    var subset = try public.subset.trueTypeAlloc(
+        allocator,
+        &face,
+        &.{1},
+        .{},
+    );
+    defer subset.deinit();
+    var parsed = try public.Face.parse(allocator, subset.program);
+    defer parsed.deinit();
+    const image = (try parsed.color().bitmapData(1, 16)).?;
+    switch (image) {
+        .png => |png| try std.testing.expect(png.data.len != 0),
+        else => return error.TestExpectedEqual,
+    }
+
+    var stripped = try public.subset.trueTypeAlloc(
+        allocator,
+        &face,
+        &.{1},
+        .{ .preserve_sbix_strikes = false },
+    );
+    defer stripped.deinit();
+    var stripped_face = try public.Face.parse(allocator, stripped.program);
+    defer stripped_face.deinit();
+    try std.testing.expect(
+        (try stripped_face.color().bitmapData(1, 16)) == null,
+    );
+}
+
 test "preserve-GID subset closes COLRv0 layer glyphs" {
     const allocator = std.testing.allocator;
     const source = try test_font.buildColorTtf(allocator);

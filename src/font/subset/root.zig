@@ -42,6 +42,9 @@ pub const Options = struct {
     /// Retain validated SVG documents that cover retained glyph IDs. Documents
     /// are emitted as one-glyph records so removed IDs are never advertised.
     preserve_svg_documents: bool = true,
+    /// Retain Apple sbix PNG strikes. Location-table CBDT/EBDT families remain
+    /// unsupported until their index-subtable rewrite is implemented.
+    preserve_sbix_strikes: bool = true,
 };
 
 pub const Result = struct {
@@ -82,6 +85,7 @@ const ModifiedTables = struct {
     loca: []u8,
     colr: ?[]u8,
     svg: ?[]u8,
+    sbix: ?[]u8,
 
     fn deinit(self: *ModifiedTables) void {
         self.allocator.free(self.head);
@@ -90,6 +94,7 @@ const ModifiedTables = struct {
         self.allocator.free(self.loca);
         if (self.colr) |colr| self.allocator.free(colr);
         if (self.svg) |svg| self.allocator.free(svg);
+        if (self.sbix) |sbix| self.allocator.free(sbix);
         self.* = undefined;
     }
 };
@@ -246,6 +251,7 @@ pub fn trueTypeAlloc(
         variation_mappings,
         has_colr_v0,
         options.preserve_svg_documents and findTable(tables, "SVG ") != null,
+        options.preserve_sbix_strikes and findTable(tables, "sbix") != null,
         options.max_output_bytes,
     );
     defer modified.deinit();
@@ -269,6 +275,8 @@ pub fn trueTypeAlloc(
             modified.colr orelse return error.InvalidFontSubset
         else if (std.mem.eql(u8, &table.tag, "SVG "))
             modified.svg orelse return error.InvalidFontSubset
+        else if (std.mem.eql(u8, &table.tag, "sbix"))
+            modified.sbix orelse return error.InvalidFontSubset
         else
             (try core.tableData(table.tag)) orelse
                 return error.InvalidFontSubset;
@@ -308,7 +316,7 @@ fn validateOptions(options: Options) !void {
 fn validateTableProfile(tables: []const font_mod.FontTableInfo) !void {
     const unsupported = [_][4]u8{
         "CBDT".*, "CBLC".*, "EBDT".*, "EBLC".*,
-        "VARC".*, "bdat".*, "bloc".*, "sbix".*,
+        "VARC".*, "bdat".*, "bloc".*,
     };
     for (unsupported) |tag| {
         if (findTable(tables, &tag) != null) return error.UnsupportedFontSubset;
@@ -355,6 +363,11 @@ fn dropTable(tag: [4]u8, options: Options) bool {
     }
     if (!options.preserve_svg_documents and
         std.mem.eql(u8, &tag, "SVG "))
+    {
+        return true;
+    }
+    if (!options.preserve_sbix_strikes and
+        std.mem.eql(u8, &tag, "sbix"))
     {
         return true;
     }
@@ -493,6 +506,7 @@ fn buildModifiedTables(
     variation_mappings: []const VariationMapping,
     has_colr_v0: bool,
     has_svg: bool,
+    has_sbix: bool,
     max_output_bytes: usize,
 ) !ModifiedTables {
     const core = core_api.inspect(face);
@@ -567,6 +581,16 @@ fn buildModifiedTables(
             return error.FontSubsetOutputLimitExceeded;
         }
     }
+    const sbix = if (has_sbix)
+        try buildSbixAlloc(allocator, face, retained)
+    else
+        null;
+    errdefer if (sbix) |bytes| allocator.free(bytes);
+    if (sbix) |bytes| {
+        if (bytes.len > max_output_bytes) {
+            return error.FontSubsetOutputLimitExceeded;
+        }
+    }
     return .{
         .allocator = allocator,
         .head = head,
@@ -575,7 +599,102 @@ fn buildModifiedTables(
         .loca = loca,
         .colr = colr,
         .svg = svg,
+        .sbix = sbix,
     };
+}
+
+const SbixImage = struct {
+    glyph_id: GlyphId,
+    origin_x: i16,
+    origin_y: i16,
+    data: []const u8,
+};
+
+fn buildSbixAlloc(
+    allocator: std.mem.Allocator,
+    face: *const face_mod.Face,
+    retained: []const bool,
+) ![]u8 {
+    const strikes = try face.color().bitmapStrikes(allocator);
+    defer allocator.free(strikes);
+    const strike_images = try allocator.alloc(
+        std.ArrayList(SbixImage),
+        strikes.len,
+    );
+    defer {
+        for (strike_images) |*images| {
+            for (images.items) |image| allocator.free(image.data);
+            images.deinit(allocator);
+        }
+        allocator.free(strike_images);
+    }
+    for (strike_images) |*images| images.* = .empty;
+    for (strikes, strike_images) |strike, *images| {
+        if (strike.source != .sbix) return error.UnsupportedFontSubset;
+        for (retained, 0..) |keep, glyph_index| {
+            if (!keep) continue;
+            const data = (try face.color().bitmapData(
+                @intCast(glyph_index),
+                @floatFromInt(strike.ppem),
+            )) orelse continue;
+            const png = switch (data) {
+                .png => |image| image,
+                else => return error.UnsupportedFontSubset,
+            };
+            if (png.source != .sbix) return error.UnsupportedFontSubset;
+            const owned = try allocator.dupe(u8, png.data);
+            errdefer allocator.free(owned);
+            try images.append(allocator, .{
+                .glyph_id = @intCast(glyph_index),
+                .origin_x = png.origin_offset_x,
+                .origin_y = png.origin_offset_y,
+                .data = owned,
+            });
+        }
+    }
+    const glyph_count = face.properties().glyph_count;
+    const header_len = try addChecked(8, strikes.len * 4);
+    var total_len = header_len;
+    for (strike_images) |images| {
+        total_len = try addChecked(total_len, 4 + (@as(usize, glyph_count) + 1) * 4);
+        for (images.items) |image| total_len = try addChecked(total_len, 8 + image.data.len);
+    }
+    const output = try allocator.alloc(u8, total_len);
+    @memset(output, 0);
+    writeU16(output, 0, 1);
+    writeU32(output, 4, @intCast(strikes.len));
+    var cursor = header_len;
+    for (strikes, strike_images, 0..) |strike, images, strike_index| {
+        writeU32(output, 8 + strike_index * 4, @intCast(cursor));
+        const strike_start = cursor;
+        writeU16(output, cursor, strike.ppem);
+        writeU16(output, cursor + 2, strike.ppi);
+        cursor += 4 + (@as(usize, glyph_count) + 1) * 4;
+        var image_index: usize = 0;
+        for (0..glyph_count) |glyph_index| {
+            writeU32(
+                output,
+                strike_start + 4 + glyph_index * 4,
+                @intCast(cursor - strike_start),
+            );
+            if (image_index >= images.items.len or
+                images.items[image_index].glyph_id != glyph_index) continue;
+            const image = images.items[image_index];
+            writeI16(output, cursor, image.origin_x);
+            writeI16(output, cursor + 2, image.origin_y);
+            @memcpy(output[cursor + 4 .. cursor + 8], "png ");
+            @memcpy(output[cursor + 8 ..][0..image.data.len], image.data);
+            cursor += 8 + image.data.len;
+            image_index += 1;
+        }
+        writeU32(
+            output,
+            strike_start + 4 + @as(usize, glyph_count) * 4,
+            @intCast(cursor - strike_start),
+        );
+    }
+    if (cursor != output.len) return error.InvalidFontSubset;
+    return output;
 }
 
 const SvgRecord = struct {

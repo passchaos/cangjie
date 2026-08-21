@@ -331,3 +331,11 @@ single-glyph SVG record, and writes resolved gzip content as ordinary validated
 XML. This avoids keeping a source record range that still advertises removed
 glyphs. `preserve_svg_documents=false` drops the table; bitmap strikes and
 VARC remain explicitly unsupported pending their own closure/rewrite logic.
+
+Outline-backed sbix PNG strikes now have a preserve-GID subset path as well.
+Every authored strike is rebuilt with the original ppem/ppi, a complete
+glyph-count offset array, and direct PNG records only for retained glyphs;
+resolved `dupe` records become self-contained images, so removed target GIDs
+cannot leave dangling strike references. `preserve_sbix_strikes=false` drops
+the table. CBDT/EBDT location/index pairs remain unsupported until their
+multiple index-subtable formats receive an equally strict rewrite.

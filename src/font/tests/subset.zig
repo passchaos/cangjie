@@ -444,6 +444,49 @@ test "preserve-GID subset retains COLRv1 paint graphs and referenced glyphs" {
     }
 }
 
+test "preserve-GID subset retains VARC component closure and variation data" {
+    const allocator = std.testing.allocator;
+    const Fixture = struct {
+        build: *const fn (std.mem.Allocator) anyerror![]u8,
+        coords: []const f32,
+    };
+    const fixtures = [_]Fixture{
+        .{ .build = test_font.buildVarcTtf, .coords = &.{} },
+        .{ .build = test_font.buildVarcTransformTtf, .coords = &.{0.75} },
+        .{ .build = test_font.buildVarcHvarTtf, .coords = &.{0.5} },
+    };
+    for (fixtures) |fixture| {
+        const source = try fixture.build(allocator);
+        defer allocator.free(source);
+        var face = try public.Face.parse(allocator, source);
+        defer face.deinit();
+        var subset = try public.subset.trueTypeAlloc(allocator, &face, &.{0}, .{});
+        defer subset.deinit();
+        var parsed = try public.Face.parse(allocator, subset.program);
+        defer parsed.deinit();
+        const metadata = public.metadata.variations.inspect(&parsed);
+        const info = (try metadata.compositeVariations(allocator)) orelse
+            return error.TestUnexpectedResult;
+        defer metadata.freeCompositeVariations(allocator, info);
+        try std.testing.expectEqual(@as(usize, 2), info.glyphs.len);
+        var outline = try parsed.glyphs().outlineAt(allocator, 0, fixture.coords);
+        defer outline.deinit();
+        _ = outline.commands.items.len;
+
+        var stripped = try public.subset.trueTypeAlloc(
+            allocator,
+            &face,
+            &.{0},
+            .{ .preserve_varc = false },
+        );
+        defer stripped.deinit();
+        var stripped_face = try public.Face.parse(allocator, stripped.program);
+        defer stripped_face.deinit();
+        try std.testing.expect((try public.metadata.variations
+            .inspect(&stripped_face).compositeVariations(allocator)) == null);
+    }
+}
+
 test "preserve-GID subset rebuilds retained SVG documents" {
     const allocator = std.testing.allocator;
     const source = try test_font.buildSvgTtf(allocator);

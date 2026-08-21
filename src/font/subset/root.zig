@@ -16,6 +16,7 @@ const face_mod = @import("../face/root.zig");
 const compound = @import("../tables/truetype/glyf/compound.zig");
 const font_mod = @import("../../font.zig");
 const glyph_mod = @import("../../glyph.zig");
+const varc_mod = @import("../../opentype/varc.zig");
 
 pub const GlyphId = glyph_mod.GlyphId;
 
@@ -54,6 +55,9 @@ pub const Options = struct {
     /// Retain standalone EBDT strikes (raw formats 1/2/5/6/7). Rebuilt dense
     /// indexes leave removed GIDs empty and normalize shared metrics.
     preserve_ebdt_strikes: bool = true,
+    /// Retain validated VARC bytes. Preserve-GID output leaves every internal
+    /// table domain valid; recursive component GIDs join retained closure.
+    preserve_varc: bool = true,
 };
 
 pub const Result = struct {
@@ -202,6 +206,42 @@ pub fn trueTypeAlloc(
     var cursor: usize = 0;
     while (cursor < closure.items.len) : (cursor += 1) {
         const glyph_id = closure.items[cursor];
+        if (options.preserve_varc and findTable(tables, "VARC") != null) {
+            const varc = (try core.tableData("VARC".*)) orelse
+                return error.InvalidFontSubset;
+            if (try varc_mod.glyphCoverageIndex(
+                varc,
+                0,
+                varc.len,
+                maxp.glyph_count,
+                glyph_id,
+            )) |coverage_index| {
+                const components = try varc_mod.glyphComponents(
+                    allocator,
+                    varc,
+                    0,
+                    varc.len,
+                    maxp.glyph_count,
+                    coverage_index,
+                );
+                defer allocator.free(components);
+                for (components) |component| {
+                    if (component.glyph_id >= maxp.glyph_count) {
+                        return error.InvalidFontSubset;
+                    }
+                    const child: GlyphId = @intCast(component.glyph_id);
+                    if (try retainGlyph(
+                        allocator,
+                        &retained_ids,
+                        retained,
+                        child,
+                        options,
+                    )) {
+                        try closure.append(allocator, child);
+                    }
+                }
+            }
+        }
         if (has_colr_v0) {
             const colr = (try core.tableData("COLR".*)) orelse
                 return error.InvalidFontSubset;
@@ -384,7 +424,7 @@ fn validateTableProfile(
     tables: []const font_mod.FontTableInfo,
     _: Options,
 ) !void {
-    const unsupported = [_][4]u8{ "VARC".*, "bdat".*, "bloc".* };
+    const unsupported = [_][4]u8{ "bdat".*, "bloc".* };
     for (unsupported) |tag| {
         if (findTable(tables, &tag) != null) return error.UnsupportedFontSubset;
     }
@@ -455,6 +495,9 @@ fn dropTable(tag: [4]u8, options: Options) bool {
         (std.mem.eql(u8, &tag, "EBDT") or
             std.mem.eql(u8, &tag, "EBLC")))
     {
+        return true;
+    }
+    if (!options.preserve_varc and std.mem.eql(u8, &tag, "VARC")) {
         return true;
     }
     if (options.preserve_variations) return false;

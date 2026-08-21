@@ -325,14 +325,16 @@ program. COLRv1 preserve-GID subsetting keeps the validated Paint/Layer/clip
 and variation graph at its original offsets while compacting the fixed-width
 BaseGlyphPaintRecord directory; selected roots and every referenced GID remain
 stable. PaintGlyph and PaintColrGlyph targets participate in retained-glyph
-closure. VARC remains rejected pending its own recursive serializer.
+closure. VARC is retained without rewriting its validated
+coverage/INDEX2/condition/variation data because the subset preserves the full
+GID domain; recursive component GIDs participate in the same closure.
+`preserve_varc=false` drops VARC explicitly.
 
 Validated SVG glyph documents can be retained independently as well. The
 subset resolves each document covering a retained GID, emits one sorted
 single-glyph SVG record, and writes resolved gzip content as ordinary validated
 XML. This avoids keeping a source record range that still advertises removed
-glyphs. `preserve_svg_documents=false` drops the table; VARC remains
-explicitly unsupported pending its own closure/rewrite logic.
+glyphs. `preserve_svg_documents=false` drops the table.
 
 Outline-backed sbix PNG strikes now have a preserve-GID subset path as well.
 Every authored strike is rebuilt with the original ppem/ppi, a complete

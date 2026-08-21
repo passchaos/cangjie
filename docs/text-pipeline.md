@@ -1870,7 +1870,9 @@ cross-line navigation surface while keeping editing policy outside the layout
 owner. `nextVisualWord` and `previousVisualWord` reuse the same physical caret
 topology and retained UAX #29 ranges, skipping punctuation/whitespace while
 following rendered mixed-bidi and wrapped-line order rather than assuming that
-UTF-8 offsets increase visually.
+UTF-8 offsets increase visually. `nextLogicalWord` and `previousLogicalWord`
+provide the complementary source-order movement, with paragraph-edge fallback
+and truncation-aware skipping of words that have no final geometry.
 
 ## Next Structural Steps
 

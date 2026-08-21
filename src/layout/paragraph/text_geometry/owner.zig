@@ -79,13 +79,17 @@ pub const TextGeometry = struct {
     ) !?records.WordGeometry {
         if (byte_offset > self.source_byte_len) return null;
         const range = wordRangeAt(self, byte_offset) orelse return null;
+        const fragments = selection.build(
+            allocator,
+            self.geometryView(),
+            range,
+        ) catch |err| switch (err) {
+            error.InvalidTextRange => return null,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
         return .{
             .range = range,
-            .fragments = try selection.build(
-                allocator,
-                self.geometryView(),
-                range,
-            ),
+            .fragments = fragments,
         };
     }
 
@@ -129,6 +133,61 @@ pub const TextGeometry = struct {
             self.words,
             current,
         );
+    }
+
+    /// Move to the next visible UAX #29 word start in logical source order.
+    ///
+    /// If no later word remains, this returns the paragraph-end caret. Words
+    /// removed by max-lines truncation are skipped rather than producing an
+    /// inaccessible source position.
+    pub fn nextLogicalWord(
+        self: TextGeometry,
+        current: records.CaretPosition,
+    ) ?records.CaretGeometry {
+        const normalized = interaction.caret(
+            self.interactionView(),
+            current,
+        ) orelse return null;
+        for (self.words) |word| {
+            if (word.byte_start <= normalized.position.byte_offset) continue;
+            if (self.caret(.{ .byte_offset = word.byte_start })) |caret_value| {
+                return caret_value;
+            }
+        }
+        var visible_end: usize = 0;
+        for (self.lines) |line| visible_end = @max(visible_end, line.byteEnd());
+        return self.caret(.{
+            .byte_offset = visible_end,
+            .affinity = .upstream,
+        });
+    }
+
+    /// Move to the preceding visible UAX #29 word start in logical order.
+    ///
+    /// A caret inside a word moves to that word's start; a caret already at a
+    /// word start moves to the previous word. If no word precedes it, the
+    /// paragraph-start caret is returned.
+    pub fn previousLogicalWord(
+        self: TextGeometry,
+        current: records.CaretPosition,
+    ) ?records.CaretGeometry {
+        const normalized = interaction.caret(
+            self.interactionView(),
+            current,
+        ) orelse return null;
+        var index = self.words.len;
+        while (index > 0) {
+            index -= 1;
+            const word = self.words[index];
+            if (word.byte_start >= normalized.position.byte_offset) continue;
+            if (self.caret(.{ .byte_offset = word.byte_start })) |caret_value| {
+                return caret_value;
+            }
+        }
+        return self.caret(.{
+            .byte_offset = 0,
+            .affinity = .downstream,
+        });
     }
 
     /// Move to the nearest stop on the following visual line.

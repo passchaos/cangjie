@@ -295,6 +295,7 @@ test "text geometry rejects selection ranges hidden by truncation" {
             .{ .byte_start = 0, .byte_end = text.len },
         ),
     );
+    try std.testing.expect((try geometry.wordAt(allocator, 4)) == null);
 }
 
 test "vertical caret navigation clamps preferred x on unequal lines" {
@@ -411,6 +412,24 @@ test "text geometry resolves UAX words and wrapped visual fragments" {
     try std.testing.expectEqual(@as(usize, 0), previous_word.position.byte_offset);
     try std.testing.expect(geometry.previousVisualWord(first_start.position) == null);
     try std.testing.expect(geometry.nextVisualWord(next_word.position) == null);
+
+    const logical_next = geometry.nextLogicalWord(first_start.position).?;
+    try std.testing.expectEqual(@as(usize, 4), logical_next.position.byte_offset);
+    const inside_second = geometry.caret(.{
+        .byte_offset = 5,
+        .affinity = .downstream,
+    }).?;
+    const logical_current_start =
+        geometry.previousLogicalWord(inside_second.position).?;
+    try std.testing.expectEqual(
+        @as(usize, 4),
+        logical_current_start.position.byte_offset,
+    );
+    const logical_previous =
+        geometry.previousLogicalWord(logical_current_start.position).?;
+    try std.testing.expectEqual(@as(usize, 0), logical_previous.position.byte_offset);
+    const logical_end = geometry.nextLogicalWord(logical_next.position).?;
+    try std.testing.expectEqual(text.len, logical_end.position.byte_offset);
 }
 
 test "visual word navigation follows mixed-direction line order" {

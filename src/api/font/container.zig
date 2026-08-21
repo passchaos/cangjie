@@ -46,6 +46,35 @@ pub const OwnedFace = struct {
         };
     }
 
+    /// Adopt already-owned canonical SFNT/TTC bytes without copying them.
+    ///
+    /// On success ownership transfers to the returned face. On failure the
+    /// caller still owns `bytes`, matching ordinary Zig move semantics. This
+    /// is the natural bridge for subset and incremental-patch results.
+    pub fn adoptSfnt(
+        allocator: std.mem.Allocator,
+        bytes: []u8,
+    ) !OwnedFace {
+        return adoptSfntIndex(allocator, bytes, 0);
+    }
+
+    pub fn adoptSfntIndex(
+        allocator: std.mem.Allocator,
+        bytes: []u8,
+        face_index: usize,
+    ) !OwnedFace {
+        const parsed_face = try face_mod.Face.parseIndex(
+            allocator,
+            bytes,
+            face_index,
+        );
+        return .{
+            .allocator = allocator,
+            .bytes = bytes,
+            .parsed_face = parsed_face,
+        };
+    }
+
     pub fn deinit(self: *OwnedFace) void {
         const allocator = self.allocator;
         self.parsed_face.deinit();
@@ -55,5 +84,9 @@ pub const OwnedFace = struct {
 
     pub fn face(self: *const OwnedFace) *const face_mod.Face {
         return &self.parsed_face;
+    }
+
+    pub fn sfntData(self: *const OwnedFace) []const u8 {
+        return self.bytes;
     }
 };

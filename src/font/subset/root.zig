@@ -58,6 +58,19 @@ pub const Result = struct {
         self.allocator.free(self.retained_glyphs);
         self.* = undefined;
     }
+
+    /// Transfer the generated program into the common owning Face wrapper.
+    /// Retained-glyph evidence is released because its ownership remains a
+    /// subset-build concern, while the returned face owns the program bytes.
+    pub fn intoOwnedFace(self: *Result) !@import("../../api/font/container.zig").OwnedFace {
+        const owned = try @import("../../api/font/container.zig").OwnedFace
+            .adoptSfnt(self.allocator, self.program);
+        self.allocator.free(self.retained_glyphs);
+        self.program = &.{};
+        self.retained_glyphs = &.{};
+        self.* = undefined;
+        return owned;
+    }
 };
 
 const Mapping = struct {

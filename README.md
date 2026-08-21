@@ -58,6 +58,12 @@ defer outline.deinit();
 The instance borrows both the face and coordinate slice. Raw `Face` views stay
 available when an application intentionally changes location per query.
 
+Generated canonical font bytes can move into the same owner without another
+copy. For example, `subset.Result.intoOwnedFace()` transfers the subset program
+into `font.container.OwnedFace`; `OwnedFace.adoptSfnt` provides the general
+already-owned SFNT/TTC boundary. On parse failure the caller keeps ownership of
+the original byte slice.
+
 ## API organization
 
 The facade intentionally has no deprecated aliases. Unicode APIs are grouped

@@ -28,6 +28,27 @@ test "preserve-GID TrueType subset keeps selected glyphs and cmap only" {
     try std.testing.expectEqual(@as(i16, 0), (try parsed.glyphs().bounds(2)).x_max);
 }
 
+test "subset result transfers into the common owned face" {
+    const allocator = std.testing.allocator;
+    const source = try test_font.buildFallbackMarkTtf(allocator);
+    defer allocator.free(source);
+    var face = try public.Face.parse(allocator, source);
+    defer face.deinit();
+    var subset = try public.subset.trueTypeAlloc(
+        allocator,
+        &face,
+        &.{1},
+        .{},
+    );
+    var owned = try subset.intoOwnedFace();
+    defer owned.deinit();
+    try std.testing.expectEqual(
+        @as(u16, 1),
+        try owned.face().glyphs().index('X'),
+    );
+    try std.testing.expect(owned.sfntData().len != 0);
+}
+
 test "preserve-GID TrueType subset closes compound components" {
     const allocator = std.testing.allocator;
     const source = try test_font.buildCompoundPointMatchTtf(allocator);

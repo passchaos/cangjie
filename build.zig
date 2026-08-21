@@ -2531,6 +2531,17 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const unicode_script_probe = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/root.zig"),
+            .target = target,
+            .optimize = .ReleaseSafe,
+        }),
+        .filters = &.{"large Unicode 17 scripts select distinct OpenType primitives"},
+    });
+    unicode_script_probe.root_module.addImport("imx", imx_dep.module("imx"));
+    unicode_script_probe.root_module.addImport("vort", vort_dep.module("vort"));
+    unicode_script_coverage_step.dependOn(&b.addRunArtifact(unicode_script_probe).step);
 
     const mod = b.addModule("cangjie", .{
         .root_source_file = b.path("src/root.zig"),

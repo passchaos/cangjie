@@ -12,6 +12,7 @@ test {
     _ = @import("paragraph_retained.zig");
     _ = @import("paragraph_tab_alignment.zig");
     _ = @import("paragraph_tabs.zig");
+    _ = @import("styled_bidi.zig");
     _ = @import("text_geometry.zig");
     _ = @import("text_geometry_interaction.zig");
     _ = @import("vertical_paragraph.zig");

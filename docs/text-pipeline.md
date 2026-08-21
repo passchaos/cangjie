@@ -1929,3 +1929,21 @@ cycles down about `1.2--3.2%`. The 31-sample wall matrix moved from
 `270.25/264.70 µs` to `268.97/260.77 µs`; checksum `fb80f404e4d69aff`,
 144 glyphs, and six lines were unchanged. Latin spacing retired work also
 improved, and the complete HarfBuzz/HarfRust corpus parity umbrella passes.
+
+Pure-RTL styled paragraphs with one font run now apply their line-local visual
+order in place. After proving that the source contains only strong RTL plus
+weak/neutral characters, that one run owns the complete glyph stream, and that
+line glyph ranges are contiguous and in bounds, layout reverses each line's
+glyphs and glyph-parallel metadata together. Mixed direction, numbers, bidi
+controls, fallback runs, inline objects, and vertical writing retain the full
+UAX #9 transaction. On the 200-byte Noto Kufi Arabic spacing row, fixed-CPU-30
+A/B/B/A counters reduced retired instructions from `975.5M/975.3M` to
+`960.4M/959.5M` and branches from `165.3M/165.3M` to `161.8M/161.6M` per 1,000
+layouts. A longer wall-time matrix remained frequency-sensitive but the two
+candidate passes measured `251.74/205.67 µs` versus baseline
+`269.34/260.29 µs`; checksum `fb80f404e4d69aff`, 144 glyphs, and six lines
+were unchanged. The Latin spacing control retained checksum
+`510135a8179bf5e4`, 105 glyphs, and six lines; retired instructions remained
+within 0.2% across A/B/B/A, as expected because that input never enters the
+fast path. Arabic spacing remains a Parley comparison gap until a stable,
+output-equivalent end-to-end matrix closes it.

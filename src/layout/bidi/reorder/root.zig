@@ -8,6 +8,7 @@ const std = @import("std");
 
 const Font = @import("../../../font.zig").Font;
 const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
+const run_types = @import("../../types/runs.zig");
 const mapping = @import("mapping.zig");
 const runs = @import("runs.zig");
 const bidi = @import("../../../text/bidi.zig");
@@ -198,6 +199,58 @@ pub fn normalizeLogical(buffer: anytype) !void {
 /// otherwise require a permutation/rebuild pass.
 pub fn recomputeRunOffsets(buffer: anytype) void {
     runs.recomputeOffsets(buffer);
+}
+
+/// Try the allocation-free line permutation for a pure RTL paragraph.
+///
+/// A single run that owns every glyph is the important styled Arabic case. In
+/// that configuration each line-local L2 permutation is just a reversal, run
+/// ownership cannot fragment, and the caller's glyph-parallel sidecar can be
+/// reversed in the same transaction. Mixed-direction text, bidi controls,
+/// unowned inline objects, fallback runs, and synthetic run fragments remain
+/// on the general resolver path below.
+pub fn tryApplyPureRtlLinesWithParallel(
+    buffer: anytype,
+    text: []const u8,
+    parallel: anytype,
+) bool {
+    const glyphs = buffer.glyphs.items;
+    if (parallel.len != glyphs.len or
+        bidi.visualOrderInputKind(text, true) != .pure_rtl)
+    {
+        return false;
+    }
+    if (buffer.runs.items.len != 1) return false;
+    const run = buffer.runs.items[0];
+    if (run.glyph_start != 0 or run.glyph_len != glyphs.len) return false;
+
+    // Validate every range before the first mutation. Falling back after a
+    // partial reversal would violate the general path's logical-order input
+    // contract. A suffix omitted from visible lines is intentionally allowed:
+    // the general transaction preserves that suffix in source order too.
+    var previous_end: usize = 0;
+    for (buffer.lines.items) |line| {
+        const line_end = std.math.add(usize, line.glyph_start, line.glyph_len) catch
+            return false;
+        if (line.glyph_start != previous_end or line_end > glyphs.len) return false;
+        previous_end = line_end;
+    }
+
+    const font = run_types.fontForBackend(run);
+    for (buffer.lines.items) |*line| {
+        const line_end = line.glyph_start + line.glyph_len;
+        bidi.applyPureRtlVisualOrderSlice(
+            glyphs[line.glyph_start..line_end],
+            font,
+        );
+        const Parallel = @TypeOf(parallel[0]);
+        std.mem.reverse(Parallel, parallel[line.glyph_start..line_end]);
+        // The sole run intersects every non-empty line and remains unchanged
+        // globally, so rebuilding an O(glyph_count) ownership map is needless.
+        line.run_start = 0;
+        line.run_len = @intFromBool(line.glyph_len != 0);
+    }
+    return true;
 }
 
 pub fn applyLines(buffer: anytype, text: []const u8, rtl: bool) !void {

@@ -501,6 +501,16 @@ const Driver = struct {
         self: *@This(),
         options: paragraph_options.Options,
     ) !void {
+        if (options.direction == .rtl and
+            !options.writing_mode.isVertical() and
+            bidi_reorder.tryApplyPureRtlLinesWithParallel(
+                self.buffer,
+                self.text,
+                self.styled.metadata.items,
+            ))
+        {
+            return;
+        }
         if (!plan_bidi.paragraphNeedsReorder(
             self.text,
             options.direction,

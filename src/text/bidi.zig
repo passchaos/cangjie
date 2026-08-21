@@ -82,19 +82,28 @@ fn buildAsciiClasses() [128]unicode.ExactBidiClass {
 }
 
 pub fn applyPureRtlVisualOrder(glyphs: anytype, font: ?*const Font) void {
-    const Glyph = @TypeOf(glyphs.items[0]);
-    if (glyphs.items.len > 1) {
+    applyPureRtlVisualOrderSlice(glyphs.items, font);
+}
+
+/// Put one already-shaped pure-RTL range in visual order.
+///
+/// Paragraph layout owns line slices rather than an independent list for each
+/// line. Keeping the slice form here ensures its fast path uses exactly the
+/// same reversal and mirroring semantics as ordinary run shaping.
+pub fn applyPureRtlVisualOrderSlice(glyphs: anytype, font: ?*const Font) void {
+    const Glyph = @TypeOf(glyphs[0]);
+    if (glyphs.len > 1) {
         // The general BidiMap path iterates RTL glyph clusters from the end of
         // the run and walks glyphs inside each cluster backwards.  For a
         // paragraph made only of RTL and neutral characters this is equivalent
         // to reversing the already-shaped glyph stream in place.
-        std.mem.reverse(Glyph, glyphs.items);
+        std.mem.reverse(Glyph, glyphs);
     }
     if (font) |face| {
         // Most Arabic/Hebrew runs contain no mirrored scalar. Avoid a binary
         // search in the complete Unicode mirror map for every glyph when a
         // cheap range proof excludes every known mirrored character.
-        for (glyphs.items) |*glyph| {
+        for (glyphs) |*glyph| {
             if (!mayHaveBidiMirror(glyph.codepoint)) continue;
             const mirrored = unicode.mirroredCodepoint(glyph.codepoint);
             if (mirrored == glyph.codepoint) continue;
@@ -158,5 +167,27 @@ test "pure RTL visual order reverses the shaped glyph stream in place" {
         glyphs.items[1].glyph_id,
         glyphs.items[2].glyph_id,
         glyphs.items[3].glyph_id,
+    });
+}
+
+test "pure RTL slice order limits mutation to one visual line" {
+    const DummyGlyph = struct {
+        glyph_id: u16,
+        codepoint: u21,
+        cluster: usize,
+    };
+    var glyphs = [_]DummyGlyph{
+        .{ .glyph_id = 1, .codepoint = 0x05d0, .cluster = 0 },
+        .{ .glyph_id = 2, .codepoint = 0x05d1, .cluster = 2 },
+        .{ .glyph_id = 3, .codepoint = 0x05d2, .cluster = 4 },
+        .{ .glyph_id = 4, .codepoint = 0x05d3, .cluster = 6 },
+    };
+
+    applyPureRtlVisualOrderSlice(glyphs[1..3], null);
+    try std.testing.expectEqualSlices(u16, &.{ 1, 3, 2, 4 }, &.{
+        glyphs[0].glyph_id,
+        glyphs[1].glyph_id,
+        glyphs[2].glyph_id,
+        glyphs[3].glyph_id,
     });
 }

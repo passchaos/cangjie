@@ -37,4 +37,11 @@ test "modified combining class fast path preserves its lower boundary and overri
     try std.testing.expectEqual(@as(u8, 0), unicode.modifiedCombiningClassForShaping(0x0627));
     try std.testing.expectEqual(@as(u8, 27), unicode.modifiedCombiningClassForShaping(0x0651));
     try std.testing.expectEqual(@as(u8, 220), unicode.modifiedCombiningClassForShaping(0x08cf));
+    try std.testing.expectEqual(@as(u8, 0), unicode.modifiedCombiningClassForShaping(0x0915));
+    try std.testing.expectEqual(@as(u8, 7), unicode.modifiedCombiningClassForShaping(0x093c));
+    try std.testing.expectEqual(@as(u8, 9), unicode.modifiedCombiningClassForShaping(0x094d));
+    try std.testing.expectEqual(@as(u8, 230), unicode.modifiedCombiningClassForShaping(0x0951));
+    try std.testing.expectEqual(@as(u8, 220), unicode.modifiedCombiningClassForShaping(0x0952));
+    try std.testing.expectEqual(@as(u8, 230), unicode.modifiedCombiningClassForShaping(0x0953));
+    try std.testing.expectEqual(@as(u8, 230), unicode.modifiedCombiningClassForShaping(0x0954));
 }

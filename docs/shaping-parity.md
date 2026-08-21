@@ -3297,3 +3297,16 @@ shaping-performance superiority.
   orders but remain frequency-sensitive. Checksum `c53c50e3c7c8ca3f` was
   unchanged. Roboto `en-words` retained checksum `ca4dc411c23af197` with
   neutral retired work and slightly lower cycles in both candidate passes.
+- Modified-combining-class lookup now rejects ordinary U+0900..U+097F
+  Devanagari scalars before entering the generated cross-Unicode search. Only
+  the block's six non-zero-CCC scalars (U+093C, U+094D, and U+0951..U+0954)
+  continue to that table, with contract tests covering every exception. On
+  fixed CPU 30, five-pass A/B/B/A counters over NotoSansDevanagari `hi-words`
+  reduced retired instructions from `2.9918B/2.9915B` to
+  `2.9538B/2.9533B` (about `1.28%`) and branches from
+  `510.3M/510.3M` to `503.9M/503.8M` (about `1.26%`); cycles fell about
+  `2.0--2.4%`. Checksum `33d837ee98745b5d` was unchanged. Long-batch
+  Roboto and Amiri controls kept their checksums and effectively neutral
+  retired work: Roboto instructions measured `1.24695B/1.24719B` versus
+  `1.24716B/1.24746B` for the baseline, and Amiri measured
+  `4.67275B/4.67286B` versus `4.67425B/4.67306B`.

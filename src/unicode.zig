@@ -148,6 +148,16 @@ pub fn modifiedCombiningClassForShaping(codepoint: u21) u8 {
     {
         return 0;
     }
+    // Unicode 17 assigns non-zero CCC to only six scalars in the primary
+    // Devanagari block. Ordinary letters and dependent vowels dominate Hindi
+    // shaping, so avoid the generated cross-Unicode search for all other
+    // U+0900..U+097F values.
+    if (codepoint >= 0x0900 and codepoint <= 0x097f and
+        codepoint != 0x093c and codepoint != 0x094d and
+        (codepoint < 0x0951 or codepoint > 0x0954))
+    {
+        return 0;
+    }
     // These script-specific overrides are part of HarfBuzz's normalization
     // contract. SAKOT and PADMA intentionally sort after ordinary tone/vowel
     // marks even though their canonical class is lower.

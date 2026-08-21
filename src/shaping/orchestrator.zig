@@ -81,11 +81,11 @@ pub const TextShaper = struct {
     }
 
     pub fn shapeUtf8WithOptions(font: *const Font, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !GlyphRun {
-        return try shapeSingleFontInto(font, null, null, buffer, text, font_size, options);
+        return try shapeSingleFontInto(font, null, null, buffer, text, font_size, options, &.{});
     }
 
     pub fn shapeUtf8WithCaches(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !GlyphRun {
-        return try shapeSingleFontInto(font, metrics_cache, glyph_index_cache, buffer, text, font_size, options);
+        return try shapeSingleFontInto(font, metrics_cache, glyph_index_cache, buffer, text, font_size, options, &.{});
     }
 
     pub fn shapeUtf8Cascade(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32) !ShapedText {
@@ -519,7 +519,7 @@ const FixedFallbackContext = struct {
     }
 };
 
-fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !GlyphRun {
+pub fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions, feature_ranges: []const unicode.GsubFeatureRange) !GlyphRun {
     const shape_profile = buffer.shape_profile;
     const profile_io = buffer.profile_io;
     const total_start = shape_profile_mod.now(shape_profile, profile_io);
@@ -534,6 +534,8 @@ fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, gl
     buffer.clear();
     const options_start = shape_profile_mod.now(shape_profile, profile_io);
     const lookup_options = plan_resolution.forText(text, options);
+    var ranged_lookup_options = lookup_options;
+    ranged_lookup_options.lookup.feature_ranges = feature_ranges;
     if (shape_profile) |p| p.options_ns += shape_profile_mod.elapsed(options_start, profile_io);
 
     try segment_pipeline.run(.{
@@ -544,7 +546,7 @@ fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, gl
         .text = text,
         .font_size = font_size,
         .cluster_base = 0,
-        .lookup_options = lookup_options,
+        .lookup_options = ranged_lookup_options,
     });
     const bidi_start = shape_profile_mod.now(shape_profile, profile_io);
     if (plan_bidi.shouldReorderShapedRun(text, options, lookup_options.all_ascii)) {

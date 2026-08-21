@@ -227,7 +227,7 @@ test "ranged GSUB preserves variation-selector cmap and cluster semantics" {
     try std.testing.expectEqual(@as(usize, 3), character_clusters.glyphs[1].source_byte_len);
 }
 
-test "rejects invalid or stage-specific GSUB feature ranges" {
+test "rejects invalid or unsupported GSUB feature ranges" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");
 

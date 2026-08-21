@@ -16,6 +16,7 @@ const gsub = @import("../../../gsub.zig");
 const run_types = @import("../../../layout/types/runs.zig");
 const shaping_plan = @import("../../plan/root.zig");
 const overrides = @import("overrides.zig");
+const ordinary = @import("../../orchestrator.zig");
 const positioning = @import("positioning.zig");
 const ranges_mod = @import("ranges.zig");
 const shaping_sections = @import("../../../shaping_sections.zig");
@@ -91,7 +92,18 @@ fn shapeValidated(
     const script = script_selection.tag orelse
         options.script_tag orelse
         unicode.openTypeScriptTag(inferred_script);
-    if (usesStagedShaper(script)) return error.UnsupportedFeatureRanges;
+    if (usesStagedShaper(script)) {
+        return ordinary.shapeSingleFontInto(
+            font,
+            metrics_cache,
+            glyph_index_cache,
+            buffer,
+            text,
+            font_size,
+            options,
+            ranges,
+        );
+    }
 
     buffer.clear();
     var sources = source_buffer.Buffer{};

@@ -67,6 +67,7 @@ pub const LookupOptions = struct {
     native_direction_shaping: bool = false,
     script_position: ScriptPosition = .normal,
     features: []const unicode.FeatureOverride = &.{},
+    feature_ranges: []const unicode.GsubFeatureRange = &.{},
     writing_mode: WritingMode = .horizontal_tb,
     text_orientation: TextOrientation = .mixed,
     normalized_variation_coords: []const f32 = &.{},

@@ -242,16 +242,38 @@ test "preserve-GID subset rebuilds CBDT PNG strikes" {
     try std.testing.expect((try stripped_face.color().bitmapData(1, 16)) == null);
 }
 
-test "preserve-GID subset rejects CBDT shared-metrics PNG strikes" {
+test "preserve-GID subset rebuilds CBDT shared-metrics PNG strikes" {
     const allocator = std.testing.allocator;
     const source = try test_font.buildCbdtFormat19PngTtf(allocator);
     defer allocator.free(source);
     var face = try public.Face.parse(allocator, source);
     defer face.deinit();
-    try std.testing.expectError(
-        error.UnsupportedFontSubset,
-        public.subset.trueTypeAlloc(allocator, &face, &.{1}, .{}),
+
+    var subset = try public.subset.trueTypeAlloc(
+        allocator,
+        &face,
+        &.{1},
+        .{},
     );
+    defer subset.deinit();
+    var parsed = try public.Face.parse(allocator, subset.program);
+    defer parsed.deinit();
+
+    const info = (try parsed.color().bitmapInfo(1, 16)) orelse
+        return error.TestUnexpectedResult;
+    // Format 19 has no inline metrics. The subset embeds its shared metrics in
+    // equivalent format-18 records so sparse preserve-GID indexing stays fast.
+    try std.testing.expectEqual(@as(?u16, 18), info.image_format);
+    try std.testing.expectEqual(@as(i16, 4), info.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, 11), info.origin_offset_y);
+    try std.testing.expectEqual(@as(?u16, 12), info.advance);
+    try std.testing.expectEqual(@as(?i16, 0), info.vertical_origin_offset_x);
+    try std.testing.expectEqual(@as(?i16, 1), info.vertical_origin_offset_y);
+    try std.testing.expectEqual(@as(?u16, 12), info.vertical_advance);
+    const png = (try parsed.color().bitmapData(1, 16)).?.png;
+    try std.testing.expectEqual(@as(i16, 4), png.origin_offset_x);
+    try std.testing.expectEqual(@as(i16, 11), png.origin_offset_y);
+    try std.testing.expect((try parsed.color().bitmapData(0, 16)) == null);
 }
 
 test "preserve-GID subset rebuilds retained SVG documents" {

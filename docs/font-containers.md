@@ -329,18 +329,19 @@ Validated SVG glyph documents can be retained independently as well. The
 subset resolves each document covering a retained GID, emits one sorted
 single-glyph SVG record, and writes resolved gzip content as ordinary validated
 XML. This avoids keeping a source record range that still advertises removed
-glyphs. `preserve_svg_documents=false` drops the table; bitmap strikes and
-VARC remain explicitly unsupported pending their own closure/rewrite logic.
+glyphs. `preserve_svg_documents=false` drops the table; VARC remains
+explicitly unsupported pending its own closure/rewrite logic.
 
 Outline-backed sbix PNG strikes now have a preserve-GID subset path as well.
 Every authored strike is rebuilt with the original ppem/ppi, a complete
 glyph-count offset array, and direct PNG records only for retained glyphs;
 resolved `dupe` records become self-contained images, so removed target GIDs
 cannot leave dangling strike references. `preserve_sbix_strikes=false` drops
-the table. CBDT PNG image formats 17 and 18 now have a bounded preserve-GID
-path as well: every strike is rebuilt with a complete dense format-1 offset
-array, retained image records are copied verbatim, and removed GIDs receive
-empty offsets. `preserve_cbdt_png_strikes=false` drops CBDT/CBLC together.
-Shared-metrics format 19, raw/compound CBDT records, and EBDT remain
-unsupported until their index-2/5 and component serializers are equally
-strict.
+the table. CBDT PNG image formats 17, 18, and 19 now have a bounded
+preserve-GID path as well. Each strike is emitted through one bounded format-1
+index; shared-metrics format 19 is normalized to equivalent self-contained
+format-18 records by embedding its BigGlyphMetrics with every retained image.
+Removed GIDs receive empty offsets without adding a linear index-subtable scan.
+`preserve_cbdt_png_strikes=false` drops CBDT/CBLC together. Raw/compound CBDT
+records and EBDT remain unsupported until their payload and component
+serializers are equally strict.

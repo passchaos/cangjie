@@ -9,6 +9,8 @@ const GlyphId = @import("../../../glyph.zig").GlyphId;
 const gsub = @import("../../../gsub.zig");
 const shaping_sections = @import("../../../shaping_sections.zig");
 const GdefLookupMetadata = @import("../../../font.zig").GdefLookupMetadata;
+const ranges = @import("../../features/ranged_gsub/ranges.zig");
+const unicode = @import("../../../unicode.zig");
 
 /// Minimal execution resources shared by every script shaper.
 ///
@@ -18,7 +20,69 @@ const GdefLookupMetadata = @import("../../../font.zig").GdefLookupMetadata;
 pub const Context = struct {
     allocator: std.mem.Allocator,
     lookup_selection_cache: ?*cache.LookupSelectionCache,
+    feature_ranges: []const ranges.Range = &.{},
+    feature_overrides: []const unicode.FeatureOverride = &.{},
+    source_byte_starts: []const usize = &.{},
+    user_feature_values: ?*std.ArrayList(u32) = null,
 };
+
+pub fn applyPlanAfterRunProofWithRanges(
+    font: *const Font,
+    context: Context,
+    plan: gsub.feature.LookupPlan,
+    glyph_ids: *std.ArrayList(GlyphId),
+    options: gsub.runtime.Options,
+    gdef_metadata: GdefLookupMetadata,
+) !void {
+    if (context.feature_ranges.len == 0) {
+        return applyPlanAfterRunProof(
+            font,
+            context,
+            plan,
+            glyph_ids,
+            options,
+            gdef_metadata,
+        );
+    }
+    for (plan.entries) |entry| {
+        var selected = options;
+        var user_feature: gsub.runtime.UserFeature = undefined;
+        if (ranges.hasTag(context.feature_ranges, entry.application.tag)) {
+            const values = context.user_feature_values orelse
+                return error.InvalidShapingInput;
+            try values.resize(
+                context.allocator,
+                context.source_byte_starts.len,
+            );
+            if (!ranges.fillEffectiveValues(
+                values.items,
+                context.source_byte_starts,
+                context.feature_ranges,
+                context.feature_overrides,
+                entry.application.tag,
+            )) return error.InvalidShapingInput;
+            user_feature = .{
+                .values = values.items,
+                .tag = entry.application.tag,
+                .value = entry.application.value,
+                .include_script_candidates = entry.application.source_scoped,
+            };
+            selected.user_feature = &user_feature;
+            selected.use_user_feature_at_cursor = true;
+        }
+        const one = gsub.feature.LookupPlan{
+            .entries = @constCast((&entry)[0..1]),
+        };
+        try applyPlanAfterRunProof(
+            font,
+            context,
+            one,
+            glyph_ids,
+            selected,
+            gdef_metadata,
+        );
+    }
+}
 
 pub fn apply(
     font: *const Font,

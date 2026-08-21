@@ -10,4 +10,5 @@ pub const state = @import("state.zig");
 
 pub const Limits = limits.Limits;
 pub const Options = options.Options;
+pub const UserFeature = options.UserFeature;
 pub const validateScriptShaperMetadata = metadata.validateScriptShaper;

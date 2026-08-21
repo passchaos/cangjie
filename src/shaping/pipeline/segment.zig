@@ -112,6 +112,7 @@ pub fn run(input: Input) !void {
     const ligature_components = &scratch.ligature_components;
     const joining_forms = &scratch.joining_forms;
     const source_features = &scratch.source_features;
+    const user_feature_values = &scratch.user_feature_values;
     const source_syllables = &scratch.source_syllables;
     const source_rphf_substituted = &scratch.source_rphf_substituted;
     const source_pref_substituted = &scratch.source_pref_substituted;
@@ -221,6 +222,13 @@ pub fn run(input: Input) !void {
     const gsub_context = gsub_executor.Context{
         .allocator = buffer.allocator,
         .lookup_selection_cache = buffer.lookup_selection_cache,
+        .feature_ranges = lookup_options.feature_ranges,
+        .feature_overrides = lookup_options.features,
+        .source_byte_starts = clusters.items,
+        .user_feature_values = if (lookup_options.feature_ranges.len != 0)
+            user_feature_values
+        else
+            null,
     };
     if (lookup_options.beginning_of_text and
         lookup_options.context_before.len == 0 and

@@ -146,7 +146,7 @@ pub fn finish(input: Input) !void {
         input.options.*,
         input.glyph_ids.items.len,
     );
-    if (cached_plans) try executor.applyPlanAfterRunProof(
+    if (cached_plans) try executor.applyPlanAfterRunProofWithRanges(
         input.font,
         input.context,
         plans[0],
@@ -171,7 +171,7 @@ pub fn finish(input: Input) !void {
         input.codepoints.items,
         input.lookup_options.script_tag,
     );
-    if (cached_plans) try executor.applyPlanAfterRunProof(
+    if (cached_plans) try executor.applyPlanAfterRunProofWithRanges(
         input.font,
         input.context,
         plans[1],
@@ -189,7 +189,7 @@ pub fn finish(input: Input) !void {
     );
     try applyPref(input, if (cached_plans) plans[2] else null);
     reorderAfterPref(input);
-    if (cached_plans) try executor.applyPlanAfterRunProof(
+    if (cached_plans) try executor.applyPlanAfterRunProofWithRanges(
         input.font,
         input.context,
         plans[3],
@@ -206,7 +206,7 @@ pub fn finish(input: Input) !void {
         input.gdef_metadata,
     );
     reorderAfterReph(input);
-    if (cached_plans) try executor.applyPlanAfterRunProof(
+    if (cached_plans) try executor.applyPlanAfterRunProofWithRanges(
         input.font,
         input.context,
         plans[4],
@@ -303,7 +303,7 @@ fn applyPref(input: Input, plan: ?gsub.feature.LookupPlan) !void {
     @memset(input.glyph_stage_substituted.items, false);
     var options = input.options.*;
     options.glyph_stage_substituted = input.glyph_stage_substituted;
-    if (plan) |cached| try executor.applyPlanAfterRunProof(
+    if (plan) |cached| try executor.applyPlanAfterRunProofWithRanges(
         input.font,
         input.context,
         cached,

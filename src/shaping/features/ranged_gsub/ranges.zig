@@ -136,6 +136,20 @@ pub fn isSupportedGenericTag(tag: u32) bool {
         tag != openTypeTag("dnom");
 }
 
+pub fn fillEffectiveValues(
+    values: []u32,
+    source_byte_starts: []const usize,
+    ranges: []const Range,
+    overrides: anytype,
+    tag: u32,
+) bool {
+    if (values.len != source_byte_starts.len) return false;
+    for (source_byte_starts, values) |byte, *value| {
+        value.* = effectiveValueAt(ranges, overrides, tag, byte);
+    }
+    return true;
+}
+
 fn openTypeTag(comptime bytes: *const [4]u8) u32 {
     return (@as(u32, bytes[0]) << 24) |
         (@as(u32, bytes[1]) << 16) |

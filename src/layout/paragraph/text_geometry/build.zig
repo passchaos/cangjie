@@ -70,6 +70,8 @@ fn buildInternal(
     defer allocator.free(owners);
     const words = try source.collectWordRanges(allocator, text);
     errdefer allocator.free(words);
+    const owned_source = try allocator.dupe(u8, text);
+    errdefer allocator.free(owned_source);
     const word_start_bytes = try source.collectWordStarts(allocator, words);
     defer allocator.free(word_start_bytes);
 
@@ -175,6 +177,8 @@ fn buildInternal(
             .span_len = output_spans.items.len - line_span_start,
             .visual_caret_start = visual_caret_start,
             .visual_caret_len = 0,
+            .alignment = line.resolved_alignment,
+            .break_kind = lineBreakKind(text, line),
         };
         try visual_carets.appendLine(
             allocator,
@@ -203,6 +207,7 @@ fn buildInternal(
         try output_visual_carets.toOwnedSlice(allocator);
     return .{
         .allocator = allocator,
+        .source = owned_source,
         .source_byte_len = text.len,
         .writing_mode = layout.writing_mode,
         .lines = owned_lines,
@@ -211,5 +216,21 @@ fn buildInternal(
         .words = words,
         .word_starts = owned_word_starts,
         .visual_caret_stops = owned_visual_carets,
+    };
+}
+
+fn lineBreakKind(
+    text: []const u8,
+    line: paragraph_types.ParagraphLine,
+) types.LineBreakKind {
+    const end = line.byteEnd();
+    if (end == 0 or end > text.len) return .none;
+    var start = end - 1;
+    while (start > 0 and (text[start] & 0xc0) == 0x80) start -= 1;
+    const codepoint = std.unicode.utf8Decode(text[start..end]) catch
+        return if (end < text.len) .soft else .none;
+    return switch (unicode.lineBreakClassForCodepoint(codepoint)) {
+        .mandatory, .carriage_return, .line_feed, .next_line => .hard,
+        else => if (end < text.len) .soft else .none,
     };
 }

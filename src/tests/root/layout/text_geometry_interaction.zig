@@ -465,3 +465,59 @@ test "visual word navigation follows mixed-direction line order" {
     const back = geometry.previousVisualWord(hebrew.position).?;
     try std.testing.expectEqual(latin.position, back.position);
 }
+
+test "accessibility runs own text and expose line semantics" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const text = try allocator.dupe(u8, "A A\nA");
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const layout = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&fonts),
+        &layout_buffer,
+        text,
+        20,
+        .{ .max_width = 25, .alignment = .center },
+    );
+    var geometry = try paragraph.buildGeometry(
+        allocator,
+        text,
+        layout,
+        .{},
+    );
+    allocator.free(text);
+    defer geometry.deinit();
+
+    try std.testing.expect(geometry.lines.len >= 3);
+    try std.testing.expectEqual(
+        paragraph.TextGeometryLineBreakKind.soft,
+        geometry.lines[0].break_kind,
+    );
+    var found_hard = false;
+    for (geometry.lines) |line| {
+        found_hard = found_hard or line.break_kind == .hard;
+    }
+    try std.testing.expect(found_hard);
+    try std.testing.expectEqual(
+        paragraph.Align.center,
+        geometry.lines[0].alignment.?,
+    );
+
+    var runs = geometry.accessibilityRuns();
+    const first = runs.next().?;
+    try std.testing.expectEqualStrings("A "[0..first.text.len], first.text);
+    try std.testing.expect(first.graphemes.len != 0);
+    try std.testing.expectEqual(@as(usize, 0), first.word_starts[0]);
+    try std.testing.expect(first.font_run != null);
+    if (first.next_on_line) |next| {
+        try std.testing.expectEqual(
+            first.span_index,
+            geometry.spans[next].previous_on_line.?,
+        );
+    }
+}

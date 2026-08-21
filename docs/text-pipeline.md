@@ -1873,6 +1873,13 @@ following rendered mixed-bidi and wrapped-line order rather than assuming that
 UTF-8 offsets increase visually. `nextLogicalWord` and `previousLogicalWord`
 provide the complementary source-order movement, with paragraph-edge fallback
 and truncation-aware skipping of words that have no final geometry.
+`accessibilityRuns` adds the adapter-neutral text-run projection: TextGeometry
+now owns a source-byte copy and yields logical run text, grapheme character
+positions/widths, word-start indexes, direction, font/style identity, resolved
+alignment, bounds, and previous/next-on-line relationships. Lines retain
+explicit `none`/`soft`/`hard` break semantics. Platform bridges can therefore
+populate AccessKit, UIA, AT-SPI, or native equivalents without borrowing a
+reusable shaping buffer or reconstructing source ownership from glyph order.
 
 ## Next Structural Steps
 

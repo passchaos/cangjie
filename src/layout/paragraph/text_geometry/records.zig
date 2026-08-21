@@ -52,6 +52,15 @@ pub const WordGeometry = struct {
     }
 };
 
+pub const LineBreakKind = enum {
+    /// Final source line/column with no following boundary.
+    none,
+    /// Width-selected reusable line boundary.
+    soft,
+    /// Explicit Unicode mandatory line separator.
+    hard,
+};
+
 /// One physically contiguous selected fragment on a visual line.
 ///
 /// A logical selection can produce several fragments on one line when bidi
@@ -160,6 +169,26 @@ pub const Span = struct {
     }
 };
 
+/// Borrowed, platform-neutral accessibility view of one logical text run.
+///
+/// Character geometry is expressed as extended grapheme clusters because that
+/// is the indivisible caret unit exposed by the layout. `word_starts` contains
+/// grapheme indexes relative to `graphemes`.
+pub const AccessibilityRun = struct {
+    span_index: usize,
+    line_index: usize,
+    text: []const u8,
+    direction: Direction,
+    bounds: paragraph_types.TextRect,
+    font_run: ?FontRun,
+    style_index: ?u32,
+    alignment: ?paragraph_types.TextAlign,
+    graphemes: []const Grapheme,
+    word_starts: []const usize,
+    previous_on_line: ?usize,
+    next_on_line: ?usize,
+};
+
 /// One final visual line retained independently from its text spans.
 ///
 /// Empty lines still own a box and source boundary, allowing a trailing hard
@@ -173,6 +202,8 @@ pub const Line = struct {
     span_len: usize,
     visual_caret_start: usize,
     visual_caret_len: usize,
+    alignment: ?paragraph_types.TextAlign = null,
+    break_kind: LineBreakKind = .none,
 
     pub fn byteEnd(self: Line) usize {
         return self.byte_start + self.byte_len;

@@ -11,6 +11,7 @@ const WritingMode =
 
 pub const TextGeometry = struct {
     allocator: std.mem.Allocator,
+    source: []u8,
     source_byte_len: usize,
     writing_mode: WritingMode = .horizontal_tb,
     lines: []records.Line,
@@ -21,6 +22,7 @@ pub const TextGeometry = struct {
     visual_caret_stops: []records.VisualCaretStop,
 
     pub fn deinit(self: *TextGeometry) void {
+        self.allocator.free(self.source);
         self.allocator.free(self.word_starts);
         self.allocator.free(self.words);
         self.allocator.free(self.graphemes);
@@ -28,6 +30,57 @@ pub const TextGeometry = struct {
         self.allocator.free(self.lines);
         self.allocator.free(self.visual_caret_stops);
         self.* = undefined;
+    }
+
+    pub const AccessibilityRunIterator = struct {
+        source: []const u8,
+        lines: []const records.Line,
+        spans: []const records.Span,
+        graphemes: []const records.Grapheme,
+        word_starts: []const usize,
+        index: usize = 0,
+
+        pub fn next(self: *AccessibilityRunIterator) ?records.AccessibilityRun {
+            if (self.index >= self.spans.len) return null;
+            const span_index = self.index;
+            const span = self.spans[span_index];
+            self.index += 1;
+            if (span.byte_start > self.source.len or
+                span.byte_len > self.source.len - span.byte_start or
+                span.line_index >= self.lines.len)
+            {
+                return null;
+            }
+            const line = self.lines[span.line_index];
+            return .{
+                .span_index = span_index,
+                .line_index = span.line_index,
+                .text = self.source[span.byte_start..span.byteEnd()],
+                .direction = span.direction,
+                .bounds = span.bounds,
+                .font_run = span.font_run,
+                .style_index = span.style_index,
+                .alignment = line.alignment,
+                .graphemes = span.graphemes(self.graphemes),
+                .word_starts = span.wordStarts(self.word_starts),
+                .previous_on_line = span.previous_on_line,
+                .next_on_line = span.next_on_line,
+            };
+        }
+    };
+
+    /// Iterate logical text runs ready for an AccessKit/UIA/AT-SPI adapter.
+    ///
+    /// The geometry owns `source`, so run text remains valid until `deinit`
+    /// without retaining the caller's paragraph bytes or shaping engine.
+    pub fn accessibilityRuns(self: TextGeometry) AccessibilityRunIterator {
+        return .{
+            .source = self.source,
+            .lines = self.lines,
+            .spans = self.spans,
+            .graphemes = self.graphemes,
+            .word_starts = self.word_starts,
+        };
     }
 
     /// Resolve one exact source boundary and affinity into paragraph geometry.

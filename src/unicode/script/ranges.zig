@@ -291,6 +291,73 @@ pub fn isTangsa(codepoint: u21) bool {
         (codepoint >= 0x16ac0 and codepoint <= 0x16ac9);
 }
 
+pub fn isKawi(codepoint: u21) bool {
+    return (codepoint >= 0x11f00 and codepoint <= 0x11f10) or
+        (codepoint >= 0x11f12 and codepoint <= 0x11f3a) or
+        (codepoint >= 0x11f3e and codepoint <= 0x11f5a);
+}
+
+pub fn isWarangCiti(codepoint: u21) bool {
+    return (codepoint >= 0x118a0 and codepoint <= 0x118f2) or
+        codepoint == 0x118ff;
+}
+
+pub fn isNewTaiLue(codepoint: u21) bool {
+    return (codepoint >= 0x1980 and codepoint <= 0x19ab) or
+        (codepoint >= 0x19b0 and codepoint <= 0x19da) or
+        (codepoint >= 0x19de and codepoint <= 0x19df);
+}
+
+pub fn isSoyombo(codepoint: u21) bool {
+    return codepoint >= 0x11a50 and codepoint <= 0x11aa2;
+}
+
+pub fn isDeseret(codepoint: u21) bool {
+    return codepoint >= 0x10400 and codepoint <= 0x1044f;
+}
+
+pub fn isTuluTigalari(codepoint: u21) bool {
+    return (codepoint >= 0x11380 and codepoint <= 0x11389) or
+        codepoint == 0x1138b or codepoint == 0x1138e or
+        (codepoint >= 0x11390 and codepoint <= 0x113b5) or
+        codepoint == 0x113b7 or
+        (codepoint >= 0x113b8 and codepoint <= 0x113c0) or
+        codepoint == 0x113c2 or codepoint == 0x113c5 or
+        (codepoint >= 0x113c7 and codepoint <= 0x113ca) or
+        (codepoint >= 0x113cc and codepoint <= 0x113d8) or
+        (codepoint >= 0x113e1 and codepoint <= 0x113e2);
+}
+
+pub fn isBopomofo(codepoint: u21) bool {
+    return (codepoint >= 0x02ea and codepoint <= 0x02eb) or
+        (codepoint >= 0x3105 and codepoint <= 0x312f) or
+        (codepoint >= 0x31a0 and codepoint <= 0x31bf);
+}
+
+pub fn isMasaramGondi(codepoint: u21) bool {
+    return (codepoint >= 0x11d00 and codepoint <= 0x11d06) or
+        (codepoint >= 0x11d08 and codepoint <= 0x11d09) or
+        (codepoint >= 0x11d0b and codepoint <= 0x11d36) or
+        codepoint == 0x11d3a or
+        (codepoint >= 0x11d3c and codepoint <= 0x11d47) or
+        (codepoint >= 0x11d50 and codepoint <= 0x11d59);
+}
+
+pub fn isOldTurkic(codepoint: u21) bool {
+    return codepoint >= 0x10c00 and codepoint <= 0x10c48;
+}
+
+pub fn isDivesAkuru(codepoint: u21) bool {
+    return (codepoint >= 0x11900 and codepoint <= 0x11906) or
+        codepoint == 0x11909 or
+        (codepoint >= 0x1190c and codepoint <= 0x11913) or
+        (codepoint >= 0x11915 and codepoint <= 0x11916) or
+        (codepoint >= 0x11918 and codepoint <= 0x11935) or
+        (codepoint >= 0x11937 and codepoint <= 0x11938) or
+        (codepoint >= 0x1193b and codepoint <= 0x11946) or
+        (codepoint >= 0x11950 and codepoint <= 0x11959);
+}
+
 pub fn isPhoenician(codepoint: u21) bool {
     return (codepoint >= 0x10900 and codepoint <= 0x1091b) or
         codepoint == 0x1091f;

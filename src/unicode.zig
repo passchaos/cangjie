@@ -411,6 +411,16 @@ pub const OpenTypeScriptTag = enum(u32) {
     sidd = tag("sidd"),
     medf = tag("medf"),
     tnsa = tag("tnsa"),
+    kawi = tag("kawi"),
+    wara = tag("wara"),
+    talu = tag("talu"),
+    soyo = tag("soyo"),
+    dsrt = tag("dsrt"),
+    tutg = tag("tutg"),
+    bopo = tag("bopo"),
+    gonm = tag("gonm"),
+    orkh = tag("orkh"),
+    diak = tag("diak"),
 };
 
 pub const ScriptTagCandidates = struct {
@@ -581,6 +591,16 @@ pub fn openTypeScriptTag(script: Script) OpenTypeScriptTag {
         .siddham => .sidd,
         .medefaidrin => .medf,
         .tangsa => .tnsa,
+        .kawi => .kawi,
+        .warang_citi => .wara,
+        .new_tai_lue => .talu,
+        .soyombo => .soyo,
+        .deseret => .dsrt,
+        .tulu_tigalari => .tutg,
+        .bopomofo => .bopo,
+        .masaram_gondi => .gonm,
+        .old_turkic => .orkh,
+        .dives_akuru => .diak,
         .common, .inherited, .unknown => .dflt,
     };
 }
@@ -836,8 +856,8 @@ fn bidiClassFast(codepoint: u21) ?BidiClass {
 
 fn bidiClassForScript(script: Script) BidiClass {
     return switch (script) {
-        .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .avestan, .imperial_aramaic, .old_south_arabian, .old_north_arabian, .meroitic_hieroglyphs, .meroitic_cursive, .old_hungarian => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .ugaritic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .tagalog, .hanunoo, .buhid, .tagbanwa, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .phags_pa, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .saurashtra, .rejang, .grantha, .limbu, .sharada, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .khudawadi, .tirhuta, .modi, .takri, .nushu, .runic, .coptic, .ogham, .duployan, .tangut, .egyptian_hieroglyphs, .cuneiform, .signwriting, .bamum, .anatolian_hieroglyphs, .khitan_small_script, .linear_a, .braille, .mende_kikakui, .linear_b, .miao, .pahawh_hmong, .cypro_minoan, .bhaiksuki, .siddham, .medefaidrin, .tangsa => .ltr,
+        .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .avestan, .imperial_aramaic, .old_south_arabian, .old_north_arabian, .meroitic_hieroglyphs, .meroitic_cursive, .old_hungarian, .old_turkic => .rtl,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .ugaritic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .tagalog, .hanunoo, .buhid, .tagbanwa, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .phags_pa, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .saurashtra, .rejang, .grantha, .limbu, .sharada, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .khudawadi, .tirhuta, .modi, .takri, .nushu, .runic, .coptic, .ogham, .duployan, .tangut, .egyptian_hieroglyphs, .cuneiform, .signwriting, .bamum, .anatolian_hieroglyphs, .khitan_small_script, .linear_a, .braille, .mende_kikakui, .linear_b, .miao, .pahawh_hmong, .cypro_minoan, .bhaiksuki, .siddham, .medefaidrin, .tangsa, .kawi, .warang_citi, .new_tai_lue, .soyombo, .deseret, .tulu_tigalari, .bopomofo, .masaram_gondi, .dives_akuru => .ltr,
         else => .neutral,
     };
 }
@@ -1224,6 +1244,16 @@ fn wordKindForCodepoint(codepoint: u21) WordKind {
         .siddham => .siddham,
         .medefaidrin => .medefaidrin,
         .tangsa => .tangsa,
+        .kawi => .kawi,
+        .warang_citi => .warang_citi,
+        .new_tai_lue => .new_tai_lue,
+        .soyombo => .soyombo,
+        .deseret => .deseret,
+        .tulu_tigalari => .tulu_tigalari,
+        .bopomofo => .bopomofo,
+        .masaram_gondi => .masaram_gondi,
+        .old_turkic => .old_turkic,
+        .dives_akuru => .dives_akuru,
         .tagalog => .tagalog,
         .hanunoo => .hanunoo,
         .buhid => .buhid,

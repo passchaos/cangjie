@@ -29,6 +29,10 @@ pub const Options = struct {
     /// Default-cmap records scanned while rebuilding a selected-only cmap.
     max_cmap_mappings: usize = 1_000_000,
     max_output_bytes: usize = 64 * 1024 * 1024,
+    /// Keep fvar/avar/gvar and metric-variation tables. The preserve-GID
+    /// contract leaves glyph domains stable, so these tables remain valid for
+    /// retained glyphs while empty unretained outlines are unreachable by cmap.
+    preserve_variations: bool = true,
 };
 
 pub const Result = struct {
@@ -199,7 +203,7 @@ pub fn trueTypeAlloc(
     );
     defer payloads.deinit(allocator);
     for (tables) |table| {
-        if (dropTable(table.tag)) continue;
+        if (dropTable(table.tag, options.preserve_variations)) continue;
         const data = if (std.mem.eql(u8, &table.tag, "head"))
             modified.head
         else if (std.mem.eql(u8, &table.tag, "cmap"))
@@ -262,12 +266,28 @@ fn validateTableProfile(tables: []const font_mod.FontTableInfo) !void {
     }
 }
 
-fn dropTable(tag: [4]u8) bool {
+fn dropTable(tag: [4]u8, preserve_variations: bool) bool {
     // A modified font cannot retain its source digital signature or incremental
     // transfer maps. The latter describe patches against the original bytes.
-    return std.mem.eql(u8, &tag, "DSIG") or
+    if (std.mem.eql(u8, &tag, "DSIG") or
         std.mem.eql(u8, &tag, "IFT ") or
-        std.mem.eql(u8, &tag, "IFTX");
+        std.mem.eql(u8, &tag, "IFTX"))
+    {
+        return true;
+    }
+    if (preserve_variations) return false;
+    // Dropping the complete variation family turns the emitted program into
+    // its default static instance. Never retain gvar/HVAR without fvar (or
+    // vice versa): a partial set would expose coordinates with inconsistent
+    // outline and metric behavior.
+    const variations = [_][4]u8{
+        "avar".*, "cvar".*, "fvar".*, "gvar".*, "HVAR".*,
+        "MVAR".*, "STAT".*, "VVAR".*,
+    };
+    for (variations) |variation_tag| {
+        if (std.mem.eql(u8, &tag, &variation_tag)) return true;
+    }
+    return false;
 }
 
 fn findTable(

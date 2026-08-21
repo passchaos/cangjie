@@ -55,6 +55,44 @@ test "preserve-GID TrueType subset closes compound components" {
     try std.testing.expectEqual(@as(usize, 9), outline.commands.items.len);
 }
 
+test "preserve-GID TrueType subset keeps or strips variation families" {
+    const allocator = std.testing.allocator;
+    const source = try test_font.buildGvarDeltaTtf(allocator);
+    defer allocator.free(source);
+    var face = try public.Face.parse(allocator, source);
+    defer face.deinit();
+
+    var variable = try public.subset.trueTypeAlloc(
+        allocator,
+        &face,
+        &.{1},
+        .{},
+    );
+    defer variable.deinit();
+    var variable_face = try public.Face.parse(allocator, variable.program);
+    defer variable_face.deinit();
+    const axes = try variable_face.variations().axes(allocator);
+    defer allocator.free(axes);
+    try std.testing.expectEqual(@as(usize, 1), axes.len);
+    const varied = try variable_face.glyphs().boundsAt(1, &.{1});
+    const default = try variable_face.glyphs().bounds(1);
+    try std.testing.expect(varied.x_max != default.x_max);
+
+    var static = try public.subset.trueTypeAlloc(
+        allocator,
+        &face,
+        &.{1},
+        .{ .preserve_variations = false },
+    );
+    defer static.deinit();
+    var static_face = try public.Face.parse(allocator, static.program);
+    defer static_face.deinit();
+    const static_axes = try static_face.variations().axes(allocator);
+    defer allocator.free(static_axes);
+    try std.testing.expectEqual(@as(usize, 0), static_axes.len);
+    try std.testing.expectEqual(default, try static_face.glyphs().bounds(1));
+}
+
 test "preserve-GID TrueType subset validates limits and unsupported profiles" {
     const allocator = std.testing.allocator;
     const source = try test_font.buildCompoundPointMatchTtf(allocator);

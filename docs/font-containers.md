@@ -297,3 +297,12 @@ Cangjie/Skrifa/Skrifa/Cangjie medians over one million reads were
 low-level bitmap APIs retain complete post-parse location/data validation,
 while immutable Face reads reuse the parse proof. This is narrow strike
 metadata evidence, not an overall Fontations performance claim.
+
+Preserve-GID TrueType subsetting now handles variable fonts explicitly. The
+default keeps the complete fvar/avar/gvar/HVAR/VVAR/MVAR/STAT/cvar family: GIDs
+and glyph-count domains remain stable, so retained glyph outlines and metrics
+continue to vary while cmap hides unretained glyphs. Callers that need a static
+default-instance program can set `preserve_variations=false`; the entire
+coupled variation family is then removed together rather than emitting a
+partially variable font. A focused gvar fixture proves both the retained
+non-default outline and the stripped zero-axis/default-outline result.

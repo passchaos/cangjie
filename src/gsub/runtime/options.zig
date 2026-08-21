@@ -19,6 +19,7 @@ pub const UserFeature = struct {
     values: []const u32,
     tag: u32,
     value: u32 = 1,
+    include_script_candidates: bool = true,
 };
 
 pub const Options = struct {

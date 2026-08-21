@@ -113,6 +113,19 @@ test "user ranges and script candidates independently enable cursors" {
     try std.testing.expect(filtering.scriptOrUserFeatureAllowsGlyph(run, 1));
     try std.testing.expect(filtering.scriptOrUserFeatureAllowsGlyph(run, 2));
     try std.testing.expect(!filtering.scriptOrUserFeatureAllowsGlyph(run, 3));
+
+    var user_only = user_feature;
+    user_only.include_script_candidates = false;
+    var user_only_run = run;
+    user_only_run.user_feature = &user_only;
+    try std.testing.expect(!filtering.scriptOrUserFeatureAllowsGlyph(
+        user_only_run,
+        0,
+    ));
+    try std.testing.expect(filtering.scriptOrUserFeatureAllowsGlyph(
+        user_only_run,
+        1,
+    ));
 }
 
 test "context filtering preserves substituted joiners CGJ and Mongolian FVS rules" {

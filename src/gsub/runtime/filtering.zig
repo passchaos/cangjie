@@ -94,13 +94,16 @@ pub noinline fn scriptOrUserFeatureAllowsGlyph(
 ) linksection(shaping_sections.isolated_hotpaths) bool {
     const script_scoped = run.active_source_feature_mask != 0 or
         run.active_source_feature != null;
-    if (script_scoped and sourceFeatureAllowsGlyph(run, glyph_index)) {
+    const user = run.user_feature;
+    if ((user == null or user.?.include_script_candidates) and
+        script_scoped and sourceFeatureAllowsGlyph(run, glyph_index))
+    {
         return true;
     }
-    const user = run.user_feature orelse return !script_scoped;
+    const active_user = user orelse return !script_scoped;
     const source = sourceForGlyph(run, glyph_index);
-    return source < user.values.len and
-        user.values[source] == user.value;
+    return source < active_user.values.len and
+        active_user.values[source] == active_user.value;
 }
 
 pub inline fn lookupCursorAllowsGlyph(

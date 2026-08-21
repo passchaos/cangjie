@@ -76,6 +76,7 @@ pub noinline fn collect(
             !prefilter.groupsMayMatchRun(
                 accelerator.coverage_groups,
                 accelerator.coverage_group_slots,
+                accelerator.coverage_group_direct,
                 glyphs,
                 lookup_flag,
                 run,

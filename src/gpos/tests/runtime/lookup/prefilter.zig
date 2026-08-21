@@ -73,6 +73,7 @@ test "exact coverage groups reject digest false positives" {
     try std.testing.expect(prefilter.groupsMayMatchRun(
         &groups,
         &.{},
+        &.{},
         &.{20},
         0,
         .{},
@@ -80,6 +81,31 @@ test "exact coverage groups reject digest false positives" {
     try std.testing.expect(!prefilter.groupsMayMatchRun(
         &groups,
         &.{},
+        &.{},
+        &.{21},
+        0,
+        .{},
+    ));
+}
+
+test "exact coverage groups use a dense direct index when available" {
+    const groups = [_]accelerator.glyph_groups.Group{
+        .{ .glyph = 20, .subtable_indices = &.{0} },
+    };
+    var direct = [_]u16{0} ** 22;
+    direct[20] = 1;
+    try std.testing.expect(prefilter.groupsMayMatchRun(
+        &groups,
+        &.{},
+        &direct,
+        &.{20},
+        0,
+        .{},
+    ));
+    try std.testing.expect(!prefilter.groupsMayMatchRun(
+        &groups,
+        &.{},
+        &direct,
         &.{21},
         0,
         .{},

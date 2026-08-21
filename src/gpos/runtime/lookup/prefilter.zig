@@ -72,13 +72,19 @@ pub fn runDigest(
 pub fn groupsMayMatchRun(
     groups: []const Group,
     slots: []const u16,
+    direct: []const u16,
     glyphs: []const GlyphId,
     lookup_flag: u16,
     run: Options,
 ) bool {
     for (glyphs) |glyph| {
         if (matching.lookupIgnoresGlyph(lookup_flag, run, glyph)) continue;
-        if (accelerator.glyph_groups.find(groups, slots, glyph) != null) {
+        if (accelerator.glyph_groups.findDirect(
+            groups,
+            slots,
+            direct,
+            glyph,
+        ) != null) {
             return true;
         }
     }

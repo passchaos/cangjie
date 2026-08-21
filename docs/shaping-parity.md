@@ -3352,3 +3352,13 @@ shaping-performance superiority.
   still measured Cangjie near `1.407--1.410 us/glyph` versus HarfBuzz near
   `0.997--1.001 us/glyph`, so the broader shaping-performance objective
   remains open.
+- GPOS's exact whole-run coverage prefilter now consumes the dense glyph-to-
+  group index already built for compact fonts instead of falling back to its
+  hash table while PairPos later used the dense index. A focused regression
+  covers direct-index hits and misses. Fixed-CPU-8 A/B/B/A counters over five
+  complete Devanagari `hi-words` passes reduced retired instructions from
+  `2.94327B/2.94328B` to `2.93909B/2.93905B` (about `0.14%`) and branches
+  from `501.82M/501.82M` to `501.14M/501.13M` (about `0.14%`). Cycles fell
+  about `3.0%` in this order, but the broader wall-time samples were noisy, so
+  only the retired-work reduction is claimed. Corpus checksum
+  `33d837ee98745b5d` remained unchanged.

@@ -191,6 +191,7 @@ pub fn run(input: Input) !void {
             null
         else
             codepoints.items,
+        .run_has_default_ignorables = has_default_ignorable,
         .shape_profile = shape_profile,
         .profile_fast_path = buffer.profile_fast_path,
         .profile_io = profile_io,

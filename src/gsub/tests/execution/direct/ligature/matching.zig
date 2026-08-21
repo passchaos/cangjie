@@ -157,6 +157,52 @@ test "direct matcher stops at source syllable boundaries" {
     )) == null);
 }
 
+test "ligature traversal uses no-default-ignorables visibility proof" {
+    const traversal = @import("../../../../execution/direct/ligature/matching/traversal.zig");
+    const codepoints = [_]u21{ 0x0915, 0x094d, 0x0937 };
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2 });
+    const syllables = [_]u8{ 1, 1, 1 };
+    var offsets: [ligature.max_components]usize = undefined;
+    const run: @import("../../../../runtime/options.zig").Options = .{
+        .glyph_source_indices = &sources,
+        .source_codepoints = &codepoints,
+        .run_has_default_ignorables = false,
+        .source_syllables = &syllables,
+        .match_source_syllable = true,
+    };
+    const end = traversal.matchSlice(
+        &.{ 2, 3 },
+        &.{ 1, 2, 3 },
+        0,
+        0,
+        run,
+        1,
+        &offsets,
+    ).?;
+    try std.testing.expectEqual(@as(usize, 3), end);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, offsets[0..3]);
+
+    var split = syllables;
+    split[2] = 2;
+    try std.testing.expect(traversal.matchSlice(
+        &.{ 2, 3 },
+        &.{ 1, 2, 3 },
+        0,
+        0,
+        .{
+            .glyph_source_indices = &sources,
+            .source_codepoints = &codepoints,
+            .run_has_default_ignorables = false,
+            .source_syllables = &split,
+            .match_source_syllable = true,
+        },
+        1,
+        &offsets,
+    ) == null);
+}
+
 test "accelerated and prefiltered matchers preserve component offsets" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 42;

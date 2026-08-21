@@ -3327,3 +3327,14 @@ shaping-performance superiority.
   retired work: Roboto instructions measured `1.24695B/1.24719B` versus
   `1.24716B/1.24746B` for the baseline, and Amiri measured
   `4.67275B/4.67286B` versus `4.67425B/4.67306B`.
+- Ligature component traversal now consumes the source stage's whole-run
+  no-default-ignorables proof. For LookupFlag-zero runs, physical adjacency is
+  already visibility adjacency, so the matcher compares components directly
+  while retaining Indic syllable boundaries and source codepoints needed for
+  ligature provenance. On fixed CPU 8, five-repeat counters over five complete
+  NotoSansDevanagari `hi-words` passes reduced retired instructions from about
+  `3.0196B` to `2.9911B` (about `0.94%`), branches from `514.7M` to `508.6M`
+  (about `1.19%`), and cycles from `1.258B` to `1.195B` (about `5.0%`). Wall
+  time remained frequency-bimodal, so the retained claim is the reduced work.
+  HarfBuzz and HarfRust comparisons both pass all 10,000 lines with checksum
+  `b01a5388ce792b49`.

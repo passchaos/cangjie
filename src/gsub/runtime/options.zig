@@ -65,6 +65,10 @@ pub const Options = struct {
     match_source_syllable_lookups: ?[]const u16 = null,
     /// Original scalars indexed by `glyph_source_indices`.
     source_codepoints: ?[]const u21 = null,
+    /// Whole-run proof that the source contains no default-ignorable scalar.
+    /// Ligature traversal can skip Unicode visibility work while retaining
+    /// source codepoints for provenance classification.
+    run_has_default_ignorables: ?bool = null,
     visible_variation_selectors: bool = false,
     /// Whether AAT receives a physically source-reversed glyph stream.
     aat_buffer_reversed: bool = false,

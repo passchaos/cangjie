@@ -39,6 +39,24 @@ pub fn matchSliceFrom(
     anchor_syllable: ?u8,
     component_offsets: *[model.max_components]usize,
 ) ?usize {
+    // With no LookupFlag filtering and no default-ignorables, the next
+    // physical glyph is also the next visible glyph. Syllable scoping remains
+    // authoritative for Indic stages.
+    if (lookup_flag == 0 and run.run_has_default_ignorables == false) {
+        const match_end = start + expected.len;
+        if (match_end > glyphs.len) return null;
+        for (expected, first_component..) |wanted, component_index| {
+            const cursor = start + component_index - first_component;
+            if (!filtering.ligatureAllowsRelativeGlyph(
+                run,
+                anchor_syllable,
+                glyph_base,
+                cursor,
+            ) or glyphs[cursor] != wanted) return null;
+            component_offsets[component_index] = cursor;
+        }
+        return match_end;
+    }
     var cursor = start;
     for (expected, first_component..) |wanted, component_index| {
         cursor = nextVisibleOffset(

@@ -42,6 +42,9 @@ pub const Script = enum {
     thai,
     lao,
     tagalog,
+    hanunoo,
+    buhid,
+    tagbanwa,
     khmer,
     myanmar,
     devanagari,
@@ -144,6 +147,9 @@ pub fn forCodepoint(codepoint: u21) Script {
     if (ranges.isThai(codepoint)) return .thai;
     if (ranges.isLao(codepoint)) return .lao;
     if (ranges.isTagalog(codepoint)) return .tagalog;
+    if (ranges.isHanunoo(codepoint)) return .hanunoo;
+    if (ranges.isBuhid(codepoint)) return .buhid;
+    if (ranges.isTagbanwa(codepoint)) return .tagbanwa;
     if (ranges.isKhmer(codepoint)) return .khmer;
     if (ranges.isMyanmar(codepoint)) return .myanmar;
     if (codepoint >= 0x0900 and codepoint <= 0x097f) return .devanagari;
@@ -259,6 +265,7 @@ fn isCommon(codepoint: u21) bool {
     return (codepoint >= 0x0000 and codepoint <= 0x0040) or
         (codepoint >= 0x005b and codepoint <= 0x0060) or
         (codepoint >= 0x007b and codepoint <= 0x00a9) or
+        (codepoint >= 0x1735 and codepoint <= 0x1736) or
         (codepoint >= 0x2000 and codepoint <= 0x206f) or
         (codepoint >= 0x3000 and codepoint <= 0x303f);
 }

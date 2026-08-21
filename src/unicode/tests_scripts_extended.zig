@@ -41,6 +41,53 @@ test "Tagalog text selects Baybayin script primitives" {
     );
 }
 
+test "Hanunoo Buhid and Tagbanwa select distinct Philippine script primitives" {
+    const allocator = std.testing.allocator;
+
+    const Cases = struct {
+        text: []const u8,
+        expected_script: unicode.Script,
+        expected_tag: unicode.OpenTypeScriptTag,
+        reserved: u21,
+    };
+    const cases = [_]Cases{
+        .{ .text = "\u{1723}\u{1732}\u{1734}", .expected_script = .hanunoo, .expected_tag = .hano, .reserved = 0x1737 },
+        .{ .text = "\u{1743}\u{1752}", .expected_script = .buhid, .expected_tag = .buhd, .reserved = 0x1754 },
+        .{ .text = "\u{1763}\u{1772}", .expected_script = .tagbanwa, .expected_tag = .tagb, .reserved = 0x176d },
+    };
+
+    for (cases) |case| {
+        const clusters = try unicode.itemizeGraphemeClusters(allocator, case.text);
+        defer allocator.free(clusters);
+        try std.testing.expectEqual(@as(usize, 1), clusters.len);
+        try std.testing.expectEqual(@as(usize, 0), clusters[0].byte_start);
+        try std.testing.expectEqual(case.text.len, clusters[0].byte_len);
+
+        const runs = try unicode.itemizeScriptRuns(allocator, case.text);
+        defer allocator.free(runs);
+        try std.testing.expectEqual(@as(usize, 1), runs.len);
+        try std.testing.expectEqual(case.expected_script, runs[0].script);
+        try std.testing.expectEqual(case.expected_tag, unicode.openTypeScriptTag(runs[0].script));
+        try std.testing.expectEqual(unicode.BidiClass.ltr, unicode.bidiClassForCodepoint(try std.unicode.utf8Decode(case.text[0..3])));
+        try std.testing.expectEqual(unicode.Script.unknown, unicode.scriptForCodepoint(case.reserved));
+
+        const words = try unicode.itemizeWordSegments(allocator, case.text);
+        defer allocator.free(words);
+        try std.testing.expectEqual(@as(usize, 1), words.len);
+        try std.testing.expectEqual(@as(usize, 0), words[0].byte_start);
+        try std.testing.expectEqual(case.text.len, words[0].byte_len);
+    }
+
+    // The two shared punctuation marks have Script=Common. In surrounding
+    // text they inherit the neighboring script run, but they do not become
+    // editor words by themselves.
+    try std.testing.expectEqual(unicode.Script.common, unicode.scriptForCodepoint(0x1735));
+    try std.testing.expectEqual(unicode.Script.common, unicode.scriptForCodepoint(0x1736));
+    const punctuation_words = try unicode.itemizeWordSegments(allocator, "\u{1735}\u{1736}");
+    defer allocator.free(punctuation_words);
+    try std.testing.expectEqual(@as(usize, 0), punctuation_words.len);
+}
+
 test "Rejang syllables keep signs and select Rejang OpenType script" {
     const allocator = std.testing.allocator;
 

@@ -226,6 +226,25 @@ pub fn isTagalog(codepoint: u21) bool {
         codepoint == 0x171f;
 }
 
+pub fn isHanunoo(codepoint: u21) bool {
+    // U+1735/U+1736 are shared Philippine punctuation with Script=Common, not
+    // Hanunoo. Keeping them out lets script-run inheritance choose the actual
+    // neighboring writing system instead of forcing the `hano` ScriptList.
+    return codepoint >= 0x1720 and codepoint <= 0x1734;
+}
+
+pub fn isBuhid(codepoint: u21) bool {
+    return codepoint >= 0x1740 and codepoint <= 0x1753;
+}
+
+pub fn isTagbanwa(codepoint: u21) bool {
+    // U+176D and U+1771 are reserved holes inside the block. Explicit ranges
+    // prevent future assignments from silently changing shaping behavior.
+    return (codepoint >= 0x1760 and codepoint <= 0x176c) or
+        (codepoint >= 0x176e and codepoint <= 0x1770) or
+        (codepoint >= 0x1772 and codepoint <= 0x1773);
+}
+
 pub fn isKhmer(codepoint: u21) bool {
     return (codepoint >= 0x1780 and codepoint <= 0x17ff) or
         (codepoint >= 0x19e0 and codepoint <= 0x19ff);

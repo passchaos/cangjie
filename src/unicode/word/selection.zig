@@ -13,6 +13,9 @@ pub const Script = enum {
     katakana,
     hangul,
     tagalog,
+    hanunoo,
+    buhid,
+    tagbanwa,
     arabic,
     hebrew,
     armenian,
@@ -49,6 +52,9 @@ pub const Kind = enum {
     lisu,
     vai,
     tagalog,
+    hanunoo,
+    buhid,
+    tagbanwa,
     arabic,
     hebrew,
     syriac,
@@ -119,6 +125,9 @@ pub fn kindForCodepoint(codepoint: u21, script: Script) Kind {
     if (isLisuWordCodepoint(codepoint)) return .lisu;
     if (isVaiWordCodepoint(codepoint)) return .vai;
     if (isTagalogWordCodepoint(codepoint)) return .tagalog;
+    if (isHanunooWordCodepoint(codepoint)) return .hanunoo;
+    if (isBuhidWordCodepoint(codepoint)) return .buhid;
+    if (isTagbanwaWordCodepoint(codepoint)) return .tagbanwa;
     if (isKhmerWordCodepoint(codepoint)) return .khmer;
     if (isMyanmarWordCodepoint(codepoint)) return .myanmar;
     if (isThaanaWordCodepoint(codepoint)) return .thaana;
@@ -181,6 +190,9 @@ pub fn kindForCodepoint(codepoint: u21, script: Script) Kind {
         .brahmi => .brahmi,
         .khudawadi, .tirhuta, .modi, .takri => .single,
         .tagalog => .tagalog,
+        .hanunoo => .hanunoo,
+        .buhid => .buhid,
+        .tagbanwa => .tagbanwa,
         else => .none,
     };
 }
@@ -205,6 +217,21 @@ fn isTagalogWordCodepoint(codepoint: u21) bool {
     // through the generated Extend/SpacingMark properties after a word starts.
     return (codepoint >= 0x1700 and codepoint <= 0x1711) or
         codepoint == 0x171f;
+}
+
+fn isHanunooWordCodepoint(codepoint: u21) bool {
+    // Philippine punctuation stays outside word spans. Dependent signs attach
+    // through the generic Extend/SpacingMark path once a letter starts a word.
+    return codepoint >= 0x1720 and codepoint <= 0x1731;
+}
+
+fn isBuhidWordCodepoint(codepoint: u21) bool {
+    return codepoint >= 0x1740 and codepoint <= 0x1751;
+}
+
+fn isTagbanwaWordCodepoint(codepoint: u21) bool {
+    return (codepoint >= 0x1760 and codepoint <= 0x176c) or
+        (codepoint >= 0x176e and codepoint <= 0x1770);
 }
 
 fn isNewaWordCodepoint(codepoint: u21) bool {

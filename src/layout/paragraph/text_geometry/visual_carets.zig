@@ -129,6 +129,22 @@ pub fn previous(
     return adjacent(geometry, current, false);
 }
 
+pub fn nextWord(
+    geometry: records.GeometryView,
+    words: []const records.SelectionRange,
+    current: records.CaretPosition,
+) ?records.CaretGeometry {
+    return adjacentWord(geometry, words, current, true);
+}
+
+pub fn previousWord(
+    geometry: records.GeometryView,
+    words: []const records.SelectionRange,
+    current: records.CaretPosition,
+) ?records.CaretGeometry {
+    return adjacentWord(geometry, words, current, false);
+}
+
 pub fn nextLine(
     geometry: records.GeometryView,
     current: records.CaretPosition,
@@ -177,6 +193,80 @@ fn adjacent(
             axes.blockStart(geometry.writing_mode, line.bounds),
             axes.blockSize(geometry.writing_mode, line.bounds),
             target.inline_position,
+        ),
+    };
+}
+
+fn adjacentWord(
+    geometry: records.GeometryView,
+    words: []const records.SelectionRange,
+    requested: records.CaretPosition,
+    forward: bool,
+) ?records.CaretGeometry {
+    const normalized = @import("interaction.zig").caret(
+        geometry,
+        requested,
+    ) orelse return null;
+    const current_index = stopIndex(
+        geometry.visual_caret_stops,
+        normalized.position,
+        normalized.line_index,
+    ) orelse return null;
+
+    if (forward) {
+        var index = current_index + 1;
+        while (index < geometry.visual_caret_stops.len) : (index += 1) {
+            if (wordStartAtStop(geometry.visual_caret_stops[index], words, true)) |position| {
+                return geometryForStop(geometry, index, position);
+            }
+        }
+        return null;
+    }
+    var index = current_index;
+    while (index > 0) {
+        index -= 1;
+        if (wordStartAtStop(geometry.visual_caret_stops[index], words, false)) |position| {
+            return geometryForStop(geometry, index, position);
+        }
+    }
+    return null;
+}
+
+fn wordStartAtStop(
+    stop: records.VisualCaretStop,
+    words: []const records.SelectionRange,
+    forward: bool,
+) ?records.CaretPosition {
+    const candidates = if (forward)
+        [_]records.CaretPosition{ stop.from_start, stop.from_end }
+    else
+        [_]records.CaretPosition{ stop.from_end, stop.from_start };
+    for (candidates) |candidate| {
+        if (candidate.affinity != .downstream) continue;
+        for (words) |word| {
+            if (candidate.byte_offset == word.byte_start) return candidate;
+        }
+    }
+    return null;
+}
+
+fn geometryForStop(
+    geometry: records.GeometryView,
+    stop_index: usize,
+    position: records.CaretPosition,
+) ?records.CaretGeometry {
+    if (stop_index >= geometry.visual_caret_stops.len) return null;
+    const stop = geometry.visual_caret_stops[stop_index];
+    if (stop.line_index >= geometry.lines.len) return null;
+    const line = geometry.lines[stop.line_index];
+    return .{
+        .position = position,
+        .line_index = stop.line_index,
+        .rect = axes.caretRect(
+            geometry.writing_mode,
+            axes.blockStart(geometry.writing_mode, line.bounds),
+            axes.blockSize(geometry.writing_mode, line.bounds),
+            stop.inline_position,
         ),
     };
 }

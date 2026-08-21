@@ -1867,7 +1867,10 @@ words do not collapse into a misleading bounding box. Punctuation, whitespace,
 out-of-range offsets, and truncated-away words return null. This complements
 the existing affinity-aware caret, hit-test, selection, visual-caret, and
 cross-line navigation surface while keeping editing policy outside the layout
-owner.
+owner. `nextVisualWord` and `previousVisualWord` reuse the same physical caret
+topology and retained UAX #29 ranges, skipping punctuation/whitespace while
+following rendered mixed-bidi and wrapped-line order rather than assuming that
+UTF-8 offsets increase visually.
 
 ## Next Structural Steps
 

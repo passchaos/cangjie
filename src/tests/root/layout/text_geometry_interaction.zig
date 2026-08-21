@@ -399,4 +399,50 @@ test "text geometry resolves UAX words and wrapped visual fragments" {
     try std.testing.expect(second.fragments[0].line_index >
         first.fragments[0].line_index);
     try std.testing.expect((try geometry.wordAt(allocator, text.len + 1)) == null);
+
+    const first_start = geometry.caret(.{ .byte_offset = 0 }).?;
+    const next_word = geometry.nextVisualWord(first_start.position).?;
+    try std.testing.expectEqual(@as(usize, 4), next_word.position.byte_offset);
+    try std.testing.expectEqual(
+        paragraph.TextGeometryAffinity.downstream,
+        next_word.position.affinity,
+    );
+    const previous_word = geometry.previousVisualWord(next_word.position).?;
+    try std.testing.expectEqual(@as(usize, 0), previous_word.position.byte_offset);
+    try std.testing.expect(geometry.previousVisualWord(first_start.position) == null);
+    try std.testing.expect(geometry.nextVisualWord(next_word.position) == null);
+}
+
+test "visual word navigation follows mixed-direction line order" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const text = "A \u{05d0}\u{05d1}";
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const layout = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&fonts),
+        &layout_buffer,
+        text,
+        20,
+        .{ .max_width = 200 },
+    );
+    var geometry = try paragraph.buildGeometry(
+        allocator,
+        text,
+        layout,
+        .{ .direction = .ltr },
+    );
+    defer geometry.deinit();
+
+    const latin = geometry.caret(.{ .byte_offset = 0 }).?;
+    const hebrew = geometry.nextVisualWord(latin.position).?;
+    try std.testing.expectEqual(@as(usize, 2), hebrew.position.byte_offset);
+    try std.testing.expect(hebrew.rect.x > latin.rect.x);
+    const back = geometry.previousVisualWord(hebrew.position).?;
+    try std.testing.expectEqual(latin.position, back.position);
 }

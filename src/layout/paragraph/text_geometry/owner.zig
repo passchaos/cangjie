@@ -103,6 +103,34 @@ pub const TextGeometry = struct {
         return visual_carets.previous(self.geometryView(), current);
     }
 
+    /// Move through UAX #29 word starts in physical visual order.
+    ///
+    /// This skips punctuation and whitespace segments. Mixed-direction lines
+    /// therefore follow the rendered order rather than increasing UTF-8 byte
+    /// offsets, matching editor Ctrl/Option-arrow behavior.
+    pub fn nextVisualWord(
+        self: TextGeometry,
+        current: records.CaretPosition,
+    ) ?records.CaretGeometry {
+        return visual_carets.nextWord(
+            self.geometryView(),
+            self.words,
+            current,
+        );
+    }
+
+    /// Move to the previous UAX #29 word start in physical visual order.
+    pub fn previousVisualWord(
+        self: TextGeometry,
+        current: records.CaretPosition,
+    ) ?records.CaretGeometry {
+        return visual_carets.previousWord(
+            self.geometryView(),
+            self.words,
+            current,
+        );
+    }
+
     /// Move to the nearest stop on the following visual line.
     ///
     /// `preferred_inline` is caller-owned state and should remain unchanged

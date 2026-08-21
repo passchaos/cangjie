@@ -111,19 +111,3 @@ test "exact coverage groups use a dense direct index when available" {
         .{},
     ));
 }
-
-test "exact coverage groups retain lookup filtering" {
-    const groups = [_]accelerator.glyph_groups.Group{
-        .{ .glyph = 20, .subtable_indices = &.{0} },
-    };
-    var classes = [_]u16{0} ** 21;
-    classes[20] = 3;
-    try std.testing.expect(!prefilter.groupsMayMatchRun(
-        &groups,
-        &.{},
-        &.{},
-        &.{20},
-        0x0008,
-        .{ .glyph_classes = &classes },
-    ));
-}

@@ -77,20 +77,6 @@ pub fn groupsMayMatchRun(
     lookup_flag: u16,
     run: Options,
 ) bool {
-    if (lookup_flag == 0) {
-        // The dominant GPOS case has no lookup filtering. Select this loop
-        // once instead of proving the same flag state for every glyph in each
-        // exact whole-run preflight.
-        for (glyphs) |glyph| {
-            if (accelerator.glyph_groups.findDirect(
-                groups,
-                slots,
-                direct,
-                glyph,
-            ) != null) return true;
-        }
-        return false;
-    }
     for (glyphs) |glyph| {
         if (matching.lookupIgnoresGlyph(lookup_flag, run, glyph)) continue;
         if (accelerator.glyph_groups.findDirect(

@@ -11,6 +11,7 @@ const std = @import("std");
 const bin = @import("../../binary.zig");
 const core_api = @import("../../api/font/metadata/core/root.zig");
 const face_mod = @import("../face/root.zig");
+const bitmap = @import("../tables/bitmap/root.zig");
 const compound = @import("../tables/truetype/glyf/compound.zig");
 const font_mod = @import("../../font.zig");
 const glyph_mod = @import("../../glyph.zig");
@@ -42,9 +43,12 @@ pub const Options = struct {
     /// Retain validated SVG documents that cover retained glyph IDs. Documents
     /// are emitted as one-glyph records so removed IDs are never advertised.
     preserve_svg_documents: bool = true,
-    /// Retain Apple sbix PNG strikes. Location-table CBDT/EBDT families remain
-    /// unsupported until their index-subtable rewrite is implemented.
+    /// Retain Apple sbix PNG strikes.
     preserve_sbix_strikes: bool = true,
+    /// Retain CBDT PNG strikes (image formats 17/18/19). Each strike is rebuilt
+    /// with one dense format-1 index so removed GIDs have empty records. Raw
+    /// bitmap and compound images remain outside this initial bounded profile.
+    preserve_cbdt_png_strikes: bool = true,
 };
 
 pub const Result = struct {
@@ -99,6 +103,8 @@ const ModifiedTables = struct {
     colr: ?[]u8,
     svg: ?[]u8,
     sbix: ?[]u8,
+    cbdt: ?[]u8,
+    cblc: ?[]u8,
 
     fn deinit(self: *ModifiedTables) void {
         self.allocator.free(self.head);
@@ -108,6 +114,8 @@ const ModifiedTables = struct {
         if (self.colr) |colr| self.allocator.free(colr);
         if (self.svg) |svg| self.allocator.free(svg);
         if (self.sbix) |sbix| self.allocator.free(sbix);
+        if (self.cbdt) |cbdt| self.allocator.free(cbdt);
+        if (self.cblc) |cblc| self.allocator.free(cblc);
         self.* = undefined;
     }
 };
@@ -140,7 +148,7 @@ pub fn trueTypeAlloc(
 
     const tables = try core.tables(allocator);
     defer allocator.free(tables);
-    try validateTableProfile(tables);
+    try validateTableProfile(tables, options);
     const has_colr_v0 = try validateColorProfile(
         face,
         tables,
@@ -265,6 +273,9 @@ pub fn trueTypeAlloc(
         has_colr_v0,
         options.preserve_svg_documents and findTable(tables, "SVG ") != null,
         options.preserve_sbix_strikes and findTable(tables, "sbix") != null,
+        options.preserve_cbdt_png_strikes and
+            findTable(tables, "CBLC") != null and
+            findTable(tables, "CBDT") != null,
         options.max_output_bytes,
     );
     defer modified.deinit();
@@ -290,6 +301,10 @@ pub fn trueTypeAlloc(
             modified.svg orelse return error.InvalidFontSubset
         else if (std.mem.eql(u8, &table.tag, "sbix"))
             modified.sbix orelse return error.InvalidFontSubset
+        else if (std.mem.eql(u8, &table.tag, "CBDT"))
+            modified.cbdt orelse return error.InvalidFontSubset
+        else if (std.mem.eql(u8, &table.tag, "CBLC"))
+            modified.cblc orelse return error.InvalidFontSubset
         else
             (try core.tableData(table.tag)) orelse
                 return error.InvalidFontSubset;
@@ -326,14 +341,21 @@ fn validateOptions(options: Options) !void {
     }
 }
 
-fn validateTableProfile(tables: []const font_mod.FontTableInfo) !void {
+fn validateTableProfile(
+    tables: []const font_mod.FontTableInfo,
+    _: Options,
+) !void {
     const unsupported = [_][4]u8{
-        "CBDT".*, "CBLC".*, "EBDT".*, "EBLC".*,
-        "VARC".*, "bdat".*, "bloc".*,
+        "EBDT".*, "EBLC".*,
+        "VARC".*, "bdat".*,
+        "bloc".*,
     };
     for (unsupported) |tag| {
         if (findTable(tables, &tag) != null) return error.UnsupportedFontSubset;
     }
+    const has_cbdt = findTable(tables, "CBDT") != null;
+    const has_cblc = findTable(tables, "CBLC") != null;
+    if (has_cbdt != has_cblc) return error.UnsupportedFontSubset;
     if (findTable(tables, "glyf") == null or
         findTable(tables, "loca") == null or
         findTable(tables, "head") == null or
@@ -381,6 +403,12 @@ fn dropTable(tag: [4]u8, options: Options) bool {
     }
     if (!options.preserve_sbix_strikes and
         std.mem.eql(u8, &tag, "sbix"))
+    {
+        return true;
+    }
+    if (!options.preserve_cbdt_png_strikes and
+        (std.mem.eql(u8, &tag, "CBDT") or
+            std.mem.eql(u8, &tag, "CBLC")))
     {
         return true;
     }
@@ -520,6 +548,7 @@ fn buildModifiedTables(
     has_colr_v0: bool,
     has_svg: bool,
     has_sbix: bool,
+    has_cbdt: bool,
     max_output_bytes: usize,
 ) !ModifiedTables {
     const core = core_api.inspect(face);
@@ -604,6 +633,21 @@ fn buildModifiedTables(
             return error.FontSubsetOutputLimitExceeded;
         }
     }
+    const cbdt_cblc = if (has_cbdt)
+        try buildCbdtPngAlloc(allocator, face, retained)
+    else
+        null;
+    errdefer if (cbdt_cblc) |pair| {
+        allocator.free(pair.cbdt);
+        allocator.free(pair.cblc);
+    };
+    if (cbdt_cblc) |pair| {
+        if (pair.cbdt.len > max_output_bytes or
+            pair.cblc.len > max_output_bytes)
+        {
+            return error.FontSubsetOutputLimitExceeded;
+        }
+    }
     return .{
         .allocator = allocator,
         .head = head,
@@ -613,6 +657,8 @@ fn buildModifiedTables(
         .colr = colr,
         .svg = svg,
         .sbix = sbix,
+        .cbdt = if (cbdt_cblc) |pair| pair.cbdt else null,
+        .cblc = if (cbdt_cblc) |pair| pair.cblc else null,
     };
 }
 
@@ -622,6 +668,174 @@ const SbixImage = struct {
     origin_y: i16,
     data: []const u8,
 };
+
+const CbdtPair = struct {
+    cbdt: []u8,
+    cblc: []u8,
+};
+
+const CbdtStrike = struct {
+    source: bitmap.cblc.Strike,
+    images: []?[]const u8,
+    image_format: u16,
+
+    fn deinit(self: *CbdtStrike, allocator: std.mem.Allocator) void {
+        for (self.images) |image| if (image) |bytes| allocator.free(bytes);
+        allocator.free(self.images);
+        self.* = undefined;
+    }
+};
+
+fn buildCbdtPngAlloc(
+    allocator: std.mem.Allocator,
+    face: *const face_mod.Face,
+    retained: []const bool,
+) !CbdtPair {
+    const core = core_api.inspect(face);
+    const cblc_data = (try core.tableData("CBLC".*)) orelse
+        return error.InvalidFontSubset;
+    const cbdt_data = (try core.tableData("CBDT".*)) orelse
+        return error.InvalidFontSubset;
+    const location_table = bitmap.Table{ .offset = 0, .length = cblc_data.len };
+    const strike_count = try bitmap.cblc.strikeCount(
+        cblc_data,
+        location_table,
+    );
+    const strikes = try allocator.alloc(CbdtStrike, strike_count);
+    var built: usize = 0;
+    defer {
+        for (strikes[0..built]) |*strike| strike.deinit(allocator);
+        allocator.free(strikes);
+    }
+
+    for (strikes, 0..) |*output, strike_index| {
+        const strike = try bitmap.cblc.strike(
+            cblc_data,
+            location_table,
+            @intCast(retained.len),
+            strike_index,
+        );
+        const images = try allocator.alloc(?[]const u8, retained.len);
+        @memset(images, null);
+        output.* = .{ .source = strike, .images = images, .image_format = 0 };
+        built += 1;
+        for (retained, 0..) |keep, glyph_index| {
+            if (!keep) continue;
+            const location = (try bitmap.cblc.glyphLocationInStrike(
+                cblc_data,
+                strike,
+                @intCast(glyph_index),
+            )) orelse continue;
+            if (location.image_format != 17 and
+                location.image_format != 18 and
+                location.image_format != 19)
+            {
+                return error.UnsupportedFontSubset;
+            }
+            // Format 19 has no inline metrics and therefore cannot be moved to
+            // the format-1 index used by this first serializer without also
+            // changing its CBDT image format. Keep that profile explicit until
+            // a shared-metrics-preserving index-2 writer is added.
+            if (location.image_format == 19) {
+                return error.UnsupportedFontSubset;
+            }
+            if (output.image_format != 0 and
+                output.image_format != location.image_format)
+            {
+                return error.UnsupportedFontSubset;
+            }
+            output.image_format = location.image_format;
+            if (location.offset > cbdt_data.len or
+                location.length > cbdt_data.len - location.offset)
+            {
+                return error.InvalidFontSubset;
+            }
+            output.images[glyph_index] = try allocator.dupe(
+                u8,
+                cbdt_data[location.offset .. location.offset + location.length],
+            );
+        }
+    }
+
+    return serializeCbdtPngStrikes(allocator, strikes, retained.len);
+}
+
+fn serializeCbdtPngStrikes(
+    allocator: std.mem.Allocator,
+    strikes: []const CbdtStrike,
+    glyph_count: usize,
+) !CbdtPair {
+    var cbdt_len: usize = 4;
+    for (strikes) |strike| for (strike.images) |image| {
+        if (image) |bytes| cbdt_len = try addChecked(cbdt_len, bytes.len);
+    };
+    const cbdt = try allocator.alloc(u8, cbdt_len);
+    errdefer allocator.free(cbdt);
+    @memset(cbdt, 0);
+    writeU16(cbdt, 0, 3);
+
+    const header_len = try addChecked(8, strikes.len * 48);
+    const strike_index_len = try addChecked(8, 8 + (glyph_count + 1) * 4);
+    const cblc_len = try addChecked(header_len, strikes.len * strike_index_len);
+    const cblc = try allocator.alloc(u8, cblc_len);
+    errdefer allocator.free(cblc);
+    @memset(cblc, 0);
+    writeU16(cblc, 0, 3);
+    writeU32(cblc, 4, @intCast(strikes.len));
+
+    var cbdt_cursor: usize = 4;
+    var cblc_cursor = header_len;
+    for (strikes, 0..) |strike, strike_index| {
+        const size = 8 + strike_index * 48;
+        writeU32(cblc, size, @intCast(cblc_cursor));
+        writeU32(cblc, size + 4, @intCast(strike_index_len));
+        writeU32(cblc, size + 8, 1);
+        // Horizontal/vertical line metrics are copied because they describe
+        // the strike rather than the retained glyph directory.
+        const source_size = 8 + strike_index * 48;
+        // `Strike` intentionally exposes only validated scalar fields. Empty
+        // line-metric records remain conforming and avoid borrowing offsets.
+        _ = source_size;
+        writeU16(cblc, size + 40, 0);
+        writeU16(cblc, size + 42, @intCast(glyph_count - 1));
+        cblc[size + 44] = @intCast(strike.source.ppem_x);
+        cblc[size + 45] = @intCast(strike.source.ppem);
+        cblc[size + 46] = strike.source.bit_depth;
+        cblc[size + 47] = strike.source.flags;
+
+        const record = cblc_cursor;
+        writeU16(cblc, record, 0);
+        writeU16(cblc, record + 2, @intCast(glyph_count - 1));
+        writeU32(cblc, record + 4, 8);
+        const subtable = record + 8;
+        writeU16(cblc, subtable, 1);
+        writeU16(cblc, subtable + 2, strike.image_format);
+        writeU32(cblc, subtable + 4, 4);
+        var image_offset: usize = 0;
+        for (strike.images, 0..) |image, glyph_index| {
+            writeU32(
+                cblc,
+                subtable + 8 + glyph_index * 4,
+                @intCast(image_offset),
+            );
+            if (image) |bytes| {
+                @memcpy(cbdt[cbdt_cursor..][0..bytes.len], bytes);
+                cbdt_cursor += bytes.len;
+                image_offset += bytes.len;
+            }
+        }
+        writeU32(
+            cblc,
+            subtable + 8 + glyph_count * 4,
+            @intCast(image_offset),
+        );
+        cblc_cursor += strike_index_len;
+    }
+    if (cbdt_cursor != cbdt.len or cblc_cursor != cblc.len) {
+        return error.InvalidFontSubset;
+    }
+    return .{ .cbdt = cbdt, .cblc = cblc };
+}
 
 fn buildSbixAlloc(
     allocator: std.mem.Allocator,

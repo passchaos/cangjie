@@ -337,5 +337,10 @@ Every authored strike is rebuilt with the original ppem/ppi, a complete
 glyph-count offset array, and direct PNG records only for retained glyphs;
 resolved `dupe` records become self-contained images, so removed target GIDs
 cannot leave dangling strike references. `preserve_sbix_strikes=false` drops
-the table. CBDT/EBDT location/index pairs remain unsupported until their
-multiple index-subtable formats receive an equally strict rewrite.
+the table. CBDT PNG image formats 17 and 18 now have a bounded preserve-GID
+path as well: every strike is rebuilt with a complete dense format-1 offset
+array, retained image records are copied verbatim, and removed GIDs receive
+empty offsets. `preserve_cbdt_png_strikes=false` drops CBDT/CBLC together.
+Shared-metrics format 19, raw/compound CBDT records, and EBDT remain
+unsupported until their index-2/5 and component serializers are equally
+strict.

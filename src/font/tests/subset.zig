@@ -209,6 +209,51 @@ test "preserve-GID TrueType subset validates limits and unsupported profiles" {
     );
 }
 
+test "preserve-GID subset rebuilds CBDT PNG strikes" {
+    const allocator = std.testing.allocator;
+    const source = try test_font.buildCbdtPngTtf(allocator);
+    defer allocator.free(source);
+    var face = try public.Face.parse(allocator, source);
+    defer face.deinit();
+
+    var subset = try public.subset.trueTypeAlloc(
+        allocator,
+        &face,
+        &.{1},
+        .{},
+    );
+    defer subset.deinit();
+    var parsed = try public.Face.parse(allocator, subset.program);
+    defer parsed.deinit();
+    const png = (try parsed.color().bitmapData(1, 16)).?.png;
+    try std.testing.expectEqual(@as(u16, 16), png.ppem);
+    try std.testing.expectEqual(@as(u32, 1), png.width);
+    try std.testing.expect((try parsed.color().bitmapData(0, 16)) == null);
+
+    var stripped = try public.subset.trueTypeAlloc(
+        allocator,
+        &face,
+        &.{1},
+        .{ .preserve_cbdt_png_strikes = false },
+    );
+    defer stripped.deinit();
+    var stripped_face = try public.Face.parse(allocator, stripped.program);
+    defer stripped_face.deinit();
+    try std.testing.expect((try stripped_face.color().bitmapData(1, 16)) == null);
+}
+
+test "preserve-GID subset rejects CBDT shared-metrics PNG strikes" {
+    const allocator = std.testing.allocator;
+    const source = try test_font.buildCbdtFormat19PngTtf(allocator);
+    defer allocator.free(source);
+    var face = try public.Face.parse(allocator, source);
+    defer face.deinit();
+    try std.testing.expectError(
+        error.UnsupportedFontSubset,
+        public.subset.trueTypeAlloc(allocator, &face, &.{1}, .{}),
+    );
+}
+
 test "preserve-GID subset rebuilds retained SVG documents" {
     const allocator = std.testing.allocator;
     const source = try test_font.buildSvgTtf(allocator);

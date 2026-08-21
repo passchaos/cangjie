@@ -1975,3 +1975,15 @@ spacing layouts reduced retired instructions from `4.5838B/4.5835B` to
 `fb80f404e4d69aff`, 144 glyphs, and six lines were unchanged. The Latin
 spacing control retained checksum `510135a8179bf5e4`, 105 glyphs, six lines,
 and neutral retired work because it does not enter bidi reversal.
+
+Prepared GPOS Coverage sidecars now use a bounded direct glyph-id index when
+their maximum covered glyph is below 4096. The one-based `u16` table is capped
+at 8 KiB, preserves CoverageIndex exactly for both format 1 and format 2, and
+keeps sparse large CJK/CID coverages on binary search. This benefits repeated
+mark/base/ligature coverage probes without adding a second dispatcher scan.
+On fixed CPU 30, an Arabic spacing A/B/B/A matrix over 5,000 layouts reduced
+retired instructions from `4.3981B/4.3873B` to `4.2460B/4.2450B` (about
+`3.3%`) and branches from `734.6M/732.8M` to `701.5M/701.4M` (about `4.4%`);
+cycles fell about `1.8--3.8%`. Checksum `fb80f404e4d69aff`, 144 glyphs, and six
+lines were unchanged. The Latin spacing control retained checksum
+`510135a8179bf5e4`, 105 glyphs, six lines, and neutral retired work.

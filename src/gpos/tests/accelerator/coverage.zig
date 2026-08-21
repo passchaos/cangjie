@@ -33,6 +33,7 @@ test "owned Coverage preserves format 1 and 2 indexes" {
         std.testing.allocator,
     );
     defer glyphs.deinit(std.testing.allocator);
+    try std.testing.expect(glyphs == .direct);
     try std.testing.expectEqual(@as(?usize, 0), glyphs.index(3));
     try std.testing.expectEqual(@as(?usize, 2), glyphs.index(20));
     try std.testing.expectEqual(@as(?usize, null), glyphs.index(9));
@@ -43,6 +44,7 @@ test "owned Coverage preserves format 1 and 2 indexes" {
         std.testing.allocator,
     );
     defer ranges.deinit(std.testing.allocator);
+    try std.testing.expect(ranges == .direct);
     try std.testing.expectEqual(@as(?usize, 0), ranges.index(30));
     try std.testing.expectEqual(@as(?usize, 2), ranges.index(32));
     try std.testing.expectEqual(@as(?usize, 3), ranges.index(40));
@@ -73,6 +75,24 @@ test "owned Coverage sequences reject null child offsets atomically" {
             std.testing.allocator,
         ),
     );
+}
+
+test "compact owned Coverage builds direct indexes" {
+    var bytes = [_]u8{0} ** 20;
+    writeU16(&bytes, 0, 1);
+    writeU16(&bytes, 2, 2);
+    writeU16(&bytes, 4, 3);
+    writeU16(&bytes, 6, 8);
+    const coverage = try accelerator.coverage.Owned.build(
+        .{ .data = &bytes, .offset = 0, .length = bytes.len },
+        0,
+        std.testing.allocator,
+    );
+    defer coverage.deinit(std.testing.allocator);
+    try std.testing.expect(coverage == .direct);
+    try std.testing.expectEqual(@as(?usize, 0), coverage.index(3));
+    try std.testing.expectEqual(@as(?usize, 1), coverage.index(8));
+    try std.testing.expectEqual(@as(?usize, null), coverage.index(4));
 }
 
 fn writeU16(bytes: []u8, offset: usize, value: u16) void {

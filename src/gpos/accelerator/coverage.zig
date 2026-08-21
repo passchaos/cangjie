@@ -7,10 +7,12 @@ const table = @import("../table/root.zig");
 
 pub const Error = table.view.Error || error{UnsupportedGpos};
 pub const View = table.View;
+const max_direct_glyphs = 4096;
 
 pub const Owned = union(enum) {
     glyphs: []const GlyphId,
     ranges: []const layout.GlyphRangeRecord,
+    direct: []const u16,
 
     pub fn build(
         view: View,
@@ -27,7 +29,10 @@ pub const Owned = union(enum) {
                         coverage_offset + 4 + glyph_index * 2,
                     );
                 }
-                break :coverage .{ .glyphs = glyphs };
+                break :coverage try buildDirectFromGlyphs(
+                    glyphs,
+                    allocator,
+                ) orelse .{ .glyphs = glyphs };
             },
             2 => coverage: {
                 const count = try view.readU16(coverage_offset + 2);
@@ -42,7 +47,10 @@ pub const Owned = union(enum) {
                         .value = try view.readU16(record + 4),
                     };
                 }
-                break :coverage .{ .ranges = ranges };
+                break :coverage try buildDirectFromRanges(
+                    ranges,
+                    allocator,
+                ) orelse .{ .ranges = ranges };
             },
             else => error.UnsupportedGpos,
         };
@@ -124,6 +132,49 @@ pub const Owned = union(enum) {
                 return @as(usize, ranges[low].value) +
                     (@as(usize, glyph) - ranges[low].start);
             },
+            .direct => |indexes| {
+                if (glyph >= indexes.len) return null;
+                const one_based = indexes[glyph];
+                return if (one_based == 0) null else one_based - 1;
+            },
         }
     }
 };
+
+fn buildDirectFromGlyphs(
+    glyphs: []const GlyphId,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!?Owned {
+    if (glyphs.len == 0 or glyphs.len > std.math.maxInt(u16)) return null;
+    const last: usize = glyphs[glyphs.len - 1];
+    if (last >= max_direct_glyphs) return null;
+    const direct = try allocator.alloc(u16, last + 1);
+    @memset(direct, 0);
+    for (glyphs, 0..) |glyph, index| direct[glyph] = @intCast(index + 1);
+    allocator.free(glyphs);
+    return .{ .direct = direct };
+}
+
+fn buildDirectFromRanges(
+    ranges: []const layout.GlyphRangeRecord,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!?Owned {
+    if (ranges.len == 0) return null;
+    const last: usize = ranges[ranges.len - 1].end;
+    if (last >= max_direct_glyphs) return null;
+    const direct = try allocator.alloc(u16, last + 1);
+    @memset(direct, 0);
+    for (ranges) |range| {
+        var glyph: usize = range.start;
+        while (glyph <= range.end) : (glyph += 1) {
+            const index = @as(usize, range.value) + glyph - range.start;
+            if (index >= std.math.maxInt(u16)) {
+                allocator.free(direct);
+                return null;
+            }
+            direct[glyph] = @intCast(index + 1);
+        }
+    }
+    allocator.free(ranges);
+    return .{ .direct = direct };
+}

@@ -123,12 +123,37 @@ pub fn finish(input: Input) !void {
     @memset(input.source_pref_substituted.items, false);
     input.options.source_features = input.source_features.items;
     input.options.source_syllables = input.source_syllables.items;
+    const applications = [_][]const gsub.feature.Application{
+        indic.preReorderFeatureApplications(),
+        indic.basicFeatureApplications(has_basic_source_features),
+        indic.prefFeatureApplications(),
+        indic.preRephFeatureApplications(),
+        indic.finalFeatureApplications(),
+    };
+    var plans: [applications.len]gsub.feature.LookupPlan = undefined;
+    const cached_plans = input.table_proved and
+        input.context.lookup_selection_cache != null;
+    if (cached_plans) try input.context.lookup_selection_cache.?
+        .gsubFeatureLookupPlans(
+        input.font,
+        &applications,
+        input.options.*,
+        input.gdef_metadata,
+        &plans,
+    );
 
     try gsub.runtime.validateScriptShaperMetadata(
         input.options.*,
         input.glyph_ids.items.len,
     );
-    try executor.applyAfterRunProof(
+    if (cached_plans) try executor.applyPlanAfterRunProof(
+        input.font,
+        input.context,
+        plans[0],
+        input.glyph_ids,
+        input.options.*,
+        input.gdef_metadata,
+    ) else try executor.applyAfterRunProof(
         input.font,
         input.context,
         input.table_proved,
@@ -146,7 +171,14 @@ pub fn finish(input: Input) !void {
         input.codepoints.items,
         input.lookup_options.script_tag,
     );
-    try executor.applyAfterRunProof(
+    if (cached_plans) try executor.applyPlanAfterRunProof(
+        input.font,
+        input.context,
+        plans[1],
+        input.glyph_ids,
+        input.options.*,
+        input.gdef_metadata,
+    ) else try executor.applyAfterRunProof(
         input.font,
         input.context,
         input.table_proved,
@@ -155,9 +187,16 @@ pub fn finish(input: Input) !void {
         input.options.*,
         input.gdef_metadata,
     );
-    try applyPref(input);
+    try applyPref(input, if (cached_plans) plans[2] else null);
     reorderAfterPref(input);
-    try executor.applyAfterRunProof(
+    if (cached_plans) try executor.applyPlanAfterRunProof(
+        input.font,
+        input.context,
+        plans[3],
+        input.glyph_ids,
+        input.options.*,
+        input.gdef_metadata,
+    ) else try executor.applyAfterRunProof(
         input.font,
         input.context,
         input.table_proved,
@@ -167,7 +206,14 @@ pub fn finish(input: Input) !void {
         input.gdef_metadata,
     );
     reorderAfterReph(input);
-    try executor.applyAfterRunProof(
+    if (cached_plans) try executor.applyPlanAfterRunProof(
+        input.font,
+        input.context,
+        plans[4],
+        input.glyph_ids,
+        input.options.*,
+        input.gdef_metadata,
+    ) else try executor.applyAfterRunProof(
         input.font,
         input.context,
         input.table_proved,
@@ -248,7 +294,7 @@ fn normalizeInitialOrder(input: Input) void {
     );
 }
 
-fn applyPref(input: Input) !void {
+fn applyPref(input: Input, plan: ?gsub.feature.LookupPlan) !void {
     input.glyph_stage_substituted.clearRetainingCapacity();
     try input.glyph_stage_substituted.resize(
         input.allocator,
@@ -257,7 +303,14 @@ fn applyPref(input: Input) !void {
     @memset(input.glyph_stage_substituted.items, false);
     var options = input.options.*;
     options.glyph_stage_substituted = input.glyph_stage_substituted;
-    try executor.applyAfterRunProof(
+    if (plan) |cached| try executor.applyPlanAfterRunProof(
+        input.font,
+        input.context,
+        cached,
+        input.glyph_ids,
+        options,
+        input.gdef_metadata,
+    ) else try executor.applyAfterRunProof(
         input.font,
         input.context,
         input.table_proved,

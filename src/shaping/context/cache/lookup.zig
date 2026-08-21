@@ -182,6 +182,62 @@ pub const LookupSelectionCache = struct {
         return self.gsub_feature_plan_entries.items[self.gsub_feature_plan_entries.items.len - 1].plan;
     }
 
+    /// Resolve several script stages in one pass over the feature-plan cache.
+    ///
+    /// Multi-stage shapers revisit the same small cache for every source run.
+    /// Matching all requested application sequences together preserves the
+    /// exact keys while avoiding one full cache walk per stage.
+    pub fn gsubFeatureLookupPlans(
+        self: *LookupSelectionCache,
+        font: *const Font,
+        application_sets: []const []const gsub.feature.Application,
+        options: gsub.runtime.Options,
+        gdef_metadata: GdefLookupMetadata,
+        output: []gsub.feature.LookupPlan,
+    ) !void {
+        if (output.len != application_sets.len) {
+            return error.InvalidShapingInput;
+        }
+        const key = lookupSelectionKey(
+            font,
+            .gsub,
+            options.script_tag,
+            options.language_tag,
+            options.features,
+            options.vertical,
+            null,
+        );
+        var found: [16]bool = [_]bool{false} ** 16;
+        if (application_sets.len > found.len) return error.InvalidShapingInput;
+        var remaining = application_sets.len;
+        for (self.gsub_feature_plan_entries.items) |entry| {
+            if (!lookupSelectionKeysEqual(entry.key, key)) continue;
+            if (!featureOverridesEqual(entry.features, options.features)) continue;
+            for (application_sets, 0..) |applications, index| {
+                if (found[index] or
+                    !featureApplicationsEqual(entry.applications, applications))
+                {
+                    continue;
+                }
+                output[index] = entry.plan;
+                found[index] = true;
+                remaining -= 1;
+                self.hits += 1;
+                break;
+            }
+            if (remaining == 0) return;
+        }
+        for (application_sets, 0..) |applications, index| {
+            if (found[index]) continue;
+            output[index] = try self.gsubFeatureLookupPlan(
+                font,
+                applications,
+                options,
+                gdef_metadata,
+            );
+        }
+    }
+
     pub fn gsubMergedFeatureLookupPlan(self: *LookupSelectionCache, font: *const Font, applications: []const gsub.feature.Application, options: gsub.runtime.Options, gdef_metadata: GdefLookupMetadata) !gsub.feature.MergedLookupPlan {
         const key = lookupSelectionKey(font, .gsub, options.script_tag, options.language_tag, options.features, options.vertical, null);
         for (self.gsub_merged_feature_plan_entries.items) |entry| {

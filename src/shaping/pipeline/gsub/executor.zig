@@ -104,6 +104,24 @@ pub fn applyAfterRunProof(
     );
 }
 
+pub fn applyPlanAfterRunProof(
+    font: *const Font,
+    context: Context,
+    plan: gsub.feature.LookupPlan,
+    glyph_ids: *std.ArrayList(GlyphId),
+    options: gsub.runtime.Options,
+    gdef_metadata: GdefLookupMetadata,
+) !void {
+    return font_shaping.applyGsubFeatureLookupPlanUsingGdefAfterRunProof(
+        font,
+        plan,
+        glyph_ids,
+        context.allocator,
+        options,
+        gdef_metadata,
+    );
+}
+
 pub fn applyMerged(
     font: *const Font,
     context: Context,

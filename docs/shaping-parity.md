@@ -3249,3 +3249,17 @@ shaping-performance superiority.
   about `0.14%`, while Devanagari and Amiri controls retained identical
   checksums with effectively neutral retired work. The complete 672-row
   HarfBuzz/HarfRust corpus umbrella passes unchanged.
+- Multi-stage script shapers can now request several cached GSUB feature plans
+  in one lookup-cache pass. Indic finish uses the generic batch API for its
+  pre-reorder, basic, `pref`, pre-reph, and final stages, then applies the same
+  immutable plans at the existing reorder boundaries. This keeps the cache
+  independent of Indic policy while avoiding five separate linear cache walks
+  per source run. Fixed-CPU-30 A/B/B/A counters over two complete
+  NotoSansDevanagari `hi-words` passes reduced retired instructions from
+  `1.0422B/1.0405B` to `1.0194B/1.0194B` (about `2.1%`) and branches from
+  `178.6M/178.3M` to `174.3M/174.3M` (about `2.3%`); cycles fell about
+  `0.4--2.9%`. Checksum `c53c50e3c7c8ca3f` remained unchanged. The Roboto
+  `en-words` control retained checksum `ca4dc411c23af197`; retired instructions
+  and branches improved slightly because its generic shaper does not call the
+  new batch API, so the difference is code-layout neutral/noise rather than a
+  claimed Latin algorithmic gain.

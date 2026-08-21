@@ -38,10 +38,10 @@ def render_test(manifest, ranges, total_script_count):
         'const std = @import("std");',
         'const script = @import("script");',
         "",
-        "fn expectScriptRange(expected: script.Script, first: u21, last: u21) !void {",
+        "fn expectScriptRange(expected: script.Script, first: u32, last: u32) !void {",
         "    var value = first;",
         "    while (value <= last) : (value += 1) {",
-        "        try std.testing.expectEqual(expected, script.forCodepoint(value));",
+        "        try std.testing.expectEqual(expected, script.forCodepoint(@intCast(value)));",
         "    }",
         "}",
         "",
@@ -56,6 +56,31 @@ def render_test(manifest, ranges, total_script_count):
                 f"    try expectScriptRange(.{internal_name}, "
                 f"0x{first:x}, 0x{last:x});"
             )
+    lines.append("}")
+    lines.extend(
+        [
+            "",
+            'test "unassigned Unicode scalars remain unknown" {',
+        ]
+    )
+    cursor = 0
+    assigned_ranges = sorted(
+        (first, last)
+        for script_ranges in ranges.values()
+        for first, last in script_ranges
+    )
+    for first, last in assigned_ranges:
+        if first < cursor:
+            raise ValueError("overlapping Unicode Script ranges")
+        if cursor < first:
+            lines.append(
+                f"    try expectScriptRange(.unknown, 0x{cursor:x}, 0x{first - 1:x});"
+            )
+        cursor = last + 1
+    if cursor < 0x110000:
+        lines.append(
+            f"    try expectScriptRange(.unknown, 0x{cursor:x}, 0x10ffff);"
+        )
     lines.extend(
         [
             "}",

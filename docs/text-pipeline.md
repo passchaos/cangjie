@@ -1669,7 +1669,8 @@ tools/unicode/script/generate_data.py \
 It distinguishes explicitly modeled scripts from gaps rather than inferring
 coverage from a hand-maintained enum. The current frontier models all 174
 Unicode 17 Script values; generated tests exhaust every assigned scalar of
-every script, including Common and Inherited.
+every script, including Common and Inherited, and verify that every unassigned
+scalar remains `Unknown`.
 
 The Unicode 17 line-break property blob is generated with:
 

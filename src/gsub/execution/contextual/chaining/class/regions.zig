@@ -1,10 +1,10 @@
 //! Lazy physical glyph regions for chaining class matching.
 
 const std = @import("std");
-const accelerator = @import("../../../../../accelerator/model.zig");
-const filtering = @import("../../../../../runtime/filtering.zig");
-const Options = @import("../../../../../runtime/options.zig").Options;
-const GlyphId = @import("../../../../../../glyph.zig").GlyphId;
+const accelerator = @import("../../../../accelerator/model.zig");
+const filtering = @import("../../../../runtime/filtering.zig");
+const Options = @import("../../../../runtime/options.zig").Options;
+const GlyphId = @import("../../../../../glyph.zig").GlyphId;
 
 pub const max_glyphs = accelerator.max_context_region_glyphs;
 

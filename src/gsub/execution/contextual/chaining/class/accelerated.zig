@@ -8,7 +8,7 @@ const Options = @import("../../../../runtime/options.zig").Options;
 const table = @import("../../../../table/root.zig");
 const commit = @import("commit.zig");
 const match = @import("match.zig");
-const matching = @import("matching/accelerated.zig");
+const matching = @import("matching.zig");
 const model = @import("../../model.zig");
 const GlyphId = @import("../../../../../glyph.zig").GlyphId;
 
@@ -94,7 +94,7 @@ noinline fn applyEligibleAt(
     run: Options,
 ) linksection(shaping_sections.isolated_hotpaths) Error!model.ApplyResult {
     var matched: match.Match = undefined;
-    if (!try matching.subtable(
+    if (!try matching.acceleratedSubtable(
         view,
         parsed,
         glyphs.items,

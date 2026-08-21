@@ -1,6 +1,6 @@
 //! Immutable result of one chaining class-rule match.
 
-const window = @import("matching/window.zig");
+const window = @import("matching.zig").window;
 
 pub const Action = union(enum) {
     records: struct {

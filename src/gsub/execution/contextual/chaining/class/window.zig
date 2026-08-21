@@ -1,10 +1,10 @@
 //! Lazy class and physical-index window for chaining class rules.
 
 const std = @import("std");
-const Options = @import("../../../../../runtime/options.zig").Options;
-const table = @import("../../../../../table/root.zig");
+const Options = @import("../../../../runtime/options.zig").Options;
+const table = @import("../../../../table/root.zig");
 const regions_mod = @import("regions.zig");
-const GlyphId = @import("../../../../../../glyph.zig").GlyphId;
+const GlyphId = @import("../../../../../glyph.zig").GlyphId;
 
 const Error = table.class_def.Error;
 const View = table.View;

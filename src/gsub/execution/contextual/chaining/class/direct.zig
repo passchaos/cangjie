@@ -6,8 +6,8 @@ const Options = @import("../../../../runtime/options.zig").Options;
 const table = @import("../../../../table/root.zig");
 const commit = @import("commit.zig");
 const match = @import("match.zig");
-const matching = @import("matching/direct.zig");
-const window = @import("matching/window.zig");
+const matching = @import("matching.zig");
+const window = matching.window;
 const model = @import("../../model.zig");
 const GlyphId = @import("../../../../../glyph.zig").GlyphId;
 
@@ -106,7 +106,7 @@ fn parsedAt(
     if (set_relative == 0) return .{};
 
     var matched: match.Match = undefined;
-    if (!try matching.ruleSet(
+    if (!try matching.directRuleSet(
         view,
         parsed.subtable_offset + set_relative,
         parsed.class_defs,

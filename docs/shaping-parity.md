@@ -3463,6 +3463,14 @@ shaping-performance superiority.
   Amiri `س`, `م`. Every glyph retained byte-identical checksums at 1x1, 2x2,
   3x3, and 4x4 sampling; a regression also renders the same dirty span twice
   to prove that no difference or sentinel state leaks between rows.
+- Row blending now slices the target and accumulator to the already-computed
+  dirty interval and advances both buffers together. This removes repeated
+  absolute-coordinate conversion and target-row address arithmetic from every
+  covered pixel while preserving max-alpha compositing. Relative to the
+  preceding single-pass clear, fixed-CPU-8/30 reverse A/B measurements reduced
+  retired instructions by about `2.7--4.0%` and branches by about `4.5--6.1%`
+  across Roboto `A`, `g`, `é` and Amiri `س`, `م`; cycles improved in all but
+  one near-noise run. All glyph/sampling checksums remained byte-identical.
 - GSUB run-state preparation is now inlined into its small set of whole-run and
   cached-plan callers. This removes an out-of-line call and large by-value
   `Options` return at each Indic feature stage while preserving the shared

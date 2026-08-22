@@ -743,6 +743,25 @@ test "difference accumulation clears the complete dirty span while blending" {
     );
     const first = pixels;
 
+    // Raster compositing is max coverage, so a pre-existing stronger pixel
+    // must survive while the parallel target-row traversal is active.
+    pixels[1] = 180;
+    _ = accumulator.cover(0, 3, &sample_offsets_4, 0.25, 2.75);
+    accumulator.blendAndClear(
+        .{ .width = pixels.len, .height = 1, .pixels = &pixels },
+        0,
+        0,
+        0,
+        2,
+        &coverage_lut_16,
+    );
+    try std.testing.expectEqual(@as(u8, 180), pixels[1]);
+    try std.testing.expectEqualSlices(
+        i16,
+        &.{ 0, 0, 0, 0, 0 },
+        accumulator.differences,
+    );
+
     @memset(&pixels, 0);
     _ = accumulator.cover(0, 3, &sample_offsets_4, 0.25, 2.75);
     accumulator.blendAndClear(

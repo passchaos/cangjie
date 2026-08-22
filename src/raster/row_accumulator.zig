@@ -89,21 +89,18 @@ pub const RowAccumulator = struct {
     ) void {
         const clear_start: usize = @intCast(row_min_x - min_x);
         const clear_end: usize = @intCast(row_max_x - min_x + 1);
+        const target_start = @as(usize, @intCast(y)) * target.width +
+            @as(usize, @intCast(row_min_x));
+        const pixels = target.pixels[target_start .. target_start + clear_end - clear_start];
         if (self.differences.len != 0) {
             var coverage: i16 = 0;
-            var x = row_min_x;
-            while (x <= row_max_x) : (x += 1) {
-                const difference_index: usize = @intCast(x - min_x);
-                coverage += self.differences[difference_index];
-                self.differences[difference_index] = 0;
+            const differences = self.differences[clear_start..clear_end];
+            for (differences, pixels) |*difference, *pixel| {
+                coverage += difference.*;
+                difference.* = 0;
                 std.debug.assert(coverage >= 0 and coverage <= 16);
                 if (coverage != 0) {
-                    scanline.blendUnchecked(
-                        target,
-                        x,
-                        y,
-                        coverage_lut[@intCast(coverage)],
-                    );
+                    pixel.* = @max(pixel.*, coverage_lut[@intCast(coverage)]);
                 }
             }
             // Include the sentinel after the final pixel: every interval writes
@@ -112,11 +109,9 @@ pub const RowAccumulator = struct {
             self.differences[clear_end] = 0;
             return;
         }
-        var x = row_min_x;
-        while (x <= row_max_x) : (x += 1) {
-            const inside = self.counts[@intCast(x - min_x)];
+        for (self.counts[clear_start..clear_end], pixels) |inside, *pixel| {
             if (inside == 0) continue;
-            scanline.blendUnchecked(target, x, y, coverage_lut[inside]);
+            pixel.* = @max(pixel.*, coverage_lut[inside]);
         }
         @memset(self.counts[clear_start..clear_end], 0);
     }

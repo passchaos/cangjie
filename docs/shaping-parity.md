@@ -3502,3 +3502,12 @@ shaping-performance superiority.
   remained within `0.002%` retired work, and the complete corpus gate plus
   direct 10,000-line HarfBuzz/HarfRust comparisons retained checksum
   `b01a5388ce792b49`.
+- Accelerator-backed ContextSubst and ChainContextSubst class matchers now use
+  a trusted first-glyph index probe. The builders already guarantee that this
+  compact index is the final `classes` region, has a recognized encoding, and
+  references a live rule group; the public defensive probe remains available
+  for independently supplied data. Relative to the preceding chaining-window
+  optimization, fixed-CPU-8 and fixed-CPU-30 counters over five complete
+  NotoSansDevanagari `hi-words` passes reduced retired instructions by about
+  `0.47%` and branches by about `0.73%`. Roboto `en-words` and Amiri `fa-words`
+  controls remained within `0.01%` retired work.

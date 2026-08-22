@@ -25,7 +25,7 @@ pub fn acceleratedSubtable(
     run: Options,
     result: *match.Match,
 ) Error!bool {
-    const group = accelerator.index.class_first.find(
+    const group = accelerator.index.class_first.findPrepared(
         parsed.classes,
         parsed.first_index_start,
         parsed.groups,

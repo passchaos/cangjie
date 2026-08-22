@@ -46,6 +46,12 @@ test "class first index deduplicates overlap and skips absent groups" {
         &groups,
         11,
     ).?.class_set);
+    try std.testing.expectEqual(@as(u16, 2), class_first.findPrepared(
+        classes.items,
+        start,
+        &groups,
+        11,
+    ).?.class_set);
     try std.testing.expect(class_first.find(
         classes.items,
         start,
@@ -84,6 +90,15 @@ test "class first hash preserves exact hits and misses" {
                 entry.glyph,
             ).?.class_set,
         );
+        try std.testing.expectEqual(
+            @as(u16, @intCast(20 + index)),
+            class_first.findPrepared(
+                classes.items,
+                start,
+                &groups,
+                entry.glyph,
+            ).?.class_set,
+        );
     }
     try std.testing.expect(class_first.find(
         classes.items,
@@ -92,6 +107,12 @@ test "class first hash preserves exact hits and misses" {
         9,
     ) == null);
     try std.testing.expect(class_first.find(
+        classes.items,
+        start,
+        &groups,
+        0xffff,
+    ) == null);
+    try std.testing.expect(class_first.findPrepared(
         classes.items,
         start,
         &groups,

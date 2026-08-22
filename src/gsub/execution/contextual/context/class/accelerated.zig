@@ -28,7 +28,7 @@ pub fn apply(
     lookup_flag: u16,
     run: Options,
 ) Error!model.ApplyResult {
-    const group = accelerator.index.class_first.find(
+    const group = accelerator.index.class_first.findPrepared(
         subtable.classes,
         subtable.first_index_start,
         subtable.groups,

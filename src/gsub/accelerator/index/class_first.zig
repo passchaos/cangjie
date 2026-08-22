@@ -126,15 +126,47 @@ pub fn find(
     groups: []const class_context.RuleGroup,
     glyph: GlyphId,
 ) ?class_context.RuleGroup {
-    if (index_start >= classes.len) return null;
+    return findImpl(false, classes, index_start, groups, glyph);
+}
+
+/// Probe an index produced by `appendClassIndex`/`appendGlyphIndex`.
+///
+/// The builders append this index as the final region of `classes`, validate
+/// its encoding and group references while constructing it, and keep both
+/// slices alive under one accelerator owner. Runtime accelerator executors can
+/// therefore omit the defensive structural checks retained by `find` for
+/// standalone and malformed-input callers.
+pub fn findPrepared(
+    classes: []const u16,
+    index_start: usize,
+    groups: []const class_context.RuleGroup,
+    glyph: GlyphId,
+) ?class_context.RuleGroup {
+    return findImpl(true, classes, index_start, groups, glyph);
+}
+
+fn findImpl(
+    comptime prepared: bool,
+    classes: []const u16,
+    index_start: usize,
+    groups: []const class_context.RuleGroup,
+    glyph: GlyphId,
+) ?class_context.RuleGroup {
+    if (prepared) {
+        std.debug.assert(index_start < classes.len);
+    } else if (index_start >= classes.len) return null;
     const index = classes[index_start..];
-    if (index.len == 0 or (index.len - 1) % 2 != 0) return null;
+    if (prepared) {
+        std.debug.assert(index.len > 0 and (index.len - 1) % 2 == 0);
+    } else if (index.len == 0 or (index.len - 1) % 2 != 0) return null;
     const group_index = switch (index[0]) {
         hash_encoding => group: {
             const slot_count = (index.len - 1) / 2;
-            if (slot_count == 0 or !std.math.isPowerOfTwo(slot_count)) {
-                return null;
-            }
+            if (prepared) {
+                std.debug.assert(slot_count != 0);
+                std.debug.assert(std.math.isPowerOfTwo(slot_count));
+            } else if (slot_count == 0 or
+                !std.math.isPowerOfTwo(slot_count)) return null;
             var slot = hashGlyph(glyph) & (slot_count - 1);
             while (index[2 + slot * 2] != empty_group_index) : (slot = (slot + 1) & (slot_count - 1)) {
                 if (index[1 + slot * 2] == glyph) {
@@ -160,9 +192,11 @@ pub fn find(
             }
             return null;
         },
-        else => return null,
+        else => if (prepared) unreachable else return null,
     };
-    if (group_index >= groups.len) return null;
+    if (prepared) {
+        std.debug.assert(group_index < groups.len);
+    } else if (group_index >= groups.len) return null;
     return groups[group_index];
 }
 

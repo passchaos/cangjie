@@ -3264,6 +3264,19 @@ shaping-performance superiority.
   `3.43%`). Branches fell about `5.22%`, `4.00%`, and `4.00%`; cycles
   improved in every order, while all dirty-render checksums and pixel counts
   remained unchanged.
+- Direct scan conversion now buckets sufficiently complex prepared edges by
+  the first clipped pixel row they can cross. This replaces the per-draw
+  comparison sort of complete 24-byte edge records with an O(edges + rows)
+  activation pass; outlines below 32 prepared edges retain the cheaper
+  insertion-sort path. On fixed CPU 30, B/A/A/B counters over 20,000 direct
+  dirty renders reduced retired instructions for Noto Sans 64 px `g` from
+  `3.443B/3.443B` to `3.022B/3.022B` (about `12.2%`) and for `é` from
+  `2.354B/2.354B` to `2.088B/2.088B` (about `11.3%`); cycles fell about
+  `9.5%` and `10.4%`, respectively. The 11-edge `A` control kept the sorted
+  path and retired about `1.1%` fewer instructions, with noisy cycles. All three
+  output checksums and dirty-pixel counts remained unchanged, and the complete
+  ReleaseFast test suite passes. FreeType still leads this direct-render
+  boundary, so the broader raster objective remains open.
 - Sparse GPOS adjustment output now checks for its common nondecreasing index
   order before invoking heap sort. The isolated noinline helper preserves the
   segment hot frame and falls back to the exact old sort at the first inversion.

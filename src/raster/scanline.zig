@@ -90,7 +90,6 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
     defer if (lines.len > inline_prepared_lines.len) allocator.free(prepared_storage);
     const prepared_lines = prepareFillLines(prepared_storage, lines);
     if (prepared_lines.len < 2) return;
-    sortPreparedFillLinesByYMin(prepared_lines);
     var inline_intersections: [128]WindingIntersection = undefined;
     const intersection_storage = if (prepared_lines.len <= inline_intersections.len)
         inline_intersections[0..prepared_lines.len]
@@ -104,112 +103,169 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
         try allocator.alloc(PreparedFillLine, prepared_lines.len);
     defer if (prepared_lines.len > inline_active_lines.len) allocator.free(active_storage);
 
-    var next_line: usize = 0;
+    if (prepared_lines.len < 32) {
+        sortPreparedFillLinesByYMin(prepared_lines);
+        var next_line: usize = 0;
+        var active_count: usize = 0;
+        var y = min_y;
+        while (y <= max_y) : (y += 1) {
+            const row_lines = updateActiveFillLines(active_storage, &active_count, prepared_lines, &next_line, y);
+            fillPreparedRow(target, row_lines, intersection_storage, min_x, max_x, y, fill_rule, sample_offsets, coverage_lut, &row_accumulator);
+        }
+        return;
+    }
+
+    // Direct rendering rebuilds edge state for every draw. Bucket sufficiently
+    // complex outlines by the first pixel row each edge can cross instead of
+    // comparison-sorting complete 24-byte records by y_min. Order within one
+    // row is irrelevant because intersections are sorted by x before winding
+    // is evaluated. Small outlines retain insertion sorting because the fixed
+    // bucket setup costs more than the comparisons it replaces.
+    var inline_next_lines: [128]usize = undefined;
+    const next_lines = if (prepared_lines.len <= inline_next_lines.len)
+        inline_next_lines[0..prepared_lines.len]
+    else
+        try allocator.alloc(usize, prepared_lines.len);
+    defer if (prepared_lines.len > inline_next_lines.len) allocator.free(next_lines);
+    const row_count: usize = @intCast(max_y - min_y + 1);
+    var inline_row_heads: [512]usize = undefined;
+    const row_heads = if (row_count <= inline_row_heads.len)
+        inline_row_heads[0..row_count]
+    else
+        try allocator.alloc(usize, row_count);
+    defer if (row_count > inline_row_heads.len) allocator.free(row_heads);
+    bucketFillLinesByFirstRow(prepared_lines, min_y, max_y, next_lines, row_heads);
+
     var active_count: usize = 0;
     var y = min_y;
     while (y <= max_y) : (y += 1) {
-        const row_lines = updateActiveFillLines(active_storage, &active_count, prepared_lines, &next_line, y);
-        if (row_lines.len < 2) continue;
-        var row_has_coverage = false;
-        var row_min_x = max_x;
-        var row_max_x = min_x;
-        for (sample_offsets) |sample_offset| {
-            const py = @as(f32, @floatFromInt(y)) + sample_offset;
-            if (row_lines.len == 2) {
-                const first = row_lines[0];
-                const second = row_lines[1];
-                if (py < first.y_min or py >= first.y_max or py < second.y_min or py >= second.y_max) continue;
-                const first_x = first.slope * (py - first.ay) + first.ax;
-                const second_x = second.slope * (py - second.ay) + second.ax;
-                if (!std.math.isFinite(first_x) or !std.math.isFinite(second_x)) continue;
-                if (@abs(second_x - first_x) <= 0.000001) continue;
-                const start_f, const end_f, const left_delta = if (first_x < second_x)
-                    .{ first_x, second_x, first.delta }
-                else
-                    .{ second_x, first_x, second.delta };
-                if (fill_rule == .even_odd or left_delta != 0) {
-                    if (row_accumulator.cover(min_x, max_x, sample_offsets, start_f, end_f)) |span| {
-                        row_has_coverage = true;
-                        row_min_x = @min(row_min_x, span.min_x);
-                        row_max_x = @max(row_max_x, span.max_x);
-                    }
+        const row_lines = updateBucketedActiveFillLines(
+            active_storage,
+            &active_count,
+            prepared_lines,
+            next_lines,
+            row_heads[@intCast(y - min_y)],
+            y,
+        );
+        fillPreparedRow(
+            target,
+            row_lines,
+            intersection_storage,
+            min_x,
+            max_x,
+            y,
+            fill_rule,
+            sample_offsets,
+            coverage_lut,
+            &row_accumulator,
+        );
+    }
+}
+
+inline fn fillPreparedRow(
+    target: Target,
+    row_lines: []const PreparedFillLine,
+    intersection_storage: []WindingIntersection,
+    min_x: i32,
+    max_x: i32,
+    y: i32,
+    fill_rule: FillRule,
+    sample_offsets: []const f32,
+    coverage_lut: []const u8,
+    row_accumulator: *RowAccumulator,
+) void {
+    if (row_lines.len < 2) return;
+    var row_has_coverage = false;
+    var row_min_x = max_x;
+    var row_max_x = min_x;
+    for (sample_offsets) |sample_offset| {
+        const py = @as(f32, @floatFromInt(y)) + sample_offset;
+        if (row_lines.len == 2) {
+            const first = row_lines[0];
+            const second = row_lines[1];
+            if (py < first.y_min or py >= first.y_max or py < second.y_min or py >= second.y_max) continue;
+            const first_x = first.slope * (py - first.ay) + first.ax;
+            const second_x = second.slope * (py - second.ay) + second.ax;
+            if (!std.math.isFinite(first_x) or !std.math.isFinite(second_x)) continue;
+            if (@abs(second_x - first_x) <= 0.000001) continue;
+            const start_f, const end_f, const left_delta = if (first_x < second_x)
+                .{ first_x, second_x, first.delta }
+            else
+                .{ second_x, first_x, second.delta };
+            if (fill_rule == .even_odd or left_delta != 0) {
+                if (row_accumulator.cover(min_x, max_x, sample_offsets, start_f, end_f)) |span| {
+                    row_has_coverage = true;
+                    row_min_x = @min(row_min_x, span.min_x);
+                    row_max_x = @max(row_max_x, span.max_x);
                 }
-                continue;
             }
+            continue;
+        }
 
-            var intersection_count: usize = 0;
-            for (row_lines) |line| {
-                if (py < line.y_min or py >= line.y_max) continue;
-                const x_intersect = line.slope * (py - line.ay) + line.ax;
-                if (!std.math.isFinite(x_intersect)) continue;
-                intersection_storage[intersection_count] = .{
-                    .x = x_intersect,
-                    .delta = line.delta,
-                };
-                intersection_count += 1;
-            }
-            const intersections = intersection_storage[0..intersection_count];
-            if (intersections.len < 2) continue;
-            sortWindingIntersections(intersections);
+        var intersection_count: usize = 0;
+        for (row_lines) |line| {
+            if (py < line.y_min or py >= line.y_max) continue;
+            const x_intersect = line.slope * (py - line.ay) + line.ax;
+            if (!std.math.isFinite(x_intersect)) continue;
+            intersection_storage[intersection_count] = .{
+                .x = x_intersect,
+                .delta = line.delta,
+            };
+            intersection_count += 1;
+        }
+        const intersections = intersection_storage[0..intersection_count];
+        if (intersections.len < 2) continue;
+        sortWindingIntersections(intersections);
 
-            if (intersections.len == 2 and @abs(intersections[1].x - intersections[0].x) > 0.000001) {
-                if (fill_rule == .even_odd or intersections[0].delta != 0) {
-                    if (row_accumulator.cover(min_x, max_x, sample_offsets, intersections[0].x, intersections[1].x)) |span| {
-                        row_has_coverage = true;
-                        row_min_x = @min(row_min_x, span.min_x);
-                        row_max_x = @max(row_max_x, span.max_x);
-                    }
+        if (intersections.len == 2 and @abs(intersections[1].x - intersections[0].x) > 0.000001) {
+            if (fill_rule == .even_odd or intersections[0].delta != 0) {
+                if (row_accumulator.cover(min_x, max_x, sample_offsets, intersections[0].x, intersections[1].x)) |span| {
+                    row_has_coverage = true;
+                    row_min_x = @min(row_min_x, span.min_x);
+                    row_max_x = @max(row_max_x, span.max_x);
                 }
-                continue;
             }
+            continue;
+        }
 
-            switch (fill_rule) {
-                .non_zero => {
-                    var winding: i32 = 0;
-                    var previous_x: ?f32 = null;
-                    var index: usize = 0;
-                    while (index < intersections.len) {
-                        const current_x = intersections[index].x;
-                        if (previous_x) |start_f| {
-                            const end_f = current_x;
-                            if (winding != 0) {
-                                if (row_accumulator.cover(min_x, max_x, sample_offsets, start_f, end_f)) |span| {
-                                    row_has_coverage = true;
-                                    row_min_x = @min(row_min_x, span.min_x);
-                                    row_max_x = @max(row_max_x, span.max_x);
-                                }
+        switch (fill_rule) {
+            .non_zero => {
+                var winding: i32 = 0;
+                var previous_x: ?f32 = null;
+                var index: usize = 0;
+                while (index < intersections.len) {
+                    const current_x = intersections[index].x;
+                    if (previous_x) |start_f| {
+                        if (winding != 0) {
+                            if (row_accumulator.cover(min_x, max_x, sample_offsets, start_f, current_x)) |span| {
+                                row_has_coverage = true;
+                                row_min_x = @min(row_min_x, span.min_x);
+                                row_max_x = @max(row_max_x, span.max_x);
                             }
                         }
-
-                        var delta_sum: i32 = 0;
-                        while (index < intersections.len and @abs(intersections[index].x - current_x) <= 0.000001) : (index += 1) {
-                            delta_sum += intersections[index].delta;
-                        }
-                        winding += delta_sum;
-                        previous_x = current_x;
                     }
-                },
-                .even_odd => {
-                    var pair: usize = 0;
-                    while (pair + 1 < intersections.len) : (pair += 2) {
-                        if (row_accumulator.cover(min_x, max_x, sample_offsets, intersections[pair].x, intersections[pair + 1].x)) |span| {
-                            row_has_coverage = true;
-                            row_min_x = @min(row_min_x, span.min_x);
-                            row_max_x = @max(row_max_x, span.max_x);
-                        }
+                    var delta_sum: i32 = 0;
+                    while (index < intersections.len and @abs(intersections[index].x - current_x) <= 0.000001) : (index += 1) {
+                        delta_sum += intersections[index].delta;
                     }
-                },
-            }
+                    winding += delta_sum;
+                    previous_x = current_x;
+                }
+            },
+            .even_odd => {
+                var pair: usize = 0;
+                while (pair + 1 < intersections.len) : (pair += 2) {
+                    if (row_accumulator.cover(min_x, max_x, sample_offsets, intersections[pair].x, intersections[pair + 1].x)) |span| {
+                        row_has_coverage = true;
+                        row_min_x = @min(row_min_x, span.min_x);
+                        row_max_x = @max(row_max_x, span.max_x);
+                    }
+                }
+            },
         }
-        if (!row_has_coverage) continue;
-        row_accumulator.blendAndClear(
-            target,
-            min_x,
-            y,
-            row_min_x,
-            row_max_x,
-            coverage_lut,
-        );
+    }
+    if (row_has_coverage) {
+        row_accumulator.blendAndClear(target, min_x, y, row_min_x, row_max_x, coverage_lut);
     }
 }
 
@@ -282,6 +338,102 @@ pub fn sortPreparedFillLinesByYMin(lines: []PreparedFillLine) void {
         return;
     }
     std.sort.heap(PreparedFillLine, lines, {}, lessThanPreparedFillLineYMin);
+}
+
+const no_fill_line = std.math.maxInt(usize);
+
+fn bucketFillLinesByFirstRow(
+    lines: []const PreparedFillLine,
+    min_y: i32,
+    max_y: i32,
+    next_lines: []usize,
+    row_heads: []usize,
+) void {
+    std.debug.assert(next_lines.len >= lines.len);
+    std.debug.assert(row_heads.len == @as(usize, @intCast(max_y - min_y + 1)));
+    @memset(row_heads, no_fill_line);
+    @memset(next_lines, no_fill_line);
+    const min_y_f: f32 = @floatFromInt(min_y);
+    const max_y_f = @as(f32, @floatFromInt(max_y)) + 1.0;
+    for (lines, 0..) |line, line_index| {
+        if (line.y_max <= min_y_f or line.y_min >= max_y_f) continue;
+        const first_y = std.math.clamp(
+            floorI32Saturating(line.y_min),
+            min_y,
+            max_y,
+        );
+        const row_index: usize = @intCast(first_y - min_y);
+        next_lines[line_index] = row_heads[row_index];
+        row_heads[row_index] = line_index;
+    }
+}
+
+fn updateBucketedActiveFillLines(
+    active_storage: []PreparedFillLine,
+    active_count: *usize,
+    lines: []const PreparedFillLine,
+    next_lines: []const usize,
+    first_line: usize,
+    y: i32,
+) []PreparedFillLine {
+    std.debug.assert(active_storage.len >= lines.len);
+    const row_min_y: f32 = @floatFromInt(y);
+    var kept: usize = 0;
+    for (active_storage[0..active_count.*]) |line| {
+        if (line.y_max <= row_min_y) continue;
+        active_storage[kept] = line;
+        kept += 1;
+    }
+
+    var line_index = first_line;
+    while (line_index != no_fill_line) : (line_index = next_lines[line_index]) {
+        const line = lines[line_index];
+        if (line.y_max <= row_min_y) continue;
+        active_storage[kept] = line;
+        kept += 1;
+    }
+    active_count.* = kept;
+    return active_storage[0..kept];
+}
+
+test "bucketed active edges match sorted active sets" {
+    const lines = [_]PreparedFillLine{
+        .{ .ax = 0, .ay = -2.5, .y_min = -2.5, .y_max = 0.25, .slope = 1, .delta = 1 },
+        .{ .ax = 1, .ay = -0.1, .y_min = -0.1, .y_max = 2.75, .slope = -1, .delta = -1 },
+        .{ .ax = 2, .ay = 0.0, .y_min = 0.0, .y_max = 4.0, .slope = 0, .delta = 1 },
+        .{ .ax = 3, .ay = 1.9, .y_min = 1.9, .y_max = 3.1, .slope = 2, .delta = -1 },
+        .{ .ax = 4, .ay = 3.0, .y_min = 3.0, .y_max = 8.0, .slope = 0, .delta = 1 },
+    };
+    const min_y: i32 = 0;
+    const max_y: i32 = 3;
+    var next_lines: [lines.len]usize = undefined;
+    var row_heads: [max_y - min_y + 1]usize = undefined;
+    bucketFillLinesByFirstRow(&lines, min_y, max_y, &next_lines, &row_heads);
+
+    var active: [lines.len]PreparedFillLine = undefined;
+    var active_count: usize = 0;
+    var y = min_y;
+    while (y <= max_y) : (y += 1) {
+        const active_lines = updateBucketedActiveFillLines(
+            &active,
+            &active_count,
+            &lines,
+            &next_lines,
+            row_heads[@intCast(y - min_y)],
+            y,
+        );
+        var seen = [_]bool{false} ** lines.len;
+        for (active_lines) |active_line| {
+            for (lines, 0..) |line, index| {
+                if (active_line.ax == line.ax) seen[index] = true;
+            }
+        }
+        for (lines, 0..) |line, index| {
+            const row_min_y: f32 = @floatFromInt(y);
+            const expected = line.y_min < row_min_y + 1.0 and line.y_max > row_min_y;
+            try std.testing.expectEqual(expected, seen[index]);
+        }
+    }
 }
 
 pub fn updateActiveFillLines(active_storage: []PreparedFillLine, active_count: *usize, sorted_lines: []const PreparedFillLine, next_line: *usize, y: i32) []PreparedFillLine {

@@ -3494,6 +3494,13 @@ shaping-performance superiority.
   about `12.6--28.3%`, branches by about `12.7--22.9%`, and cycles by about
   `6.8--18.5%` across Roboto `A`, `g`, `é` and Amiri `س`, `م`; direct/prepared
   output remained byte-identical.
+- Prepared cached-row blending now writes `max(existing, lut[count])` for every
+  pixel in the clipped dirty slice. Because `lut[0]` is transparent, internal
+  contour holes need no data-dependent branch. Relative to the row-slice
+  baseline, fixed-CPU-8 reverse A/B measurements reduced prepared-raster
+  instructions by about `1.3--8.2%`, branches by about `18.8--44.8%`, and
+  cycles by about `2.8--8.0%` across the same Roboto/Amiri glyph matrix, with
+  byte-identical direct/prepared output.
 - GSUB run-state preparation is now inlined into its small set of whole-run and
   cached-plan callers. This removes an out-of-line call and large by-value
   `Options` return at each Indic feature stage while preserving the shared

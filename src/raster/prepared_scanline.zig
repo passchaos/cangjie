@@ -248,7 +248,10 @@ noinline fn fillDifference4(allocator: std.mem.Allocator, target: Target, prepar
             // and trailing zeroes. Traverse source and destination together so
             // the hot copy avoids reconstructing both indexes for every pixel.
             for (source, destination) |count, *pixel| {
-                if (count != 0) pixel.* = @max(pixel.*, lut[count]);
+                // lut[0] is transparent and max-alpha blending is idempotent.
+                // A straight write therefore preserves internal contour holes
+                // without a data-dependent branch.
+                pixel.* = @max(pixel.*, lut[count]);
             }
         }
         return;

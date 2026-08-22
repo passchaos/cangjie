@@ -186,7 +186,6 @@ inline fn fillPreparedRow(
             if (py < first.y_min or py >= first.y_max or py < second.y_min or py >= second.y_max) continue;
             const first_x = first.slope * (py - first.ay) + first.ax;
             const second_x = second.slope * (py - second.ay) + second.ax;
-            if (!std.math.isFinite(first_x) or !std.math.isFinite(second_x)) continue;
             if (@abs(second_x - first_x) <= 0.000001) continue;
             const start_f, const end_f, const left_delta = if (first_x < second_x)
                 .{ first_x, second_x, first.delta }
@@ -206,7 +205,6 @@ inline fn fillPreparedRow(
         for (row_lines) |line| {
             if (py < line.y_min or py >= line.y_max) continue;
             const x_intersect = line.slope * (py - line.ay) + line.ax;
-            if (!std.math.isFinite(x_intersect)) continue;
             intersection_storage[intersection_count] = .{
                 .x = x_intersect,
                 .delta = line.delta,
@@ -327,13 +325,19 @@ fn prepareFillLinesAndBounds(
         raw_max_y = @max(raw_max_y, ceilI32Saturating(@max(line.a.y, line.b.y)));
 
         const dy = line.b.y - line.a.y;
-        if (dy == 0.0) continue;
+        if (dy == 0.0 or !std.math.isFinite(dy)) continue;
+        const slope = (line.b.x - line.a.x) / dy;
+        // Every evaluated sample lies inside the edge's half-open y range.
+        // Finite endpoints, delta-y, and slope therefore guarantee a finite
+        // interpolated x; reject extreme arithmetic here once rather than
+        // rechecking the result for every edge at every subpixel row.
+        if (!std.math.isFinite(slope)) continue;
         out[count] = .{
             .ax = line.a.x,
             .ay = line.a.y,
             .y_min = @min(line.a.y, line.b.y),
             .y_max = @max(line.a.y, line.b.y),
-            .slope = (line.b.x - line.a.x) / dy,
+            .slope = slope,
             .delta = if (dy > 0.0) 1 else -1,
         };
         count += 1;
@@ -370,6 +374,18 @@ test "combined line preparation preserves public bounds and edges" {
     try std.testing.expectEqualSlices(PreparedFillLine, reference_lines, combined.lines);
 }
 
+test "line preparation rejects non-finite slopes once" {
+    const source = [_]Line{.{
+        .a = .{ .x = -std.math.floatMax(f32), .y = 0 },
+        .b = .{ .x = std.math.floatMax(f32), .y = 1 },
+    }};
+    var storage: [source.len]PreparedFillLine = undefined;
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        prepareFillLines(&storage, &source).len,
+    );
+}
+
 pub fn prepareFillLines(out: []PreparedFillLine, lines: []const Line) []PreparedFillLine {
     std.debug.assert(out.len >= lines.len);
     var count: usize = 0;
@@ -379,13 +395,15 @@ pub fn prepareFillLines(out: []PreparedFillLine, lines: []const Line) []Prepared
         // Horizontal edges never cross the half-open scanline test used by the
         // rasterizer. Dropping them here keeps the hot sample loop focused on
         // candidate edges while preserving the exact winding rule for all rows.
-        if (dy == 0.0) continue;
+        if (dy == 0.0 or !std.math.isFinite(dy)) continue;
+        const slope = (line.b.x - line.a.x) / dy;
+        if (!std.math.isFinite(slope)) continue;
         out[count] = .{
             .ax = line.a.x,
             .ay = line.a.y,
             .y_min = @min(line.a.y, line.b.y),
             .y_max = @max(line.a.y, line.b.y),
-            .slope = (line.b.x - line.a.x) / dy,
+            .slope = slope,
             .delta = if (dy > 0.0) 1 else -1,
         };
         count += 1;

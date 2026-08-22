@@ -3445,3 +3445,12 @@ shaping-performance superiority.
   frequency-sensitive. The cached glyph-index hit count falls by exactly one
   per source line, while both current HarfBuzz 14.3 and HarfRust retain exact
   10,000-line parity checksum `b01a5388ce792b49`.
+- Direct scan conversion now rejects non-finite edge slopes during its single
+  preparation pass, so every subpixel-row intersection can rely on finite
+  arithmetic instead of repeating two `isFinite` checks in the hot loop. A
+  fixed-CPU-8, seven-repeat comparison at 64 px reduced retired instructions
+  by about `2.4%` for Roboto `A`, `1.8%` for `g`, `2.0%` for `é`, `1.5%` for
+  Amiri `س`, and `2.4%` for `م`; branches fell by about `1.1--3.6%`. All five
+  glyphs retained byte-identical output at 1x1, 2x2, 3x3, and 4x4 sampling,
+  and a regression test covers finite endpoints whose subtraction overflows
+  to a non-finite slope.

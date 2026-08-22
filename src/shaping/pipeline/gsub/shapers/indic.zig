@@ -19,6 +19,12 @@ const use = @import("use.zig");
 
 pub const supports = indic.shouldShape;
 
+const Prepared = struct {
+    /// Zero means the query was intentionally not retained (the cacheless
+    /// boundary must repeat its mutation-aware font validation in `finish`).
+    dotted_circle_glyph: GlyphId = 0,
+};
+
 pub const Input = struct {
     allocator: std.mem.Allocator,
     font: *const Font,
@@ -43,7 +49,7 @@ pub const Input = struct {
     gdef_metadata: GdefLookupMetadata,
 };
 
-pub fn prepare(input: Input) !void {
+pub fn prepare(input: Input) !Prepared {
     const dotted_circle_glyph = try source_pipeline.glyphIndex(
         input.font,
         input.glyph_index_cache,
@@ -82,21 +88,23 @@ pub fn prepare(input: Input) !void {
     }
     input.options.source_codepoints = input.codepoints.items;
     input.source_boundaries.bindSourceByteStarts(input.clusters.items);
-}
-
-pub fn finish(input: Input) !void {
-    return switch (input.lookup_options.script_tag) {
-        .dev2 => finishDev2(input),
-        else => finishGeneric(input),
+    return .{
+        .dotted_circle_glyph = if (input.glyph_index_cache != null)
+            dotted_circle_glyph
+        else
+            0,
     };
 }
 
-fn finishDev2(input: Input) !void {
-    const dotted_circle_glyph = try source_pipeline.glyphIndex(
-        input.font,
-        input.glyph_index_cache,
-        0x25cc,
-    );
+pub fn finish(input: Input, prepared: Prepared) !void {
+    return switch (input.lookup_options.script_tag) {
+        .dev2 => finishDev2(input, prepared),
+        else => finishGeneric(input, prepared),
+    };
+}
+
+fn finishDev2(input: Input, prepared: Prepared) !void {
+    const dotted_circle_glyph = try dottedCircleForFinish(input, prepared);
     try indic.insertDottedCirclesForBrokenClusters(
         input.allocator,
         input.glyph_ids,
@@ -117,15 +125,11 @@ fn finishDev2(input: Input) !void {
     try finishStages(input, false);
 }
 
-fn finishGeneric(input: Input) !void {
+fn finishGeneric(input: Input, prepared: Prepared) !void {
     // Preserve the historical two-query contract. With a context cache this
     // is a hit; without one it retains defensive borrowed-font validation at
     // each distinct shaper phase.
-    const dotted_circle_glyph = try source_pipeline.glyphIndex(
-        input.font,
-        input.glyph_index_cache,
-        0x25cc,
-    );
+    const dotted_circle_glyph = try dottedCircleForFinish(input, prepared);
     try indic.insertDottedCirclesForBrokenClusters(
         input.allocator,
         input.glyph_ids,
@@ -139,6 +143,11 @@ fn finishGeneric(input: Input) !void {
     );
     normalizeInitialOrder(input);
     try finishStages(input, true);
+}
+
+fn dottedCircleForFinish(input: Input, prepared: Prepared) !GlyphId {
+    if (input.glyph_index_cache != null) return prepared.dotted_circle_glyph;
+    return source_pipeline.glyphIndex(input.font, null, 0x25cc);
 }
 
 fn finishStages(input: Input, generic_script: bool) !void {

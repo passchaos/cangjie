@@ -444,7 +444,10 @@ pub fn run(input: Input) !void {
             .lookup_options = lookup_options,
             .gdef_metadata = gdef_metadata.*,
         };
-        if (indic_shape) try gsub_indic.prepare(indic_input);
+        const indic_prepared = if (indic_shape)
+            try gsub_indic.prepare(indic_input)
+        else
+            undefined;
         ran_generic_gsub = true;
         try gsub_generic.run(.{
             .allocator = buffer.allocator,
@@ -461,7 +464,7 @@ pub fn run(input: Input) !void {
             .lookup_options = lookup_options,
             .gdef_metadata = gdef_metadata.*,
         });
-        if (indic_shape) try gsub_indic.finish(indic_input);
+        if (indic_shape) try gsub_indic.finish(indic_input, indic_prepared);
     }
     // Generic shaping merges JSTF enable indexes into its selected plan before
     // execution. Script shapers own several source-sensitive stages instead;

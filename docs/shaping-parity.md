@@ -3435,3 +3435,13 @@ shaping-performance superiority.
   comparisons. Current HarfBuzz 14.3 and HarfRust parity remain exact for all
   10,000 lines with checksum `b01a5388ce792b49`, and the complete corpus and
   ReleaseFast test gates pass.
+- Indic preparation now lends its dotted-circle glyph result to final broken-
+  cluster repair when a glyph-index cache owns the immutable font lookup. The
+  cacheless path deliberately repeats its mutation-aware validation, preserving
+  the public defensive contract. Fixed-CPU-8 B/A/A/B counters over five full
+  NotoSansDevanagari `hi-words` passes reduced retired instructions from about
+  `2.901B` to `2.898B` (about `0.11%`) and branches from `493.1M` to `492.6M`
+  (about `0.10%`); cycles improved in the forward comparison but remained
+  frequency-sensitive. The cached glyph-index hit count falls by exactly one
+  per source line, while both current HarfBuzz 14.3 and HarfRust retain exact
+  10,000-line parity checksum `b01a5388ce792b49`.

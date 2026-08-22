@@ -3481,3 +3481,12 @@ shaping-performance superiority.
   `0.45%` and branches by about `0.37%`; Amiri `fa-words` improved about
   `0.4--0.5%` in both counters, and Roboto remained within `0.02%`. Current
   HarfBuzz 14.3 and HarfRust parity remain exact for the 10,000-line corpus.
+- The same generic fallback now treats a validated table plus its complete
+  lookup-accelerator array as a table-wide fixed-header proof. Accelerator
+  construction validates every LookupList header, so payload-capability misses
+  no longer need a second lookup-specific identity probe; cacheless callers
+  still run the full validator. Relative to the preceding exact-sidecar check,
+  fixed-CPU-8 counters reduced Devanagari `hi-words` instructions by about
+  `0.41%` and branches by about `0.31%`, and Amiri `fa-words` by about `0.37%`
+  and `0.28%`; CPU-30 reproduced the improvements. Roboto retired work stayed
+  within `0.02%`, and all output checksums were unchanged.

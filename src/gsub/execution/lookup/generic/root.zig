@@ -63,7 +63,7 @@ pub noinline fn apply(
     );
     profile.recordKind(run.shape_profile, resolved.lookup_type);
 
-    if (!view.assume_validated) {
+    if (!view.assume_validated or run.lookup_accelerators == null) {
         try validation.lookup.validateSubtables(
             Executor,
             view,

@@ -3501,6 +3501,14 @@ shaping-performance superiority.
   instructions by about `1.3--8.2%`, branches by about `18.8--44.8%`, and
   cycles by about `2.8--8.0%` across the same Roboto/Amiri glyph matrix, with
   byte-identical direct/prepared output.
+- Prepared coverage construction now consumes its already-sorted finite
+  intersections with a non-negative epsilon difference and clears difference
+  cells while resolving each row, leaving only the trailing sentinel to reset.
+  This removes an absolute value and a second dirty-span clear during outline
+  preparation. A fixed-CPU-8, 10,000-preparation A/B reduced retired
+  instructions by about `2.3--3.1%`, branches by about `1.9--2.8%`, and cycles
+  by about `1.1--7.8%` for Roboto `A`, `g` and Amiri `س`, with unchanged cached
+  coverage and rendered output.
 - GSUB run-state preparation is now inlined into its small set of whole-run and
   cached-plan callers. This removes an out-of-line call and large by-value
   `Options` return at each Indic feature stage while preserving the shared

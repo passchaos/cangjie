@@ -67,7 +67,12 @@ pub fn build(allocator: std.mem.Allocator, bounds: ?scanline.Bounds, rows: anyty
                     };
                 }
                 var delta: i32 = 0;
-                while (index < intersections.len and @abs(intersections[index].x - current) <= 0.000001) : (index += 1) delta += intersections[index].delta;
+                // Intersections are finite and sorted during preparation.
+                while (index < intersections.len and
+                    intersections[index].x - current <= 0.000001) : (index += 1)
+                {
+                    delta += intersections[index].delta;
+                }
                 winding += delta;
                 previous = current;
             }
@@ -79,13 +84,14 @@ pub fn build(allocator: std.mem.Allocator, bounds: ?scanline.Bounds, rows: anyty
         var running: i16 = 0;
         var x = dirty_min;
         while (x <= dirty_max) : (x += 1) {
-            running += differences[@intCast(x - geometry.min_x)];
+            const difference_index: usize = @intCast(x - geometry.min_x);
+            running += differences[difference_index];
+            differences[difference_index] = 0;
             std.debug.assert(running >= 0 and running <= 16);
             pixels[row_index * width + @as(usize, @intCast(x - geometry.min_x))] = @intCast(running);
         }
-        const first: usize = @intCast(dirty_min - geometry.min_x);
         const after: usize = @intCast(dirty_max - geometry.min_x + 1);
-        @memset(differences[first .. after + 1], 0);
+        differences[after] = 0;
         cached_rows[row_index] = .{
             .start = @intCast(dirty_min - geometry.min_x),
             .end = @intCast(dirty_max - geometry.min_x),

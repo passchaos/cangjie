@@ -33,6 +33,7 @@ pub fn lookup(
     while (position < glyphs.items.len) {
         var next_position = position + 1;
         defer position = next_position;
+        const first = glyphs.items[position];
         if (!eligible(glyphs.items, position, lookup_flag, run)) continue;
 
         var subtable_index: usize = 0;
@@ -43,10 +44,17 @@ pub fn lookup(
             const parsed =
                 lookup_accelerator.chaining_class_subtables[subtable_index];
             if (parsed.rules.len == 0) continue;
-            const result = try applyEligibleAt(
+            const group = accelerator.index.class_first.findPrepared(
+                parsed.classes,
+                parsed.first_index_start,
+                parsed.groups,
+                first,
+            ) orelse continue;
+            const result = try applyEligibleGroupAt(
                 Executor,
                 view,
                 parsed,
+                group,
                 glyphs,
                 position,
                 allocator,
@@ -97,6 +105,39 @@ noinline fn applyEligibleAt(
     if (!try matching.acceleratedSubtable(
         view,
         parsed,
+        glyphs.items,
+        position,
+        lookup_flag,
+        run,
+        &matched,
+    )) return .{};
+    return commit.apply(
+        Executor,
+        view,
+        glyphs,
+        position,
+        &matched,
+        allocator,
+        run,
+    );
+}
+
+noinline fn applyEligibleGroupAt(
+    comptime Executor: type,
+    view: View,
+    parsed: Subtable,
+    group: *const @import("../../../../../opentype/class_context.zig").RuleGroup,
+    glyphs: *std.ArrayList(GlyphId),
+    position: usize,
+    allocator: std.mem.Allocator,
+    lookup_flag: u16,
+    run: Options,
+) linksection(shaping_sections.isolated_hotpaths) Error!model.ApplyResult {
+    var matched: match.Match = undefined;
+    if (!try matching.acceleratedGroup(
+        view,
+        parsed,
+        group,
         glyphs.items,
         position,
         lookup_flag,

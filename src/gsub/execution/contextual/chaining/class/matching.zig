@@ -31,6 +31,28 @@ pub fn acceleratedSubtable(
         parsed.groups,
         glyphs[position],
     ) orelse return false;
+    return acceleratedGroup(
+        view,
+        parsed,
+        group,
+        glyphs,
+        position,
+        lookup_flag,
+        run,
+        result,
+    );
+}
+
+pub fn acceleratedGroup(
+    view: View,
+    parsed: Subtable,
+    group: *const class_context.RuleGroup,
+    glyphs: []const GlyphId,
+    position: usize,
+    lookup_flag: u16,
+    run: Options,
+    result: *match.Match,
+) Error!bool {
     if (group.max_input_count == 0 or
         group.max_input_count > window.max_region_glyphs or
         group.max_lookahead_count > window.max_region_glyphs)

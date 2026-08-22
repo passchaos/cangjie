@@ -28,11 +28,12 @@ pub fn apply(
     while (position < glyphs.items.len) {
         var next_position = position + 1;
         defer position = next_position;
+        const first = glyphs.items[position];
         if (!filtering.lookupCursorAllowsGlyph(run, position) or
             filtering.lookupIgnoresGlyph(
                 lookup_flag,
                 run,
-                glyphs.items[position],
+                first,
             ))
         {
             continue;
@@ -45,10 +46,19 @@ pub fn apply(
             const accelerated_subtable =
                 lookup_accelerator.context_class_subtables[subtable_index];
             if (accelerated_subtable.rules.len == 0) continue;
-            const result = try accelerated.apply(
+            // The selected group is also the matcher's first operation. Probe
+            // once here and lend the result across that API boundary.
+            const group = accelerator.index.class_first.findPrepared(
+                accelerated_subtable.classes,
+                accelerated_subtable.first_index_start,
+                accelerated_subtable.groups,
+                first,
+            ) orelse continue;
+            const result = try accelerated.applyGroup(
                 Executor,
                 view,
                 accelerated_subtable,
+                group,
                 glyphs,
                 position,
                 allocator,

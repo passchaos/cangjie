@@ -3558,3 +3558,12 @@ shaping-performance superiority.
   five complete Devanagari `hi-words` passes reduced retired instructions by
   about `0.02%` and branches by about `0.13%`; CPU 8 reproduced the branch
   reduction. Roboto and Amiri controls remained within `0.01%` retired work.
+- Whole-lookup class-context scans now probe the compact first-glyph index
+  before entering the large per-position matcher and lend the selected
+  `RuleGroup` across that boundary. This rejects misses before constructing
+  matcher state and avoids a duplicate index probe for hits, while nested
+  single-position entry points keep their existing checks. Fixed-CPU-8/30
+  reverse A/B measurements over five complete Devanagari `hi-words` passes
+  reduced retired instructions by about `2.26%` and branches by about `1.61%`.
+  Roboto remained within `0.01%` retired work; Amiri instructions/branches
+  improved about `0.07%`/`0.03%`.

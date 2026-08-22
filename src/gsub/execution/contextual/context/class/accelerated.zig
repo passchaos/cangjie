@@ -34,6 +34,30 @@ pub fn apply(
         subtable.groups,
         glyphs.items[position],
     ) orelse return .{};
+    return applyGroup(
+        Executor,
+        view,
+        subtable,
+        group,
+        glyphs,
+        position,
+        allocator,
+        lookup_flag,
+        run,
+    );
+}
+
+pub fn applyGroup(
+    comptime Executor: type,
+    view: View,
+    subtable: Subtable,
+    group: *const class_context.RuleGroup,
+    glyphs: *std.ArrayList(GlyphId),
+    position: usize,
+    allocator: std.mem.Allocator,
+    lookup_flag: u16,
+    run: Options,
+) Error!model.ApplyResult {
     if (group.max_input_count == 0 or
         group.max_input_count > max_input_glyphs)
     {

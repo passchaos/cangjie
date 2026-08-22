@@ -154,27 +154,25 @@ inline fn coverSpanDifference4QuarterSamples(
     start_f: f32,
     end_f: f32,
 ) ?scanline.CoveredSpan {
-    const start64: f64 = start_f;
-    const end64: f64 = end_f;
-    const min64: f64 = @floatFromInt(min_x);
-    const max64: f64 = @floatFromInt(max_x);
-    if (end64 <= start64 or end64 <= min64 or start64 >= max64 + 1.0) {
+    const min_f: f32 = @floatFromInt(min_x);
+    const max_after_f = @as(f32, @floatFromInt(max_x)) + 1.0;
+    if (end_f <= start_f or end_f <= min_f or start_f >= max_after_f) {
         return null;
     }
-    const min_sample = @as(i64, min_x) * 4;
-    const max_sample = (@as(i64, max_x) + 1) * 4;
-    const first = if (start64 <= min64)
+    const min_sample = min_x * 4;
+    const max_sample = (max_x + 1) * 4;
+    const first: i32 = if (start_f <= min_f)
         min_sample
     else
-        @as(i64, @intFromFloat(@ceil(start64 * 4.0 - 0.5)));
-    const after = if (end64 >= max64 + 1.0)
+        @intFromFloat(@ceil(start_f * 4.0 - 0.5));
+    const after: i32 = if (end_f >= max_after_f)
         max_sample
     else
-        @as(i64, @intFromFloat(@ceil(end64 * 4.0 - 0.5)));
+        @intFromFloat(@ceil(end_f * 4.0 - 0.5));
     if (after <= first) return null;
 
-    const x_start: i32 = @intCast(@divTrunc(first, 4));
-    const x_end: i32 = @intCast(@divTrunc(after - 1, 4));
+    const x_start = @divTrunc(first, 4);
+    const x_end = @divTrunc(after - 1, 4);
     if (x_start == x_end) {
         addDifference(
             differences,

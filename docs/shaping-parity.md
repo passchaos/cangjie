@@ -3531,6 +3531,13 @@ shaping-performance superiority.
   `0.5%`. Cycles improved for four glyphs and were slightly noisy for `g`.
   Expanded threshold tests and the five-glyph 1×1--4×4 matrix retained
   byte-identical coverage.
+- The bounded quarter-sample path now stays in f32/i32 after its exact-range
+  guard instead of widening endpoints and sample indexes to f64/i64. Fixed-
+  CPU-8 reverse A/B counters over 100,000 dirty renders reduced retired
+  instructions by about `2.0%` for Roboto `A`, `1.6%` for `g`, `1.1%` for `é`,
+  `1.2%` for Amiri `س`, and `0.4%` for `م`; branches were neutral to `0.2%`
+  lower. The expanded boundary test and five-glyph 1×1--4×4 matrix remained
+  byte-identical.
 - Prepared fill edges now anchor x at their lower y endpoint. This removes the
   redundant original endpoint-y field, reduces each active edge from 24 to 20
   bytes, and preserves the same subtract/multiply/add intersection arithmetic

@@ -1680,8 +1680,9 @@ single `Script` value. Regenerate it with `generate_data.py` under
 `text.script.extensionsContain` and zero-allocation
 `extensionsForCodepoint` queries expose membership and enumeration; script-run
 itemization uses explicit extension sets to prevent shared punctuation from
-sticking to an incompatible established run. Verify the generated blob and
-every explicit membership with:
+sticking to an incompatible established run. Verify the generated blob, every
+explicit membership, and the singleton fallback for every other Unicode scalar
+with:
 
 ```sh
 zig build unicode-script-extensions \

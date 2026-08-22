@@ -193,7 +193,24 @@ def main() -> None:
             test_lines.append(
                 f"    try std.testing.expect(script.extensionsForCodepoint(0x{scalar:x}).at({len(expected)}) == null);"
             )
-        test_lines.extend(["}", ""])
+        test_lines.extend(
+            [
+                "}",
+                "",
+                'test "implicit Script_Extensions sets equal the primary Script" {',
+                "    var value: u32 = 0;",
+                "    while (value <= 0x10ffff) : (value += 1) {",
+                "        const codepoint: u21 = @intCast(value);",
+                "        if (script.hasExplicitExtensions(codepoint)) continue;",
+                "        const set = script.extensionsForCodepoint(codepoint);",
+                "        try std.testing.expectEqual(@as(usize, 1), set.len());",
+                "        try std.testing.expectEqual(script.of(codepoint), set.at(0).?);",
+                "        try std.testing.expect(set.at(1) == null);",
+                "    }",
+                "}",
+                "",
+            ]
+        )
         Path(sys.argv[5]).write_text("\n".join(test_lines), encoding="utf-8")
 
 

@@ -3519,3 +3519,10 @@ shaping-performance superiority.
   over five complete `hi-words` passes reduced retired instructions by about
   `0.13%` and branches by about `0.09%`; Roboto and Amiri controls remained
   within `0.003%` retired work.
+- Trusted class-index probes now return a borrowed `RuleGroup` rather than a
+  roughly 32-byte value copy. The defensive public probe keeps its value-return
+  contract, while the two accelerator executors retain the group in its owned
+  sidecar for the complete match. Fixed-CPU-30 reverse A/B/B/A counters over
+  five complete Devanagari `hi-words` passes reduced retired instructions by
+  about `0.02%` and branches by about `0.13%`; CPU 8 reproduced the branch
+  reduction. Roboto and Amiri controls remained within `0.01%` retired work.

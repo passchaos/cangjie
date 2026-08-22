@@ -144,8 +144,65 @@ pub fn findPrepared(
     index_start: usize,
     groups: []const class_context.RuleGroup,
     glyph: GlyphId,
-) ?class_context.RuleGroup {
-    return findImpl(true, classes, index_start, groups, glyph);
+) ?*const class_context.RuleGroup {
+    const index = preparedGroupIndex(classes, index_start, glyph) orelse
+        return null;
+    std.debug.assert(index < groups.len);
+    return &groups[index];
+}
+
+fn preparedGroupIndex(
+    classes: []const u16,
+    index_start: usize,
+    glyph: GlyphId,
+) ?u16 {
+    std.debug.assert(index_start < classes.len);
+    const index = classes[index_start..];
+    std.debug.assert(index.len > 0);
+    return switch (index[0]) {
+        hash_encoding => group: {
+            std.debug.assert((index.len - 1) % 2 == 0);
+            const slot_count = (index.len - 1) / 2;
+            std.debug.assert(slot_count != 0);
+            std.debug.assert(std.math.isPowerOfTwo(slot_count));
+            var slot = hashGlyph(glyph) & (slot_count - 1);
+            while (index[2 + slot * 2] != empty_group_index) : (slot = (slot + 1) & (slot_count - 1)) {
+                if (index[1 + slot * 2] == glyph) {
+                    break :group index[2 + slot * 2];
+                }
+            }
+            return null;
+        },
+        sorted_encoding => group: {
+            std.debug.assert((index.len - 1) % 2 == 0);
+            const count = (index.len - 1) / 2;
+            var low: usize = 0;
+            var high: usize = count;
+            while (low < high) {
+                const middle = low + (high - low) / 2;
+                const candidate = index[1 + middle * 2];
+                if (glyph < candidate) {
+                    high = middle;
+                } else if (glyph > candidate) {
+                    low = middle + 1;
+                } else {
+                    break :group index[2 + middle * 2];
+                }
+            }
+            return null;
+        },
+        dense_encoding => group: {
+            std.debug.assert(index.len >= 3);
+            const first = index[1];
+            if (glyph < first) return null;
+            const slot = @as(usize, glyph - first);
+            if (slot >= index.len - 2) return null;
+            const candidate = index[2 + slot];
+            if (candidate == empty_group_index) return null;
+            break :group candidate;
+        },
+        else => unreachable,
+    };
 }
 
 fn findImpl(

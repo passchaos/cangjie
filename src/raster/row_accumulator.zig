@@ -139,10 +139,13 @@ inline fn coverSpanDifference4(
         min_x
     else
         @as(i32, @intFromFloat(@floor(start64)));
-    const x_end = if (end64 >= max64)
+    // Sample centers are strictly below each pixel's right edge, so the pixel
+    // beginning at ceil(end) can never receive coverage. This matches the
+    // legacy count accumulator and avoids one empty boundary update per span.
+    const x_end = if (end64 >= max64 + 1.0)
         max_x
     else
-        @as(i32, @intFromFloat(@ceil(end64)));
+        @as(i32, @intFromFloat(@ceil(end64))) - 1;
     const full_start = if (start64 <= min64)
         min_x
     else
@@ -164,6 +167,14 @@ inline fn coverSpanDifference4(
         addPartialDifference4(differences, min_x, start_f, end_f, x);
     }
     return .{ .min_x = x_start, .max_x = x_end };
+}
+
+test "difference span excludes the guaranteed-empty end pixel" {
+    var differences = [_]i16{0} ** 5;
+    try std.testing.expectEqual(
+        scanline.CoveredSpan{ .min_x = 0, .max_x = 1 },
+        coverSpanDifference4(&differences, 0, 3, 0.25, 1.75).?,
+    );
 }
 
 inline fn addPartialDifference4(

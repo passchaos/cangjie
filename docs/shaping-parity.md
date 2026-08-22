@@ -3252,6 +3252,18 @@ shaping-performance superiority.
   five-repeat counters reduced instructions by about `16.7%`, `13.0%`, and
   `13.5%`, branches by `11.8%`, `8.7%`, and `9.8%`, and cycles by roughly
   `12.7%`, `10.4%`, and `11.7%`, respectively.
+- The 4×4 signed-difference accumulator now applies the same half-open span-end
+  bound as the legacy count scanner: the pixel beginning at `ceil(end)` cannot
+  contain any sample center and is excluded. Prepared-cache construction uses
+  the same bound, and a focused boundary test plus the retained direct/prepared
+  byte differentials protect output identity. Fixed-CPU-8 A/B/B/A counters over
+  20,000 direct dirty renders reduced retired instructions for Roboto 64 px
+  `A` from `2.29416B/2.29411B` to `2.18827B/2.18821B` (about `4.62%`),
+  `g` from `3.37542B/3.37536B` to `3.25727B/3.25734B` (about `3.50%`),
+  and `é` from `2.32225B/2.32214B` to `2.24255B/2.24248B` (about
+  `3.43%`). Branches fell about `5.22%`, `4.00%`, and `4.00%`; cycles
+  improved in every order, while all dirty-render checksums and pixel counts
+  remained unchanged.
 - Sparse GPOS adjustment output now checks for its common nondecreasing index
   order before invoking heap sort. The isolated noinline helper preserves the
   segment hot frame and falls back to the exact old sort at the first inversion.

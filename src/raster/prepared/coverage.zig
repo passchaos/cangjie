@@ -106,7 +106,10 @@ fn addSpan(differences: []i16, min_x: i32, max_x: i32, start_f: f32, end_f: f32)
     const clipped_start = @max(start_f, @as(f32, @floatFromInt(min_x)));
     const clipped_end = @min(end_f, @as(f32, @floatFromInt(max_x)) + 1.0);
     const x_start: i32 = @intFromFloat(@floor(clipped_start));
-    const x_end: i32 = @min(max_x, @as(i32, @intFromFloat(@ceil(clipped_end))));
+    const x_end: i32 = @min(
+        max_x,
+        @as(i32, @intFromFloat(@ceil(clipped_end))) - 1,
+    );
     const full_start: i32 = @intFromFloat(@ceil(clipped_start));
     const full_end = @as(i32, @intFromFloat(@floor(clipped_end))) - 1;
     var x = x_start;

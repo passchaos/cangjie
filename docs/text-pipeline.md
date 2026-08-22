@@ -1672,6 +1672,23 @@ Unicode 17 Script values; generated tests exhaust every assigned scalar of
 every script, including Common and Inherited, and verify that every unassigned
 scalar remains `Unknown`.
 
+Unicode 17 `Script_Extensions` is stored separately as an exact 669-scalar,
+118-set override table. Scalars without an explicit override inherit their
+single `Script` value. Regenerate it with `generate_data.py` under
+`tools/unicode/script_extensions/`; its manifest pins both
+`ScriptExtensions.txt` and `PropertyValueAliases.txt`. The public
+`text.script.extensionsContain` query exposes membership, and script-run
+itemization uses explicit extension sets to prevent shared punctuation from
+sticking to an incompatible established run. Verify the generated blob and
+every explicit membership with:
+
+```sh
+zig build unicode-script-extensions \
+  -Dunicode-scripts=path/to/Scripts.txt \
+  -Dunicode-script-extensions=path/to/ScriptExtensions.txt \
+  -Dunicode-property-value-aliases=path/to/PropertyValueAliases.txt
+```
+
 The Unicode 17 line-break property blob is generated with:
 
 ```sh

@@ -1,0 +1,9 @@
+{
+  "unicode_version": "17.0.0",
+  "source_url": "https://www.unicode.org/Public/17.0.0/ucd/ScriptExtensions.txt",
+  "source_sha256": "ec2107e58825a1586acee8e0911ce18260394ac8b87e535ca325f1ccbeb06bc6",
+  "aliases_url": "https://www.unicode.org/Public/17.0.0/ucd/PropertyValueAliases.txt",
+  "aliases_sha256": "64e9a5f76f7a1e8b5a47d6a1f9a26522a251208f5276bdfa1559dac7cf2e827a",
+  "expected_explicit_scalars": 669,
+  "expected_unique_sets": 118
+}

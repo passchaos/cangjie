@@ -3,6 +3,69 @@
 const std = @import("std");
 const unicode = @import("../unicode.zig");
 
+test "Unicode 17 Script Extensions expose explicit and fallback memberships" {
+    // Explicit Script_Extensions rows replace the primary Script value.
+    try std.testing.expect(unicode.scriptExtensionsContain(0x00b7, .latin));
+    try std.testing.expect(unicode.scriptExtensionsContain(0x00b7, .greek));
+    try std.testing.expect(unicode.scriptExtensionsContain(0x00b7, .shavian));
+    try std.testing.expect(!unicode.scriptExtensionsContain(0x00b7, .common));
+
+    try std.testing.expect(unicode.scriptExtensionsContain(0x0964, .devanagari));
+    try std.testing.expect(unicode.scriptExtensionsContain(0x0964, .bengali));
+    try std.testing.expect(unicode.scriptExtensionsContain(0x0964, .tamil));
+    try std.testing.expect(!unicode.scriptExtensionsContain(0x0964, .common));
+
+    try std.testing.expect(unicode.scriptExtensionsContain(0x30fc, .hiragana));
+    try std.testing.expect(unicode.scriptExtensionsContain(0x30fc, .katakana));
+    try std.testing.expect(!unicode.scriptExtensionsContain(0x30fc, .common));
+
+    // Scalars without an explicit row inherit exactly their Script value.
+    try std.testing.expect(unicode.scriptExtensionsContain('A', .latin));
+    try std.testing.expect(!unicode.scriptExtensionsContain('A', .greek));
+    try std.testing.expect(unicode.scriptExtensionsContain(0x0370, .greek));
+    try std.testing.expect(!unicode.scriptExtensionsContain(0x0370, .latin));
+}
+
+test "Script Extensions keep shared characters with compatible runs" {
+    const allocator = std.testing.allocator;
+
+    const arabic = "A\u{060c}\u{0628}";
+    const arabic_runs = try unicode.itemizeScriptRuns(allocator, arabic);
+    defer allocator.free(arabic_runs);
+    try std.testing.expectEqualSlices(
+        unicode.ScriptRun,
+        &.{
+            .{ .script = .latin, .byte_start = 0, .byte_len = 1 },
+            .{ .script = .arabic, .byte_start = 1, .byte_len = arabic.len - 1 },
+        },
+        arabic_runs,
+    );
+
+    const kana = "A\u{30fc}\u{30a2}";
+    const kana_runs = try unicode.itemizeScriptRuns(allocator, kana);
+    defer allocator.free(kana_runs);
+    try std.testing.expectEqualSlices(
+        unicode.ScriptRun,
+        &.{
+            .{ .script = .latin, .byte_start = 0, .byte_len = 1 },
+            .{ .script = .katakana, .byte_start = 1, .byte_len = kana.len - 1 },
+        },
+        kana_runs,
+    );
+
+    const incompatible_trailing = "A\u{060c}";
+    const incompatible_runs = try unicode.itemizeScriptRuns(allocator, incompatible_trailing);
+    defer allocator.free(incompatible_runs);
+    try std.testing.expectEqualSlices(
+        unicode.ScriptRun,
+        &.{
+            .{ .script = .latin, .byte_start = 0, .byte_len = 1 },
+            .{ .script = .common, .byte_start = 1, .byte_len = incompatible_trailing.len - 1 },
+        },
+        incompatible_runs,
+    );
+}
+
 test "large Unicode 17 scripts select distinct OpenType primitives" {
     const Case = struct {
         scalar: u21,

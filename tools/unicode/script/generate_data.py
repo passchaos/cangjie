@@ -24,10 +24,10 @@ ZIG_SCRIPT_NAME_OVERRIDES = {"Oriya": "odia"}
 
 
 def script_order() -> list[str]:
-    source = (ROOT / "src/unicode/script/root.zig").read_text(encoding="utf-8")
+    source = (ROOT / "src/unicode/script/types.zig").read_text(encoding="utf-8")
     match = ENUM.search(source)
     if match is None:
-        raise SystemExit("could not find Script enum in root.zig")
+        raise SystemExit("could not find Script enum in types.zig")
     names = []
     for line in match.group(1).splitlines():
         name = line.split("//", 1)[0].strip().removesuffix(",")

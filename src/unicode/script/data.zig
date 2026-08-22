@@ -7,7 +7,7 @@
 const std = @import("std");
 
 const data = @embedFile("data.bin");
-const script_root = @import("root.zig");
+const script_root = @import("types.zig");
 const header_len = 16;
 const index_count = readU16(12);
 const page_count = readU16(14);

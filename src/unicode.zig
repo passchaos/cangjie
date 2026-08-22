@@ -7,6 +7,7 @@ const sentence_boundary = @import("unicode/sentence/iterator.zig");
 const joining = @import("unicode/joining.zig");
 const mark = @import("unicode/mark/root.zig");
 const script_mod = @import("unicode/script/root.zig");
+const script_extensions = @import("unicode/script_extensions/root.zig");
 const vertical = @import("unicode/vertical.zig");
 const bidi_paragraph = @import("unicode/bidi/paragraph.zig");
 const canonical_combining_class = @import("unicode/canonical_combining_class.zig");
@@ -17,6 +18,9 @@ const canonical_decomposition = @import("unicode/canonical_decomposition.zig");
 /// datasets. Script and shaping-specific helper tables remain intentionally
 /// focused on the scripts supported by Cangjie's OpenType pipeline.
 pub const Script = script_mod.Script;
+pub const scriptExtensionsContain = script_extensions.contains;
+pub const hasExplicitScriptExtensions = script_extensions.hasExplicit;
+pub const scriptExtensionsCount = script_extensions.count;
 
 pub const ScriptRun = struct {
     script: Script,
@@ -1310,7 +1314,7 @@ pub fn itemizeScriptRuns(allocator: std.mem.Allocator, text: []const u8) ![]Scri
             run_end = next_index;
             continue;
         }
-        if (scriptBelongsToRun(script, current_script.?)) {
+        if (scriptBelongsToRun(codepoint, script, current_script.?)) {
             if (current_script.? == .common and script != .common and script != .inherited) {
                 current_script = script;
             }
@@ -1556,11 +1560,18 @@ fn isEmojiTagCodepoint(codepoint: u21) bool {
 
 const isSpacingMark = mark.isSpacing;
 
-fn scriptBelongsToRun(script: Script, current: Script) bool {
+fn scriptBelongsToRun(codepoint: u21, script: Script, current: Script) bool {
     // Common and inherited scripts adopt the current run script. If a run starts
-    // as common, let the first strong script continue it.
+    // as common, let the first strong script continue it. Explicit Script_Extensions
+    // values narrow that wildcard: a shared character joins only a script named
+    // by UAX #24 after a strong script has established the run. Leading
+    // Common/Inherited characters retain the established compatibility rule
+    // of adopting the first following strong script.
     if (script == current) return true;
-    if (script == .common or script == .inherited) return true;
+    if (script == .common or script == .inherited) {
+        return !script_extensions.hasExplicit(codepoint) or
+            script_extensions.contains(codepoint, current);
+    }
     if (current == .common) return true;
     return false;
 }

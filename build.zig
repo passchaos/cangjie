@@ -2498,6 +2498,16 @@ pub fn build(b: *std.Build) void {
         "unicode-scripts",
         "Unicode 17 Scripts.txt path for the script coverage audit",
     );
+    const unicode_script_extensions_path = b.option(
+        []const u8,
+        "unicode-script-extensions",
+        "Unicode 17 ScriptExtensions.txt path for the script extension audit",
+    );
+    const unicode_property_value_aliases_path = b.option(
+        []const u8,
+        "unicode-property-value-aliases",
+        "Unicode 17 PropertyValueAliases.txt path for script aliases",
+    );
     const unicode_script_coverage_step = b.step(
         "unicode-script-coverage",
         "Verify the Unicode 17 shaping-script coverage frontier",
@@ -2561,6 +2571,46 @@ pub fn build(b: *std.Build) void {
             .{ .name = "vort", .module = vort_dep.module("vort") },
         },
     });
+
+    const unicode_script_extensions_step = b.step(
+        "unicode-script-extensions",
+        "Verify Unicode 17 Script_Extensions coverage",
+    );
+    if (unicode_scripts_path != null and
+        unicode_script_extensions_path != null and
+        unicode_property_value_aliases_path != null)
+    {
+        const verify_extensions = b.addSystemCommand(&.{
+            "python3",
+            "tools/unicode/script_extensions/verify_coverage.py",
+            unicode_scripts_path.?,
+            unicode_script_extensions_path.?,
+            unicode_property_value_aliases_path.?,
+        });
+        const generated_test = verify_extensions.addOutputFileArg(
+            "script_extensions_test.zig",
+        );
+        const extension_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = generated_test,
+                .target = target,
+                .optimize = .ReleaseSafe,
+            }),
+        });
+        extension_test.root_module.addImport(
+            "cangjie",
+            mod,
+        );
+        unicode_script_extensions_step.dependOn(
+            &b.addRunArtifact(extension_test).step,
+        );
+    } else {
+        const missing_extensions = b.addFail(
+            "unicode-script-extensions requires -Dunicode-scripts, " ++
+                "-Dunicode-script-extensions, and -Dunicode-property-value-aliases",
+        );
+        unicode_script_extensions_step.dependOn(&missing_extensions.step);
+    }
 
     const tests = b.addTest(.{
         .root_module = mod,

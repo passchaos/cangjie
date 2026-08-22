@@ -152,7 +152,7 @@ def main() -> int:
     if unknown:
         raise SystemExit(f"manifest names unknown Unicode scripts: {unknown}")
 
-    root = (ROOT / "src/unicode/script/root.zig").read_text(encoding="utf-8")
+    root = (ROOT / "src/unicode/script/types.zig").read_text(encoding="utf-8")
     facade = (ROOT / "src/unicode.zig").read_text(encoding="utf-8")
     missing_artifacts = []
     if len(exact) != len(set(exact)):

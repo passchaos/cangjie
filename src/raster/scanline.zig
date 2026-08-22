@@ -714,10 +714,10 @@ pub inline fn sortWindingIntersections(intersections: []WindingIntersection) voi
             return;
         },
         4 => {
-            compareSwapIntersections(&intersections[0], &intersections[1]);
-            compareSwapIntersections(&intersections[2], &intersections[3]);
             compareSwapIntersections(&intersections[0], &intersections[2]);
             compareSwapIntersections(&intersections[1], &intersections[3]);
+            compareSwapIntersections(&intersections[0], &intersections[1]);
+            compareSwapIntersections(&intersections[2], &intersections[3]);
             compareSwapIntersections(&intersections[1], &intersections[2]);
             return;
         },

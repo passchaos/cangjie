@@ -3503,6 +3503,14 @@ shaping-performance superiority.
   `0.7%` for `g`, `0.4%` for `é`, `0.5%` for Amiri `س`, and `0.1%` for `م`;
   branches fell about `2.1%`, `1.7%`, `0.9%`, `1.3%`, and `0.3%`. Output
   remained byte-identical across the complete five-glyph sampling matrix.
+- The four-item sorting network now compares opposite pairs before ordering
+  the two halves. It remains the same optimal five-comparator network, but the
+  input-correlated branch order avoids the previous final-swap register churn.
+  Fixed-CPU-8 reverse A/B counters over 100,000 dirty renders reduced retired
+  instructions by about `2.0%` for Roboto `A`, `0.1%` for `g`/`é`, `0.9%` for
+  Amiri `س`, and was neutral for `م`; branches fell about `1.1%`, `0.2%`,
+  `0.2%`, `0.4%`, and `0.1%`. An exhaustive permutation test and the five-
+  glyph 1×1--4×4 matrix retained byte-identical ordering and rendered output.
 - Prepared 4×4 coverage rendering now slices each immutable cached row and the
   clipped target row once, then advances both buffers together. This removes
   repeated source/target index reconstruction from every cached pixel while

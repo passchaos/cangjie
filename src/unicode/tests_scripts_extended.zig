@@ -24,6 +24,15 @@ test "Unicode 17 Script Extensions expose explicit and fallback memberships" {
     try std.testing.expect(!unicode.scriptExtensionsContain('A', .greek));
     try std.testing.expect(unicode.scriptExtensionsContain(0x0370, .greek));
     try std.testing.expect(!unicode.scriptExtensionsContain(0x0370, .latin));
+
+    const explicit = unicode.scriptExtensionsForCodepoint(0x30fc);
+    try std.testing.expectEqual(@as(usize, 2), explicit.len());
+    try std.testing.expectEqual(unicode.Script.hiragana, explicit.at(0).?);
+    try std.testing.expectEqual(unicode.Script.katakana, explicit.at(1).?);
+    try std.testing.expect(explicit.at(2) == null);
+    const fallback = unicode.scriptExtensionsForCodepoint('A');
+    try std.testing.expectEqual(@as(usize, 1), fallback.len());
+    try std.testing.expectEqual(unicode.Script.latin, fallback.at(0).?);
 }
 
 test "Script Extensions keep shared characters with compatible runs" {

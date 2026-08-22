@@ -183,8 +183,15 @@ def main() -> None:
                 test_lines.append(
                     f"    try std.testing.expect(script.extensionsContain(0x{scalar:x}, .{enum_names[member]}));"
                 )
+            for index, member in enumerate(expected):
+                test_lines.append(
+                    f"    try std.testing.expectEqual(script.Script.{enum_names[member]}, script.extensionsForCodepoint(0x{scalar:x}).at({index}).?);"
+                )
             test_lines.append(
                 f"    try std.testing.expectEqual(@as(usize, {len(expected)}), script.extensionsCount(0x{scalar:x}));"
+            )
+            test_lines.append(
+                f"    try std.testing.expect(script.extensionsForCodepoint(0x{scalar:x}).at({len(expected)}) == null);"
             )
         test_lines.extend(["}", ""])
         Path(sys.argv[5]).write_text("\n".join(test_lines), encoding="utf-8")

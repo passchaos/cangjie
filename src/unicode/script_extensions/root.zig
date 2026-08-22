@@ -16,6 +16,30 @@ const members_offset = offsets_offset + (@as(usize, set_count) + 1) * 2;
 const entries_offset = members_offset + member_count;
 const entry_len = 8;
 
+pub const Set = struct {
+    explicit: []const u8 = &.{},
+    fallback: ?script.Script = null,
+
+    pub fn len(self: Set) usize {
+        return if (self.explicit.len != 0) self.explicit.len else 1;
+    }
+
+    pub fn contains(self: Set, candidate: script.Script) bool {
+        if (self.explicit.len == 0) return self.fallback.? == candidate;
+        const wanted: u8 = @intFromEnum(candidate);
+        for (self.explicit) |member| {
+            if (member == wanted) return true;
+        }
+        return false;
+    }
+
+    pub fn at(self: Set, index: usize) ?script.Script {
+        if (index >= self.len()) return null;
+        if (self.explicit.len == 0) return self.fallback;
+        return @enumFromInt(self.explicit[index]);
+    }
+};
+
 comptime {
     if (data.len < header_len or !std.mem.eql(u8, data[0..4], "CJSE") or
         data[4] != 1 or data[5] != 17 or data[6] != 0 or data[7] != 0)
@@ -35,13 +59,7 @@ comptime {
 /// with it. Therefore an explicit extension row is authoritative even when the
 /// scalar's Script value is already specific.
 pub fn contains(codepoint: u21, candidate: script.Script) bool {
-    const set = explicitSet(codepoint) orelse
-        return script.forCodepoint(codepoint) == candidate;
-    const wanted: u8 = @intFromEnum(candidate);
-    for (set) |member| {
-        if (member == wanted) return true;
-    }
-    return false;
+    return forCodepoint(codepoint).contains(candidate);
 }
 
 /// Return the Script_Extensions cardinality for one scalar.
@@ -49,7 +67,15 @@ pub fn contains(codepoint: u21, candidate: script.Script) bool {
 /// The implicit fallback is always the singleton Script value, including
 /// Unknown for unassigned scalars.
 pub fn count(codepoint: u21) usize {
-    return if (explicitSet(codepoint)) |set| set.len else 1;
+    return forCodepoint(codepoint).len();
+}
+
+/// Return a zero-allocation immutable view of one Script_Extensions set.
+pub fn forCodepoint(codepoint: u21) Set {
+    return if (explicitSet(codepoint)) |members|
+        .{ .explicit = members }
+    else
+        .{ .fallback = script.forCodepoint(codepoint) };
 }
 
 /// Whether ScriptExtensions.txt overrides the scalar's primary Script value.

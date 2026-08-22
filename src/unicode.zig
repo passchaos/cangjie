@@ -21,6 +21,8 @@ pub const Script = script_mod.Script;
 pub const scriptExtensionsContain = script_extensions.contains;
 pub const hasExplicitScriptExtensions = script_extensions.hasExplicit;
 pub const scriptExtensionsCount = script_extensions.count;
+pub const ScriptExtensions = script_extensions.Set;
+pub const scriptExtensionsForCodepoint = script_extensions.forCodepoint;
 
 pub const ScriptRun = struct {
     script: Script,

@@ -235,25 +235,43 @@ inline fn fillPreparedRow(
                     intersections[2].x - intersections[1].x > 0.000001 and
                     intersections[3].x - intersections[2].x > 0.000001)
                 {
-                    // Four distinct crossings dominate ordinary overlapping
-                    // contours. Their prefix windings are known after three
-                    // additions, so avoid the generic optional/epsilon loop.
-                    var winding: i16 = intersections[0].delta;
-                    inline for (0..3) |span_index| {
-                        if (winding != 0) {
-                            if (row_accumulator.cover(
-                                min_x,
-                                max_x,
-                                sample_offsets,
-                                intersections[span_index].x,
-                                intersections[span_index + 1].x,
-                            )) |span| {
-                                row_has_coverage = true;
-                                row_min_x = @min(row_min_x, span.min_x);
-                                row_max_x = @max(row_max_x, span.max_x);
-                            }
+                    // Each edge contributes ±1. The winding after one or three
+                    // crossings is therefore odd and cannot be zero; only the
+                    // middle span needs a runtime winding test.
+                    if (row_accumulator.cover(
+                        min_x,
+                        max_x,
+                        sample_offsets,
+                        intersections[0].x,
+                        intersections[1].x,
+                    )) |span| {
+                        row_has_coverage = true;
+                        row_min_x = @min(row_min_x, span.min_x);
+                        row_max_x = @max(row_max_x, span.max_x);
+                    }
+                    if (@as(i16, intersections[0].delta) + intersections[1].delta != 0) {
+                        if (row_accumulator.cover(
+                            min_x,
+                            max_x,
+                            sample_offsets,
+                            intersections[1].x,
+                            intersections[2].x,
+                        )) |span| {
+                            row_has_coverage = true;
+                            row_min_x = @min(row_min_x, span.min_x);
+                            row_max_x = @max(row_max_x, span.max_x);
                         }
-                        winding += intersections[span_index + 1].delta;
+                    }
+                    if (row_accumulator.cover(
+                        min_x,
+                        max_x,
+                        sample_offsets,
+                        intersections[2].x,
+                        intersections[3].x,
+                    )) |span| {
+                        row_has_coverage = true;
+                        row_min_x = @min(row_min_x, span.min_x);
+                        row_max_x = @max(row_max_x, span.max_x);
                     }
                     continue;
                 }

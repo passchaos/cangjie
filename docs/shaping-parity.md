@@ -3495,6 +3495,14 @@ shaping-performance superiority.
   fell about `17.1%`, `14.2%`, `8.0%`, `11.1%`, and `2.3%`, respectively.
   Cycles improved for four glyphs and were frequency-sensitive for `م`; all
   five glyphs retained byte-identical output at 1×1 through 4×4 sampling.
+- The four-crossing path now uses the edge invariant that each crossing changes
+  winding by exactly one: after the first and third crossings the winding is
+  odd and cannot be zero, so only the middle span needs a runtime winding test.
+  Relative to the initial four-crossing specialization, fixed-CPU-8 reverse
+  A/B counters reduced retired instructions by about `0.9%` for Roboto `A`,
+  `0.7%` for `g`, `0.4%` for `é`, `0.5%` for Amiri `س`, and `0.1%` for `م`;
+  branches fell about `2.1%`, `1.7%`, `0.9%`, `1.3%`, and `0.3%`. Output
+  remained byte-identical across the complete five-glyph sampling matrix.
 - Prepared 4×4 coverage rendering now slices each immutable cached row and the
   clipped target row once, then advances both buffers together. This removes
   repeated source/target index reconstruction from every cached pixel while

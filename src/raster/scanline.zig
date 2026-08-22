@@ -578,7 +578,7 @@ fn lessThanWindingIntersection(_: void, lhs: WindingIntersection, rhs: WindingIn
     return lhs.x < rhs.x;
 }
 
-pub fn sortWindingIntersections(intersections: []WindingIntersection) void {
+pub inline fn sortWindingIntersections(intersections: []WindingIntersection) void {
     switch (intersections.len) {
         0, 1 => return,
         2 => {

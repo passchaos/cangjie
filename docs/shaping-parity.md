@@ -3287,6 +3287,14 @@ shaping-performance superiority.
   Cycles improved in every order. Checksums and dirty-pixel counts remained
   unchanged for all three glyphs at 1×1, 2×2, 3×3, and 4×4 sampling, and a
   focused regression compares the fused result against the two public passes.
+- The intersection sorter is now inlined into its scan-row callers. Typical
+  glyph rows contain only two or four crossings, so this exposes the existing
+  fixed sorting networks directly to the surrounding loop while larger sets
+  still use insertion/heap sorting. Fixed-CPU-30 B/A/A/B counters over 20,000
+  direct dirty renders reduced retired instructions by about `2.0%` for Noto
+  Sans 64 px `A`, `2.5%` for `g`, and `2.7%` for `é`; cycles fell about
+  `1.5--2.8%`. The output checksum and dirty-pixel count for every glyph stayed
+  unchanged.
 - Sparse GPOS adjustment output now checks for its common nondecreasing index
   order before invoking heap sort. The isolated noinline helper preserves the
   segment hot frame and falls back to the exact old sort at the first inversion.

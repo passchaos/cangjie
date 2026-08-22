@@ -173,27 +173,30 @@ fn addSpanQuarterSamples(differences: []i16, min_x: i32, max_x: i32, start_f: f3
     const max64: f64 = @floatFromInt(max_x);
     if (end64 <= start64 or end64 <= min64 or start64 >= max64 + 1.0) return null;
 
-    const min_sample = @as(i64, min_x) * 4;
-    const max_sample = (@as(i64, max_x) + 1) * 4;
-    const first = if (start64 <= min64)
+    const min_sample = min_x * 4;
+    const max_sample = (max_x + 1) * 4;
+    const first: i32 = if (start64 <= min64)
         min_sample
     else
-        @as(i64, @intFromFloat(@ceil(start64 * 4.0 - 0.5)));
-    const after = if (end64 >= max64 + 1.0)
+        @intFromFloat(@ceil(start64 * 4.0 - 0.5));
+    const after: i32 = if (end64 >= max64 + 1.0)
         max_sample
     else
-        @as(i64, @intFromFloat(@ceil(end64 * 4.0 - 0.5)));
+        @intFromFloat(@ceil(end64 * 4.0 - 0.5));
     if (after <= first) return null;
 
-    const x_start: i32 = @intCast(@divFloor(first, 4));
-    const x_end: i32 = @intCast(@divFloor(after - 1, 4));
+    const sample_bias: i32 = 1_048_576 * 4;
+    const first_biased: u32 = @intCast(first + sample_bias);
+    const after_biased: u32 = @intCast(after + sample_bias);
+    const x_start = @as(i32, @intCast(first_biased >> 2)) - 1_048_576;
+    const x_end = @as(i32, @intCast((after_biased - 1) >> 2)) - 1_048_576;
     if (x_start == x_end) {
         addDifference(differences, min_x, x_start, x_start, @intCast(after - first));
         return .{ x_start, x_end };
     }
 
-    const first_offset: i16 = @intCast(@mod(first, 4));
-    const after_offset: i16 = @intCast(@mod(after, 4));
+    const first_offset: i16 = @intCast(first_biased & 3);
+    const after_offset: i16 = @intCast(after_biased & 3);
     var full_start = x_start;
     var full_end = x_end;
     if (first_offset != 0) {

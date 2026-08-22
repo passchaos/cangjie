@@ -3596,6 +3596,14 @@ shaping-performance superiority.
   branches fell about `7.3%`, `5.4%`, `5.0%`, `4.9%`, and `5.3%`. Expanded
   negative-coordinate threshold tests and the prepared-render glyph matrix
   retained byte-identical coverage.
+- Prepared quarter-sample indexes now add a fixed exact-range bias and use
+  unsigned shifts/masks for pixel quotient and remainder. This preserves floor
+  semantics for negative raw glyph bounds without i64 floor-division machinery.
+  Fixed-CPU-8 reverse A/B `raster-prepare` counters over 20,000 preparations
+  reduced retired instructions by about `2.3%` for Roboto `A`, `1.6%` for `g`/
+  `é`, `1.5%` for Amiri `س`, and `1.9%` for `م`; branches were neutral. Cycles
+  improved in both candidate passes for all five glyphs, and prepared-render
+  checksums remained byte-identical.
 - Dense prepared coverage is now generated directly from the sorted prepared
   edges in one row pass. The ordinary path no longer allocates, fills, and then
   frees a complete intermediate sample-row/intersection cache; geometry that

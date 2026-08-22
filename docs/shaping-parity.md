@@ -3569,6 +3569,12 @@ shaping-performance superiority.
   hostile geometry that declines the bounded dense cache keeps and exercises
   the sorted-sample fallback. Focused lifecycle tests cover both ownership
   outcomes; rendered output is unchanged.
+- Glyph benchmarking now exposes `raster-prepare`, which decodes the outline
+  once and times only repeated flatten/edge/cache construction plus teardown.
+  This separates prepared-glyph construction from `raster-prepared`'s cached
+  draw loop and provides a stable fixed-CPU gate for future cache-building
+  changes. The mode rejects FreeType comparison and dirty-rectangle accounting
+  because neither has an equivalent preparation-only contract.
 - Dense prepared coverage now packs each row's dirty interval contiguously
   instead of retaining the complete rectangular zero-padded bitmap. An 8-byte
   row record carries the packed offset and x interval, so clipped draws no

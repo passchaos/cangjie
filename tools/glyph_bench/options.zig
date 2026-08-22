@@ -39,6 +39,7 @@ pub const Mode = enum {
     outline_session,
     raster,
     raster_reuse,
+    raster_prepare,
     raster_prepared,
 
     pub fn fromName(name: []const u8) ?Mode {
@@ -57,6 +58,7 @@ pub const Mode = enum {
         if (std.mem.eql(u8, name, "outline-session")) return .outline_session;
         if (std.mem.eql(u8, name, "raster")) return .raster;
         if (std.mem.eql(u8, name, "raster-reuse")) return .raster_reuse;
+        if (std.mem.eql(u8, name, "raster-prepare")) return .raster_prepare;
         if (std.mem.eql(u8, name, "raster-prepared")) return .raster_prepared;
         return null;
     }
@@ -78,6 +80,7 @@ pub const Mode = enum {
             .outline_session => "outline-session",
             .raster => "raster",
             .raster_reuse => "raster-reuse",
+            .raster_prepare => "raster-prepare",
             .raster_prepared => "raster-prepared",
         };
     }
@@ -218,6 +221,7 @@ pub fn parse(args: []const []const u8) !Options {
     }
     if (!std.math.isFinite(options.font_size) or options.font_size <= 0) return error.InvalidArguments;
     if (options.target_size == 0 or options.samples_per_axis == 0 or options.iterations == 0 or options.samples == 0) return error.InvalidArguments;
+    if (options.dirty_rect and options.mode != .raster_reuse and options.mode != .raster_prepared) return error.InvalidArguments;
     if ((options.engine == .freetype or options.engine == .compare_freetype) and
         (options.mode == .outline_session or
             options.mode == .glyph_name or
@@ -226,6 +230,7 @@ pub fn parse(args: []const []const u8) !Options {
             options.mode == .palettes or
             options.mode == .strikes or
             options.mode == .color_glyph or
+            options.mode == .raster_prepare or
             options.mode == .raster_prepared)) return error.InvalidArguments;
     return options;
 }
@@ -265,11 +270,11 @@ fn parseVariationCoords(options: *Options, text: []const u8) !void {
 pub fn printUsage(args: []const []const u8) void {
     const exe = if (args.len > 0) args[0] else "glyph-bench";
     std.debug.print(
-        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode charmap|metrics|global-metrics|family-name|glyph-name|attributes|bitmap|outline|outline-session|raster|raster-reuse|raster-prepared] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation|cbdt-bgra] [--glyph-id n|--codepoint U+XXXX]
+        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode charmap|metrics|global-metrics|family-name|glyph-name|attributes|bitmap|outline|outline-session|raster|raster-reuse|raster-prepare|raster-prepared] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation|cbdt-bgra] [--glyph-id n|--codepoint U+XXXX]
         \\
         \\options:
         \\  --engine NAME        cangjie, freetype, or compare-freetype; default cangjie
-        \\  --mode NAME          charmap, metrics, global-metrics, family-name, glyph-name, attributes, bitmap, outline, outline-session, raster, raster-reuse, or raster-prepared; default outline
+        \\  --mode NAME          charmap, metrics, global-metrics, family-name, glyph-name, attributes, bitmap, outline, outline-session, raster, raster-reuse, raster-prepare, or raster-prepared; default outline
         \\  --format text|tsv    output format, default text
         \\  --font PATH          use a real font
         \\  --builtin NAME       use an in-repo fixture, default gvar-compound
@@ -314,6 +319,26 @@ test "parse accepts reused raster dirty rectangle mode" {
     const options = try parse(&.{ "glyph-bench", "--mode", "raster-reuse", "--dirty-rect" });
     try std.testing.expectEqual(Mode.raster_reuse, options.mode);
     try std.testing.expect(options.dirty_rect);
+}
+
+test "parse accepts raster preparation benchmark mode" {
+    const options = try parse(&.{ "glyph-bench", "--mode", "raster-prepare" });
+    try std.testing.expectEqual(Mode.raster_prepare, options.mode);
+    try std.testing.expectEqualStrings("raster-prepare", options.mode.label());
+}
+
+test "raster preparation has no FreeType comparison mode" {
+    try std.testing.expectError(
+        error.InvalidArguments,
+        parse(&.{ "glyph-bench", "--engine", "freetype", "--mode", "raster-prepare" }),
+    );
+}
+
+test "raster preparation rejects dirty rectangle accounting" {
+    try std.testing.expectError(
+        error.InvalidArguments,
+        parse(&.{ "glyph-bench", "--mode", "raster-prepare", "--dirty-rect" }),
+    );
 }
 
 test "parse accepts global metrics benchmark mode" {

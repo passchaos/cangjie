@@ -183,6 +183,7 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, g
         .outline_session => try runOutlineSessionIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster => try runRasterIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_reuse => try runRasterReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
+        .raster_prepare => try runRasterPrepareIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_prepared => try runRasterPreparedIterations(allocator, font, glyph_id, options, iterations, checksum),
     }
 }
@@ -470,6 +471,35 @@ fn runRasterReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.f
         target.clear(0);
         try rasterizer.drawOutline(&target, &outline, 0, options.font_size, options.font_size, units_per_em);
         checksum.* = updateChecksum(checksum.*, bytesChecksum(target.pixels));
+    }
+}
+
+fn runRasterPrepareIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
+    const coords = options.normalizedVariationCoords();
+    const session = font.glyphs().session();
+    var outline = if (coords.len == 0)
+        try session.outline(allocator, glyph_id)
+    else
+        try session.outlineAt(allocator, glyph_id, coords);
+    defer outline.deinit();
+
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
+    defer rasterizer.deinit();
+    rasterizer.setHintSize(options.font_size);
+    rasterizer.setSampling(options.samples_per_axis);
+    for (0..iterations) |_| {
+        var prepared = try rasterizer.prepare(
+            &outline,
+            0,
+            options.font_size,
+            options.font_size,
+            font.properties().units_per_em,
+        );
+        checksum.* = updateChecksum(
+            checksum.*,
+            @as(u64, @intCast(prepared.glyph.prepared_fill.edgeCount())),
+        );
+        prepared.deinit();
     }
 }
 

@@ -3472,3 +3472,12 @@ shaping-performance superiority.
   and Amiri retired work remained within `0.02%`. The feature-range path keeps
   its existing per-entry value materialization and all corpus checksums remain
   unchanged.
+- Generic GSUB fallback now reuses an exact validated accelerator sidecar as
+  proof of the fixed Lookup header, including class-chaining lookups whose
+  payload execution intentionally remains in the generic dispatcher. Detached,
+  stale, and cacheless tables still run the complete header validator. Relative
+  to the preceding state, fixed-CPU-8/30 counters over five complete
+  NotoSansDevanagari `hi-words` passes reduced retired instructions by about
+  `0.45%` and branches by about `0.37%`; Amiri `fa-words` improved about
+  `0.4--0.5%` in both counters, and Roboto remained within `0.02%`. Current
+  HarfBuzz 14.3 and HarfRust parity remain exact for the 10,000-line corpus.

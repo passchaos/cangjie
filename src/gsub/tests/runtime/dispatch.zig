@@ -35,6 +35,14 @@ test "cached lookup dispatch requires validated matching metadata" {
     try std.testing.expectEqual(@as(u16, 7), cached.lookup_type);
     try std.testing.expectEqual(@as(u16, 3), cached.subtable_count);
     try std.testing.expectEqual(@as(?u16, 9), cached.mark_filtering_set);
+    try std.testing.expect(
+        runtime.dispatch.exact(
+            validated,
+            0,
+            0,
+            .{ .lookup_accelerators = &accelerators },
+        ) != null,
+    );
 
     const parsed = try runtime.dispatch.header(.{
         .data = &bytes,
@@ -44,6 +52,14 @@ test "cached lookup dispatch requires validated matching metadata" {
     try std.testing.expectEqual(@as(u16, 1), parsed.lookup_type);
     try std.testing.expectEqual(@as(u16, 0x0010), parsed.lookup_flag);
     try std.testing.expectEqual(@as(?u16, 0xffff), parsed.mark_filtering_set);
+    try std.testing.expect(
+        runtime.dispatch.exact(
+            .{ .data = &bytes, .offset = 0, .length = bytes.len },
+            0,
+            0,
+            .{ .lookup_accelerators = &accelerators },
+        ) == null,
+    );
 
     var stale = accelerators;
     stale[0].lookup_offset = 2;
@@ -54,6 +70,14 @@ test "cached lookup dispatch requires validated matching metadata" {
         .{ .lookup_accelerators = &stale },
     );
     try std.testing.expectEqual(@as(u16, 1), fallback.lookup_type);
+    try std.testing.expect(
+        runtime.dispatch.exact(
+            validated,
+            0,
+            0,
+            .{ .lookup_accelerators = &stale },
+        ) == null,
+    );
 }
 
 test "dispatch selects only populated accelerator capabilities" {

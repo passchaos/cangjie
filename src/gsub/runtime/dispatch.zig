@@ -30,19 +30,13 @@ pub fn header(
     lookup_index: ?u16,
     run: Options,
 ) Error!Header {
-    if (view.assume_validated) {
-        if (any(lookup_index, run)) |cached| {
-            if (cached.lookup_offset == lookup_offset and
-                cached.lookup_type != 0)
-            {
-                return .{
-                    .lookup_type = cached.lookup_type,
-                    .lookup_flag = cached.lookup_flag,
-                    .subtable_count = cached.subtable_count,
-                    .mark_filtering_set = cached.mark_filtering_set,
-                };
-            }
-        }
+    if (exact(view, lookup_offset, lookup_index, run)) |cached| {
+        return .{
+            .lookup_type = cached.lookup_type,
+            .lookup_flag = cached.lookup_flag,
+            .subtable_count = cached.subtable_count,
+            .mark_filtering_set = cached.mark_filtering_set,
+        };
     }
 
     const lookup_flag = try view.readU16(lookup_offset + 2);
@@ -58,6 +52,23 @@ pub fn header(
         else
             null,
     };
+}
+
+/// Return the sidecar only when the caller owns a validated table view and the
+/// cached lookup identity matches that exact table position. Capability-specific
+/// dispatchers may still decline its payload, but can reuse the header proof.
+pub inline fn exact(
+    view: View,
+    lookup_offset: usize,
+    lookup_index: ?u16,
+    run: Options,
+) ?*const Lookup {
+    if (!view.assume_validated) return null;
+    const cached = any(lookup_index, run) orelse return null;
+    if (cached.lookup_offset != lookup_offset or cached.lookup_type == 0) {
+        return null;
+    }
+    return cached;
 }
 
 pub fn any(lookup_index: ?u16, run: Options) ?*const Lookup {

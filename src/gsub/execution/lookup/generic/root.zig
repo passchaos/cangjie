@@ -40,13 +40,21 @@ pub noinline fn apply(
     );
     defer trace.finish(allocator, glyphs.items);
 
-    // ExtensionSubst validation walks every wrapper and wrapped payload before
-    // dispatch, preserving lookup-level atomicity for mixed wrappers.
-    _ = try validation.lookup.validateHeader(
-        Executor,
-        view,
-        lookup_offset,
-    );
+    // Untrusted/detached lookups still prove the fixed header here. A
+    // font-owned table with an exact accelerator sidecar already established
+    // the same header while building the cache, including lookups whose payload
+    // capability intentionally falls through to this generic executor.
+    const has_exact_header_proof =
+        runtime_dispatch.exact(view, lookup_offset, lookup_index, run) != null;
+    if (!has_exact_header_proof) {
+        // ExtensionSubst validation walks every wrapper and wrapped payload
+        // before dispatch, preserving lookup-level atomicity for mixed wrappers.
+        _ = try validation.lookup.validateHeader(
+            Executor,
+            view,
+            lookup_offset,
+        );
+    }
     const resolved = try runtime_dispatch.header(
         view,
         lookup_offset,

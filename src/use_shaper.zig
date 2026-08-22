@@ -330,6 +330,32 @@ pub fn decomposeCanonicalSources(
     }
 }
 
+/// Return whether the source may contain one of the split-matra
+/// decompositions retained by this shaping stage. The primary Devanagari
+/// block has none, but an explicit Devanagari script override may still carry
+/// arbitrary mixed-script input, so the proof must inspect every source.
+pub fn mayHaveCanonicalDecomposition(
+    codepoints: []const u21,
+    script_tag: unicode.OpenTypeScriptTag,
+) bool {
+    if (script_tag != .dev2 and script_tag != .deva) return true;
+    for (codepoints) |codepoint| {
+        if (codepoint < 0x0900 or codepoint > 0x097f) return true;
+    }
+    return false;
+}
+
+test "Devanagari has no retained canonical source decomposition" {
+    try std.testing.expect(!mayHaveCanonicalDecomposition(
+        &.{ 0x0915, 0x094d, 0x0937 },
+        .dev2,
+    ));
+    try std.testing.expect(!mayHaveCanonicalDecomposition(&.{0x0958}, .deva));
+    // An explicit script override does not prove homogeneous source text.
+    try std.testing.expect(mayHaveCanonicalDecomposition(&.{ 0x0915, 0x09cb }, .dev2));
+    try std.testing.expect(mayHaveCanonicalDecomposition(&.{0x09cb}, .bng2));
+}
+
 fn canonicalDecompositionClusterOwner(
     cluster_level: shaping_metadata.ClusterLevel,
     grapheme_owner: usize,

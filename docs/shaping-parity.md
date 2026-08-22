@@ -3424,3 +3424,14 @@ shaping-performance superiority.
   branches from `501.1M` to `498.2M` (about `0.58%`); branch misses fell about
   `1.8%`, while wall time remained noisy. Both current HarfBuzz 14.3 and
   HarfRust still pass all 10,000 lines with checksum `b01a5388ce792b49`.
+- Indic preparation now skips the canonical-decomposition table walk when a
+  `dev2`/`deva` source is wholly inside U+0900..U+097F, a block with no entries
+  in the retained split-matra decomposition table. Explicit script overrides
+  containing any out-of-block scalar conservatively keep the generic scan.
+  Relative to the preceding specialized shaper, fixed-CPU-8 B/A/A/B counters
+  over five complete NotoSansDevanagari `hi-words` passes reduced retired
+  instructions from about `2.928B` to `2.901B` (about `0.93%`) and branches
+  from `498.3M` to `493.2M` (about `1.02%`); cycles improved in both forward
+  comparisons. Current HarfBuzz 14.3 and HarfRust parity remain exact for all
+  10,000 lines with checksum `b01a5388ce792b49`, and the complete corpus and
+  ReleaseFast test gates pass.

@@ -62,19 +62,24 @@ pub fn prepare(input: Input) !void {
         dotted_circle_glyph,
         true,
     );
-    try use.decomposeCanonicalSources(
-        input.allocator,
-        input.font,
-        input.glyph_ids,
-        input.codepoints,
-        input.clusters,
-        input.source_ends,
-        input.glyph_source_indices,
-        input.glyph_cluster_indices,
-        input.glyph_substituted,
-        input.ligature_components,
-        input.lookup_options.cluster_level orelse .monotone_graphemes,
-    );
+    if (use.mayHaveCanonicalDecomposition(
+        input.codepoints.items,
+        input.lookup_options.script_tag,
+    )) {
+        try use.decomposeCanonicalSources(
+            input.allocator,
+            input.font,
+            input.glyph_ids,
+            input.codepoints,
+            input.clusters,
+            input.source_ends,
+            input.glyph_source_indices,
+            input.glyph_cluster_indices,
+            input.glyph_substituted,
+            input.ligature_components,
+            input.lookup_options.cluster_level orelse .monotone_graphemes,
+        );
+    }
     input.options.source_codepoints = input.codepoints.items;
     input.source_boundaries.bindSourceByteStarts(input.clusters.items);
 }

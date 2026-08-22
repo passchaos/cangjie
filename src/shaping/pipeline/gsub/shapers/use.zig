@@ -22,6 +22,8 @@ pub const supports = use_shaper.shouldShape;
 pub const insertVowelConstraintDottedCircles =
     use_shaper.insertVowelConstraintDottedCircles;
 pub const decomposeCanonicalSources = use_shaper.decomposeCanonicalSources;
+pub const mayHaveCanonicalDecomposition =
+    use_shaper.mayHaveCanonicalDecomposition;
 
 pub const Input = struct {
     allocator: std.mem.Allocator,

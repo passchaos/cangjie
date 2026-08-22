@@ -3509,6 +3509,12 @@ shaping-performance superiority.
   instructions by about `2.3--3.1%`, branches by about `1.9--2.8%`, and cycles
   by about `1.1--7.8%` for Roboto `A`, `g` and Amiri `س`, with unchanged cached
   coverage and rendered output.
+- Successful dense prepared coverage now releases the larger intermediate
+  sample-row/intersection cache instead of retaining two equivalent immutable
+  render representations for the lifetime of a prepared glyph. Oversized or
+  hostile geometry that declines the bounded dense cache keeps and exercises
+  the sorted-sample fallback. Focused lifecycle tests cover both ownership
+  outcomes; rendered output is unchanged.
 - GSUB run-state preparation is now inlined into its small set of whole-run and
   cached-plan callers. This removes an out-of-line call and large by-value
   `Options` return at each Indic feature stage while preserving the shared

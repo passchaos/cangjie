@@ -68,12 +68,26 @@ pub fn prepare(allocator: std.mem.Allocator, lines: []const Line) !PreparedFill 
     scanline.sortPreparedFillLinesByYMin(lines_prepared);
     const owned = try allocator.realloc(storage, lines_prepared.len);
     errdefer allocator.free(owned);
-    const samples = try prepareSampleRows(allocator, owned, raw_bounds);
+    var samples = try prepareSampleRows(allocator, owned, raw_bounds);
     errdefer if (samples.owned) {
         allocator.free(samples.rows);
         allocator.free(samples.intersections);
     };
     const coverage = try coverage_cache.build(allocator, raw_bounds, samples.rows, samples.intersections, samples.min_y);
+    // Dense non-zero coverage is the authoritative 4×4 draw cache. Keeping the
+    // much larger sorted-intersection fallback as well only duplicates owned
+    // geometry; release it once dense construction succeeds. Hostile/oversized
+    // bounds that decline dense coverage retain the sample cache unchanged.
+    if (coverage.pixels.len != 0 and samples.owned) {
+        allocator.free(samples.rows);
+        allocator.free(samples.intersections);
+        samples = .{
+            .rows = @constCast(&empty_prepared_samples.rows),
+            .intersections = @constCast(&empty_prepared_samples.intersections),
+            .min_y = 0,
+            .owned = false,
+        };
+    }
     return .{
         .allocator = allocator,
         .lines = owned,
@@ -210,6 +224,12 @@ test "prepared coverage row slices preserve clipping and max blending" {
     };
     var prepared = try prepare(allocator, &lines);
     defer prepared.deinit();
+    try std.testing.expect(prepared.coverage.pixels.len != 0);
+    try std.testing.expectEqual(@as(usize, 0), prepared.sample_rows.len);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        prepared.sample_intersections.len,
+    );
     var pixels = [_]u8{0} ** 8;
     pixels[1] = 255;
     const target = Target{ .width = 4, .height = 2, .pixels = &pixels };
@@ -220,6 +240,22 @@ test "prepared coverage row slices preserve clipping and max blending" {
     try std.testing.expect(pixels[2] != 0);
     try std.testing.expectEqual(@as(u8, 0), pixels[3]);
     try std.testing.expectEqual(@as(u8, 0), pixels[7]);
+}
+
+test "prepared oversized coverage retains sorted sample fallback" {
+    const allocator = std.testing.allocator;
+    // Dense coverage declines this >16 MiB box, while the bounded sample-row
+    // cache remains practical and must stay owned for clipped target draws.
+    const lines = [_]Line{
+        .{ .a = .{ .x = 0, .y = 0 }, .b = .{ .x = 0, .y = 4000 } },
+        .{ .a = .{ .x = 5000, .y = 4000 }, .b = .{ .x = 5000, .y = 0 } },
+    };
+    var prepared = try prepare(allocator, &lines);
+    defer prepared.deinit();
+    try std.testing.expectEqual(@as(usize, 0), prepared.coverage.pixels.len);
+    try std.testing.expect(prepared.sample_rows.len != 0);
+    try std.testing.expect(prepared.sample_intersections.len != 0);
+    try std.testing.expect(prepared.owns_sample_cache);
 }
 
 noinline fn fillDifference4(allocator: std.mem.Allocator, target: Target, prepared: *const PreparedFill, fill_rule: FillRule, samples_per_axis: u8) linksection(shaping_sections.isolated_hotpaths) !void {

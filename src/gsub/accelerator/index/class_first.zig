@@ -20,6 +20,7 @@ pub const min_entries_for_hash = 8;
 const empty_group_index = std.math.maxInt(u16);
 pub const sorted_encoding: u16 = 0;
 pub const hash_encoding: u16 = 1;
+pub const dense_encoding: u16 = 2;
 
 pub fn appendClassIndex(
     view: View,
@@ -107,7 +108,9 @@ pub fn appendPrepared(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!usize {
     const start = classes.items.len;
-    if (entries.len < min_entries_for_hash) {
+    if (denseSpan(entries)) |span| {
+        try appendDense(entries, span, classes, allocator);
+    } else if (entries.len < min_entries_for_hash) {
         try classes.ensureUnusedCapacity(allocator, 1 + entries.len * 2);
         classes.appendAssumeCapacity(sorted_encoding);
         for (entries) |entry| {
@@ -156,11 +159,12 @@ fn findImpl(
         std.debug.assert(index_start < classes.len);
     } else if (index_start >= classes.len) return null;
     const index = classes[index_start..];
-    if (prepared) {
-        std.debug.assert(index.len > 0 and (index.len - 1) % 2 == 0);
-    } else if (index.len == 0 or (index.len - 1) % 2 != 0) return null;
+    if (prepared) std.debug.assert(index.len > 0) else if (index.len == 0) return null;
     const group_index = switch (index[0]) {
         hash_encoding => group: {
+            if (prepared) {
+                std.debug.assert((index.len - 1) % 2 == 0);
+            } else if ((index.len - 1) % 2 != 0) return null;
             const slot_count = (index.len - 1) / 2;
             if (prepared) {
                 std.debug.assert(slot_count != 0);
@@ -176,6 +180,9 @@ fn findImpl(
             return null;
         },
         sorted_encoding => group: {
+            if (prepared) {
+                std.debug.assert((index.len - 1) % 2 == 0);
+            } else if ((index.len - 1) % 2 != 0) return null;
             const count = (index.len - 1) / 2;
             var low: usize = 0;
             var high: usize = count;
@@ -191,6 +198,16 @@ fn findImpl(
                 }
             }
             return null;
+        },
+        dense_encoding => group: {
+            if (!prepared and index.len < 3) return null;
+            const first = index[1];
+            if (glyph < first) return null;
+            const slot = @as(usize, glyph - first);
+            if (slot >= index.len - 2) return null;
+            const candidate = index[2 + slot];
+            if (candidate == empty_group_index) return null;
+            break :group candidate;
         },
         else => if (prepared) unreachable else return null,
     };
@@ -226,6 +243,33 @@ fn appendHash(
         }
         slots[slot * 2] = entry.glyph;
         slots[slot * 2 + 1] = entry.group_index;
+    }
+}
+
+/// Dense indexes are worthwhile only when they use fewer words than both the
+/// exact sorted encoding and the 50%-load hash selected for larger sets. This
+/// keeps sparse production coverages compact while making consecutive glyph
+/// classes a direct bounds check and array load.
+fn denseSpan(entries: []const Entry) ?usize {
+    if (entries.len < min_entries_for_hash) return null;
+    const first = entries[0].glyph;
+    const span = @as(usize, entries[entries.len - 1].glyph) - first + 1;
+    return if (2 + span < 1 + entries.len * 2) span else null;
+}
+
+fn appendDense(
+    entries: []const Entry,
+    span: usize,
+    classes: *std.ArrayList(u16),
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!void {
+    try classes.ensureUnusedCapacity(allocator, 2 + span);
+    classes.appendAssumeCapacity(dense_encoding);
+    classes.appendAssumeCapacity(entries[0].glyph);
+    const slots = classes.addManyAsSliceAssumeCapacity(span);
+    @memset(slots, empty_group_index);
+    for (entries) |entry| {
+        slots[entry.glyph - entries[0].glyph] = entry.group_index;
     }
 }
 

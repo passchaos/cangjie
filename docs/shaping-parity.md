@@ -3511,3 +3511,11 @@ shaping-performance superiority.
   NotoSansDevanagari `hi-words` passes reduced retired instructions by about
   `0.47%` and branches by about `0.73%`. Roboto `en-words` and Amiri `fa-words`
   controls remained within `0.01%` retired work.
+- Compact first-glyph class indexes now select a dense direct map when a glyph
+  span is smaller than the corresponding sorted and hash encodings. This turns
+  NotoSansDevanagari's consecutive 12-glyph ContextSubst group into one bounds
+  check and array load while its sparse chaining groups retain the hash form.
+  Relative to the trusted-index baseline, fixed-CPU-8 and fixed-CPU-30 counters
+  over five complete `hi-words` passes reduced retired instructions by about
+  `0.13%` and branches by about `0.09%`; Roboto and Amiri controls remained
+  within `0.003%` retired work.

@@ -3515,6 +3515,16 @@ shaping-performance superiority.
   hostile geometry that declines the bounded dense cache keeps and exercises
   the sorted-sample fallback. Focused lifecycle tests cover both ownership
   outcomes; rendered output is unchanged.
+- Dense prepared coverage now packs each row's dirty interval contiguously
+  instead of retaining the complete rectangular zero-padded bitmap. An 8-byte
+  row record carries the packed offset and x interval, so clipped draws no
+  longer reconstruct a full-width source stride and prepared glyphs retain no
+  leading, trailing, or empty-row pixels. Fixed-CPU-8 reverse A/B counters over
+  200,000 dirty prepared draws reduced retired instructions by about
+  `1.2--2.2%` for Roboto `A`, `g`, `é` and Amiri `س`, `م`; branches were
+  neutral. Cycles improved for Roboto `g`/`é` and were noisy or near neutral
+  elsewhere. Direct checksums remained byte-identical at 1×1, 2×2, 3×3, and
+  4×4 sampling, and direct/prepared output remained identical at 4×4.
 - GSUB run-state preparation is now inlined into its small set of whole-run and
   cached-plan callers. This removes an out-of-line call and large by-value
   `Options` return at each Indic feature stage while preserving the shared

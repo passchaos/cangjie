@@ -78,7 +78,7 @@ pub fn prepare(allocator: std.mem.Allocator, lines: []const Line) !PreparedFill 
     // much larger sorted-intersection fallback as well only duplicates owned
     // geometry; release it once dense construction succeeds. Hostile/oversized
     // bounds that decline dense coverage retain the sample cache unchanged.
-    if (coverage.pixels.len != 0 and samples.owned) {
+    if (coverage.rows.len != 0 and samples.owned) {
         allocator.free(samples.rows);
         allocator.free(samples.intersections);
         samples = .{
@@ -225,6 +225,14 @@ test "prepared coverage row slices preserve clipping and max blending" {
     var prepared = try prepare(allocator, &lines);
     defer prepared.deinit();
     try std.testing.expect(prepared.coverage.pixels.len != 0);
+    var packed_len: usize = 0;
+    for (prepared.coverage.rows) |row| {
+        if (row.start <= row.end) {
+            try std.testing.expectEqual(packed_len, row.data_start);
+            packed_len += @as(usize, row.end) - row.start + 1;
+        }
+    }
+    try std.testing.expectEqual(packed_len, prepared.coverage.pixels.len);
     try std.testing.expectEqual(@as(usize, 0), prepared.sample_rows.len);
     try std.testing.expectEqual(
         @as(usize, 0),
@@ -260,9 +268,8 @@ test "prepared oversized coverage retains sorted sample fallback" {
 
 noinline fn fillDifference4(allocator: std.mem.Allocator, target: Target, prepared: *const PreparedFill, fill_rule: FillRule, samples_per_axis: u8) linksection(shaping_sections.isolated_hotpaths) !void {
     const bounds = preparedBoundsForTarget(target, prepared.raw_bounds) orelse return;
-    if (fill_rule == .non_zero and prepared.coverage.pixels.len != 0) {
+    if (fill_rule == .non_zero and prepared.coverage.rows.len != 0) {
         const lut = scanline.coverageLutForSampleCount(16).?;
-        const width: usize = prepared.coverage.width;
         var y = bounds.min_y;
         while (y <= bounds.max_y) : (y += 1) {
             const source_y: usize = @intCast(y - prepared.coverage.min_y);
@@ -274,8 +281,8 @@ noinline fn fillDifference4(allocator: std.mem.Allocator, target: Target, prepar
             const end_x = @min(bounds.max_x, row_max_x);
             if (x > end_x) continue;
             const len: usize = @intCast(end_x - x + 1);
-            const source_start = source_y * width +
-                @as(usize, @intCast(x - prepared.coverage.min_x));
+            const source_start = @as(usize, cached_row.data_start) +
+                @as(usize, @intCast(x - row_min_x));
             const target_start = @as(usize, @intCast(y)) * target.width +
                 @as(usize, @intCast(x));
             const source = prepared.coverage.pixels[source_start .. source_start + len];

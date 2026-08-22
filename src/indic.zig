@@ -1468,6 +1468,23 @@ fn usesPrefSources(script_tag: unicode.OpenTypeScriptTag) bool {
     };
 }
 
+/// Whether the Indic shaper must remember exactly which source was substituted
+/// by the `pref` stage for subsequent glyph reordering. Modern and legacy
+/// Malayalam need that provenance; other Indic scripts execute `pref` but do
+/// not consume its per-source result.
+pub fn tracksPrefSubstitutions(
+    script_tag: unicode.OpenTypeScriptTag,
+) bool {
+    return usesPrefSources(script_tag);
+}
+
+test "only Malayalam tracks pref substitution provenance" {
+    try std.testing.expect(tracksPrefSubstitutions(.mlm2));
+    try std.testing.expect(tracksPrefSubstitutions(.mlym));
+    try std.testing.expect(!tracksPrefSubstitutions(.dev2));
+    try std.testing.expect(!tracksPrefSubstitutions(.bng2));
+}
+
 fn baseSource(codepoints: []const u21, syllable_start: usize, syllable_end: usize, script_tag: unicode.OpenTypeScriptTag) usize {
     if (usesPrefSources(script_tag)) {
         var index = syllable_start;

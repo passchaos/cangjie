@@ -80,6 +80,39 @@ pub fn prepare(input: Input) !void {
 }
 
 pub fn finish(input: Input) !void {
+    return switch (input.lookup_options.script_tag) {
+        .dev2 => finishDev2(input),
+        else => finishGeneric(input),
+    };
+}
+
+fn finishDev2(input: Input) !void {
+    const dotted_circle_glyph = try source_pipeline.glyphIndex(
+        input.font,
+        input.glyph_index_cache,
+        0x25cc,
+    );
+    try indic.insertDottedCirclesForBrokenClusters(
+        input.allocator,
+        input.glyph_ids,
+        input.glyph_source_indices,
+        input.glyph_cluster_indices,
+        input.glyph_substituted,
+        input.ligature_components,
+        input.codepoints.items,
+        dotted_circle_glyph,
+        .dev2,
+    );
+    indic.mergePlaceholderDependentMarks(
+        input.glyph_cluster_indices,
+        input.glyph_source_indices,
+        input.codepoints.items,
+        .dev2,
+    );
+    try finishStages(input, false);
+}
+
+fn finishGeneric(input: Input) !void {
     // Preserve the historical two-query contract. With a context cache this
     // is a hit; without one it retains defensive borrowed-font validation at
     // each distinct shaper phase.
@@ -100,7 +133,10 @@ pub fn finish(input: Input) !void {
         input.lookup_options.script_tag,
     );
     normalizeInitialOrder(input);
+    try finishStages(input, true);
+}
 
+fn finishStages(input: Input, generic_script: bool) !void {
     try input.source_features.resize(
         input.allocator,
         input.codepoints.items.len,
@@ -116,11 +152,18 @@ pub fn finish(input: Input) !void {
             input.codepoints.items,
             input.lookup_options.script_tag,
         );
-    try input.source_pref_substituted.resize(
-        input.allocator,
-        input.codepoints.items.len,
+    const tracks_pref = indic.tracksPrefSubstitutions(
+        input.lookup_options.script_tag,
     );
-    @memset(input.source_pref_substituted.items, false);
+    if (tracks_pref) {
+        try input.source_pref_substituted.resize(
+            input.allocator,
+            input.codepoints.items.len,
+        );
+        @memset(input.source_pref_substituted.items, false);
+    } else {
+        input.source_pref_substituted.clearRetainingCapacity();
+    }
     input.options.source_features = input.source_features.items;
     input.options.source_syllables = input.source_syllables.items;
     const applications = [_][]const gsub.feature.Application{
@@ -162,15 +205,17 @@ pub fn finish(input: Input) !void {
         input.options.*,
         input.gdef_metadata,
     );
-    indic.reorderInitialKannadaVowels(
-        input.glyph_ids,
-        input.glyph_source_indices,
-        input.glyph_cluster_indices,
-        input.glyph_substituted,
-        input.ligature_components,
-        input.codepoints.items,
-        input.lookup_options.script_tag,
-    );
+    if (generic_script) {
+        indic.reorderInitialKannadaVowels(
+            input.glyph_ids,
+            input.glyph_source_indices,
+            input.glyph_cluster_indices,
+            input.glyph_substituted,
+            input.ligature_components,
+            input.codepoints.items,
+            input.lookup_options.script_tag,
+        );
+    }
     if (cached_plans) try executor.applyPlanAfterRunProofWithRanges(
         input.font,
         input.context,
@@ -187,7 +232,28 @@ pub fn finish(input: Input) !void {
         input.options.*,
         input.gdef_metadata,
     );
-    try applyPref(input, if (cached_plans) plans[2] else null);
+    if (tracks_pref) {
+        try applyPref(input, if (cached_plans) plans[2] else null);
+    } else if (cached_plans) {
+        try executor.applyPlanAfterRunProofWithRanges(
+            input.font,
+            input.context,
+            plans[2],
+            input.glyph_ids,
+            input.options.*,
+            input.gdef_metadata,
+        );
+    } else {
+        try executor.applyAfterRunProof(
+            input.font,
+            input.context,
+            input.table_proved,
+            indic.prefFeatureApplications(),
+            input.glyph_ids,
+            input.options.*,
+            input.gdef_metadata,
+        );
+    }
     reorderAfterPref(input);
     if (cached_plans) try executor.applyPlanAfterRunProofWithRanges(
         input.font,
@@ -222,22 +288,24 @@ pub fn finish(input: Input) !void {
         input.options.*,
         input.gdef_metadata,
     );
-    indic.mergeMalayalamOldSpecTrailingViramaClusters(
-        input.glyph_cluster_indices,
-        input.glyph_source_indices,
-        input.ligature_components,
-        input.codepoints.items,
-        input.lookup_options.script_tag,
-    );
-    indic.reorderGujaratiSplitMatraComponents(
-        input.glyph_ids,
-        input.glyph_source_indices,
-        input.glyph_cluster_indices,
-        input.glyph_substituted,
-        input.ligature_components,
-        input.codepoints.items,
-        input.lookup_options.script_tag,
-    );
+    if (generic_script) {
+        indic.mergeMalayalamOldSpecTrailingViramaClusters(
+            input.glyph_cluster_indices,
+            input.glyph_source_indices,
+            input.ligature_components,
+            input.codepoints.items,
+            input.lookup_options.script_tag,
+        );
+        indic.reorderGujaratiSplitMatraComponents(
+            input.glyph_ids,
+            input.glyph_source_indices,
+            input.glyph_cluster_indices,
+            input.glyph_substituted,
+            input.ligature_components,
+            input.codepoints.items,
+            input.lookup_options.script_tag,
+        );
+    }
 }
 
 fn normalizeInitialOrder(input: Input) void {
@@ -365,6 +433,7 @@ fn reorderAfterReph(input: Input) void {
         input.codepoints.items,
         input.lookup_options.script_tag,
     );
+    if (input.lookup_options.script_tag == .dev2) return;
     indic.reorderLogicalRepha(
         input.glyph_ids,
         input.glyph_source_indices,

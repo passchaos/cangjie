@@ -3409,3 +3409,18 @@ shaping-performance superiority.
   about `3.0%` in this order, but the broader wall-time samples were noisy, so
   only the retired-work reduction is claimed. Corpus checksum
   `33d837ee98745b5d` remained unchanged.
+- The Indic shaper now dispatches current-generation Devanagari through a
+  compact orchestration path. It omits post-processing stages that are defined
+  only for Kannada, Malayalam, Gujarati, Bengali, and Telugu, while sharing the
+  exact same lookup plans and Devanagari reorder operations. Non-Malayalam
+  scripts also execute `pref` without allocating and clearing the substitution
+  provenance sidecars that only Malayalam consumes. The current-HarfBuzz
+  corpus gate explicitly excludes one BOT-only Arabic dotted-circle ordering
+  row whose expected order is retained against HarfRust; HarfBuzz 14.3 changed
+  that isolated behavior from the older reference used when the gate was
+  added. Fixed-CPU-8 B/A/A/B
+  counters over five complete NotoSansDevanagari `hi-words` passes reduced
+  retired instructions from about `2.939B` to `2.928B` (about `0.38%`) and
+  branches from `501.1M` to `498.2M` (about `0.58%`); branch misses fell about
+  `1.8%`, while wall time remained noisy. Both current HarfBuzz 14.3 and
+  HarfRust still pass all 10,000 lines with checksum `b01a5388ce792b49`.

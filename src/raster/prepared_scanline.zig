@@ -229,6 +229,9 @@ test "prepared coverage row slices preserve clipping and max blending" {
         }
     }
     try std.testing.expectEqual(packed_len, prepared.coverage.pixels.len);
+    for (prepared.coverage.pixels) |coverage| {
+        try std.testing.expect(coverage == 0 or coverage >= 15);
+    }
     try std.testing.expectEqual(@as(usize, 0), prepared.sample_rows.len);
     try std.testing.expectEqual(
         @as(usize, 0),
@@ -265,7 +268,6 @@ test "prepared oversized coverage retains sorted sample fallback" {
 noinline fn fillDifference4(allocator: std.mem.Allocator, target: Target, prepared: *const PreparedFill, fill_rule: FillRule, samples_per_axis: u8) linksection(shaping_sections.isolated_hotpaths) !void {
     const bounds = preparedBoundsForTarget(target, prepared.raw_bounds) orelse return;
     if (fill_rule == .non_zero and prepared.coverage.rows.len != 0) {
-        const lut = scanline.coverageLutForSampleCount(16).?;
         var y = bounds.min_y;
         while (y <= bounds.max_y) : (y += 1) {
             const source_y: usize = @intCast(y - prepared.coverage.min_y);
@@ -286,11 +288,11 @@ noinline fn fillDifference4(allocator: std.mem.Allocator, target: Target, prepar
             // Cached rows are immutable and their dirty bounds exclude leading
             // and trailing zeroes. Traverse source and destination together so
             // the hot copy avoids reconstructing both indexes for every pixel.
-            for (source, destination) |count, *pixel| {
-                // lut[0] is transparent and max-alpha blending is idempotent.
+            for (source, destination) |coverage, *pixel| {
+                // Zero alpha is transparent and max-alpha blending is idempotent.
                 // A straight write therefore preserves internal contour holes
                 // without a data-dependent branch.
-                pixel.* = @max(pixel.*, lut[count]);
+                pixel.* = @max(pixel.*, coverage);
             }
         }
         return;

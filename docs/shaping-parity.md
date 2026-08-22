@@ -3610,6 +3610,14 @@ shaping-performance superiority.
   neutral. Cycles improved for Roboto `g`/`é` and were noisy or near neutral
   elsewhere. Direct checksums remained byte-identical at 1×1, 2×2, 3×3, and
   4×4 sampling, and direct/prepared output remained identical at 4×4.
+- Dense prepared coverage now stores final 8-bit alpha values instead of the
+  intermediate `0..16` sample counts. Construction performs the 17-entry LUT
+  lookup once, so every repeated draw directly max-blends cached bytes without
+  another indexed load. Fixed-CPU-8 reverse A/B counters over 200,000 prepared
+  draws reduced retired instructions by about `6.3%` for Roboto `A`, `6.5%`
+  for `g`, `5.3%` for `é`, `6.3%` for Amiri `س`, and `3.3%` for `م`; branches
+  were neutral. Prepared-render checksums remained byte-identical for all five
+  glyphs.
 - GSUB run-state preparation is now inlined into its small set of whole-run and
   cached-plan callers. This removes an out-of-line call and large by-value
   `Options` return at each Indic feature stage while preserving the shared

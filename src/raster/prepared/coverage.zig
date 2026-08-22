@@ -62,6 +62,7 @@ pub fn build(allocator: std.mem.Allocator, geometry: scanline.Bounds, lines: []c
     defer if (lines.len > inline_intersections.len) allocator.free(intersection_storage);
     var next_line: usize = 0;
     var active_count: usize = 0;
+    const coverage_lut = scanline.coverageLutForSampleCount(16).?;
     var pixel_count: usize = 0;
     for (0..height) |row_index| {
         const y = geometry.min_y + @as(i32, @intCast(row_index));
@@ -125,7 +126,7 @@ pub fn build(allocator: std.mem.Allocator, geometry: scanline.Bounds, lines: []c
             running += differences[difference_index];
             differences[difference_index] = 0;
             std.debug.assert(running >= 0 and running <= 16);
-            pixels[pixel_count] = @intCast(running);
+            pixels[pixel_count] = coverage_lut[@intCast(running)];
             pixel_count += 1;
         }
         const after: usize = @intCast(dirty_max - geometry.min_x + 1);

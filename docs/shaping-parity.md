@@ -3277,6 +3277,16 @@ shaping-performance superiority.
   output checksums and dirty-pixel counts remained unchanged, and the complete
   ReleaseFast test suite passes. FreeType still leads this direct-render
   boundary, so the broader raster objective remains open.
+- Direct fill now derives target-clipped bounds while converting finite,
+  non-horizontal edges into `PreparedFillLine` records. This removes a second
+  complete flattened-edge walk without changing the public `boundsForTarget`
+  helper or prepared-render lifecycle. Relative to the bucketed baseline, a
+  fixed-CPU-30 B/A/A/B counter matrix over 20,000 direct dirty renders reduced
+  retired instructions by about `1.1%` for Noto Sans 64 px `A`, `2.3%` for
+  `g`, and `2.8%` for `é`; branches fell about `0.4%`, `1.6%`, and `2.0%`.
+  Cycles improved in every order. Checksums and dirty-pixel counts remained
+  unchanged for all three glyphs at 1×1, 2×2, 3×3, and 4×4 sampling, and a
+  focused regression compares the fused result against the two public passes.
 - Sparse GPOS adjustment output now checks for its common nondecreasing index
   order before invoking heap sort. The isolated noinline helper preserves the
   segment hot frame and falls back to the exact old sort at the first inversion.

@@ -46,12 +46,6 @@ pub const PreparedFillLine = struct {
 /// `[]u8` buffer of at least `width * height` bytes.
 pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, fill_rule: FillRule, samples_per_axis: u8) !void {
     if (lines.len == 0) return;
-    const bounds = boundsForTarget(target, lines) orelse return;
-    const min_x = bounds.min_x;
-    const min_y = bounds.min_y;
-    const max_x = bounds.max_x;
-    const max_y = bounds.max_y;
-
     const sample_axis: i32 = @max(1, @as(i32, samples_per_axis));
     const sample_count = sample_axis * sample_axis;
     var dynamic_coverage_lut: [256]u8 = undefined;
@@ -69,6 +63,20 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
         break :blk dynamic_sample_offsets;
     };
     defer if (dynamic_sample_offsets.len != 0) allocator.free(dynamic_sample_offsets);
+    var inline_prepared_lines: [128]PreparedFillLine = undefined;
+    const prepared_storage = if (lines.len <= inline_prepared_lines.len)
+        inline_prepared_lines[0..lines.len]
+    else
+        try allocator.alloc(PreparedFillLine, lines.len);
+    defer if (lines.len > inline_prepared_lines.len) allocator.free(prepared_storage);
+    const prepared = prepareFillLinesAndBounds(target, prepared_storage, lines);
+    const prepared_lines = prepared.lines;
+    if (prepared_lines.len < 2) return;
+    const bounds = prepared.bounds orelse return;
+    const min_x = bounds.min_x;
+    const min_y = bounds.min_y;
+    const max_x = bounds.max_x;
+    const max_y = bounds.max_y;
     const row_width_i32 = max_x - min_x + 1;
     if (row_width_i32 <= 0) return;
     const row_width: usize = @intCast(row_width_i32);
@@ -82,14 +90,6 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
         &inline_coverage_differences,
     );
     defer row_accumulator.deinit(allocator);
-    var inline_prepared_lines: [128]PreparedFillLine = undefined;
-    const prepared_storage = if (lines.len <= inline_prepared_lines.len)
-        inline_prepared_lines[0..lines.len]
-    else
-        try allocator.alloc(PreparedFillLine, lines.len);
-    defer if (lines.len > inline_prepared_lines.len) allocator.free(prepared_storage);
-    const prepared_lines = prepareFillLines(prepared_storage, lines);
-    if (prepared_lines.len < 2) return;
     var inline_intersections: [128]WindingIntersection = undefined;
     const intersection_storage = if (prepared_lines.len <= inline_intersections.len)
         inline_intersections[0..prepared_lines.len]
@@ -296,6 +296,79 @@ pub fn boundsForTarget(target: Target, lines: []const Line) ?Bounds {
 }
 
 pub const blendUnchecked = scanline_types.blendUnchecked;
+
+const PreparedLinesAndBounds = struct {
+    lines: []PreparedFillLine,
+    bounds: ?Bounds,
+};
+
+fn prepareFillLinesAndBounds(
+    target: Target,
+    out: []PreparedFillLine,
+    lines: []const Line,
+) PreparedLinesAndBounds {
+    std.debug.assert(out.len >= lines.len);
+    const target_max_x = targetMaxPixelIndex(target.width) orelse
+        return .{ .lines = out[0..0], .bounds = null };
+    const target_max_y = targetMaxPixelIndex(target.height) orelse
+        return .{ .lines = out[0..0], .bounds = null };
+    var raw_min_x: i32 = std.math.maxInt(i32);
+    var raw_min_y: i32 = std.math.maxInt(i32);
+    var raw_max_x: i32 = std.math.minInt(i32);
+    var raw_max_y: i32 = std.math.minInt(i32);
+    var count: usize = 0;
+    var saw_finite_line = false;
+    for (lines) |line| {
+        if (!lineFinite(line)) continue;
+        saw_finite_line = true;
+        raw_min_x = @min(raw_min_x, floorI32Saturating(@min(line.a.x, line.b.x)));
+        raw_min_y = @min(raw_min_y, floorI32Saturating(@min(line.a.y, line.b.y)));
+        raw_max_x = @max(raw_max_x, ceilI32Saturating(@max(line.a.x, line.b.x)));
+        raw_max_y = @max(raw_max_y, ceilI32Saturating(@max(line.a.y, line.b.y)));
+
+        const dy = line.b.y - line.a.y;
+        if (dy == 0.0) continue;
+        out[count] = .{
+            .ax = line.a.x,
+            .ay = line.a.y,
+            .y_min = @min(line.a.y, line.b.y),
+            .y_max = @max(line.a.y, line.b.y),
+            .slope = (line.b.x - line.a.x) / dy,
+            .delta = if (dy > 0.0) 1 else -1,
+        };
+        count += 1;
+    }
+    if (!saw_finite_line) return .{ .lines = out[0..count], .bounds = null };
+
+    const min_x = @max(0, saturatingSubOne(raw_min_x));
+    const min_y = @max(0, saturatingSubOne(raw_min_y));
+    const max_x = @min(target_max_x, saturatingAddOne(raw_max_x));
+    const max_y = @min(target_max_y, saturatingAddOne(raw_max_y));
+    const bounds: ?Bounds = if (max_x < min_x or max_y < min_y) null else .{
+        .min_x = min_x,
+        .min_y = min_y,
+        .max_x = max_x,
+        .max_y = max_y,
+    };
+    return .{ .lines = out[0..count], .bounds = bounds };
+}
+
+test "combined line preparation preserves public bounds and edges" {
+    const target = Target{ .width = 12, .height = 10, .pixels = &.{} };
+    const source = [_]Line{
+        .{ .a = .{ .x = -2.5, .y = 1.25 }, .b = .{ .x = 4.75, .y = 1.25 } },
+        .{ .a = .{ .x = 4.75, .y = 1.25 }, .b = .{ .x = 8.5, .y = 7.75 } },
+        .{ .a = .{ .x = std.math.nan(f32), .y = 2 }, .b = .{ .x = 3, .y = 4 } },
+        .{ .a = .{ .x = 8.5, .y = 7.75 }, .b = .{ .x = -2.5, .y = 1.25 } },
+    };
+    var combined_storage: [source.len]PreparedFillLine = undefined;
+    var reference_storage: [source.len]PreparedFillLine = undefined;
+    const combined = prepareFillLinesAndBounds(target, &combined_storage, &source);
+    const reference_lines = prepareFillLines(&reference_storage, &source);
+
+    try std.testing.expectEqual(boundsForTarget(target, &source), combined.bounds);
+    try std.testing.expectEqualSlices(PreparedFillLine, reference_lines, combined.lines);
+}
 
 pub fn prepareFillLines(out: []PreparedFillLine, lines: []const Line) []PreparedFillLine {
     std.debug.assert(out.len >= lines.len);

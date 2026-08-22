@@ -163,7 +163,7 @@ fn prepareSampleRows(allocator: std.mem.Allocator, lines: []const PreparedFillLi
             var count: usize = 0;
             for (row_lines) |line| {
                 if (py < line.y_min or py >= line.y_max) continue;
-                const x = line.slope * (py - line.ay) + line.ax;
+                const x = line.slope * (py - line.y_min) + line.x_at_y_min;
                 if (!std.math.isFinite(x)) continue;
                 row_intersections[count] = .{ .x = x, .delta = line.delta };
                 count += 1;
@@ -448,8 +448,8 @@ noinline fn fillDifference4(allocator: std.mem.Allocator, target: Target, prepar
                 const first = row_lines[0];
                 const second = row_lines[1];
                 if (py < first.y_min or py >= first.y_max or py < second.y_min or py >= second.y_max) continue;
-                const first_x = first.slope * (py - first.ay) + first.ax;
-                const second_x = second.slope * (py - second.ay) + second.ax;
+                const first_x = first.slope * (py - first.y_min) + first.x_at_y_min;
+                const second_x = second.slope * (py - second.y_min) + second.x_at_y_min;
                 if (!std.math.isFinite(first_x) or !std.math.isFinite(second_x)) continue;
                 if (@abs(second_x - first_x) <= 0.000001) continue;
                 const start_f, const end_f, const left_delta = if (first_x < second_x)
@@ -475,7 +475,7 @@ noinline fn fillDifference4(allocator: std.mem.Allocator, target: Target, prepar
             var intersection_count: usize = 0;
             for (row_lines) |line| {
                 if (py < line.y_min or py >= line.y_max) continue;
-                const x_intersect = line.slope * (py - line.ay) + line.ax;
+                const x_intersect = line.slope * (py - line.y_min) + line.x_at_y_min;
                 if (!std.math.isFinite(x_intersect)) continue;
                 intersection_storage[intersection_count] = .{
                     .x = x_intersect,
@@ -633,8 +633,8 @@ noinline fn fillLegacy(allocator: std.mem.Allocator, target: Target, prepared: *
                 const first = row_lines[0];
                 const second = row_lines[1];
                 if (py < first.y_min or py >= first.y_max or py < second.y_min or py >= second.y_max) continue;
-                const first_x = first.slope * (py - first.ay) + first.ax;
-                const second_x = second.slope * (py - second.ay) + second.ax;
+                const first_x = first.slope * (py - first.y_min) + first.x_at_y_min;
+                const second_x = second.slope * (py - second.y_min) + second.x_at_y_min;
                 if (!std.math.isFinite(first_x) or !std.math.isFinite(second_x)) continue;
                 if (@abs(second_x - first_x) <= 0.000001) continue;
                 const start_f, const end_f, const left_delta = if (first_x < second_x)
@@ -654,7 +654,7 @@ noinline fn fillLegacy(allocator: std.mem.Allocator, target: Target, prepared: *
             var intersection_count: usize = 0;
             for (row_lines) |line| {
                 if (py < line.y_min or py >= line.y_max) continue;
-                const x_intersect = line.slope * (py - line.ay) + line.ax;
+                const x_intersect = line.slope * (py - line.y_min) + line.x_at_y_min;
                 if (!std.math.isFinite(x_intersect)) continue;
                 intersection_storage[intersection_count] = .{
                     .x = x_intersect,

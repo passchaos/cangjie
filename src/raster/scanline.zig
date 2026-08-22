@@ -29,8 +29,7 @@ pub const WindingIntersection = struct {
 };
 
 pub const PreparedFillLine = struct {
-    ax: f32,
-    ay: f32,
+    x_at_y_min: f32,
     y_min: f32,
     y_max: f32,
     slope: f32,
@@ -184,8 +183,8 @@ inline fn fillPreparedRow(
             const first = row_lines[0];
             const second = row_lines[1];
             if (py < first.y_min or py >= first.y_max or py < second.y_min or py >= second.y_max) continue;
-            const first_x = first.slope * (py - first.ay) + first.ax;
-            const second_x = second.slope * (py - second.ay) + second.ax;
+            const first_x = first.slope * (py - first.y_min) + first.x_at_y_min;
+            const second_x = second.slope * (py - second.y_min) + second.x_at_y_min;
             if (@abs(second_x - first_x) <= 0.000001) continue;
             const start_f, const end_f, const left_delta = if (first_x < second_x)
                 .{ first_x, second_x, first.delta }
@@ -204,7 +203,7 @@ inline fn fillPreparedRow(
         var intersection_count: usize = 0;
         for (row_lines) |line| {
             if (py < line.y_min or py >= line.y_max) continue;
-            const x_intersect = line.slope * (py - line.ay) + line.ax;
+            const x_intersect = line.slope * (py - line.y_min) + line.x_at_y_min;
             intersection_storage[intersection_count] = .{
                 .x = x_intersect,
                 .delta = line.delta,
@@ -346,10 +345,10 @@ test "four distinct non-zero crossings preserve nested and disjoint spans" {
         defer accumulator.deinit(std.testing.allocator);
         var storage: [4]WindingIntersection = undefined;
         const lines = [_]PreparedFillLine{
-            .{ .ax = 1, .ay = 0, .y_min = 0, .y_max = 1, .slope = 0, .delta = case.deltas[0] },
-            .{ .ax = 2, .ay = 0, .y_min = 0, .y_max = 1, .slope = 0, .delta = case.deltas[1] },
-            .{ .ax = 4, .ay = 0, .y_min = 0, .y_max = 1, .slope = 0, .delta = case.deltas[2] },
-            .{ .ax = 5, .ay = 0, .y_min = 0, .y_max = 1, .slope = 0, .delta = case.deltas[3] },
+            .{ .x_at_y_min = 1, .y_min = 0, .y_max = 1, .slope = 0, .delta = case.deltas[0] },
+            .{ .x_at_y_min = 2, .y_min = 0, .y_max = 1, .slope = 0, .delta = case.deltas[1] },
+            .{ .x_at_y_min = 4, .y_min = 0, .y_max = 1, .slope = 0, .delta = case.deltas[2] },
+            .{ .x_at_y_min = 5, .y_min = 0, .y_max = 1, .slope = 0, .delta = case.deltas[3] },
         };
         fillPreparedRow(
             mutable_target,
@@ -437,8 +436,7 @@ fn prepareFillLinesAndBounds(
         // rechecking the result for every edge at every subpixel row.
         if (!std.math.isFinite(slope)) continue;
         out[count] = .{
-            .ax = line.a.x,
-            .ay = line.a.y,
+            .x_at_y_min = if (dy > 0.0) line.a.x else line.b.x,
             .y_min = @min(line.a.y, line.b.y),
             .y_max = @max(line.a.y, line.b.y),
             .slope = slope,
@@ -490,6 +488,21 @@ test "line preparation rejects non-finite slopes once" {
     );
 }
 
+test "prepared edge anchors intersections at its lower endpoint" {
+    const source = [_]Line{
+        .{ .a = .{ .x = 7, .y = 5 }, .b = .{ .x = 3, .y = 1 } },
+        .{ .a = .{ .x = 2, .y = 1 }, .b = .{ .x = 6, .y = 5 } },
+    };
+    var storage: [source.len]PreparedFillLine = undefined;
+    const prepared = prepareFillLines(&storage, &source);
+    try std.testing.expectEqual(@as(usize, 2), prepared.len);
+    try std.testing.expectEqual(@as(f32, 3), prepared[0].x_at_y_min);
+    try std.testing.expectEqual(@as(f32, 1), prepared[0].y_min);
+    try std.testing.expectEqual(@as(f32, 2), prepared[1].x_at_y_min);
+    try std.testing.expectEqual(@as(f32, 1), prepared[1].y_min);
+    try std.testing.expectEqual(@as(usize, 20), @sizeOf(PreparedFillLine));
+}
+
 pub fn prepareFillLines(out: []PreparedFillLine, lines: []const Line) []PreparedFillLine {
     std.debug.assert(out.len >= lines.len);
     var count: usize = 0;
@@ -503,8 +516,7 @@ pub fn prepareFillLines(out: []PreparedFillLine, lines: []const Line) []Prepared
         const slope = (line.b.x - line.a.x) / dy;
         if (!std.math.isFinite(slope)) continue;
         out[count] = .{
-            .ax = line.a.x,
-            .ay = line.a.y,
+            .x_at_y_min = if (dy > 0.0) line.a.x else line.b.x,
             .y_min = @min(line.a.y, line.b.y),
             .y_max = @max(line.a.y, line.b.y),
             .slope = slope,
@@ -593,11 +605,11 @@ fn updateBucketedActiveFillLines(
 
 test "bucketed active edges match sorted active sets" {
     const lines = [_]PreparedFillLine{
-        .{ .ax = 0, .ay = -2.5, .y_min = -2.5, .y_max = 0.25, .slope = 1, .delta = 1 },
-        .{ .ax = 1, .ay = -0.1, .y_min = -0.1, .y_max = 2.75, .slope = -1, .delta = -1 },
-        .{ .ax = 2, .ay = 0.0, .y_min = 0.0, .y_max = 4.0, .slope = 0, .delta = 1 },
-        .{ .ax = 3, .ay = 1.9, .y_min = 1.9, .y_max = 3.1, .slope = 2, .delta = -1 },
-        .{ .ax = 4, .ay = 3.0, .y_min = 3.0, .y_max = 8.0, .slope = 0, .delta = 1 },
+        .{ .x_at_y_min = 0, .y_min = -2.5, .y_max = 0.25, .slope = 1, .delta = 1 },
+        .{ .x_at_y_min = 1, .y_min = -0.1, .y_max = 2.75, .slope = -1, .delta = -1 },
+        .{ .x_at_y_min = 2, .y_min = 0.0, .y_max = 4.0, .slope = 0, .delta = 1 },
+        .{ .x_at_y_min = 3, .y_min = 1.9, .y_max = 3.1, .slope = 2, .delta = -1 },
+        .{ .x_at_y_min = 4, .y_min = 3.0, .y_max = 8.0, .slope = 0, .delta = 1 },
     };
     const min_y: i32 = 0;
     const max_y: i32 = 3;
@@ -620,7 +632,7 @@ test "bucketed active edges match sorted active sets" {
         var seen = [_]bool{false} ** lines.len;
         for (active_lines) |active_line| {
             for (lines, 0..) |line, index| {
-                if (active_line.ax == line.ax) seen[index] = true;
+                if (active_line.x_at_y_min == line.x_at_y_min) seen[index] = true;
             }
         }
         for (lines, 0..) |line, index| {

@@ -3531,6 +3531,15 @@ shaping-performance superiority.
   `0.5%`. Cycles improved for four glyphs and were slightly noisy for `g`.
   Expanded threshold tests and the five-glyph 1×1--4×4 matrix retained
   byte-identical coverage.
+- Prepared fill edges now anchor x at their lower y endpoint. This removes the
+  redundant original endpoint-y field, reduces each active edge from 24 to 20
+  bytes, and preserves the same subtract/multiply/add intersection arithmetic
+  for either source direction. Fixed-CPU-8 reverse A/B counters over 100,000
+  dirty renders reduced retired instructions by about `0.7%` for Roboto `A`,
+  `0.8%` for `g`, `0.7%` for `é`, `0.6%` for Amiri `س`, and `0.7%` for `م`;
+  branches fell up to `1.1%`. Cycles were frequency-sensitive, so only retired
+  work is claimed. Directional anchor tests and the five-glyph 1×1--4×4 matrix
+  retained byte-identical intersections and rendered output.
 - Prepared 4×4 coverage rendering now slices each immutable cached row and the
   clipped target row once, then advances both buffers together. This removes
   repeated source/target index reconstruction from every cached pixel while

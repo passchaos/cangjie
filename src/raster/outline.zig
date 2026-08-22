@@ -192,17 +192,7 @@ fn flattenCommandsTransformed(
                     orientation,
                 );
                 const segments = curves.quadSegmentCount(a, control, end);
-                var previous = a;
-                for (1..segments + 1) |index| {
-                    const t = @as(f32, @floatFromInt(index)) /
-                        @as(f32, @floatFromInt(segments));
-                    const point = curves.quadPoint(a, control, end, t);
-                    lines.appendAssumeCapacity(.{
-                        .a = previous,
-                        .b = point,
-                    });
-                    previous = point;
-                }
+                curves.appendQuadLines(lines, a, control, end, segments);
                 current = end;
             },
             .cubic_to => |cubic| {
@@ -229,17 +219,7 @@ fn flattenCommandsTransformed(
                     orientation,
                 );
                 const segments = curves.cubicSegmentCount(a, c0, c1, end);
-                var previous = a;
-                for (1..segments + 1) |index| {
-                    const t = @as(f32, @floatFromInt(index)) /
-                        @as(f32, @floatFromInt(segments));
-                    const point = curves.cubicPoint(a, c0, c1, end, t);
-                    lines.appendAssumeCapacity(.{
-                        .a = previous,
-                        .b = point,
-                    });
-                    previous = point;
-                }
+                curves.appendCubicLines(lines, a, c0, c1, end, segments);
                 current = end;
             },
             .close => {

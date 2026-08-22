@@ -3547,6 +3547,15 @@ shaping-performance superiority.
   branches fell up to `1.1%`. Cycles were frequency-sensitive, so only retired
   work is claimed. Directional anchor tests and the five-glyph 1×1--4×4 matrix
   retained byte-identical intersections and rendered output.
+- Equally spaced quadratic and cubic flattening now advances points with
+  second- and third-order forward differences instead of rebuilding Bernstein
+  bases and dividing for every interior segment. The adaptive segment count is
+  unchanged and each authored endpoint is assigned exactly to prevent contour-
+  join drift. Fixed-CPU-8 reverse A/B counters over 100,000 dirty renders
+  reduced retired instructions by about `0.9%` for Roboto `g`, `0.9%` for `é`,
+  `1.2%` for Amiri `س`, and `0.8%` for `م`, while straight-sided Roboto `A` was
+  neutral. Branches fell about `0.5--0.7%` on curved glyphs. Point-error tests
+  and the five-glyph 1×1--4×4 matrix retained byte-identical rendered output.
 - Prepared 4×4 coverage rendering now slices each immutable cached row and the
   clipped target row once, then advances both buffers together. This removes
   repeated source/target index reconstruction from every cached pixel while

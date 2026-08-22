@@ -144,6 +144,13 @@ fn appendEntry(
         run,
     );
     errdefer allocator.free(lookups);
+    // An absent feature is a true no-op. Omitting its empty stage keeps cached
+    // multi-stage shapers from rebuilding per-entry Options and dispatch state
+    // for every source run, while ownership remains unchanged for real stages.
+    if (lookups.len == 0) {
+        allocator.free(lookups);
+        return;
+    }
     const offsets = try selection.lookupOffsets(
         view,
         context.lookup_list,

@@ -49,6 +49,27 @@ test "feature plan builders preserve required stages and merge lookup scope" {
     try std.testing.expectEqualSlices(usize, &.{ 72, 80 }, merged.lookup_offsets);
 }
 
+test "feature plans omit absent no-op stages" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 96;
+    writePlanTable(&bytes);
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+    };
+    var plan = try feature.plan.build.lookupPlan(
+        view,
+        &.{.{ .tag = unicode.tag("salt") }},
+        allocator,
+        .{ .script_tag = .dflt },
+    );
+    defer plan.deinit(allocator);
+    // The required ccmp stage remains; absent salt contributes no empty entry.
+    try std.testing.expectEqual(@as(usize, 1), plan.entries.len);
+    try std.testing.expectEqual(unicode.tag("ccmp"), plan.entries[0].application.tag);
+}
+
 fn writePlanTable(bytes: []u8) void {
     fixture.writeU32(bytes, 0, 0x00010000);
     fixture.writeU16(bytes, 4, 10); // ScriptList.

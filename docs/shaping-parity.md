@@ -3724,3 +3724,11 @@ shaping-performance superiority.
   reduced retired instructions by about `2.26%` and branches by about `1.61%`.
   Roboto remained within `0.01%` retired work; Amiri instructions/branches
   improved about `0.07%`/`0.03%`.
+- Cached staged GSUB plans now omit absent features whose selected lookup list
+  is empty. Such entries have no observable execution but previously rebuilt
+  per-entry `Options` and entered shared dispatch for every source run. Fixed-
+  CPU-8 reverse A/B counters over five complete corpus passes reduced retired
+  instructions by about `0.69%` for NotoSansDevanagari `hi-words` and `0.69%`
+  for Amiri `fa-words`, with branches down about `0.20%` and `0.16%`; Roboto
+  `en-words` stayed within `0.02%`. Current HarfBuzz parity remains exact on
+  all 10,000 Devanagari lines with checksum `b01a5388ce792b49`.

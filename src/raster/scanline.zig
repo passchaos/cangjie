@@ -249,7 +249,7 @@ inline fn fillPreparedRow(
                         row_min_x = @min(row_min_x, span.min_x);
                         row_max_x = @max(row_max_x, span.max_x);
                     }
-                    if (@as(i16, intersections[0].delta) + intersections[1].delta != 0) {
+                    if (intersections[0].delta == intersections[1].delta) {
                         if (row_accumulator.cover(
                             min_x,
                             max_x,

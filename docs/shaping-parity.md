@@ -3511,6 +3511,14 @@ shaping-performance superiority.
   Amiri `س`, and was neutral for `م`; branches fell about `1.1%`, `0.2%`,
   `0.2%`, `0.4%`, and `0.1%`. An exhaustive permutation test and the five-
   glyph 1×1--4×4 matrix retained byte-identical ordering and rendered output.
+- Four-crossing middle-span selection now compares the first two edge deltas
+  directly. Prepared fill edges always contribute exactly `+1` or `-1`, making
+  equality equivalent to a non-zero two-edge prefix winding without integer
+  promotion and addition. Fixed-CPU-8 reverse A/B counters over 100,000 dirty
+  renders reduced retired instructions by about `0.3%` for Roboto `A`/`g`,
+  `0.2%` for `é`/Amiri `س`, and `0.04%` for `م`; branches were effectively
+  neutral and cycles remained frequency-sensitive. The five-glyph 1×1--4×4
+  output matrix remained byte-identical.
 - Prepared 4×4 coverage rendering now slices each immutable cached row and the
   clipped target row once, then advances both buffers together. This removes
   repeated source/target index reconstruction from every cached pixel while

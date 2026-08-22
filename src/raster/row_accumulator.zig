@@ -125,6 +125,104 @@ inline fn coverSpanDifference4(
     end_f: f32,
 ) ?scanline.CoveredSpan {
     std.debug.assert(std.math.isFinite(start_f) and std.math.isFinite(end_f));
+    // Up to this coordinate every 1/8-pixel sample center is exactly
+    // representable by f32, matching the scalar predicates below. Convert the
+    // covered sample-center interval once per endpoint instead of rounding both
+    // endpoints twice and testing four boundary centers.
+    if (min_x >= 0 and max_x <= 1_048_575) {
+        return coverSpanDifference4QuarterSamples(
+            differences,
+            min_x,
+            max_x,
+            start_f,
+            end_f,
+        );
+    }
+    return coverSpanDifference4Wide(
+        differences,
+        min_x,
+        max_x,
+        start_f,
+        end_f,
+    );
+}
+
+inline fn coverSpanDifference4QuarterSamples(
+    differences: []i16,
+    min_x: i32,
+    max_x: i32,
+    start_f: f32,
+    end_f: f32,
+) ?scanline.CoveredSpan {
+    const start64: f64 = start_f;
+    const end64: f64 = end_f;
+    const min64: f64 = @floatFromInt(min_x);
+    const max64: f64 = @floatFromInt(max_x);
+    if (end64 <= start64 or end64 <= min64 or start64 >= max64 + 1.0) {
+        return null;
+    }
+    const min_sample = @as(i64, min_x) * 4;
+    const max_sample = (@as(i64, max_x) + 1) * 4;
+    const first = if (start64 <= min64)
+        min_sample
+    else
+        @as(i64, @intFromFloat(@ceil(start64 * 4.0 - 0.5)));
+    const after = if (end64 >= max64 + 1.0)
+        max_sample
+    else
+        @as(i64, @intFromFloat(@ceil(end64 * 4.0 - 0.5)));
+    if (after <= first) return null;
+
+    const x_start: i32 = @intCast(@divTrunc(first, 4));
+    const x_end: i32 = @intCast(@divTrunc(after - 1, 4));
+    if (x_start == x_end) {
+        addDifference(
+            differences,
+            min_x,
+            x_start,
+            x_start,
+            @intCast(after - first),
+        );
+        return .{ .min_x = x_start, .max_x = x_end };
+    }
+
+    const first_offset: i16 = @intCast(@mod(first, 4));
+    const after_offset: i16 = @intCast(@mod(after, 4));
+    var full_start = x_start;
+    var full_end = x_end;
+    if (first_offset != 0) {
+        addDifference(
+            differences,
+            min_x,
+            x_start,
+            x_start,
+            4 - first_offset,
+        );
+        full_start += 1;
+    }
+    if (after_offset != 0) {
+        addDifference(
+            differences,
+            min_x,
+            x_end,
+            x_end,
+            after_offset,
+        );
+        full_end -= 1;
+    }
+    if (full_start <= full_end) {
+        addDifference(differences, min_x, full_start, full_end, 4);
+    }
+    return .{ .min_x = x_start, .max_x = x_end };
+}
+
+noinline fn coverSpanDifference4Wide(
+    differences: []i16,
+    min_x: i32,
+    max_x: i32,
+    start_f: f32,
+    end_f: f32,
+) ?scanline.CoveredSpan {
     const start64: f64 = start_f;
     const end64: f64 = end_f;
     const min64: f64 = @floatFromInt(min_x);
@@ -182,10 +280,10 @@ test "difference span excludes the guaranteed-empty end pixel" {
 
 test "difference span matches sample-count accumulation at boundaries" {
     const boundaries = [_]f32{
-        -1.0, -0.875, -0.625, -0.375, -0.125,
-        0.0,  0.125,  0.375,  0.625,  0.875,
-        1.0,  1.125,  1.375,  1.625,  1.875,
-        2.0,
+        -1.0,  -0.876, -0.875, -0.874, -0.625, -0.375, -0.125,
+        0.0,   0.124,  0.125,  0.126,  0.374,  0.375,  0.376,
+        0.625, 0.875,  1.0,    1.125,  1.375,  1.625,  1.875,
+        2.0,   3.0,    1.0e30,
     };
     const offsets = [_]f32{ 0.125, 0.375, 0.625, 0.875 };
     for (boundaries) |start| {

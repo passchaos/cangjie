@@ -3519,6 +3519,18 @@ shaping-performance superiority.
   `0.2%` for `é`/Amiri `س`, and `0.04%` for `م`; branches were effectively
   neutral and cycles remained frequency-sensitive. The five-glyph 1×1--4×4
   output matrix remained byte-identical.
+- Default 4×4 span accumulation now maps each finite endpoint once to the
+  global sequence of quarter-pixel sample indexes. Quotient and remainder then
+  identify the two boundary counts and the intervening full-pixel range,
+  replacing four floor/ceil conversions and boundary predicate vectors. A
+  conservative coordinate guard retains the former f64 path beyond the range
+  where f32 represents every 1/8-pixel sample center. Fixed-CPU-8 reverse A/B
+  counters over 100,000 dirty renders reduced retired instructions by about
+  `5.4%` for Roboto `A`, `4.3%` for `g`, `3.9%` for `é`, `3.9%` for Amiri `س`,
+  and `4.2%` for `م`; branches fell about `1.5%`, `0.3%`, `0.5%`, `0.5%`, and
+  `0.5%`. Cycles improved for four glyphs and were slightly noisy for `g`.
+  Expanded threshold tests and the five-glyph 1×1--4×4 matrix retained
+  byte-identical coverage.
 - Prepared 4×4 coverage rendering now slices each immutable cached row and the
   clipped target row once, then advances both buffers together. This removes
   repeated source/target index reconstruction from every cached pixel while

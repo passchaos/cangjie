@@ -196,6 +196,10 @@ use `-Dharfbuzz-prefix` for an isolated local checkout install, or rely on
 shared `--enable-feature` / `--disable-feature` overrides, `--glyph-summary`
 output, and `compare-harfbuzz`, so focused HarfBuzz/Cangjie feature-diff
 fixtures can be built without shelling out to `hb-shape`.
+`compare-harfbuzz` requires HarfBuzz 14.2 or newer because retained rows use
+current syllable and attachment semantics; timing-only `--engine harfbuzz`
+remains available with older installed libraries. This prevents a system
+HarfBuzz 8.x from being mistaken for the documented/current parity oracle.
 
 The `harfrust` engine shells out to `hr-shape` once per sample and uses
 `hr-shape -n` for measured iterations. It is useful for batch output parity and

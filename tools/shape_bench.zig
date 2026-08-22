@@ -10,6 +10,13 @@ const runner = @import("shape_bench/runner.zig");
 const harfbuzz = if (build_options.enable_harfbuzz) @import("shape_bench/harfbuzz.zig") else DisabledHarfBuzz;
 
 const DisabledHarfBuzz = struct {
+    pub fn versionAtLeast(major: u32, minor: u32, micro: u32) bool {
+        _ = major;
+        _ = minor;
+        _ = micro;
+        return false;
+    }
+
     pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, options: options_mod.Options) !runner.BenchResult {
         _ = io;
         _ = allocator;
@@ -48,6 +55,16 @@ pub fn main(init: std.process.Init) !void {
             \\
         , .{});
         return error.HarfBuzzUnavailable;
+    }
+    if (options.engine == .compare_harfbuzz and
+        !harfbuzz.versionAtLeast(14, 2, 0))
+    {
+        std.debug.print(
+            "error: compare-harfbuzz requires HarfBuzz 14.2.0 or newer; " ++
+                "the retained parity matrix targets current shaping semantics.\n",
+            .{},
+        );
+        return error.UnsupportedHarfBuzzVersion;
     }
     const resolved_harfrust_bin = try resolveDefaultHarfRustBin(init.io, allocator, init.environ_map, &options);
     defer if (resolved_harfrust_bin) |path| allocator.free(path);

@@ -5,6 +5,10 @@ const hb = @import("harfbuzz");
 const options_mod = @import("options.zig");
 const runner = @import("runner.zig");
 
+pub fn versionAtLeast(major: u32, minor: u32, micro: u32) bool {
+    return hb.cangjie_hb_version_at_least(major, minor, micro) != 0;
+}
+
 const HarfBuzzFont = struct {
     blob: *hb.hb_blob_t,
     face: *hb.hb_face_t,

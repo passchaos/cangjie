@@ -117,6 +117,66 @@ pub fn build(allocator: std.mem.Allocator, bounds: ?scanline.Bounds, rows: anyty
 }
 
 fn addSpan(differences: []i16, min_x: i32, max_x: i32, start_f: f32, end_f: f32) ?[2]i32 {
+    // Match the direct scanner's quarter-sample representation while every
+    // 1/8-pixel center is exactly representable. Raw prepared bounds can be
+    // negative, so the fallback retains the defensive wide-coordinate path.
+    if (min_x >= -1_048_576 and max_x <= 1_048_575) {
+        return addSpanQuarterSamples(
+            differences,
+            min_x,
+            max_x,
+            start_f,
+            end_f,
+        );
+    }
+    return addSpanWide(differences, min_x, max_x, start_f, end_f);
+}
+
+fn addSpanQuarterSamples(differences: []i16, min_x: i32, max_x: i32, start_f: f32, end_f: f32) ?[2]i32 {
+    const start64: f64 = start_f;
+    const end64: f64 = end_f;
+    const min64: f64 = @floatFromInt(min_x);
+    const max64: f64 = @floatFromInt(max_x);
+    if (end64 <= start64 or end64 <= min64 or start64 >= max64 + 1.0) return null;
+
+    const min_sample = @as(i64, min_x) * 4;
+    const max_sample = (@as(i64, max_x) + 1) * 4;
+    const first = if (start64 <= min64)
+        min_sample
+    else
+        @as(i64, @intFromFloat(@ceil(start64 * 4.0 - 0.5)));
+    const after = if (end64 >= max64 + 1.0)
+        max_sample
+    else
+        @as(i64, @intFromFloat(@ceil(end64 * 4.0 - 0.5)));
+    if (after <= first) return null;
+
+    const x_start: i32 = @intCast(@divFloor(first, 4));
+    const x_end: i32 = @intCast(@divFloor(after - 1, 4));
+    if (x_start == x_end) {
+        addDifference(differences, min_x, x_start, x_start, @intCast(after - first));
+        return .{ x_start, x_end };
+    }
+
+    const first_offset: i16 = @intCast(@mod(first, 4));
+    const after_offset: i16 = @intCast(@mod(after, 4));
+    var full_start = x_start;
+    var full_end = x_end;
+    if (first_offset != 0) {
+        addDifference(differences, min_x, x_start, x_start, 4 - first_offset);
+        full_start += 1;
+    }
+    if (after_offset != 0) {
+        addDifference(differences, min_x, x_end, x_end, after_offset);
+        full_end -= 1;
+    }
+    if (full_start <= full_end) {
+        addDifference(differences, min_x, full_start, full_end, 4);
+    }
+    return .{ x_start, x_end };
+}
+
+fn addSpanWide(differences: []i16, min_x: i32, max_x: i32, start_f: f32, end_f: f32) ?[2]i32 {
     if (end_f <= start_f or end_f <= @as(f32, @floatFromInt(min_x)) or start_f >= @as(f32, @floatFromInt(max_x)) + 1.0) return null;
     const clipped_start = @max(start_f, @as(f32, @floatFromInt(min_x)));
     const clipped_end = @min(end_f, @as(f32, @floatFromInt(max_x)) + 1.0);
@@ -169,6 +229,42 @@ test "coverage cache declines pathological bounds" {
     );
     defer cache.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 0), cache.pixels.len);
+}
+
+test "quarter-sample spans match scalar predicates across negative bounds" {
+    const boundaries = [_]f32{
+        -2.0,  -1.876, -1.875, -1.874, -1.625, -1.375, -1.125,
+        -1.0,  -0.875, -0.625, -0.375, -0.125, 0.0,    0.125,
+        0.375, 0.625,  0.875,  1.0,    2.0,    3.0,
+    };
+    for (boundaries) |start| {
+        for (boundaries) |end| {
+            var expected = [_]i16{0} ** 7;
+            var actual = [_]i16{0} ** 7;
+            const expected_span = addSpanScalar(&expected, -3, 2, start, end);
+            const actual_span = addSpanQuarterSamples(&actual, -3, 2, start, end);
+            try std.testing.expectEqual(expected_span, actual_span);
+            try std.testing.expectEqualSlices(i16, &expected, &actual);
+        }
+    }
+}
+
+fn addSpanScalar(differences: []i16, min_x: i32, max_x: i32, start: f32, end: f32) ?[2]i32 {
+    var first: ?i32 = null;
+    var last: i32 = undefined;
+    var x = min_x;
+    while (x <= max_x) : (x += 1) {
+        const base: f32 = @floatFromInt(x);
+        var count: i16 = 0;
+        inline for ([_]f32{ 0.125, 0.375, 0.625, 0.875 }) |offset| {
+            count += @intFromBool(base + offset >= start and base + offset < end);
+        }
+        if (count == 0) continue;
+        addDifference(differences, min_x, x, x, count);
+        if (first == null) first = x;
+        last = x;
+    }
+    return if (first) |value| .{ value, last } else null;
 }
 
 test "empty dense coverage keeps row metadata without pixel storage" {

@@ -3563,6 +3563,15 @@ shaping-performance superiority.
   instructions by about `2.3--3.1%`, branches by about `1.9--2.8%`, and cycles
   by about `1.1--7.8%` for Roboto `A`, `g` and Amiri `س`, with unchanged cached
   coverage and rendered output.
+- Prepared coverage construction now uses the direct rasterizer's quarter-
+  sample endpoint representation inside the exact f32 coordinate range, while
+  preserving the scalar/f64 fallback for extreme negative or positive bounds.
+  The new `raster-prepare` gate on fixed CPU 8, over 20,000 prepare/deinit
+  iterations, reduced retired instructions by about `9.6%` for Roboto `A`,
+  `7.0%` for `g`, `6.8%` for `é`, `6.3%` for Amiri `س`, and `7.5%` for `م`;
+  branches fell about `7.3%`, `5.4%`, `5.0%`, `4.9%`, and `5.3%`. Expanded
+  negative-coordinate threshold tests and the prepared-render glyph matrix
+  retained byte-identical coverage.
 - Successful dense prepared coverage now releases the larger intermediate
   sample-row/intersection cache instead of retaining two equivalent immutable
   render representations for the lifetime of a prepared glyph. Oversized or

@@ -3486,6 +3486,14 @@ shaping-performance superiority.
   retired instructions by about `0.25--1.07%` across Roboto `A`, `g`, `é` and
   Amiri `س`, `م`; branches were neutral. The real-glyph checksum matrix remained
   byte-identical at 1x1, 2x2, 3x3, and 4x4 sampling.
+- Prepared 4×4 coverage rendering now slices each immutable cached row and the
+  clipped target row once, then advances both buffers together. This removes
+  repeated source/target index reconstruction from every cached pixel while
+  retaining transparent holes, clipping, and max-alpha blending. Fixed-CPU-8
+  reverse A/B measurements reduced prepared-raster retired instructions by
+  about `12.6--28.3%`, branches by about `12.7--22.9%`, and cycles by about
+  `6.8--18.5%` across Roboto `A`, `g`, `é` and Amiri `س`, `م`; direct/prepared
+  output remained byte-identical.
 - GSUB run-state preparation is now inlined into its small set of whole-run and
   cached-plan callers. This removes an out-of-line call and large by-value
   `Options` return at each Indic feature stage while preserving the shared

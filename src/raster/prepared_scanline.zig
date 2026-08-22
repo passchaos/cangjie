@@ -202,6 +202,26 @@ pub fn fill(
     );
 }
 
+test "prepared coverage row slices preserve clipping and max blending" {
+    const allocator = std.testing.allocator;
+    const lines = [_]Line{
+        .{ .a = .{ .x = -1, .y = 0 }, .b = .{ .x = -1, .y = 3 } },
+        .{ .a = .{ .x = 3, .y = 3 }, .b = .{ .x = 3, .y = 0 } },
+    };
+    var prepared = try prepare(allocator, &lines);
+    defer prepared.deinit();
+    var pixels = [_]u8{0} ** 8;
+    pixels[1] = 255;
+    const target = Target{ .width = 4, .height = 2, .pixels = &pixels };
+
+    try fill(allocator, target, &prepared, .non_zero, 4);
+    try std.testing.expectEqual(@as(u8, 255), pixels[1]);
+    try std.testing.expect(pixels[0] != 0);
+    try std.testing.expect(pixels[2] != 0);
+    try std.testing.expectEqual(@as(u8, 0), pixels[3]);
+    try std.testing.expectEqual(@as(u8, 0), pixels[7]);
+}
+
 noinline fn fillDifference4(allocator: std.mem.Allocator, target: Target, prepared: *const PreparedFill, fill_rule: FillRule, samples_per_axis: u8) linksection(shaping_sections.isolated_hotpaths) !void {
     const bounds = preparedBoundsForTarget(target, prepared.raw_bounds) orelse return;
     if (fill_rule == .non_zero and prepared.coverage.pixels.len != 0) {
@@ -214,11 +234,21 @@ noinline fn fillDifference4(allocator: std.mem.Allocator, target: Target, prepar
             if (cached_row.start > cached_row.end) continue;
             const row_min_x = prepared.coverage.min_x + @as(i32, @intCast(cached_row.start));
             const row_max_x = prepared.coverage.min_x + @as(i32, @intCast(cached_row.end));
-            var x = @max(bounds.min_x, row_min_x);
+            const x = @max(bounds.min_x, row_min_x);
             const end_x = @min(bounds.max_x, row_max_x);
-            while (x <= end_x) : (x += 1) {
-                const count = prepared.coverage.pixels[source_y * width + @as(usize, @intCast(x - prepared.coverage.min_x))];
-                if (count != 0) scanline.blendUnchecked(target, x, y, lut[count]);
+            if (x > end_x) continue;
+            const len: usize = @intCast(end_x - x + 1);
+            const source_start = source_y * width +
+                @as(usize, @intCast(x - prepared.coverage.min_x));
+            const target_start = @as(usize, @intCast(y)) * target.width +
+                @as(usize, @intCast(x));
+            const source = prepared.coverage.pixels[source_start .. source_start + len];
+            const destination = target.pixels[target_start .. target_start + len];
+            // Cached rows are immutable and their dirty bounds exclude leading
+            // and trailing zeroes. Traverse source and destination together so
+            // the hot copy avoids reconstructing both indexes for every pixel.
+            for (source, destination) |count, *pixel| {
+                if (count != 0) pixel.* = @max(pixel.*, lut[count]);
             }
         }
         return;

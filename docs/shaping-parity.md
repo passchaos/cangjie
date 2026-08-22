@@ -3463,3 +3463,12 @@ shaping-performance superiority.
   `1.47%` and `1.74%`. Amiri `fa-words` also reduced instructions by about
   `4.2%` and branches by about `5.4%` on both cores, while Roboto stayed within
   `0.03%`. All corpus checksums remained unchanged.
+- The cached-plan/ranged-feature bridge now inlines its ordinary empty-range
+  branch, allowing Indic stages to enter the already-proven plan executor
+  without another large by-value context/options boundary. Against the
+  preceding state-preparation optimization, fixed-CPU-8 reverse B/A/A/B
+  counters over NotoSansDevanagari `hi-words` reduced retired instructions by
+  about `0.70%`, branches by about `1.12%`, and cycles by about `1.2%`; Roboto
+  and Amiri retired work remained within `0.02%`. The feature-range path keeps
+  its existing per-entry value materialization and all corpus checksums remain
+  unchanged.

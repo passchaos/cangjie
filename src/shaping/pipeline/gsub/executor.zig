@@ -26,7 +26,7 @@ pub const Context = struct {
     user_feature_values: ?*std.ArrayList(u32) = null,
 };
 
-pub fn applyPlanAfterRunProofWithRanges(
+pub inline fn applyPlanAfterRunProofWithRanges(
     font: *const Font,
     context: Context,
     plan: gsub.feature.LookupPlan,
@@ -35,6 +35,10 @@ pub fn applyPlanAfterRunProofWithRanges(
     gdef_metadata: GdefLookupMetadata,
 ) !void {
     if (context.feature_ranges.len == 0) {
+        // Script shapers invoke this boundary several times per source run.
+        // Inline the overwhelmingly common no-range branch so the caller can
+        // enter the cached plan executor directly instead of copying Context,
+        // Options, and GDEF metadata through another call frame.
         return applyPlanAfterRunProof(
             font,
             context,

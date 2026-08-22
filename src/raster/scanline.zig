@@ -715,6 +715,47 @@ test "covered span excludes the guaranteed-empty end pixel" {
     try std.testing.expectEqualSlices(u8, &.{ 3, 3, 0, 0 }, &counts);
 }
 
+test "difference accumulation clears the complete dirty span while blending" {
+    var pixels = [_]u8{0} ** 4;
+    var counts: [512]u8 = undefined;
+    var differences: [513]i16 = undefined;
+    var accumulator = try RowAccumulator.init(
+        std.testing.allocator,
+        pixels.len,
+        true,
+        &counts,
+        &differences,
+    );
+    defer accumulator.deinit(std.testing.allocator);
+    _ = accumulator.cover(0, 3, &sample_offsets_4, 0.25, 2.75);
+    accumulator.blendAndClear(
+        .{ .width = pixels.len, .height = 1, .pixels = &pixels },
+        0,
+        0,
+        0,
+        2,
+        &coverage_lut_16,
+    );
+    try std.testing.expectEqualSlices(
+        i16,
+        &.{ 0, 0, 0, 0, 0 },
+        accumulator.differences,
+    );
+    const first = pixels;
+
+    @memset(&pixels, 0);
+    _ = accumulator.cover(0, 3, &sample_offsets_4, 0.25, 2.75);
+    accumulator.blendAndClear(
+        .{ .width = pixels.len, .height = 1, .pixels = &pixels },
+        0,
+        0,
+        0,
+        2,
+        &coverage_lut_16,
+    );
+    try std.testing.expectEqual(first, pixels);
+}
+
 fn targetMaxPixelIndex(limit: u32) ?i32 {
     if (limit == 0) return null;
     const max_i32_u32: u32 = @intCast(std.math.maxInt(i32));

@@ -93,7 +93,9 @@ pub const RowAccumulator = struct {
             var coverage: i16 = 0;
             var x = row_min_x;
             while (x <= row_max_x) : (x += 1) {
-                coverage += self.differences[@intCast(x - min_x)];
+                const difference_index: usize = @intCast(x - min_x);
+                coverage += self.differences[difference_index];
+                self.differences[difference_index] = 0;
                 std.debug.assert(coverage >= 0 and coverage <= 16);
                 if (coverage != 0) {
                     scanline.blendUnchecked(
@@ -107,7 +109,7 @@ pub const RowAccumulator = struct {
             // Include the sentinel after the final pixel: every interval writes
             // its negative delta there, and leaving it live would contaminate
             // a later row whose dirty range starts farther right.
-            @memset(self.differences[clear_start .. clear_end + 1], 0);
+            self.differences[clear_end] = 0;
             return;
         }
         var x = row_min_x;

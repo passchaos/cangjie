@@ -3454,6 +3454,15 @@ shaping-performance superiority.
   glyphs retained byte-identical output at 1x1, 2x2, 3x3, and 4x4 sampling,
   and a regression test covers finite endpoints whose subtraction overflows
   to a non-finite slope.
+- Four-sample difference accumulation now clears each touched cell during the
+  mandatory blend scan and clears only the trailing sentinel afterward. This
+  removes a second memset traversal over every covered row without changing
+  coverage arithmetic. Fixed-CPU-8/30 reverse A/B measurements at 64 px
+  reduced retired instructions by about `2.5--3.4%`, branches by about
+  `1.2--2.8%`, and cycles by about `1.8--3.5%` across Roboto `A`, `g`, `é` and
+  Amiri `س`, `م`. Every glyph retained byte-identical checksums at 1x1, 2x2,
+  3x3, and 4x4 sampling; a regression also renders the same dirty span twice
+  to prove that no difference or sentinel state leaks between rows.
 - GSUB run-state preparation is now inlined into its small set of whole-run and
   cached-plan callers. This removes an out-of-line call and large by-value
   `Options` return at each Indic feature stage while preserving the shared

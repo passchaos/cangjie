@@ -3538,6 +3538,14 @@ shaping-performance superiority.
   `1.2%` for Amiri `س`, and `0.4%` for `م`; branches were neutral to `0.2%`
   lower. The expanded boundary test and five-glyph 1×1--4×4 matrix remained
   byte-identical.
+- Non-negative quarter-sample indexes now use an unsigned representation for
+  their pixel quotient and in-pixel remainder. This lets code generation use
+  shifts and masks directly instead of preserving signed division semantics
+  that cannot occur after target clipping. Fixed-CPU-8 reverse A/B counters
+  over 100,000 dirty renders reduced retired instructions by about `2.3%` for
+  Roboto `A`, `1.8%` for `g`, `1.6%` for `é`/Amiri `س`, and `1.8%` for `م`;
+  branches were neutral. The five-glyph 1×1--4×4 output matrix remained byte-
+  identical.
 - Prepared fill edges now anchor x at their lower y endpoint. This removes the
   redundant original endpoint-y field, reduces each active edge from 24 to 20
   bytes, and preserves the same subtract/multiply/add intersection arithmetic

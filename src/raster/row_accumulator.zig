@@ -171,8 +171,14 @@ inline fn coverSpanDifference4QuarterSamples(
         @intFromFloat(@ceil(end_f * 4.0 - 0.5));
     if (after <= first) return null;
 
-    const x_start = @divTrunc(first, 4);
-    const x_end = @divTrunc(after - 1, 4);
+    // The guarded target has min_x >= 0, and endpoint clipping therefore
+    // guarantees both sample indexes are non-negative. Express quotient and
+    // remainder in that domain so codegen uses shifts/masks rather than signed
+    // division's negative-value correction sequence.
+    const first_sample: u32 = @intCast(first);
+    const after_sample: u32 = @intCast(after);
+    const x_start: i32 = @intCast(first_sample >> 2);
+    const x_end: i32 = @intCast((after_sample - 1) >> 2);
     if (x_start == x_end) {
         addDifference(
             differences,
@@ -184,8 +190,8 @@ inline fn coverSpanDifference4QuarterSamples(
         return .{ .min_x = x_start, .max_x = x_end };
     }
 
-    const first_offset: i16 = @intCast(@mod(first, 4));
-    const after_offset: i16 = @intCast(@mod(after, 4));
+    const first_offset: i16 = @intCast(first_sample & 3);
+    const after_offset: i16 = @intCast(after_sample & 3);
     var full_start = x_start;
     var full_end = x_end;
     if (first_offset != 0) {

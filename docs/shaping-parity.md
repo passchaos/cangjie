@@ -3471,6 +3471,14 @@ shaping-performance superiority.
   retired instructions by about `2.7--4.0%` and branches by about `4.5--6.1%`
   across Roboto `A`, `g`, `é` and Amiri `س`, `م`; cycles improved in all but
   one near-noise run. All glyph/sampling checksums remained byte-identical.
+- Four-sample boundary accumulation now treats pixels bordering a full span as
+  one-sided intervals. A left boundary tests only `sample >= start`, a right
+  boundary only `sample < end`; only the at-most-two-pixel interval with no
+  full pixel retains both predicates. Fixed-CPU-8/30 reverse A/B measurements
+  reduced retired instructions by about `2.4--3.5%`, branches by about
+  `0.3--1.7%`, and cycles by about `2.2--8.0%` across Roboto `A`, `g`, `é` and
+  Amiri `س`, `م`. Exhaustive sample-boundary tests and all real-glyph sampling
+  checks retained identical coverage.
 - GSUB run-state preparation is now inlined into its small set of whole-run and
   cached-plan callers. This removes an out-of-line call and large by-value
   `Options` return at each Indic feature stage while preserving the shared

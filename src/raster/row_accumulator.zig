@@ -155,13 +155,19 @@ inline fn coverSpanDifference4(
     var x = x_start;
     if (full_start <= full_end) {
         while (x < full_start) : (x += 1) {
-            addPartialDifference4(differences, min_x, start_f, end_f, x);
+            addLeftPartialDifference4(differences, min_x, start_f, x);
         }
         addDifference(differences, min_x, full_start, full_end, 4);
         x = full_end + 1;
-    }
-    while (x <= x_end) : (x += 1) {
-        addPartialDifference4(differences, min_x, start_f, end_f, x);
+        while (x <= x_end) : (x += 1) {
+            addRightPartialDifference4(differences, min_x, end_f, x);
+        }
+    } else {
+        // A subpixel interval with no completely covered pixel still needs
+        // both endpoint predicates; this path spans at most two pixels.
+        while (x <= x_end) : (x += 1) {
+            addPartialDifference4(differences, min_x, start_f, end_f, x);
+        }
     }
     return .{ .min_x = x_start, .max_x = x_end };
 }
@@ -172,6 +178,72 @@ test "difference span excludes the guaranteed-empty end pixel" {
         scanline.CoveredSpan{ .min_x = 0, .max_x = 1 },
         coverSpanDifference4(&differences, 0, 3, 0.25, 1.75).?,
     );
+}
+
+test "difference span matches sample-count accumulation at boundaries" {
+    const boundaries = [_]f32{
+        -1.0, -0.875, -0.625, -0.375, -0.125,
+        0.0,  0.125,  0.375,  0.625,  0.875,
+        1.0,  1.125,  1.375,  1.625,  1.875,
+        2.0,
+    };
+    const offsets = [_]f32{ 0.125, 0.375, 0.625, 0.875 };
+    for (boundaries) |start| {
+        for (boundaries) |end| {
+            var expected = [_]u8{0} ** 3;
+            var differences = [_]i16{0} ** 4;
+            _ = scanline.coverSpanFinite(
+                &expected,
+                0,
+                2,
+                &offsets,
+                start,
+                end,
+            );
+            _ = coverSpanDifference4(
+                &differences,
+                0,
+                2,
+                start,
+                end,
+            );
+            var running: i16 = 0;
+            for (expected, differences[0..3]) |count, difference| {
+                running += difference;
+                try std.testing.expectEqual(@as(i16, count), running);
+            }
+        }
+    }
+}
+
+inline fn addLeftPartialDifference4(
+    differences: []i16,
+    min_x: i32,
+    start_f: f32,
+    x: i32,
+) void {
+    const base: f32 = @floatFromInt(x);
+    var count: i16 = 0;
+    count += @intFromBool(base + 0.125 >= start_f);
+    count += @intFromBool(base + 0.375 >= start_f);
+    count += @intFromBool(base + 0.625 >= start_f);
+    count += @intFromBool(base + 0.875 >= start_f);
+    if (count != 0) addDifference(differences, min_x, x, x, count);
+}
+
+inline fn addRightPartialDifference4(
+    differences: []i16,
+    min_x: i32,
+    end_f: f32,
+    x: i32,
+) void {
+    const base: f32 = @floatFromInt(x);
+    var count: i16 = 0;
+    count += @intFromBool(base + 0.125 < end_f);
+    count += @intFromBool(base + 0.375 < end_f);
+    count += @intFromBool(base + 0.625 < end_f);
+    count += @intFromBool(base + 0.875 < end_f);
+    if (count != 0) addDifference(differences, min_x, x, x, count);
 }
 
 inline fn addPartialDifference4(

@@ -230,6 +230,33 @@ inline fn fillPreparedRow(
 
         switch (fill_rule) {
             .non_zero => {
+                if (intersections.len == 4 and
+                    intersections[1].x - intersections[0].x > 0.000001 and
+                    intersections[2].x - intersections[1].x > 0.000001 and
+                    intersections[3].x - intersections[2].x > 0.000001)
+                {
+                    // Four distinct crossings dominate ordinary overlapping
+                    // contours. Their prefix windings are known after three
+                    // additions, so avoid the generic optional/epsilon loop.
+                    var winding: i16 = intersections[0].delta;
+                    inline for (0..3) |span_index| {
+                        if (winding != 0) {
+                            if (row_accumulator.cover(
+                                min_x,
+                                max_x,
+                                sample_offsets,
+                                intersections[span_index].x,
+                                intersections[span_index + 1].x,
+                            )) |span| {
+                                row_has_coverage = true;
+                                row_min_x = @min(row_min_x, span.min_x);
+                                row_max_x = @max(row_max_x, span.max_x);
+                            }
+                        }
+                        winding += intersections[span_index + 1].delta;
+                    }
+                    continue;
+                }
                 var winding: i32 = 0;
                 var previous_x: ?f32 = null;
                 var index: usize = 0;
@@ -271,6 +298,58 @@ inline fn fillPreparedRow(
     }
     if (row_has_coverage) {
         row_accumulator.blendAndClear(target, min_x, y, row_min_x, row_max_x, coverage_lut);
+    }
+}
+
+test "four distinct non-zero crossings preserve nested and disjoint spans" {
+    const target = Target{ .width = 8, .height = 1, .pixels = undefined };
+    const offsets = [_]f32{ 0.125, 0.375, 0.625, 0.875 };
+    const lut = coverageLutForSampleCount(16).?;
+    const cases = [_]struct { deltas: [4]i8, disjoint: bool }{
+        // Two disjoint contours and one nested, same-direction contour.
+        .{ .deltas = .{ 1, -1, 1, -1 }, .disjoint = true },
+        .{ .deltas = .{ 1, 1, -1, -1 }, .disjoint = false },
+        // Reversed contour direction must produce the same occupied spans.
+        .{ .deltas = .{ -1, -1, 1, 1 }, .disjoint = false },
+    };
+    for (cases) |case| {
+        var pixels = [_]u8{0} ** 8;
+        var mutable_target = target;
+        mutable_target.pixels = &pixels;
+        var counts: [512]u8 = undefined;
+        var differences: [513]i16 = undefined;
+        var accumulator = try RowAccumulator.init(
+            std.testing.allocator,
+            pixels.len,
+            true,
+            &counts,
+            &differences,
+        );
+        defer accumulator.deinit(std.testing.allocator);
+        var storage: [4]WindingIntersection = undefined;
+        const lines = [_]PreparedFillLine{
+            .{ .ax = 1, .ay = 0, .y_min = 0, .y_max = 1, .slope = 0, .delta = case.deltas[0] },
+            .{ .ax = 2, .ay = 0, .y_min = 0, .y_max = 1, .slope = 0, .delta = case.deltas[1] },
+            .{ .ax = 4, .ay = 0, .y_min = 0, .y_max = 1, .slope = 0, .delta = case.deltas[2] },
+            .{ .ax = 5, .ay = 0, .y_min = 0, .y_max = 1, .slope = 0, .delta = case.deltas[3] },
+        };
+        fillPreparedRow(
+            mutable_target,
+            &lines,
+            &storage,
+            0,
+            7,
+            0,
+            .non_zero,
+            &offsets,
+            lut,
+            &accumulator,
+        );
+        const expected = if (case.disjoint)
+            [_]u8{ 0, 255, 0, 0, 255, 0, 0, 0 }
+        else
+            [_]u8{ 0, 255, 255, 255, 255, 0, 0, 0 };
+        try std.testing.expectEqualSlices(u8, &expected, &pixels);
     }
 }
 

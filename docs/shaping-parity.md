@@ -3486,6 +3486,15 @@ shaping-performance superiority.
   retired instructions by about `0.25--1.07%` across Roboto `A`, `g`, `é` and
   Amiri `س`, `م`; branches were neutral. The real-glyph checksum matrix remained
   byte-identical at 1x1, 2x2, 3x3, and 4x4 sampling.
+- Direct non-zero scan conversion now expands the common four-distinct-crossing
+  case into its three prefix-winding spans. Coincident crossings retain the
+  generic epsilon-coalescing loop, while focused tests cover disjoint, nested,
+  and reversed contours. Fixed-CPU-8 reverse A/B counters over 100,000 dirty
+  renders reduced retired instructions by about `12.1%` for Roboto `A`, `9.9%`
+  for `g`, `5.2%` for `é`, `7.5%` for Amiri `س`, and `0.9%` for `م`; branches
+  fell about `17.1%`, `14.2%`, `8.0%`, `11.1%`, and `2.3%`, respectively.
+  Cycles improved for four glyphs and were frequency-sensitive for `م`; all
+  five glyphs retained byte-identical output at 1×1 through 4×4 sampling.
 - Prepared 4×4 coverage rendering now slices each immutable cached row and the
   clipped target row once, then advances both buffers together. This removes
   repeated source/target index reconstruction from every cached pixel while

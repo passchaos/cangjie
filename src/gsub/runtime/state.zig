@@ -28,7 +28,7 @@ pub fn withDigestGeneration(
     return result;
 }
 
-pub fn prepare(
+pub inline fn prepare(
     run: Options,
     initial_glyph_count: usize,
     storage: *Storage,

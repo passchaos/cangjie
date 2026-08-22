@@ -3454,3 +3454,12 @@ shaping-performance superiority.
   glyphs retained byte-identical output at 1x1, 2x2, 3x3, and 4x4 sampling,
   and a regression test covers finite endpoints whose subtraction overflows
   to a non-finite slope.
+- GSUB run-state preparation is now inlined into its small set of whole-run and
+  cached-plan callers. This removes an out-of-line call and large by-value
+  `Options` return at each Indic feature stage while preserving the shared
+  mutation epoch and operation limits. Fixed-CPU-8 seven-repeat counters over
+  five NotoSansDevanagari `hi-words` passes reduced retired instructions by
+  about `1.47%` and branches by about `1.73%`; fixed-CPU-30 reproduced about
+  `1.47%` and `1.74%`. Amiri `fa-words` also reduced instructions by about
+  `4.2%` and branches by about `5.4%` on both cores, while Roboto stayed within
+  `0.03%`. All corpus checksums remained unchanged.

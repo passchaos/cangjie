@@ -68,26 +68,18 @@ pub fn prepare(allocator: std.mem.Allocator, lines: []const Line) !PreparedFill 
     scanline.sortPreparedFillLinesByYMin(lines_prepared);
     const owned = try allocator.realloc(storage, lines_prepared.len);
     errdefer allocator.free(owned);
-    var samples = try prepareSampleRows(allocator, owned, raw_bounds);
+    var samples = PreparedSamples.empty();
+    const coverage = if (raw_bounds) |bounds|
+        (try coverage_cache.build(allocator, bounds, owned)) orelse blk: {
+            samples = try prepareSampleRows(allocator, owned, raw_bounds);
+            break :blk CoverageCache{};
+        }
+    else
+        CoverageCache{};
     errdefer if (samples.owned) {
         allocator.free(samples.rows);
         allocator.free(samples.intersections);
     };
-    const coverage = try coverage_cache.build(allocator, raw_bounds, samples.rows, samples.intersections, samples.min_y);
-    // Dense non-zero coverage is the authoritative 4×4 draw cache. Keeping the
-    // much larger sorted-intersection fallback as well only duplicates owned
-    // geometry; release it once dense construction succeeds. Hostile/oversized
-    // bounds that decline dense coverage retain the sample cache unchanged.
-    if (coverage.rows.len != 0 and samples.owned) {
-        allocator.free(samples.rows);
-        allocator.free(samples.intersections);
-        samples = .{
-            .rows = @constCast(&empty_prepared_samples.rows),
-            .intersections = @constCast(&empty_prepared_samples.intersections),
-            .min_y = 0,
-            .owned = false,
-        };
-    }
     return .{
         .allocator = allocator,
         .lines = owned,
@@ -110,6 +102,15 @@ const PreparedSamples = struct {
     intersections: []WindingIntersection,
     min_y: i32,
     owned: bool,
+
+    fn empty() PreparedSamples {
+        return .{
+            .rows = @constCast(&empty_prepared_samples.rows),
+            .intersections = @constCast(&empty_prepared_samples.intersections),
+            .min_y = 0,
+            .owned = false,
+        };
+    }
 };
 
 const EmptyPreparedSamples = struct {
@@ -126,12 +127,7 @@ fn prepareSampleRows(allocator: std.mem.Allocator, lines: []const PreparedFillLi
     // densities ignore the cache and preserve their existing scanner. The
     // cache is target-independent; clipping selects a row subrange at draw
     // time.
-    const empty = PreparedSamples{
-        .rows = @constCast(&empty_prepared_samples.rows),
-        .intersections = @constCast(&empty_prepared_samples.intersections),
-        .min_y = 0,
-        .owned = false,
-    };
+    const empty = PreparedSamples.empty();
     const bounds = raw_bounds orelse return empty;
     const row_count_i64 = @as(i64, bounds.max_y) - bounds.min_y + 1;
     if (row_count_i64 <= 0 or row_count_i64 > 65_536) return empty;

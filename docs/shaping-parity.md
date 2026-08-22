@@ -3579,6 +3579,15 @@ shaping-performance superiority.
   branches fell about `7.3%`, `5.4%`, `5.0%`, `4.9%`, and `5.3%`. Expanded
   negative-coordinate threshold tests and the prepared-render glyph matrix
   retained byte-identical coverage.
+- Dense prepared coverage is now generated directly from the sorted prepared
+  edges in one row pass. The ordinary path no longer allocates, fills, and then
+  frees a complete intermediate sample-row/intersection cache; geometry that
+  exceeds the dense-cache cap still builds and retains exactly that fallback.
+  Fixed-CPU-8 reverse A/B `raster-prepare` counters over 20,000 preparations
+  reduced retired instructions by about `8.1%` for Roboto `A`, `5.4%` for `g`,
+  `11.5%` for `é`, `5.0%` for Amiri `س`, and `15.5%` for `م`; branches fell
+  about `11.5%`, `8.0%`, `13.7%`, `7.4%`, and `17.4%`. Construction and
+  prepared-render checksums remained identical across all five glyphs.
 - Successful dense prepared coverage now releases the larger intermediate
   sample-row/intersection cache instead of retaining two equivalent immutable
   render representations for the lifetime of a prepared glyph. Oversized or

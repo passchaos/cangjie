@@ -3,6 +3,8 @@
 const std = @import("std");
 const scanline = @import("../scanline.zig");
 
+const sample_offsets_4 = [_]f32{ 0.125, 0.375, 0.625, 0.875 };
+
 pub const Cache = struct {
     /// Coverage bytes packed by each row's non-zero interval.
     pixels: []u8 = &.{},
@@ -29,15 +31,16 @@ pub const Row = struct {
     end: u16 = 0,
 };
 
-pub fn build(allocator: std.mem.Allocator, bounds: ?scanline.Bounds, rows: anytype, points: []const scanline.WindingIntersection, min_sample_y: i32) !Cache {
-    const geometry = bounds orelse return .{};
-    if (rows.len == 0) return .{};
+/// Build dense coverage directly from prepared edges. A null result means the
+/// bounded dense representation was declined and the caller must retain its
+/// sorted-sample fallback.
+pub fn build(allocator: std.mem.Allocator, geometry: scanline.Bounds, lines: []const scanline.PreparedFillLine) !?Cache {
     const width_i64 = @as(i64, geometry.max_x) - geometry.min_x + 1;
     const height_i64 = @as(i64, geometry.max_y) - geometry.min_y + 1;
-    if (width_i64 <= 0 or height_i64 <= 0 or width_i64 > 65_536 or height_i64 > 65_536) return .{};
+    if (width_i64 <= 0 or height_i64 <= 0 or width_i64 > 65_536 or height_i64 > 65_536) return null;
     const width: usize = @intCast(width_i64);
     const height: usize = @intCast(height_i64);
-    if (width > std.math.maxInt(usize) / height or width * height > 16 * 1024 * 1024) return .{};
+    if (width > std.math.maxInt(usize) / height or width * height > 16 * 1024 * 1024) return null;
     const pixels = try allocator.alloc(u8, width * height);
     errdefer allocator.free(pixels);
     const cached_rows = try allocator.alloc(Row, height);
@@ -45,18 +48,48 @@ pub fn build(allocator: std.mem.Allocator, bounds: ?scanline.Bounds, rows: anyty
     const differences = try allocator.alloc(i16, width + 1);
     defer allocator.free(differences);
     @memset(differences, 0);
+    var inline_active: [128]scanline.PreparedFillLine = undefined;
+    const active = if (lines.len <= inline_active.len)
+        inline_active[0..lines.len]
+    else
+        try allocator.alloc(scanline.PreparedFillLine, lines.len);
+    defer if (lines.len > inline_active.len) allocator.free(active);
+    var inline_intersections: [128]scanline.WindingIntersection = undefined;
+    const intersection_storage = if (lines.len <= inline_intersections.len)
+        inline_intersections[0..lines.len]
+    else
+        try allocator.alloc(scanline.WindingIntersection, lines.len);
+    defer if (lines.len > inline_intersections.len) allocator.free(intersection_storage);
+    var next_line: usize = 0;
+    var active_count: usize = 0;
     var pixel_count: usize = 0;
     for (0..height) |row_index| {
         const y = geometry.min_y + @as(i32, @intCast(row_index));
+        const row_lines = scanline.updateActiveFillLines(
+            active,
+            &active_count,
+            lines,
+            &next_line,
+            y,
+        );
         var dirty_min = geometry.max_x;
         var dirty_max = geometry.min_x;
         var dirty = false;
-        for (0..4) |sample_index| {
-            const record_index_i64 = (@as(i64, y) - min_sample_y) * 4 + @as(i64, @intCast(sample_index));
-            if (record_index_i64 < 0 or record_index_i64 >= rows.len) continue;
-            const record = rows[@intCast(record_index_i64)];
-            const start: usize = record.start;
-            const intersections = points[start .. start + record.len];
+        inline for (sample_offsets_4) |offset| {
+            const py = @as(f32, @floatFromInt(y)) + offset;
+            var intersection_count: usize = 0;
+            for (row_lines) |line| {
+                if (py < line.y_min or py >= line.y_max) continue;
+                const x = line.slope * (py - line.y_min) + line.x_at_y_min;
+                if (!std.math.isFinite(x)) continue;
+                intersection_storage[intersection_count] = .{
+                    .x = x,
+                    .delta = line.delta,
+                };
+                intersection_count += 1;
+            }
+            const intersections = intersection_storage[0..intersection_count];
+            scanline.sortWindingIntersections(intersections);
             var winding: i32 = 0;
             var previous: ?f32 = null;
             var index: usize = 0;
@@ -215,7 +248,7 @@ fn addDifference(differences: []i16, min_x: i32, start: i32, end: i32, count: i1
 }
 
 test "coverage cache declines pathological bounds" {
-    var cache = try build(
+    const cache = try build(
         std.testing.allocator,
         .{
             .min_x = std.math.minInt(i32),
@@ -223,12 +256,9 @@ test "coverage cache declines pathological bounds" {
             .max_x = std.math.maxInt(i32),
             .max_y = 1,
         },
-        &[_]struct { start: u32, len: u32 }{.{ .start = 0, .len = 0 }},
         &.{},
-        0,
     );
-    defer cache.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), cache.pixels.len);
+    try std.testing.expect(cache == null);
 }
 
 test "quarter-sample spans match scalar predicates across negative bounds" {
@@ -268,14 +298,11 @@ fn addSpanScalar(differences: []i16, min_x: i32, max_x: i32, start: f32, end: f3
 }
 
 test "empty dense coverage keeps row metadata without pixel storage" {
-    const rows = [_]struct { start: u32 = 0, len: u32 = 0 }{.{}} ** 4;
-    var cache = try build(
+    var cache = (try build(
         std.testing.allocator,
         .{ .min_x = 0, .min_y = 0, .max_x = 2, .max_y = 0 },
-        &rows,
         &.{},
-        0,
-    );
+    )).?;
     defer cache.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 1), cache.rows.len);
     try std.testing.expectEqual(@as(usize, 0), cache.pixels.len);

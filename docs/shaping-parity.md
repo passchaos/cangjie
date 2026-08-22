@@ -3479,6 +3479,13 @@ shaping-performance superiority.
   `0.3--1.7%`, and cycles by about `2.2--8.0%` across Roboto `A`, `g`, `é` and
   Amiri `س`, `م`. Exhaustive sample-boundary tests and all real-glyph sampling
   checks retained identical coverage.
+- Direct scan conversion now compares already-sorted intersection coordinates
+  with a non-negative subtraction when coalescing coincident crossings. This
+  removes a redundant absolute-value operation from the innermost winding loop
+  without changing its epsilon. Fixed-CPU-8/30 reverse A/B measurements reduced
+  retired instructions by about `0.25--1.07%` across Roboto `A`, `g`, `é` and
+  Amiri `س`, `م`; branches were neutral. The real-glyph checksum matrix remained
+  byte-identical at 1x1, 2x2, 3x3, and 4x4 sampling.
 - GSUB run-state preparation is now inlined into its small set of whole-run and
   cached-plan callers. This removes an out-of-line call and large by-value
   `Options` return at each Indic feature stage while preserving the shared

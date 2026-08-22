@@ -215,7 +215,9 @@ inline fn fillPreparedRow(
         if (intersections.len < 2) continue;
         sortWindingIntersections(intersections);
 
-        if (intersections.len == 2 and @abs(intersections[1].x - intersections[0].x) > 0.000001) {
+        if (intersections.len == 2 and
+            intersections[1].x - intersections[0].x > 0.000001)
+        {
             if (fill_rule == .even_odd or intersections[0].delta != 0) {
                 if (row_accumulator.cover(min_x, max_x, sample_offsets, intersections[0].x, intersections[1].x)) |span| {
                     row_has_coverage = true;
@@ -243,7 +245,12 @@ inline fn fillPreparedRow(
                         }
                     }
                     var delta_sum: i32 = 0;
-                    while (index < intersections.len and @abs(intersections[index].x - current_x) <= 0.000001) : (index += 1) {
+                    // Sorting and finite preparation guarantee a non-negative
+                    // difference, so absolute value would duplicate work in
+                    // this innermost winding loop.
+                    while (index < intersections.len and
+                        intersections[index].x - current_x <= 0.000001) : (index += 1)
+                    {
                         delta_sum += intersections[index].delta;
                     }
                     winding += delta_sum;
@@ -654,6 +661,15 @@ test "small winding sorting networks preserve ascending intersections" {
             try std.testing.expect(previous.x <= current.x);
         }
     }
+
+    var coincident = [_]WindingIntersection{
+        .{ .x = 3.0, .delta = 1 },
+        .{ .x = 1.0, .delta = -1 },
+        .{ .x = 1.0 + 0.0000005, .delta = 1 },
+        .{ .x = 2.0, .delta = -1 },
+    };
+    sortWindingIntersections(&coincident);
+    try std.testing.expect(coincident[1].x - coincident[0].x <= 0.000001);
 }
 
 pub const CoveredSpan = scanline_types.CoveredSpan;

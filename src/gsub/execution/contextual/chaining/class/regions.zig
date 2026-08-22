@@ -96,6 +96,25 @@ pub const Regions = struct {
         count: usize,
     ) error{UnsupportedGsub}!bool {
         if (count > max_glyphs) return error.UnsupportedGsub;
+        if (self.lookup_flag == 0 and
+            self.run.run_has_default_ignorables == false)
+        {
+            while (self.backtrack_len < count) {
+                if (self.backtrack_scan == 0) {
+                    self.backtrack_exhausted = true;
+                    return false;
+                }
+                self.backtrack_scan -= 1;
+                const index = self.backtrack_scan;
+                if (!self.syllableAllows(index)) {
+                    self.backtrack_exhausted = true;
+                    return false;
+                }
+                self.backtrack[self.backtrack_len] = index;
+                self.backtrack_len += 1;
+            }
+            return true;
+        }
         while (self.backtrack_len < count) {
             if (self.backtrack_exhausted) return false;
             var found = false;
@@ -164,6 +183,20 @@ pub const Regions = struct {
         scan: *usize,
         context_match: bool,
     ) ?usize {
+        // With neither LookupFlag filtering nor source default-ignorables, a
+        // physical glyph is necessarily the next contextual glyph. The
+        // whole-run proof is established before GSUB and remains valid across
+        // substitutions because it describes the immutable source stream.
+        // Indic syllable boundaries still need their ordinary source check.
+        if (self.lookup_flag == 0 and
+            self.run.run_has_default_ignorables == false)
+        {
+            if (scan.* >= self.glyphs.len) return null;
+            const index = scan.*;
+            scan.* += 1;
+            if (!self.syllableAllows(index)) return null;
+            return index;
+        }
         while (scan.* < self.glyphs.len) {
             const index = scan.*;
             scan.* += 1;

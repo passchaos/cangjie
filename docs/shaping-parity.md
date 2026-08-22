@@ -3490,3 +3490,15 @@ shaping-performance superiority.
   `0.41%` and branches by about `0.31%`, and Amiri `fa-words` by about `0.37%`
   and `0.28%`; CPU-30 reproduced the improvements. Roboto retired work stayed
   within `0.02%`, and all output checksums were unchanged.
+- Chaining-class region discovery now consumes the existing whole-run proof
+  that the immutable source contains no default-ignorable scalars. With a zero
+  LookupFlag, adjacent physical glyphs are therefore adjacent contextual
+  glyphs; the specialized forward, lookahead, and backtrack traversals retain
+  Indic syllable-boundary checks while skipping per-glyph LookupFlag and
+  Unicode visibility classification. Fixed-CPU-8 reverse A/B/B/A counters over
+  five complete NotoSansDevanagari `hi-words` passes reduced retired
+  instructions by about `0.13%` and branches by about `0.10%`; fixed CPU 30
+  reproduced both reductions. Roboto `en-words` and Amiri `fa-words` controls
+  remained within `0.002%` retired work, and the complete corpus gate plus
+  direct 10,000-line HarfBuzz/HarfRust comparisons retained checksum
+  `b01a5388ce792b49`.

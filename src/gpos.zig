@@ -58,6 +58,30 @@ pub fn collectAdjustmentsWithOptions(data: []const u8, offset: usize, length: us
     );
 }
 
+/// Collect from an internal shaping run whose owned pipeline maintained all
+/// glyph/source sidecars and proved final glyph ids at the GSUB-to-GPOS
+/// boundary. Public and detached callers retain the defensive metadata
+/// validation in `collectAdjustmentsWithOptions`.
+pub fn collectAdjustmentsWithOptionsAfterMetadataProof(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    glyphs: []const GlyphId,
+    adjustments: *std.ArrayList(Adjustment),
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GposError || std.mem.Allocator.Error)!void {
+    return runtime_run.collectAfterMetadataProof(
+        data,
+        offset,
+        length,
+        glyphs,
+        adjustments,
+        allocator,
+        options,
+    );
+}
+
 /// Execute GPOS Lookup tables embedded directly in an OpenType JSTF table.
 ///
 /// Offsets are relative to the supplied JSTF table range and were structurally

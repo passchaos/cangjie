@@ -3671,6 +3671,19 @@ pub const Font = struct {
         try gpos_mod.collectAdjustmentsWithOptions(self.data, gpos.offset, gpos.length, glyphs, adjustments, allocator, gpos_options);
     }
 
+    /// Continue the internal shaping pipeline after it maintained every
+    /// source/provenance sidecar through GSUB and proved the final glyph ids.
+    /// The normal after-table-proof entry above retains full metadata
+    /// validation for callers that do not own that stronger run contract.
+    fn collectGposAdjustmentsWithOptionsUsingGdefAfterRunProof(self: *const Font, glyphs: []const glyph_mod.GlyphId, adjustments: *std.ArrayList(gpos_mod.Adjustment), allocator: std.mem.Allocator, options: gpos_mod.LookupOptions, gdef_metadata: GdefLookupMetadata) FontError!void {
+        try self.validateGlyphRun(glyphs);
+        const gpos = self.gpos orelse return;
+        var gpos_options = options;
+        gpos_options.assume_validated = true;
+        gdef_metadata.applyToGposOptions(&gpos_options);
+        try gpos_mod.collectAdjustmentsWithOptionsAfterMetadataProof(self.data, gpos.offset, gpos.length, glyphs, adjustments, allocator, gpos_options);
+    }
+
     fn collectJstfMaxAdjustmentsForShaping(
         self: *const Font,
         lookup_offsets: []const usize,
@@ -6854,6 +6867,7 @@ pub const shaping = struct {
     pub const applyAatSubstitutionForShaping = Font.applyAatSubstitutionForShaping;
     pub const applyMorxForShaping = Font.applyMorxForShaping;
     pub const collectGposAdjustmentsWithOptionsUsingGdefAfterProof = Font.collectGposAdjustmentsWithOptionsUsingGdefAfterProof;
+    pub const collectGposAdjustmentsWithOptionsUsingGdefAfterRunProof = Font.collectGposAdjustmentsWithOptionsUsingGdefAfterRunProof;
     pub const collectJstfMaxAdjustmentsForShaping = Font.collectJstfMaxAdjustmentsForShaping;
     pub const selectGposLookupsForShaping = Font.selectGposLookupsForShaping;
     pub const gposLookupAcceleratorsForShaping = Font.gposLookupAcceleratorsForShaping;

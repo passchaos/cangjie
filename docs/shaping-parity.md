@@ -3862,3 +3862,13 @@ shaping-performance superiority.
   `1.7%`, and E-core cycles by about `2.2%`; Roboto and Amiri controls were
   neutral because they do not enter this path. The full 10,000-line checksum
   remains `b01a5388ce792b49`.
+- Internal shaping now enters GPOS through an after-run-proof boundary once it
+  has maintained the source/provenance sidecars through GSUB and validated the
+  final glyph ids. Public and detached GPOS callers retain complete metadata
+  validation, while the owned pipeline no longer rescans every glyph and
+  ligature component before positioning. Fixed-
+  CPU-8/30 reverse A/B counters reduced retired instructions by about `0.75%`
+  for Devanagari `hi-words`, `1.8--1.9%` for Roboto `en-words`, and `0.4%` for
+  Amiri `fa-words`; branches fell about `1.0%`, `2.7--2.8%`, and `0.5%`,
+  respectively. E-core cycles improved about `2.1%`, `8.0%`, and `1.2%`; all
+  corpus checksums remained unchanged.

@@ -31,8 +31,51 @@ pub fn collect(
     allocator: std.mem.Allocator,
     run: Options,
 ) (Error || std.mem.Allocator.Error)!void {
+    return collectImpl(
+        data,
+        offset,
+        length,
+        glyphs,
+        adjustments,
+        allocator,
+        run,
+        true,
+    );
+}
+
+pub fn collectAfterMetadataProof(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    glyphs: []const GlyphId,
+    adjustments: *std.ArrayList(Adjustment),
+    allocator: std.mem.Allocator,
+    run: Options,
+) (Error || std.mem.Allocator.Error)!void {
+    return collectImpl(
+        data,
+        offset,
+        length,
+        glyphs,
+        adjustments,
+        allocator,
+        run,
+        false,
+    );
+}
+
+fn collectImpl(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    glyphs: []const GlyphId,
+    adjustments: *std.ArrayList(Adjustment),
+    allocator: std.mem.Allocator,
+    run: Options,
+    comptime prove_metadata: bool,
+) (Error || std.mem.Allocator.Error)!void {
     const view = try tableView(data, offset, length, run.assume_validated);
-    try matching.validate(run, glyphs.len);
+    if (prove_metadata) try matching.validate(run, glyphs.len);
     try requireSupportedVersion(view);
 
     // GPOS shares the OpenType Layout activation graph with GSUB, but its

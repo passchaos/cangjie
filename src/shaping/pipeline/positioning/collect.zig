@@ -110,7 +110,7 @@ pub fn run(input: Input) !Result {
         }
         if (input.gpos_table_proof_cache) |proof_cache| {
             try proof_cache.prove(input.font);
-            try font_shaping.collectGposAdjustmentsWithOptionsUsingGdefAfterProof(
+            try font_shaping.collectGposAdjustmentsWithOptionsUsingGdefAfterRunProof(
                 input.font,
                 input.glyph_ids,
                 input.adjustments,

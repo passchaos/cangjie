@@ -3812,3 +3812,15 @@ shaping-performance superiority.
   Branches fell about `3.2%`, `0.6%`, and `2.4%`, respectively. The complete
   ReleaseFast suite, benchmark smoke gate, and shaping parity umbrella pass
   unchanged.
+- Source population now decodes scalars through a compact out-of-line decoder
+  after the public shaping boundary has validated the complete UTF-8 input.
+  This removes the standard iterator's redundant per-scalar length and decode
+  calls without weakening malformed-input rejection, and a boundary-value
+  differential covers all UTF-8 widths against `std.unicode.utf8Decode`. On
+  fixed CPU 8/30 reverse A/B runs over complete corpora, retired instructions
+  fell about `0.78%` for Devanagari `hi-words` and `0.29%` for Amiri
+  `fa-words`; Roboto `en-words`, which is almost entirely handled by the
+  existing ASCII path, remained within `0.04%`. Branches also fell about
+  `0.40%` and `0.13%` for the two non-ASCII corpora. The full ReleaseFast
+  suite, benchmark smoke gate, and shaping parity umbrella pass unchanged,
+  including all 10,000 Devanagari lines with checksum `b01a5388ce792b49`.

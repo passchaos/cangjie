@@ -75,10 +75,17 @@ pub fn populate(
         return result;
     }
 
-    var iterator = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
-    while (iterator.i < text.len) {
-        const local_cluster = iterator.i;
-        const codepoint = iterator.nextCodepoint() orelse break;
+    // Public shaping entry points validate the complete UTF-8 request before
+    // any source buffer is mutated. Decode directly here so the hot loop does
+    // not construct a temporary slice and re-enter the checked std decoder for
+    // each scalar. Continuation-byte and range validity are therefore trusted
+    // exactly like `Utf8Iterator.nextCodepoint()` after that proof.
+    var source_byte_index: usize = 0;
+    while (source_byte_index < text.len) {
+        const local_cluster = source_byte_index;
+        const decoded = decodeValidatedUtf8(text, source_byte_index);
+        const codepoint = decoded.codepoint;
+        source_byte_index += decoded.byte_len;
         result.run_has_decimal_number =
             result.run_has_decimal_number or support.isDecimalNumber(codepoint);
         result.run_has_letter = result.run_has_letter or support.isLetter(codepoint);
@@ -92,7 +99,7 @@ pub fn populate(
                 )) |variant_glyph| {
                     glyph_ids.items[glyph_ids.items.len - 1] = variant_glyph;
                     source_ends.items[source_ends.items.len - 1] =
-                        cluster_base + iterator.i;
+                        cluster_base + source_byte_index;
                     continue;
                 }
             }
@@ -101,7 +108,7 @@ pub fn populate(
                 try support.glyphIndex(font, glyph_index_cache, codepoint);
             result.has_default_ignorable = true;
             source_ends.items[source_ends.items.len - 1] =
-                cluster_base + iterator.i;
+                cluster_base + source_byte_index;
             const source_cluster = if ((options.cluster_level == null or
                 options.cluster_level.?.groupsGraphemes()) and
                 clusters.items.len != 0)
@@ -113,7 +120,7 @@ pub fn populate(
                 selector_glyph,
                 codepoint,
                 cluster_base + source_cluster,
-                cluster_base + iterator.i,
+                cluster_base + source_byte_index,
                 if (source_cluster != local_cluster and
                     glyph_cluster_indices.items.len != 0)
                     glyph_cluster_indices.items[
@@ -136,7 +143,7 @@ pub fn populate(
                 codepoint,
                 local_cluster,
                 cluster_base,
-                iterator.i,
+                source_byte_index,
                 options.cluster_level,
             );
             continue;
@@ -147,14 +154,14 @@ pub fn populate(
             glyph_index_cache,
             codepoint,
             text,
-            iterator.i,
+            source_byte_index,
         );
         const local_source_end =
-            if (composition) |value| value.byte_end else iterator.i;
+            if (composition) |value| value.byte_end else source_byte_index;
         const normalized_codepoint =
             if (composition) |value| value.codepoint else codepoint;
         const glyph_id = if (composition) |value| glyph: {
-            iterator.i = value.byte_end;
+            source_byte_index = value.byte_end;
             break :glyph value.glyph_id;
         } else glyph: {
             const presented = try support.presentationCodepoint(
@@ -235,6 +242,71 @@ pub fn populate(
         );
     }
     return result;
+}
+
+const DecodedUtf8 = struct {
+    codepoint: u21,
+    byte_len: u3,
+};
+
+/// Decode one scalar after the public request boundary has validated the
+/// complete UTF-8 slice. Keeping this helper out of line avoids expanding the
+/// already-large source-population loop while still omitting redundant scalar
+/// validation.
+noinline fn decodeValidatedUtf8(text: []const u8, index: usize) DecodedUtf8 {
+    const first = text[index];
+    if (first < 0x80) return .{ .codepoint = first, .byte_len = 1 };
+    if (first < 0xe0) {
+        return .{
+            .codepoint = (@as(u21, first & 0x1f) << 6) |
+                @as(u21, text[index + 1] & 0x3f),
+            .byte_len = 2,
+        };
+    }
+    if (first < 0xf0) {
+        return .{
+            .codepoint = (@as(u21, first & 0x0f) << 12) |
+                (@as(u21, text[index + 1] & 0x3f) << 6) |
+                @as(u21, text[index + 2] & 0x3f),
+            .byte_len = 3,
+        };
+    }
+    return .{
+        .codepoint = (@as(u21, first & 0x07) << 18) |
+            (@as(u21, text[index + 1] & 0x3f) << 12) |
+            (@as(u21, text[index + 2] & 0x3f) << 6) |
+            @as(u21, text[index + 3] & 0x3f),
+        .byte_len = 4,
+    };
+}
+
+test "validated source decoder matches the standard UTF-8 decoder" {
+    const representatives = [_]u21{
+        0x00,
+        'A',
+        0x7f,
+        0x80,
+        0x7ff,
+        0x800,
+        0x0930,
+        0xd7ff,
+        0xe000,
+        0xffff,
+        0x10000,
+        0x10ffff,
+    };
+    for (representatives) |codepoint| {
+        var encoded: [4]u8 = undefined;
+        const len = try std.unicode.utf8Encode(codepoint, &encoded);
+        const bytes = encoded[0..len];
+        const decoded = decodeValidatedUtf8(bytes, 0);
+        try std.testing.expectEqual(codepoint, decoded.codepoint);
+        try std.testing.expectEqual(len, decoded.byte_len);
+        try std.testing.expectEqual(
+            try std.unicode.utf8Decode(bytes),
+            decoded.codepoint,
+        );
+    }
 }
 
 pub const ArabicCompositionMatch = support.ArabicCompositionMatch;

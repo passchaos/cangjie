@@ -3908,3 +3908,12 @@ shaping-performance superiority.
   gains while `g` remained frequency-noisy. Roboto and Amiri five-glyph wall
   probes improved or remained neutral, and all target checksums stayed byte-
   identical.
+- The fused direct edge-preparation pass now accumulates finite floating-point
+  extrema and performs saturating floor/ceil conversion only for the final four
+  bounds. Previously it converted both endpoints of every edge even though the
+  same pass had already proved them finite. Relative to the two-edge baseline,
+  fixed-CPU-30 A/B/B/A counters over 20,000 direct dirty renders reduced
+  retired instructions by about `0.31%` for Roboto 64 px `A`, `0.20%` for
+  `g`, and `0.06%` for `é`; cycles improved about `1.1%`, `1.0%`, and
+  `0.7%`. Amiri `س` improved in wall probes while the simpler `م` control
+  remained within noise. All five target checksums stayed byte-identical.

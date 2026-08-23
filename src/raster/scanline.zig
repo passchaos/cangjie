@@ -379,25 +379,28 @@ test "four distinct non-zero crossings preserve nested and disjoint spans" {
 pub fn boundsForTarget(target: Target, lines: []const Line) ?Bounds {
     const target_max_x = targetMaxPixelIndex(target.width) orelse return null;
     const target_max_y = targetMaxPixelIndex(target.height) orelse return null;
-    var raw_min_x: i32 = std.math.maxInt(i32);
-    var raw_min_y: i32 = std.math.maxInt(i32);
-    var raw_max_x: i32 = std.math.minInt(i32);
-    var raw_max_y: i32 = std.math.minInt(i32);
+    // All finite coordinates remain in floating point during the fused edge
+    // walk. Convert only the four final extrema; saturating every endpoint
+    // duplicated classification and floor/ceil work for no additional safety.
+    var raw_min_x = std.math.inf(f32);
+    var raw_min_y = std.math.inf(f32);
+    var raw_max_x = -std.math.inf(f32);
+    var raw_max_y = -std.math.inf(f32);
     var saw_finite_line = false;
     for (lines) |line| {
         if (!lineFinite(line)) continue;
         saw_finite_line = true;
-        raw_min_x = @min(raw_min_x, floorI32Saturating(@min(line.a.x, line.b.x)));
-        raw_min_y = @min(raw_min_y, floorI32Saturating(@min(line.a.y, line.b.y)));
-        raw_max_x = @max(raw_max_x, ceilI32Saturating(@max(line.a.x, line.b.x)));
-        raw_max_y = @max(raw_max_y, ceilI32Saturating(@max(line.a.y, line.b.y)));
+        raw_min_x = @min(raw_min_x, @min(line.a.x, line.b.x));
+        raw_min_y = @min(raw_min_y, @min(line.a.y, line.b.y));
+        raw_max_x = @max(raw_max_x, @max(line.a.x, line.b.x));
+        raw_max_y = @max(raw_max_y, @max(line.a.y, line.b.y));
     }
     if (!saw_finite_line) return null;
 
-    const min_x = @max(0, saturatingSubOne(raw_min_x));
-    const min_y = @max(0, saturatingSubOne(raw_min_y));
-    const max_x = @min(target_max_x, saturatingAddOne(raw_max_x));
-    const max_y = @min(target_max_y, saturatingAddOne(raw_max_y));
+    const min_x = @max(0, saturatingSubOne(floorI32Saturating(raw_min_x)));
+    const min_y = @max(0, saturatingSubOne(floorI32Saturating(raw_min_y)));
+    const max_x = @min(target_max_x, saturatingAddOne(ceilI32Saturating(raw_max_x)));
+    const max_y = @min(target_max_y, saturatingAddOne(ceilI32Saturating(raw_max_y)));
     if (max_x < min_x or max_y < min_y) return null;
     return .{ .min_x = min_x, .min_y = min_y, .max_x = max_x, .max_y = max_y };
 }

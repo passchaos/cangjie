@@ -197,10 +197,17 @@ fn finishStages(input: Input, generic_script: bool) !void {
         &plans,
     );
 
-    try gsub.runtime.validateScriptShaperMetadata(
-        input.options.*,
-        input.glyph_ids.items.len,
-    );
+    if (generic_script) {
+        try gsub.runtime.validateScriptShaperMetadata(
+            input.options.*,
+            input.glyph_ids.items.len,
+        );
+    }
+    // The dedicated dev2 entry owns every glyph-parallel list from source
+    // population through this point. Its dotted-circle preparation updates
+    // them atomically, and the two source maps above were resized to the exact
+    // codepoint count. Preserve the defensive scan for generic Indic callers,
+    // but do not re-prove those internal invariants on every Devanagari run.
     if (cached_plans) try executor.applyPlanAfterRunProofWithRanges(
         input.font,
         input.context,

@@ -3852,3 +3852,13 @@ shaping-performance superiority.
   `fa-words` improved about `0.75%`/`0.69%` in instructions/branches, while
   Roboto remained neutral. The complete Devanagari HarfBuzz corpus still
   passes with checksum `b01a5388ce792b49`.
+- The dedicated modern-Devanagari finishing path no longer repeats the generic
+  script-shaper metadata scan after the immediately preceding generic GSUB pass
+  proved every glyph-parallel sidecar. Its dotted-circle preparation maintains
+  those sidecars atomically and its source maps are resized to the exact source
+  length before staged GSUB; generic Indic entry points retain the defensive
+  validation. Fixed-CPU-8/30 reverse A/B counters over five complete `hi-words`
+  passes reduced retired instructions by about `1.3%`, branches by about
+  `1.7%`, and E-core cycles by about `2.2%`; Roboto and Amiri controls were
+  neutral because they do not enter this path. The full 10,000-line checksum
+  remains `b01a5388ce792b49`.

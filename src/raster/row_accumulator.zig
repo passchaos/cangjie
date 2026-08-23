@@ -18,8 +18,8 @@ pub const RowAccumulator = struct {
         allocator: std.mem.Allocator,
         row_width: usize,
         use_differences: bool,
-        inline_counts: *[512]u8,
-        inline_differences: *[513]i16,
+        inline_counts: []u8,
+        inline_differences: []i16,
     ) !RowAccumulator {
         if (use_differences) {
             const needed = row_width + 1;

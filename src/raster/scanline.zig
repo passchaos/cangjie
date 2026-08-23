@@ -80,7 +80,10 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
     if (row_width_i32 <= 0) return;
     const row_width: usize = @intCast(row_width_i32);
     var inline_coverage_counts: [512]u8 = undefined;
-    var inline_coverage_differences: [513]i16 = undefined;
+    // Text glyph rows are normally well below this width. Keeping only the
+    // common case inline cuts the direct fill's stack frame substantially;
+    // unusually wide targets retain the allocator-backed fallback.
+    var inline_coverage_differences: [129]i16 = undefined;
     var row_accumulator = try RowAccumulator.init(
         allocator,
         row_width,

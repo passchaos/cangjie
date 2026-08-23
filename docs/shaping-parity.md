@@ -3917,3 +3917,9 @@ shaping-performance superiority.
   `g`, and `0.06%` for `é`; cycles improved about `1.1%`, `1.0%`, and
   `0.7%`. Amiri `س` improved in wall probes while the simpler `م` control
   remained within noise. All five target checksums stayed byte-identical.
+- Direct 4×4 scan conversion now keeps 128 pixels of signed row-difference
+  scratch inline instead of reserving 512 pixels on every call; wider glyphs
+  retain the existing allocator-backed path. Fixed-CPU-30 A/B/B/A counters over
+  20,000 dirty renders kept retired work neutral while slightly reducing cycles
+  and instruction-cache misses for the retained Roboto `A`, `g`, and `é`
+  matrix. The complete raster checksum matrix is unchanged.

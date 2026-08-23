@@ -752,12 +752,6 @@ pub inline fn sortWindingIntersections(intersections: []WindingIntersection) voi
 
 inline fn compareSwapIntersections(a: *WindingIntersection, b: *WindingIntersection) void {
     if (a.x > b.x) {
-        // Intersection order changes with both contour geometry and sample
-        // row. Mark this genuinely data-dependent edge so LLVM does not lay
-        // out the tiny sorting networks around a guessed likely direction.
-        // Keeping the swap itself branchy avoids the extra payload moves of a
-        // fully branchless compare/select implementation.
-        @branchHint(.unpredictable);
         const temporary = a.*;
         a.* = b.*;
         b.* = temporary;

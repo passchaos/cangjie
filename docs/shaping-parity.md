@@ -3897,11 +3897,3 @@ shaping-performance superiority.
   complete corpus passes reduced retired instructions by about `0.11%` for
   Devanagari, `0.10%` for Roboto, and `0.28%` for Amiri; cycles improved about
   `0.96%`, `1.1%`, and `0.29%`, respectively, with unchanged output.
-- The fixed two-through-four-intersection sorting networks now mark each
-  compare-swap edge as data-dependent. This preserves the compact branchy swap
-  while preventing LLVM from imposing a guessed likely direction on contour-
-  and sample-row-dependent intersection order. Fixed-CPU-30 A/B/B/A counters
-  over 20,000 direct dirty renders kept retired instructions and branches
-  effectively neutral, reduced cycles by about `1.0%` for Roboto 64 px `g`,
-  and left `A`/`é` within run noise; fixed-CPU-8 measurements were frequency-
-  noisy. All three target checksums remained byte-identical.

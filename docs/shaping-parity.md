@@ -3763,3 +3763,13 @@ shaping-performance superiority.
   `0.72%` and branches by about `0.72%`; Roboto `en-words` and Amiri `fa-words`
   also improved slightly. The complete ReleaseFast suite and shaping parity
   umbrella pass unchanged.
+- The unfiltered ChainContextSubst format-2 fast path now compares adjacent
+  backtrack, input, and lookahead classes directly and materializes its three
+  bounded index arrays only after a rule matches. This removes the former
+  `SimpleWindow`/`SimpleRegions` wrapper state while retaining reversed
+  backtrack order and source-syllable checks. Fixed-CPU-8 A/B/B/A counters
+  over five complete Devanagari `hi-words` passes reduced retired instructions
+  by about `0.74%` and branches by about `0.72%`; Amiri `fa-words` improved
+  about `0.15%` in both counters, and Roboto `en-words` remained effectively
+  neutral. The complete ReleaseFast suite and shaping parity umbrella pass
+  unchanged.

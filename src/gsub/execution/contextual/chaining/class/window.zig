@@ -17,44 +17,6 @@ pub const ClassDefs = struct {
     lookahead: usize,
 };
 
-pub const SimpleWindow = struct {
-    view: View,
-    glyphs: []const GlyphId,
-    class_defs: ClassDefs,
-    regions: regions_mod.SimpleRegions,
-
-    pub fn init(
-        view: View,
-        glyphs: []const GlyphId,
-        position: usize,
-        class_defs: ClassDefs,
-        run: Options,
-    ) SimpleWindow {
-        return .{
-            .view = view,
-            .glyphs = glyphs,
-            .class_defs = class_defs,
-            .regions = regions_mod.SimpleRegions.init(
-                position,
-                run,
-            ),
-        };
-    }
-
-    pub inline fn classAt(
-        self: *const SimpleWindow,
-        class_def: usize,
-        glyph_index: usize,
-    ) Error!?u16 {
-        if (!self.regions.allows(glyph_index)) return null;
-        return try table.class_def.value(
-            self.view,
-            class_def,
-            self.glyphs[glyph_index],
-        );
-    }
-};
-
 /// Rules in one class set may have different region lengths. Cache discovered
 /// physical indexes and class values incrementally so a longer later rule
 /// cannot make an earlier short rule fail at the end of a run or syllable.

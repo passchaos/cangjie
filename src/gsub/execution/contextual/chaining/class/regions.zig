@@ -8,56 +8,6 @@ const GlyphId = @import("../../../../../glyph.zig").GlyphId;
 
 pub const max_glyphs = accelerator.max_context_region_glyphs;
 
-pub const SimpleRegions = struct {
-    syllables: []const u8,
-    sources: []const usize,
-    anchor_syllable: ?u8,
-
-    pub fn init(
-        position: usize,
-        run: Options,
-    ) SimpleRegions {
-        // Script-shaper metadata is validated before its feature stages. A
-        // low-level caller with incomplete metadata keeps the same permissive
-        // behavior as `sourceSyllableForGlyph`: no anchor means no syllable
-        // restriction, never an invalid memory access.
-        if (run.match_source_syllable) {
-            if (run.source_syllables) |syllables| {
-                if (run.glyph_source_indices) |sources| {
-                    if (position < sources.items.len) {
-                        const source = sources.items[position];
-                        if (source < syllables.len) {
-                            return .{
-                                .syllables = syllables,
-                                .sources = sources.items,
-                                .anchor_syllable = syllables[source],
-                            };
-                        }
-                    }
-                }
-            }
-        }
-        return .{
-            .syllables = &.{},
-            .sources = &.{},
-            .anchor_syllable = null,
-        };
-    }
-
-    pub inline fn allows(
-        self: *const SimpleRegions,
-        glyph_index: usize,
-    ) bool {
-        if (self.anchor_syllable) |anchor| {
-            if (glyph_index >= self.sources.len) return false;
-            const source = self.sources[glyph_index];
-            if (source >= self.syllables.len or
-                self.syllables[source] != anchor) return false;
-        }
-        return true;
-    }
-};
-
 pub const Regions = struct {
     glyphs: []const GlyphId,
     lookup_flag: u16,

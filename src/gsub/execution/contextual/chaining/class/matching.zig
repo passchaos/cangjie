@@ -5,6 +5,7 @@
 //! preserving the existing direct and prepared entry points.
 
 const accelerator = @import("../../../../accelerator/root.zig");
+const filtering = @import("../../../../runtime/filtering.zig");
 const Options = @import("../../../../runtime/options.zig").Options;
 const class_context = @import("../../../../../opentype/class_context.zig");
 const table = @import("../../../../table/root.zig");
@@ -60,7 +61,7 @@ pub fn acceleratedGroup(
         return error.UnsupportedGsub;
     }
     if (lookup_flag == 0 and run.run_has_default_ignorables == false) {
-        return acceleratedSimpleGroup(
+        return acceleratedAdjacentGroup(
             view,
             parsed,
             group,
@@ -99,7 +100,7 @@ pub fn acceleratedGroup(
     return false;
 }
 
-fn acceleratedSimpleGroup(
+fn acceleratedAdjacentGroup(
     view: View,
     parsed: Subtable,
     group: *const class_context.RuleGroup,
@@ -108,17 +109,8 @@ fn acceleratedSimpleGroup(
     run: Options,
     result: *match.Match,
 ) Error!bool {
-    const simple = window.SimpleWindow.init(
-        view,
-        glyphs,
-        position,
-        .{
-            .backtrack = parsed.backtrack_class_def,
-            .input = parsed.input_class_def,
-            .lookahead = parsed.lookahead_class_def,
-        },
-        run,
-    );
+    const anchor_syllable =
+        filtering.sourceSyllableForGlyph(run, position);
     for (parsed.rules[group.start .. group.start + group.len]) |rule| {
         const backtrack_count: usize = @intCast(rule.records_offset);
         const input_count: usize = rule.input_count;
@@ -132,13 +124,20 @@ fn acceleratedSimpleGroup(
         var expected_index: usize = rule.classes_start;
         var matches = true;
         for (0..backtrack_count) |index| {
-            const actual = (try simple.classAt(
-                simple.class_defs.backtrack,
-                position - index - 1,
-            )) orelse {
+            const glyph_index = position - index - 1;
+            if (!filtering.sourceSyllableAllowsGlyph(
+                run,
+                anchor_syllable,
+                glyph_index,
+            )) {
                 matches = false;
                 break;
-            };
+            }
+            const actual = try table.class_def.value(
+                view,
+                parsed.backtrack_class_def,
+                glyphs[glyph_index],
+            );
             if (parsed.classes[expected_index] != actual) {
                 matches = false;
                 break;
@@ -147,13 +146,20 @@ fn acceleratedSimpleGroup(
         }
         if (!matches) continue;
         for (1..input_count) |index| {
-            const actual = (try simple.classAt(
-                simple.class_defs.input,
-                position + index,
-            )) orelse {
+            const glyph_index = position + index;
+            if (!filtering.sourceSyllableAllowsGlyph(
+                run,
+                anchor_syllable,
+                glyph_index,
+            )) {
                 matches = false;
                 break;
-            };
+            }
+            const actual = try table.class_def.value(
+                view,
+                parsed.input_class_def,
+                glyphs[glyph_index],
+            );
             if (parsed.classes[expected_index] != actual) {
                 matches = false;
                 break;
@@ -163,13 +169,20 @@ fn acceleratedSimpleGroup(
         if (!matches) continue;
         for (0..lookahead_count) |index| {
             const relative = input_count + index;
-            const actual = (try simple.classAt(
-                simple.class_defs.lookahead,
-                position + relative,
-            )) orelse {
+            const glyph_index = position + relative;
+            if (!filtering.sourceSyllableAllowsGlyph(
+                run,
+                anchor_syllable,
+                glyph_index,
+            )) {
                 matches = false;
                 break;
-            };
+            }
+            const actual = try table.class_def.value(
+                view,
+                parsed.lookahead_class_def,
+                glyphs[glyph_index],
+            );
             if (parsed.classes[expected_index] != actual) {
                 matches = false;
                 break;

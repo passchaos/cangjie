@@ -273,19 +273,84 @@ pub fn reorderPreBaseMatras(
     codepoints: []const u21,
     script_tag: unicode.OpenTypeScriptTag,
 ) void {
+    return reorderPreBaseMatrasImpl(
+        false,
+        glyph_ids,
+        glyph_source_indices,
+        glyph_cluster_indices,
+        glyph_substituted,
+        ligature_components,
+        codepoints,
+        &.{},
+        script_tag,
+    );
+}
+
+/// Modern Devanagari can reuse the syllable serials already required by GSUB
+/// matching instead of rescanning all preceding source scalars for each matra.
+pub noinline fn reorderDev2PreBaseMatras(
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    codepoints: []const u21,
+    source_syllables: []const u8,
+) linksection(scanner_text_section) void {
+    std.debug.assert(source_syllables.len == codepoints.len);
+    return reorderPreBaseMatrasImpl(
+        true,
+        glyph_ids,
+        glyph_source_indices,
+        glyph_cluster_indices,
+        glyph_substituted,
+        ligature_components,
+        codepoints,
+        source_syllables,
+        .dev2,
+    );
+}
+
+fn reorderPreBaseMatrasImpl(
+    comptime dev2: bool,
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    codepoints: []const u21,
+    source_syllables: []const u8,
+    script_tag: unicode.OpenTypeScriptTag,
+) void {
     var processed_source: ?usize = null;
     var index: usize = 0;
     while (index < glyph_source_indices.items.len) : (index += 1) {
         const source_index = glyph_source_indices.items[index];
         if (source_index >= codepoints.len) continue;
-        if (!isPreBaseMatra(codepoints[source_index], script_tag)) continue;
-        if (keepsBrokenPreBaseMatraBeforeDottedCircle(script_tag) and
+        if (if (dev2)
+            codepoints[source_index] != 0x093f
+        else
+            !isPreBaseMatra(codepoints[source_index], script_tag)) continue;
+        if ((dev2 or keepsBrokenPreBaseMatraBeforeDottedCircle(script_tag)) and
             processed_source != null and processed_source.? == source_index) continue;
         processed_source = source_index;
 
         const following_mark_sources = followingMatraMarkSources(glyph_source_indices.items, codepoints, index, source_index, script_tag);
-        const syllable_start = indicSyllableStart(codepoints, source_index, script_tag);
-        const target_info = preBaseMatraTargetGlyphIndex(glyph_source_indices.items, ligature_components, codepoints, syllable_start, source_index, index, script_tag);
+        const syllable_start = if (dev2)
+            sourceSyllableStart(source_syllables, source_index)
+        else
+            indicSyllableStart(codepoints, source_index, script_tag);
+        const target_info = if (dev2)
+            dev2PreBaseMatraTargetGlyphIndex(
+                glyph_source_indices.items,
+                ligature_components,
+                codepoints,
+                syllable_start,
+                source_index,
+                index,
+            )
+        else
+            preBaseMatraTargetGlyphIndex(glyph_source_indices.items, ligature_components, codepoints, syllable_start, source_index, index, script_tag);
         const leading_mark_start = leadingPreBaseMatraMarkStart(following_mark_sources, codepoints, script_tag);
         if (target_info.merge_from_syllable_start) {
             shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, syllable_start, index + 1);
@@ -440,6 +505,58 @@ pub fn markInitialMatraGlyphSources(source_features: []u32, glyph_source_indices
             source_features[first_source] |= gsub.feature.sourceMaskForTag(unicode.tag("init")).?;
             marked = true;
         }
+    }
+    return marked;
+}
+
+/// Mark `init` candidates for modern Devanagari from the source-syllable map
+/// already retained by the shaper. The first visible glyph of each serial is
+/// enough to identify the moved U+093F candidate; unlike the generic routine,
+/// this does not repeatedly rescan source text to recover both boundaries.
+pub noinline fn markDev2InitialMatraGlyphSources(
+    source_features: []u32,
+    glyph_source_indices: []const usize,
+    codepoints: []const u21,
+    source_syllables: []const u8,
+) linksection(scanner_text_section) bool {
+    std.debug.assert(source_syllables.len == codepoints.len);
+    const init_mask =
+        gsub.feature.sourceMaskForTag(unicode.tag("init")).?;
+    var marked = false;
+    var glyph_index: usize = 0;
+    while (glyph_index < glyph_source_indices.len) {
+        const source = glyph_source_indices[glyph_index];
+        if (source >= codepoints.len) {
+            glyph_index += 1;
+            continue;
+        }
+        const syllable = source_syllables[source];
+        if (syllable == 0) {
+            glyph_index += 1;
+            continue;
+        }
+
+        const first_glyph = glyph_index;
+        glyph_index += 1;
+        while (glyph_index < glyph_source_indices.len) : (glyph_index += 1) {
+            const next_source = glyph_source_indices[glyph_index];
+            if (next_source >= source_syllables.len or
+                source_syllables[next_source] != syllable) break;
+        }
+        const first_source = glyph_source_indices[first_glyph];
+        if (codepoints[first_source] != 0x093f) continue;
+        if (first_glyph != 0) {
+            const previous_source = glyph_source_indices[first_glyph - 1];
+            if (previous_source < source_syllables.len and
+                source_syllables[previous_source] != 0) continue;
+            if (previous_source < codepoints.len and
+                isIndicFormatOrNonspacingMark(codepoints[previous_source]))
+            {
+                continue;
+            }
+        }
+        source_features[first_source] |= init_mask;
+        marked = true;
     }
     return marked;
 }
@@ -827,6 +944,70 @@ pub fn reorderRephs(
             script_tag,
         );
         shaping_metadata.mergeMonotoneClusters(glyph_cluster_indices.items, @min(index, target), @max(index, target) + 1);
+        shaping_metadata.move(
+            glyph_ids,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+            index,
+            target,
+        );
+        index = target + 1;
+    }
+}
+
+/// Reorder modern Devanagari rephs using the source-syllable map already built
+/// for staged GSUB. The generic path has to rediscover syllable boundaries and
+/// dispatch character categories across every supported Indic script; `dev2`
+/// has fixed scalar ranges and a stable non-zero syllable serial.
+pub noinline fn reorderDev2Rephs(
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    codepoints: []const u21,
+    source_syllables: []const u8,
+) linksection(scanner_text_section) void {
+    std.debug.assert(source_syllables.len == codepoints.len);
+    var index: usize = 0;
+    while (index < glyph_source_indices.items.len) {
+        const source_index = glyph_source_indices.items[index];
+        if (!isFormedReph(
+            ligature_components,
+            ligature_components.infos.items[index],
+            source_index,
+            codepoints,
+            .dev2,
+        )) {
+            index += 1;
+            continue;
+        }
+
+        const syllable = source_syllables[source_index];
+        if (syllable == 0) {
+            index += 1;
+            continue;
+        }
+        var syllable_end = source_index + 1;
+        while (syllable_end < source_syllables.len and
+            source_syllables[syllable_end] == syllable)
+        {
+            syllable_end += 1;
+        }
+        const target = dev2RephTargetGlyphIndex(
+            glyph_source_indices.items,
+            codepoints,
+            source_index,
+            syllable_end,
+            index,
+        );
+        shaping_metadata.mergeMonotoneClusters(
+            glyph_cluster_indices.items,
+            @min(index, target),
+            @max(index, target) + 1,
+        );
         shaping_metadata.move(
             glyph_ids,
             glyph_source_indices,
@@ -1993,6 +2174,45 @@ fn preBaseMatraTargetGlyphIndex(sources: []const usize, ligature_components: *co
     return .{ .index = fallback_target };
 }
 
+fn dev2PreBaseMatraTargetGlyphIndex(
+    sources: []const usize,
+    ligature_components: *const ligature_provenance.Store,
+    codepoints: []const u21,
+    syllable_start: usize,
+    matra_source: usize,
+    fallback_index: usize,
+) PreBaseMatraTarget {
+    var fallback_target = fallback_index;
+    for (sources, 0..) |source, glyph_index| {
+        if (glyph_index >= fallback_index) break;
+        const effective_source = effectiveIndicSource(
+            ligature_components,
+            glyph_index,
+            source,
+            codepoints,
+            .dev2,
+        );
+        if (effective_source < syllable_start or
+            effective_source >= matra_source) continue;
+        if (fallback_target == fallback_index) fallback_target = glyph_index;
+        if (effective_source + 1 < codepoints.len and
+            codepoints[effective_source] == 0x094d and
+            codepoints[effective_source + 1] == 0x0935)
+        {
+            return .{ .index = @min(glyph_index + 1, fallback_index) };
+        }
+    }
+    return .{ .index = fallback_target };
+}
+
+fn sourceSyllableStart(source_syllables: []const u8, source: usize) usize {
+    const syllable = source_syllables[source];
+    if (syllable == 0) return source;
+    var start = source;
+    while (start > 0 and source_syllables[start - 1] == syllable) start -= 1;
+    return start;
+}
+
 fn prefTargetGlyphIndex(sources: []const usize, ligature_components: *const ligature_provenance.Store, codepoints: []const u21, syllable_start: usize, base_source: usize, fallback_index: usize, script_tag: unicode.OpenTypeScriptTag) usize {
     var target = fallback_index;
     for (sources, 0..) |source, glyph_index| {
@@ -2073,6 +2293,32 @@ fn rephTargetGlyphIndex(
         if (isPostHalantConsonant(codepoints, source, syllable_start, script_tag)) {
             if (script_tag == .bng2 or script_tag == .beng) return glyph_index;
             if (hasVisibleViramaBeforeSource(sources, glyph_index, source)) break;
+        }
+        target = glyph_index;
+    }
+    return target;
+}
+
+fn dev2RephTargetGlyphIndex(
+    sources: []const usize,
+    codepoints: []const u21,
+    syllable_start: usize,
+    syllable_end: usize,
+    reph_index: usize,
+) usize {
+    var target = reph_index;
+    for (sources, 0..) |source, glyph_index| {
+        if (glyph_index == reph_index) continue;
+        if (source < syllable_start or source >= syllable_end) continue;
+        if (source < codepoints.len and codepoints[source] -% 0x0900 <= 3) {
+            break;
+        }
+        if (source > syllable_start and source < codepoints.len and
+            isDev2Consonant(codepoints[source]) and
+            codepoints[source - 1] == 0x094d and
+            hasVisibleViramaBeforeSource(sources, glyph_index, source))
+        {
+            break;
         }
         target = glyph_index;
     }

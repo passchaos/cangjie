@@ -410,15 +410,27 @@ fn applyPref(input: Input, plan: ?gsub.feature.LookupPlan) !void {
 }
 
 fn reorderAfterPref(input: Input) void {
-    indic.reorderPreBaseMatras(
-        input.glyph_ids,
-        input.glyph_source_indices,
-        input.glyph_cluster_indices,
-        input.glyph_substituted,
-        input.ligature_components,
-        input.codepoints.items,
-        input.lookup_options.script_tag,
-    );
+    if (input.lookup_options.script_tag == .dev2) {
+        indic.reorderDev2PreBaseMatras(
+            input.glyph_ids,
+            input.glyph_source_indices,
+            input.glyph_cluster_indices,
+            input.glyph_substituted,
+            input.ligature_components,
+            input.codepoints.items,
+            input.source_syllables.items,
+        );
+    } else {
+        indic.reorderPreBaseMatras(
+            input.glyph_ids,
+            input.glyph_source_indices,
+            input.glyph_cluster_indices,
+            input.glyph_substituted,
+            input.ligature_components,
+            input.codepoints.items,
+            input.lookup_options.script_tag,
+        );
+    }
     indic.reorderPrefGlyphs(
         input.glyph_ids,
         input.glyph_source_indices,
@@ -429,15 +441,36 @@ fn reorderAfterPref(input: Input) void {
         input.codepoints.items,
         input.lookup_options.script_tag,
     );
-    _ = indic.markInitialMatraGlyphSources(
-        input.source_features.items,
-        input.glyph_source_indices.items,
-        input.codepoints.items,
-        input.lookup_options.script_tag,
-    );
+    if (input.lookup_options.script_tag == .dev2) {
+        _ = indic.markDev2InitialMatraGlyphSources(
+            input.source_features.items,
+            input.glyph_source_indices.items,
+            input.codepoints.items,
+            input.source_syllables.items,
+        );
+    } else {
+        _ = indic.markInitialMatraGlyphSources(
+            input.source_features.items,
+            input.glyph_source_indices.items,
+            input.codepoints.items,
+            input.lookup_options.script_tag,
+        );
+    }
 }
 
 fn reorderAfterReph(input: Input) void {
+    if (input.lookup_options.script_tag == .dev2) {
+        indic.reorderDev2Rephs(
+            input.glyph_ids,
+            input.glyph_source_indices,
+            input.glyph_cluster_indices,
+            input.glyph_substituted,
+            input.ligature_components,
+            input.codepoints.items,
+            input.source_syllables.items,
+        );
+        return;
+    }
     indic.reorderRephs(
         input.glyph_ids,
         input.glyph_source_indices,
@@ -447,7 +480,6 @@ fn reorderAfterReph(input: Input) void {
         input.codepoints.items,
         input.lookup_options.script_tag,
     );
-    if (input.lookup_options.script_tag == .dev2) return;
     indic.reorderLogicalRepha(
         input.glyph_ids,
         input.glyph_source_indices,

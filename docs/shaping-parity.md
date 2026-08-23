@@ -3824,3 +3824,13 @@ shaping-performance superiority.
   `0.40%` and `0.13%` for the two non-ASCII corpora. The full ReleaseFast
   suite, benchmark smoke gate, and shaping parity umbrella pass unchanged,
   including all 10,000 Devanagari lines with checksum `b01a5388ce792b49`.
+- Modern Devanagari post-GSUB reordering now consumes the source-syllable
+  serial map that the shaper already built. Dedicated pre-base-matra, `init`
+  marking, and reph paths avoid repeatedly recovering syllable boundaries and
+  dispatching all-Indic character predicates; generic and legacy Indic scripts
+  retain their former routines. Fixed-CPU-8/30 reverse A/B counters over full
+  `hi-words` runs reduced retired instructions by about `3.5%`, branches by
+  about `5.8%`, and cycles by about `1.9--3.9%`. Roboto and Amiri retired work
+  remained within `0.01%`; their cycle variation was within about `1%`. Exact
+  HarfBuzz parity remains unchanged on all 10,000 Devanagari lines with
+  checksum `b01a5388ce792b49`.

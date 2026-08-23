@@ -147,6 +147,16 @@ pub fn run(input: Input) !void {
     const lookup_options = selected_lookup_options;
 
     const shape_in_native_direction = lookup_options.shouldShapeInNativeDirection();
+    const shaping_direction = if (shape_in_native_direction)
+        if (lookup_options.nativeHorizontalDirection()) |native|
+            if (native == .rtl)
+                pipeline_types.TextDirection.rtl
+            else
+                pipeline_types.TextDirection.ltr
+        else
+            lookup_options.direction
+    else
+        lookup_options.direction;
     if (shape_in_native_direction) {
         normalize_native.reverse(scratch);
     }
@@ -543,7 +553,7 @@ pub fn run(input: Input) !void {
             const jstf_options = gpos.LookupOptions{
                 .script_tag = gpos_script_tag,
                 .language_tag = lookup_options.language_tag,
-                .direction = if (lookup_options.shapingDirection() == .rtl)
+                .direction = if (shaping_direction == .rtl)
                     .rtl
                 else
                     .ltr,
@@ -665,7 +675,7 @@ pub fn run(input: Input) !void {
             stch_actions.items,
             segment_glyph_start,
             lookup_options.direction == .rtl,
-            shape_in_native_direction and lookup_options.shapingDirection() == .rtl,
+            shape_in_native_direction and shaping_direction == .rtl,
             scale,
             font,
             metrics_cache,
@@ -685,7 +695,7 @@ pub fn run(input: Input) !void {
         }
         if (shape_profile) |p| p.position_tracking_ns += shape_profile_mod.elapsed(tracking_start, profile_io);
     }
-    if (shape_in_native_direction and lookup_options.shapingDirection() == .rtl) {
+    if (shape_in_native_direction and shaping_direction == .rtl) {
         const reverse_start = shape_profile_mod.now(shape_profile, profile_io);
         std.mem.reverse(GlyphPosition, buffer.glyphs.items[segment_glyph_start..]);
         if (shape_profile) |p| p.position_reverse_ns += shape_profile_mod.elapsed(reverse_start, profile_io);

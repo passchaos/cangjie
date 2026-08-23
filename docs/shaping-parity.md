@@ -3890,3 +3890,10 @@ shaping-performance superiority.
   `en-words`, and `0.42%` for Amiri `fa-words`; branches fell about `1.05%`,
   `0.12%`, and `0.54%`, respectively. Cycles were neutral for Devanagari and
   improved slightly for Roboto; Amiri cycle variation remained noisy.
+- Segment positioning now derives the effective shaping direction once from
+  the already-computed native-direction decision and reuses it for JSTF,
+  `stch`, and final reversal. This avoids repeating the Unicode script-direction
+  resolution several times per run. Fixed-CPU-30 A/B/B/A counters over five
+  complete corpus passes reduced retired instructions by about `0.11%` for
+  Devanagari, `0.10%` for Roboto, and `0.28%` for Amiri; cycles improved about
+  `0.96%`, `1.1%`, and `0.29%`, respectively, with unchanged output.

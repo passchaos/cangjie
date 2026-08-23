@@ -177,12 +177,13 @@ inline fn fillPreparedRow(
     var row_has_coverage = false;
     var row_min_x = max_x;
     var row_max_x = min_x;
-    for (sample_offsets) |sample_offset| {
-        const py = @as(f32, @floatFromInt(y)) + sample_offset;
-        if (row_lines.len == 2) {
-            const first = row_lines[0];
-            const second = row_lines[1];
-            if (py < first.y_min or py >= first.y_max or py < second.y_min or py >= second.y_max) continue;
+    if (row_lines.len == 2) {
+        const first = row_lines[0];
+        const second = row_lines[1];
+        for (sample_offsets) |sample_offset| {
+            const py = @as(f32, @floatFromInt(y)) + sample_offset;
+            if (py < first.y_min or py >= first.y_max or
+                py < second.y_min or py >= second.y_max) continue;
             const first_x = first.slope * (py - first.y_min) + first.x_at_y_min;
             const second_x = second.slope * (py - second.y_min) + second.x_at_y_min;
             if (@abs(second_x - first_x) <= 0.000001) continue;
@@ -197,9 +198,14 @@ inline fn fillPreparedRow(
                     row_max_x = @max(row_max_x, span.max_x);
                 }
             }
-            continue;
         }
-
+        if (row_has_coverage) {
+            row_accumulator.blendAndClear(target, min_x, y, row_min_x, row_max_x, coverage_lut);
+        }
+        return;
+    }
+    for (sample_offsets) |sample_offset| {
+        const py = @as(f32, @floatFromInt(y)) + sample_offset;
         var intersection_count: usize = 0;
         for (row_lines) |line| {
             if (py < line.y_min or py >= line.y_max) continue;

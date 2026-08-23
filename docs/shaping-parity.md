@@ -3897,3 +3897,14 @@ shaping-performance superiority.
   complete corpus passes reduced retired instructions by about `0.11%` for
   Devanagari, `0.10%` for Roboto, and `0.28%` for Amiri; cycles improved about
   `0.96%`, `1.1%`, and `0.29%`, respectively, with unchanged output.
+- Direct scan conversion now dispatches the common two-active-edge row once,
+  outside the subpixel loop, instead of retesting that invariant for all four
+  vertical samples. Fixed-CPU-30 A/B/B/A counters over 20,000 direct dirty
+  renders reduced branches by about `1.2%` for Roboto 64 px `A`, `1.6%` for
+  `g`, and `0.2%` for `é`; cycles improved by about `0.1%`, `1.0%`, and
+  `1.6%`, respectively. The `A` retired-instruction count fell about `0.28%`;
+  the more complex controls traded roughly `0.1--0.7%` more instructions for
+  fewer branches and cycles. CPU-8 counters reproduced the `A` and `é` cycle
+  gains while `g` remained frequency-noisy. Roboto and Amiri five-glyph wall
+  probes improved or remained neutral, and all target checksums stayed byte-
+  identical.

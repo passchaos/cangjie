@@ -3782,3 +3782,13 @@ shaping-performance superiority.
   `hi-words`, `2.0%` for Roboto `en-words`, and `3.9%` for Amiri `fa-words`;
   branches also fell about `0.7%`, `1.0%`, and `0.9%`. The full ReleaseFast
   suite, benchmark smoke gate, and shaping parity umbrella pass unchanged.
+- Accelerated GSUB now branches to that unprofiled executor immediately after
+  validating the sidecar identity, before computing timestamps, glyph-count
+  snapshots, or lookup-specific option overrides. The profiled path remains
+  unchanged and a focused fast-profile test exercises its static nested
+  dispatch. Relative to the first unprofiled split, fixed-CPU-8 reverse A/B
+  counters over five corpus passes further reduced retired instructions by
+  about `0.43%` for Devanagari `hi-words`, `0.29%` for Roboto `en-words`, and
+  `0.68%` for Amiri `fa-words`; branches fell about `0.43%`, `0.28%`, and
+  `0.70%`. The full ReleaseFast suite, benchmark smoke gate, and shaping
+  parity umbrella pass unchanged.

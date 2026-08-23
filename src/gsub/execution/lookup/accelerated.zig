@@ -46,6 +46,19 @@ pub fn apply(
     if (sidecar.lookup_offset != lookup_offset or sidecar.lookup_type == 0) {
         return false;
     }
+    if (run.shape_profile == null) {
+        return applyUnprofiled(
+            Executor,
+            view,
+            lookup_offset,
+            lookup_index,
+            glyphs,
+            allocator,
+            run,
+            run_digest_cache,
+            sidecar,
+        );
+    }
     const lookup_start = profile.now(run.shape_profile, run.profile_io);
     const glyph_count_before =
         if (run.shape_profile != null) glyphs.items.len else 0;
@@ -66,57 +79,80 @@ pub fn apply(
             try filtering.validateMarkFilteringSetIndex(customized);
         }
         customized.match_source_syllable = scoped_syllable;
-        return if (customized.shape_profile == null)
-            applyPreparedUnprofiled(
-                Executor,
-                view,
-                lookup_offset,
-                glyphs,
-                allocator,
-                customized,
-                run_digest_cache,
-                sidecar,
-            )
-        else
-            applyPrepared(
-                Executor,
-                view,
-                lookup_offset,
-                lookup_index,
-                glyphs,
-                allocator,
-                customized,
-                run_digest_cache,
-                sidecar,
-                lookup_start,
-                glyph_count_before,
-            );
-    }
-    return if (run.shape_profile == null)
-        applyPreparedUnprofiled(
-            Executor,
-            view,
-            lookup_offset,
-            glyphs,
-            allocator,
-            run,
-            run_digest_cache,
-            sidecar,
-        )
-    else
-        applyPrepared(
+        return applyPrepared(
             Executor,
             view,
             lookup_offset,
             lookup_index,
             glyphs,
             allocator,
-            run,
+            customized,
             run_digest_cache,
             sidecar,
             lookup_start,
             glyph_count_before,
         );
+    }
+    return applyPrepared(
+        Executor,
+        view,
+        lookup_offset,
+        lookup_index,
+        glyphs,
+        allocator,
+        run,
+        run_digest_cache,
+        sidecar,
+        lookup_start,
+        glyph_count_before,
+    );
+}
+
+inline fn applyUnprofiled(
+    comptime Executor: type,
+    view: View,
+    lookup_offset: usize,
+    lookup_index: ?u16,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    run: Options,
+    run_digest_cache: ?*RunDigestCache,
+    sidecar: *const Lookup,
+) Error!bool {
+    const scoped_syllable =
+        runtime_dispatch.matchesSourceSyllable(lookup_index, run);
+    if (runtime_dispatch.needsCustomizedOptions(
+        sidecar.lookup_flag,
+        scoped_syllable,
+        run,
+    )) {
+        var customized = run;
+        if ((sidecar.lookup_flag & 0x0010) != 0) {
+            customized.active_mark_filtering_set = sidecar.mark_filtering_set;
+            try filtering.validateMarkFilteringSetIndex(customized);
+        }
+        customized.match_source_syllable = scoped_syllable;
+        return applyPreparedUnprofiled(
+            Executor,
+            view,
+            lookup_offset,
+            glyphs,
+            allocator,
+            customized,
+            run_digest_cache,
+            sidecar,
+        );
+    }
+    return applyPreparedUnprofiled(
+        Executor,
+        view,
+        lookup_offset,
+        glyphs,
+        allocator,
+        run,
+        run_digest_cache,
+        sidecar,
+    );
 }
 
 noinline fn applyPreparedUnprofiled(

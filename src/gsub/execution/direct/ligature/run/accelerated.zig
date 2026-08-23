@@ -82,10 +82,13 @@ fn applyKind(
     var component_offsets: [model.max_components]usize = undefined;
     var glyph_index: usize = 0;
     while (glyph_index < glyphs.items.len) : (glyph_index += 1) {
-        if (!filtering.lookupCursorAllowsGlyph(run, glyph_index)) continue;
         const first = glyphs.items[glyph_index];
-        if (filtering.lookupIgnoresGlyph(lookup_flag, run, first)) continue;
         if (!ligature.first_component_digest.mayHave(first)) continue;
+        // The digest is a cheap necessary condition independent of feature
+        // scope and LookupFlag visibility. Rejecting misses first avoids both
+        // metadata lookups for the overwhelming non-candidate population.
+        if (!filtering.lookupCursorAllowsGlyph(run, glyph_index)) continue;
+        if (filtering.lookupIgnoresGlyph(lookup_flag, run, first)) continue;
         const set = matching.setForGlyph(ligature, first) orelse continue;
         const found = if (prefilter_second)
             matching.acceleratedPrefilteredMatch(

@@ -3745,3 +3745,11 @@ shaping-performance superiority.
   ReleaseFast suite and shaping parity umbrella pass, including exact
   HarfBuzz parity for all 10,000 Devanagari lines with checksum
   `b01a5388ce792b49`.
+- Accelerated LigatureSubst scanning now applies its existing first-component
+  digest before source-feature and LookupFlag eligibility checks. The digest is
+  a permissive necessary condition, so every possible hit still reaches those
+  authoritative filters and the exact LigatureSet index. Fixed-CPU-8 reverse
+  A/B counters over five complete NotoSansDevanagari `hi-words` passes reduced
+  retired instructions by about `0.8%` and branches by about `1.0%`; Roboto
+  `en-words` and Amiri `fa-words` also improved slightly in both counters. All
+  corpus checksums were unchanged.

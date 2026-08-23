@@ -92,6 +92,7 @@ pub fn one(
         .lookup_type = lookup_type,
         .lookup_flag = lookup_flag,
         .subtable_count = subtable_count,
+        .lookup_offset_proved = true,
         .mark_filtering_set = if ((lookup_flag & 0x0010) != 0)
             try view.readU16(
                 lookup_offset + 6 + @as(usize, subtable_count) * 2,

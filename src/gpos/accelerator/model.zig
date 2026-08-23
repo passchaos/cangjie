@@ -18,6 +18,10 @@ pub const Lookup = struct {
     lookup_type: u16 = 0,
     lookup_flag: u16 = 0,
     subtable_count: u16 = 0,
+    /// Offset16 resolution is completed while constructing the validated
+    /// sidecar. Whole-run shaping can then enter a lookup without rereading
+    /// the LookupList array on every source run.
+    lookup_offset_proved: bool = false,
     mark_filtering_set: ?u16 = null,
     extension_lookup_type: ?u16 = null,
     coverage_digest: GlyphDigest = .{},

@@ -3872,3 +3872,12 @@ shaping-performance superiority.
   Amiri `fa-words`; branches fell about `1.0%`, `2.7--2.8%`, and `0.5%`,
   respectively. E-core cycles improved about `2.1%`, `8.0%`, and `1.2%`; all
   corpus checksums remained unchanged.
+- Validated GPOS accelerator sidecars now explicitly retain the already-
+  resolved LookupList offset. Cached shaping therefore avoids decoding and
+  bounds-checking the same Offset16 before every selected lookup, while
+  hand-constructed and detached sidecars default to the existing defensive
+  resolution path. Fixed-CPU-8/30 reverse A/B counters reduced retired
+  instructions by about `0.3%` for Devanagari, `0.1%` for Roboto, and `0.18%`
+  for Amiri; branches fell about `0.6%`, `0.1%`, and `0.36%`, respectively.
+  E-core cycles improved about `0.45%` for Devanagari and remained within run
+  noise for the controls; all corpus checksums were unchanged.

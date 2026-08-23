@@ -188,15 +188,26 @@ fn collectLookup(
     run: Options,
     digest_cache: *lookup_dispatcher.DigestCache,
 ) (Error || std.mem.Allocator.Error)!void {
-    const lookup = try table.offset.required16(
-        view,
-        lookup_list,
-        // LookupList array reads retain scalar EndOfStream behavior; only the
-        // mandatory top-level pointer itself is normalized to BadGpos.
-        try view.readU16(
-            lookup_list + 2 + @as(usize, lookup_index) * 2,
-        ),
-    );
+    const lookup = cached: {
+        if (run.assume_validated) {
+            if (run.lookup_accelerators) |accelerators| {
+                if (lookup_index < accelerators.len and
+                    accelerators[lookup_index].lookup_offset_proved)
+                {
+                    break :cached accelerators[lookup_index].lookup_offset;
+                }
+            }
+        }
+        break :cached try table.offset.required16(
+            view,
+            lookup_list,
+            // LookupList array reads retain scalar EndOfStream behavior; only
+            // the mandatory top-level pointer is normalized to BadGpos.
+            try view.readU16(
+                lookup_list + 2 + @as(usize, lookup_index) * 2,
+            ),
+        );
+    };
     return lookup_dispatcher.collectWithIndex(
         view,
         lookup,

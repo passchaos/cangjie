@@ -105,7 +105,7 @@ pub fn finish(input: Input, prepared: Prepared) !void {
 
 fn finishDev2(input: Input, prepared: Prepared) !void {
     const dotted_circle_glyph = try dottedCircleForFinish(input, prepared);
-    try indic.insertDottedCirclesForBrokenClusters(
+    try indic.insertDev2DottedCirclesForBrokenClusters(
         input.allocator,
         input.glyph_ids,
         input.glyph_source_indices,
@@ -114,13 +114,11 @@ fn finishDev2(input: Input, prepared: Prepared) !void {
         input.ligature_components,
         input.codepoints.items,
         dotted_circle_glyph,
-        .dev2,
     );
-    indic.mergePlaceholderDependentMarks(
+    indic.mergeDev2PlaceholderDependentMarks(
         input.glyph_cluster_indices,
         input.glyph_source_indices,
         input.codepoints.items,
-        .dev2,
     );
     try finishStages(input, false);
 }

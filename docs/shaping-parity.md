@@ -3834,3 +3834,11 @@ shaping-performance superiority.
   remained within `0.01%`; their cycle variation was within about `1%`. Exact
   HarfBuzz parity remains unchanged on all 10,000 Devanagari lines with
   checksum `b01a5388ce792b49`.
+- The same `dev2` split now covers broken-cluster dotted-circle insertion and
+  placeholder/dependent-mark cluster merging. Fixed Devanagari predicates
+  replace the generic all-Indic category/virama dispatch, while every other
+  script retains its existing implementation. Fixed-CPU-8/30 reverse A/B
+  counters over complete `hi-words` passes reduced retired instructions by
+  about `1.28%`, branches by about `2.10%`, and cycles by about `1.5%`.
+  Roboto and Amiri retired work remained within `0.02%`; the full 10,000-line
+  HarfBuzz comparison still passes with checksum `b01a5388ce792b49`.

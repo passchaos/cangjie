@@ -605,6 +605,88 @@ pub fn insertDottedCirclesForBrokenClusters(
     }
 }
 
+/// Insert dotted circles for modern Devanagari using its fixed category map.
+/// The generic routine remains the authority for every other Indic model.
+pub noinline fn insertDev2DottedCirclesForBrokenClusters(
+    allocator: std.mem.Allocator,
+    glyph_ids: *std.ArrayList(GlyphId),
+    glyph_source_indices: *std.ArrayList(usize),
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_substituted: *std.ArrayList(bool),
+    ligature_components: *ligature_provenance.Store,
+    codepoints: []const u21,
+    dotted_circle_glyph: GlyphId,
+) linksection(scanner_text_section) !void {
+    if (dotted_circle_glyph == 0) return;
+
+    var glyph_index: usize = 0;
+    while (glyph_index < glyph_source_indices.items.len) : (glyph_index += 1) {
+        const source_index = glyph_source_indices.items[glyph_index];
+        if (source_index >= codepoints.len or
+            !startsDev2BrokenCluster(codepoints, source_index)) continue;
+        const insert_index = if (codepoints[source_index] == 0x093f)
+            glyph_index + 1
+        else
+            glyph_index;
+        try shaping_metadata.insert(
+            allocator,
+            glyph_ids,
+            glyph_source_indices,
+            glyph_cluster_indices,
+            glyph_substituted,
+            ligature_components,
+            insert_index,
+            dotted_circle_glyph,
+            source_index,
+            glyph_cluster_indices.items[glyph_index],
+        );
+        glyph_index += 1;
+    }
+}
+
+fn startsDev2BrokenCluster(codepoints: []const u21, source_index: usize) bool {
+    if (source_index != 0 and
+        isDev2SyllableCodepoint(codepoints[source_index - 1])) return false;
+    if (source_index != 0 and codepoints[source_index - 1] == 0x25cc) {
+        return false;
+    }
+    if (isDev2Base(codepoints[source_index])) return false;
+    const syllable_end = devanagariSyllableEnd(codepoints, source_index);
+    if (syllable_end <= source_index) return false;
+    if (codepoints[source_index] == 0x094d) return true;
+    for (codepoints[source_index..syllable_end]) |codepoint| {
+        if (isDev2Consonant(codepoint)) return false;
+    }
+    return true;
+}
+
+/// Modern Devanagari has only U+25CC as an Indic placeholder base.
+pub noinline fn mergeDev2PlaceholderDependentMarks(
+    glyph_cluster_indices: *std.ArrayList(usize),
+    glyph_source_indices: *std.ArrayList(usize),
+    codepoints: []const u21,
+) linksection(scanner_text_section) void {
+    for (glyph_source_indices.items, 0..) |source, glyph_index| {
+        if (source == 0 or source >= codepoints.len) continue;
+        const codepoint: u32 = codepoints[source];
+        if (!(codepoint -% 0x0900 <= 3 or
+            codepoint == 0x093c or
+            codepoint -% 0x093e <= 0x11 or
+            codepoint -% 0x0951 <= 6 or
+            codepoint -% 0x0962 <= 1)) continue;
+        const previous = source - 1;
+        if (codepoints[previous] != 0x25cc) continue;
+        const previous_glyph =
+            glyphIndexForSource(glyph_source_indices.items, previous) orelse
+            continue;
+        shaping_metadata.mergeMonotoneClusters(
+            glyph_cluster_indices.items,
+            @min(previous_glyph, glyph_index),
+            @max(previous_glyph, glyph_index) + 1,
+        );
+    }
+}
+
 pub fn mergePlaceholderDependentMarks(glyph_cluster_indices: *std.ArrayList(usize), glyph_source_indices: *std.ArrayList(usize), codepoints: []const u21, script_tag: unicode.OpenTypeScriptTag) void {
     var glyph_index: usize = 0;
     while (glyph_index < glyph_source_indices.items.len) : (glyph_index += 1) {

@@ -6,3 +6,4 @@ assets
 __pycache__/
 *.py[cod]
 tools/parley_layout_oracle/target/
+tools/harfrust_shape_oracle/target/

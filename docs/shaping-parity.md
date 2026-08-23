@@ -202,10 +202,19 @@ remains available with older installed libraries. This prevents a system
 HarfBuzz 8.x from being mistaken for the documented/current parity oracle.
 
 The `harfrust` engine shells out to `hr-shape` once per sample and uses
-`hr-shape -n` for measured iterations. It is useful for batch output parity and
-rough timing against HarfRust, but still includes external process startup and
-serialization/parsing overhead. A library runner is still needed for strict
-HarfRust timing.
+`hr-shape -n` for measured iterations. It remains the output-parity surface.
+Strict timing is available separately through
+`tools/harfrust_shape_oracle`: that executable links HarfRust directly and
+retains its parsed font, `ShaperData`, shape plans, and reusable Unicode buffer
+across measured iterations. It hashes complete output before and after timing,
+then uses a constant-size measured consumer so process startup and serialized
+glyph parsing are excluded. See the tool README for the paired command line.
+On fixed CPU 30, a Cangjie/HarfRust/HarfRust/Cangjie matrix over five complete
+NotoSansDevanagari `hi-words` passes and 11 samples, using the matching summary
+consumer in both runners, measured Cangjie at `997.865`/`1009.690 ns/glyph`
+and the new HarfRust library runner at `875.616`/`869.981 ns/glyph`. This
+replaces subprocess-relative HarfRust timing with the missing strict library
+baseline, but still leaves Cangjie about `15.0%` slower on this Indic workload.
 
 `compare-harfrust` runs Cangjie and HarfRust in the same invocation and compares
 per-line glyph-id, UTF-8 cluster, font-unit x/y advance, and x/y offset

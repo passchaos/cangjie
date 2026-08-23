@@ -22,6 +22,7 @@ fn printText(options: options_mod.Options, result: runner.BenchResult) void {
         \\iterations={d}
         \\warmup={d}
         \\samples={d}
+        \\timing_consumer={s}
         \\feature_overrides={d}
         \\feature_ranges={d}
         \\variation_coords={d}
@@ -46,6 +47,7 @@ fn printText(options: options_mod.Options, result: runner.BenchResult) void {
         options.iterations,
         options.warmup,
         options.samples,
+        options.timing_consumer.label(),
         options.featureOverrideCount(),
         options.featureRanges().len,
         options.variationCoordCount(),
@@ -304,11 +306,11 @@ fn printTsv(options: options_mod.Options, result: runner.BenchResult) void {
     const ns_per_glyph = if (result.glyph_count == 0) 0 else divFloat(result.elapsed_ns, result.glyph_count);
     const stats = sampleStats(result.samples);
     std.debug.print(
-        "engine\tfont\ttext\ttext_bytes\titerations\twarmup\tsamples\tfeature_overrides\tvariation_coords\tuse_caches\tuse_shaped_cache\tprofile\tprofile_fast_path\telapsed_ns\tglyphs\tns_per_iter\tns_per_glyph\tsample_min_ns_per_glyph\tsample_median_ns_per_glyph\tsample_max_ns_per_glyph\tchecksum\tglyph_index_cache_hits\tglyph_index_cache_misses\tglyph_metrics_cache_hits\tglyph_metrics_cache_misses\tgdef_cache_hits\tgdef_cache_misses\tgsub_proof_cache_hits\tgsub_proof_cache_misses\tgpos_proof_cache_hits\tgpos_proof_cache_misses\tlookup_selection_cache_hits\tlookup_selection_cache_misses\tshaped_cache_hits\tshaped_cache_misses\n",
+        "engine\tfont\ttext\ttext_bytes\titerations\twarmup\tsamples\ttiming_consumer\tfeature_overrides\tvariation_coords\tuse_caches\tuse_shaped_cache\tprofile\tprofile_fast_path\telapsed_ns\tglyphs\tns_per_iter\tns_per_glyph\tsample_min_ns_per_glyph\tsample_median_ns_per_glyph\tsample_max_ns_per_glyph\tchecksum\tglyph_index_cache_hits\tglyph_index_cache_misses\tglyph_metrics_cache_hits\tglyph_metrics_cache_misses\tgdef_cache_hits\tgdef_cache_misses\tgsub_proof_cache_hits\tgsub_proof_cache_misses\tgpos_proof_cache_hits\tgpos_proof_cache_misses\tlookup_selection_cache_hits\tlookup_selection_cache_misses\tshaped_cache_hits\tshaped_cache_misses\n",
         .{},
     );
     std.debug.print(
-        "{s}\t{s}\t{s}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{any}\t{any}\t{any}\t{any}\t{d}\t{d}\t{d:.3}\t{d:.3}\t{d:.3}\t{d:.3}\t{d:.3}\t{x}",
+        "{s}\t{s}\t{s}\t{d}\t{d}\t{d}\t{d}\t{s}\t{d}\t{d}\t{any}\t{any}\t{any}\t{any}\t{d}\t{d}\t{d:.3}\t{d:.3}\t{d:.3}\t{d:.3}\t{d:.3}\t{x}",
         .{
             options.engine.label(),
             options.fontLabel(),
@@ -317,6 +319,7 @@ fn printTsv(options: options_mod.Options, result: runner.BenchResult) void {
             options.iterations,
             options.warmup,
             options.samples,
+            options.timing_consumer.label(),
             options.featureOverrideCount(),
             options.variationCoordCount(),
             options.use_caches,

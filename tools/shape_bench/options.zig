@@ -137,6 +137,21 @@ pub const OutputFormat = enum {
     }
 };
 
+pub const TimingConsumer = enum {
+    full,
+    summary,
+
+    pub fn fromName(name: []const u8) ?TimingConsumer {
+        if (std.mem.eql(u8, name, "full")) return .full;
+        if (std.mem.eql(u8, name, "summary")) return .summary;
+        return null;
+    }
+
+    pub fn label(self: TimingConsumer) []const u8 {
+        return @tagName(self);
+    }
+};
+
 pub const Direction = enum {
     ltr,
     rtl,
@@ -200,6 +215,7 @@ pub const Options = struct {
     iterations: usize = 10_000,
     warmup: usize = 1_000,
     samples: usize = 1,
+    timing_consumer: TimingConsumer = .full,
     direction: Direction = .ltr,
     reorder_bidi: bool = true,
     native_direction_shaping: bool = false,
@@ -361,6 +377,11 @@ pub fn parse(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.samples = try parsePositiveUsize(args[i]);
+        } else if (std.mem.eql(u8, arg, "--timing-consumer")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.timing_consumer = TimingConsumer.fromName(args[i]) orelse
+                return error.InvalidArguments;
         } else if (std.mem.eql(u8, arg, "--direction")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -555,6 +576,23 @@ test "variation design coordinates right-pad short OpenType tags" {
     try std.testing.expectError(error.InvalidArguments, parseVariationCoords(&options, "ABCDE=1"));
 }
 
+test "timing consumer option selects the constant-size benchmark consumer" {
+    const args = [_][]const u8{
+        "shape-bench",
+        "--timing-consumer",
+        "summary",
+    };
+    const parsed = try parse(&args);
+    try std.testing.expectEqual(TimingConsumer.summary, parsed.timing_consumer);
+
+    const invalid_args = [_][]const u8{
+        "shape-bench",
+        "--timing-consumer",
+        "unknown",
+    };
+    try std.testing.expectError(error.InvalidArguments, parse(&invalid_args));
+}
+
 fn parsePositiveUsize(text: []const u8) !usize {
     const value = try std.fmt.parseInt(usize, text, 10);
     if (value == 0) return error.InvalidArguments;
@@ -712,6 +750,8 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --iterations N               measured iterations, default 10000
         \\  --warmup N                   unmeasured warmup iterations, default 1000
         \\  --samples N                  independent measured samples, default 1
+        \\  --timing-consumer full|summary
+        \\                               hash every glyph or consume result slices; default full
         \\  --direction ltr|rtl|ttb|btt  shaping direction, default ltr
         \\  --language dflt|ara|far|fa|jan|kor|zhh|zhs|zht|hin|dhv|dv
         \\                               force an OpenType language system

@@ -236,8 +236,21 @@ pub fn runCangjie(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie
                     shape_options,
                 );
                 sample_glyph_count += glyphs.len;
-                const line_checksum = glyphsChecksum(glyphs);
-                sample_checksum = updateChecksumWithLine(sample_checksum, line_checksum);
+                var line_checksum: u64 = 0;
+                if (options.timing_consumer == .full) {
+                    line_checksum = glyphsChecksum(glyphs);
+                    sample_checksum = updateChecksumWithLine(
+                        sample_checksum,
+                        line_checksum,
+                    );
+                } else {
+                    // The library-level HarfRust runner exposes the same
+                    // constant-size consumer. Keep the result slice observable
+                    // and retain glyph counts without charging either engine
+                    // for a tool-specific full-output hash in the timed region.
+                    std.mem.doNotOptimizeAway(glyphs.ptr);
+                    sample_checksum +%= glyphs.len;
+                }
                 if (options.line_summary and sample_index == 0 and i == 0) {
                     try line_summaries.append(allocator, .{
                         .index = line_index,

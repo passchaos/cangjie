@@ -37,6 +37,21 @@ pub fn collectForwardPrefix(
     context_match: bool,
     anchor_index: usize,
 ) usize {
+    if (lookup_flag == 0 and run.run_has_default_ignorables == false) {
+        const available = glyphs.len -| start;
+        const count = @min(out.len, available);
+        const anchor_syllable =
+            filtering.sourceSyllableForGlyph(run, anchor_index);
+        var copied: usize = 0;
+        while (copied < count and filtering.sourceSyllableAllowsGlyph(
+            run,
+            anchor_syllable,
+            start + copied,
+        )) : (copied += 1) {
+            out[copied] = start + copied;
+        }
+        return copied;
+    }
     var out_index: usize = 0;
     var glyph_index = start;
     const anchor_syllable =

@@ -3753,3 +3753,13 @@ shaping-performance superiority.
   retired instructions by about `0.8%` and branches by about `1.0%`; Roboto
   `en-words` and Amiri `fa-words` also improved slightly in both counters. All
   corpus checksums were unchanged.
+- Contextual forward-prefix collection now consumes the same zero-LookupFlag,
+  no-default-ignorables proof as the specialized chaining traversal. Physical
+  glyphs are then the contextual sequence, so it writes adjacent indexes while
+  retaining source-syllable boundaries instead of running the general Unicode
+  visibility predicate for every component. Focused tests cover both bounded
+  Indic syllables and unrestricted runs. Fixed-CPU-8 A/B/B/A counters over five
+  complete Devanagari `hi-words` passes reduced retired instructions by about
+  `0.72%` and branches by about `0.72%`; Roboto `en-words` and Amiri `fa-words`
+  also improved slightly. The complete ReleaseFast suite and shaping parity
+  umbrella pass unchanged.

@@ -3881,3 +3881,12 @@ shaping-performance superiority.
   for Amiri; branches fell about `0.6%`, `0.1%`, and `0.36%`, respectively.
   E-core cycles improved about `0.45%` for Devanagari and remained within run
   noise for the controls; all corpus checksums were unchanged.
+- Source population now rejects non-starters before entering the font-aware
+  Arabic canonical-composition lookahead. Only six Unicode scalars can begin
+  one of these pairs, so Devanagari, Latin, and ordinary Arabic sources avoid
+  an out-of-line call while the helper retains its own defensive guard. Fixed-
+  CPU-30 A/B/B/A counters over ten complete corpus passes reduced retired
+  instructions by about `0.91%` for Devanagari `hi-words`, `0.31%` for Roboto
+  `en-words`, and `0.42%` for Amiri `fa-words`; branches fell about `1.05%`,
+  `0.12%`, and `0.54%`, respectively. Cycles were neutral for Devanagari and
+  improved slightly for Roboto; Amiri cycle variation remained noisy.

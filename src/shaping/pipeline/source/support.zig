@@ -12,6 +12,7 @@ const unicode = @import("../../../unicode.zig");
 const unicode_glyph_fallback = @import("../../../unicode_glyph_fallback.zig");
 
 pub const ArabicCompositionMatch = arabic_normalization.CompositionMatch;
+pub const canStartArabicComposition = arabic_normalization.canStartComposition;
 
 pub fn arabicCompositionForFontAt(
     font: *const Font,

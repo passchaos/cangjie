@@ -149,13 +149,19 @@ pub fn populate(
             continue;
         }
 
-        const composition = try support.arabicCompositionForFontAt(
-            font,
-            glyph_index_cache,
-            codepoint,
-            text,
-            source_byte_index,
-        );
+        // Canonical Arabic composition has only six possible starters. Keep
+        // the common source loop out of the font-aware lookahead helper; its
+        // internal guard remains authoritative for direct callers.
+        const composition = if (support.canStartArabicComposition(codepoint))
+            try support.arabicCompositionForFontAt(
+                font,
+                glyph_index_cache,
+                codepoint,
+                text,
+                source_byte_index,
+            )
+        else
+            null;
         const local_source_end =
             if (composition) |value| value.byte_end else source_byte_index;
         const normalized_codepoint =

@@ -58,6 +58,27 @@ pub fn markSourceSyllablesAndBasicFeatures(
     codepoints: []const u21,
     script_tag: unicode.OpenTypeScriptTag,
 ) bool {
+    if (script_tag == .dev2) {
+        return markDev2SourceSyllablesAndBasicFeatures(
+            source_syllables,
+            source_features,
+            codepoints,
+        );
+    }
+    return markGenericSourceSyllablesAndBasicFeatures(
+        source_syllables,
+        source_features,
+        codepoints,
+        script_tag,
+    );
+}
+
+fn markGenericSourceSyllablesAndBasicFeatures(
+    source_syllables: []u8,
+    source_features: []u32,
+    codepoints: []const u21,
+    script_tag: unicode.OpenTypeScriptTag,
+) bool {
     @memset(source_syllables, 0);
     @memset(source_features, 0);
 
@@ -105,6 +126,142 @@ pub fn markSourceSyllablesAndBasicFeatures(
         source = syllable_end;
     }
     return marked;
+}
+
+/// Current-generation Devanagari has a fixed category map and does not use
+/// `pref` source masks. Keep its dominant source-marking pass free of the
+/// all-Indic script switches while preserving the generic implementation for
+/// legacy Devanagari and the other Indic shaping models.
+fn markDev2SourceSyllablesAndBasicFeatures(
+    source_syllables: []u8,
+    source_features: []u32,
+    codepoints: []const u21,
+) bool {
+    @memset(source_syllables, 0);
+    @memset(source_features, 0);
+
+    var marked = false;
+    var source: usize = 0;
+    var serial: u8 = 1;
+    while (source < codepoints.len) {
+        if (!isDev2SyllableCodepoint(codepoints[source])) {
+            source += 1;
+            continue;
+        }
+        const syllable_start = source;
+        const syllable_end = devanagariSyllableEnd(codepoints, source);
+        @memset(source_syllables[syllable_start..syllable_end], serial);
+        serial +%= 1;
+        if (serial == 0) serial = 1;
+
+        if (hasDev2InitialReph(codepoints, syllable_start, syllable_end)) {
+            source_features[syllable_start] |= rphf_source_mask;
+            marked = true;
+        }
+        if (markDev2HalfSources(
+            source_features,
+            codepoints,
+            syllable_start,
+            syllable_end,
+        )) marked = true;
+        source = syllable_end;
+    }
+    return marked;
+}
+
+fn hasDev2InitialReph(
+    codepoints: []const u21,
+    start: usize,
+    end: usize,
+) bool {
+    if (start + 2 >= end or
+        codepoints[start] != 0x0930 or
+        codepoints[start + 1] != 0x094d or
+        isJoiner(codepoints[start + 2]))
+    {
+        return false;
+    }
+    for (codepoints[start + 2 .. end]) |codepoint| {
+        if (isDev2Base(codepoint)) return true;
+    }
+    return false;
+}
+
+fn markDev2HalfSources(
+    source_features: []u32,
+    codepoints: []const u21,
+    start: usize,
+    end: usize,
+) bool {
+    const base = dev2HalfBaseSource(codepoints, start, end);
+    var marked = false;
+    var index = start;
+    while (index + 1 < end) : (index += 1) {
+        if (index >= base or !isDev2Consonant(codepoints[index])) continue;
+        const virama = if (codepoints[index + 1] == 0x094d)
+            index + 1
+        else if (index + 2 < end and
+            codepoints[index + 1] == 0x093c and
+            codepoints[index + 2] == 0x094d)
+            index + 2
+        else
+            continue;
+        for (codepoints[virama + 1 .. end]) |codepoint| {
+            if (!isDev2Consonant(codepoint)) continue;
+            source_features[index] |= half_source_mask;
+            marked = true;
+            break;
+        }
+    }
+    return marked;
+}
+
+fn dev2HalfBaseSource(
+    codepoints: []const u21,
+    start: usize,
+    end: usize,
+) usize {
+    var has_prebase_matra = false;
+    for (codepoints[start..end]) |codepoint| {
+        has_prebase_matra = has_prebase_matra or codepoint == 0x093f;
+    }
+    var base = start;
+    var index = start;
+    while (index < end) : (index += 1) {
+        const codepoint = codepoints[index];
+        if (!isDev2Consonant(codepoint)) continue;
+        if (has_prebase_matra and index > start and
+            codepoints[index - 1] == 0x094d and codepoint == 0x0930)
+        {
+            var previous = index - 1;
+            while (previous > start) {
+                previous -= 1;
+                if (isDev2Consonant(codepoints[previous])) return previous;
+            }
+            return base;
+        }
+        base = index;
+    }
+    return base;
+}
+
+inline fn isDev2SyllableCodepoint(codepoint: u21) bool {
+    const value: u32 = codepoint;
+    return (value -% 0x0900 <= 0x61 and value != 0x0950) or
+        value == 0x1cf5 or value == 0x25cc or value -% 0x200c <= 1;
+}
+
+inline fn isDev2Consonant(codepoint: u21) bool {
+    const value: u32 = codepoint;
+    return value -% 0x0915 <= 0x24 or
+        value -% 0x0958 <= 0x07 or value == 0x1cf5;
+}
+
+inline fn isDev2Base(codepoint: u21) bool {
+    const value: u32 = codepoint;
+    return isDev2Consonant(codepoint) or
+        value -% 0x0904 <= 0x10 or value -% 0x0960 <= 1 or
+        value == 0x25cc;
 }
 
 pub fn reorderPreBaseMatras(
@@ -601,6 +758,38 @@ test "combined Indic source maps match independent builders" {
     try std.testing.expectEqual(expected_marked, marked);
     try std.testing.expectEqualSlices(u8, &expected_syllables, &syllables);
     try std.testing.expectEqualSlices(u32, &expected_features, &features);
+}
+
+test "specialized dev2 source maps match generic marking" {
+    const representatives = [_]u21{
+        0x0915, 0x0930, 0x093f, 0x094d, 0x093c, 0x0958,
+        0x0960, 0x1cf5, 0x200c, 0x200d, 0x25cc, ' ',
+    };
+    for (representatives) |first| {
+        for (representatives) |second| {
+            for (representatives) |third| {
+                const codepoints = [_]u21{ first, second, third };
+                var expected_syllables: [codepoints.len]u8 = undefined;
+                var expected_features: [codepoints.len]u32 = undefined;
+                const expected_marked = markGenericSourceSyllablesAndBasicFeatures(
+                    &expected_syllables,
+                    &expected_features,
+                    &codepoints,
+                    .dev2,
+                );
+                var actual_syllables: [codepoints.len]u8 = undefined;
+                var actual_features: [codepoints.len]u32 = undefined;
+                const actual_marked = markDev2SourceSyllablesAndBasicFeatures(
+                    &actual_syllables,
+                    &actual_features,
+                    &codepoints,
+                );
+                try std.testing.expectEqual(expected_marked, actual_marked);
+                try std.testing.expectEqualSlices(u8, &expected_syllables, &actual_syllables);
+                try std.testing.expectEqualSlices(u32, &expected_features, &actual_features);
+            }
+        }
+    }
 }
 
 pub fn recordPrefSubstitutions(glyph_source_indices: []const usize, glyph_stage_substituted: []const bool, source_pref_substituted: []bool) void {

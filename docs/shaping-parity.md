@@ -3792,3 +3792,13 @@ shaping-performance superiority.
   `0.68%` for Amiri `fa-words`; branches fell about `0.43%`, `0.28%`, and
   `0.70%`. The full ReleaseFast suite, benchmark smoke gate, and shaping
   parity umbrella pass unchanged.
+- Current-generation Devanagari source marking now uses a dedicated `dev2`
+  category path. It shares the specialized syllable scanner, omits the
+  Malayalam-only `pref` source pass, and evaluates reph/half candidates with
+  compact Devanagari predicates instead of repeatedly entering the all-Indic
+  script switches. An exhaustive three-codepoint representative differential
+  retains the generic marker as its oracle. Fixed-CPU-8 reverse A/B counters
+  over five complete `hi-words` passes reduced retired instructions by about
+  `1.05%` and branches by about `2.1%`; Roboto `en-words` and Amiri `fa-words`
+  controls remained within about `0.03%`. The full ReleaseFast suite,
+  benchmark smoke gate, and shaping parity umbrella pass unchanged.

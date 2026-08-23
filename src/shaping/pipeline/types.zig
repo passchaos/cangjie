@@ -83,6 +83,17 @@ pub const LookupOptions = struct {
     run_has_decimal_number: bool = false,
     run_has_letter: bool = false,
 
+    /// Whether native-direction resolution needs source number/letter traits.
+    /// Only LTR requests for an RTL script use the HarfBuzz-compatible rule
+    /// that keeps number-only runs in logical order.
+    pub fn needsRtlNumericDirectionGuard(self: LookupOptions) bool {
+        if (!self.reorder_bidi and !self.native_direction_shaping) return false;
+        if (self.writing_mode.isVertical() or self.direction != .ltr) {
+            return false;
+        }
+        return self.nativeHorizontalDirection() == .rtl;
+    }
+
     pub fn shouldShapeInNativeDirection(self: LookupOptions) bool {
         if (!self.reorder_bidi and !self.native_direction_shaping) return false;
         if (self.writing_mode.isVertical()) return false;
@@ -135,4 +146,17 @@ pub const ResolvedLookupOptions = struct {
 
 fn textDirectionFromBidiClass(direction: unicode.BidiClass) TextDirection {
     return if (direction == .rtl) .rtl else .ltr;
+}
+
+test "only LTR requests for RTL scripts need numeric direction traits" {
+    try @import("std").testing.expect((LookupOptions{
+        .script = .arabic,
+    }).needsRtlNumericDirectionGuard());
+    try @import("std").testing.expect(!(LookupOptions{
+        .script = .devanagari,
+    }).needsRtlNumericDirectionGuard());
+    try @import("std").testing.expect(!(LookupOptions{
+        .script = .arabic,
+        .direction = .rtl,
+    }).needsRtlNumericDirectionGuard());
 }

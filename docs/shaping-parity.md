@@ -1077,6 +1077,17 @@ Current local snapshot after the Nastaliq parity work:
   Cangjie/HarfBuzz/HarfBuzz/Cangjie matrix measured `957.022` versus
   `784.909 ns/glyph`, leaving Cangjie about `21.93%` slower—still the largest
   active shaping-performance gap, but down from the prior `28.74%`.
+- Single-font shaping now records bidi visual-reorder triggers while its source
+  loop is already decoding UTF-8, then reuses that proof after positioning.
+  The same pass skips number/letter classification unless an LTR request for an
+  RTL script needs the numeric-direction guard. Devanagari has a direct block
+  proof, while mixed text and explicit UAX #9 controls retain exact-class
+  lookup. Fixed-CPU-30 A/B/B/A counters over 200 complete
+  NotoSansDevanagari `hi-words` passes reduced retired instructions by about
+  `1.95%` and branches by about `1.90%`; the candidate timing pair measured
+  `987.189`/`985.693 ns/glyph` against baseline
+  `995.034`/`995.549 ns/glyph`. Full corpus comparison still passes HarfBuzz
+  with checksum `b01a5388ce792b49`.
 - Validated, non-profiled GSUB now also dispatches accelerated direct
   ContextSubst lookups through the small fast wrapper instead of entering the
   generic profiling-capable dispatcher before reaching the same predecoded

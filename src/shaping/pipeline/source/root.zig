@@ -20,6 +20,10 @@ pub const Result = struct {
     has_default_ignorable: bool = false,
     run_has_decimal_number: bool = false,
     run_has_letter: bool = false,
+    /// The source scan already decodes every scalar. Preserve the fact that no
+    /// scalar can trigger bidi visual reordering so the top-level shaper does
+    /// not decode and classify the same non-ASCII run a second time.
+    may_need_bidi_reorder: bool = false,
     default_ignorable_invisible_glyph_id: ?GlyphId = null,
 };
 
@@ -55,6 +59,12 @@ pub fn populate(
     try ligature_components.infos.ensureUnusedCapacity(allocator, text.len);
 
     var result = Result{};
+    const track_rtl_numeric_guard = options.needsRtlNumericDirectionGuard();
+    const track_bidi_reorder = options.reorder_bidi and
+        !options.writing_mode.isVertical() and
+        options.direction != .rtl;
+    const common_ltr_script =
+        commonLtrScriptRange(options.script);
     if (all_ascii and options.direction == .ltr) {
         // The caller already validated and classified this run. One byte is one
         // source scalar and no variation/default-ignorable handling is needed.
@@ -86,9 +96,23 @@ pub fn populate(
         const decoded = decodeValidatedUtf8(text, source_byte_index);
         const codepoint = decoded.codepoint;
         source_byte_index += decoded.byte_len;
-        result.run_has_decimal_number =
-            result.run_has_decimal_number or support.isDecimalNumber(codepoint);
-        result.run_has_letter = result.run_has_letter or support.isLetter(codepoint);
+        if (track_rtl_numeric_guard) {
+            result.run_has_decimal_number =
+                result.run_has_decimal_number or
+                support.isDecimalNumber(codepoint);
+            result.run_has_letter =
+                result.run_has_letter or support.isLetter(codepoint);
+        }
+        if (track_bidi_reorder and
+            !result.may_need_bidi_reorder and
+            !(if (common_ltr_script) |range|
+                codepoint -% range.start < range.len
+            else
+                false))
+        {
+            result.may_need_bidi_reorder =
+                unicode.mayNeedBidiVisualReorder(codepoint);
+        }
 
         if (unicode.isVariationSelector(codepoint)) {
             if (glyph_ids.items.len == 0) continue;
@@ -250,6 +274,18 @@ pub fn populate(
     return result;
 }
 
+const ScriptRange = struct {
+    start: u21,
+    len: u21,
+};
+
+fn commonLtrScriptRange(script: unicode.Script) ?ScriptRange {
+    return switch (script) {
+        .devanagari => .{ .start = 0x0900, .len = 0x80 },
+        else => null,
+    };
+}
+
 const DecodedUtf8 = struct {
     codepoint: u21,
     byte_len: u3,
@@ -313,6 +349,21 @@ test "validated source decoder matches the standard UTF-8 decoder" {
             decoded.codepoint,
         );
     }
+}
+
+test "source scan recognizes bidi visual-reorder triggers" {
+    for (0x0900..0x0980) |codepoint| {
+        const range = commonLtrScriptRange(.devanagari).?;
+        try std.testing.expect(@as(u21, @intCast(codepoint)) -%
+            range.start < range.len);
+        try std.testing.expect(!unicode.mayNeedBidiVisualReorder(
+            @intCast(codepoint),
+        ));
+    }
+    const range = commonLtrScriptRange(.devanagari).?;
+    try std.testing.expect(!(0x202e -% range.start < range.len));
+    try std.testing.expect(unicode.mayNeedBidiVisualReorder(0x05d0));
+    try std.testing.expect(unicode.mayNeedBidiVisualReorder(0x202e));
 }
 
 pub const ArabicCompositionMatch = support.ArabicCompositionMatch;

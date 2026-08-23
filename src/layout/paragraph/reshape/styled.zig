@@ -649,7 +649,7 @@ const SegmentContext = struct {
     ) !fallback_segment.Pen {
         const font = cascade.fonts[font_index];
         const glyph_start = self.buffer.glyphs.items.len;
-        try segment_pipeline.run(.{
+        _ = try segment_pipeline.run(.{
             .font = font,
             .metrics_cache = null,
             .glyph_index_cache = null,

@@ -538,7 +538,7 @@ pub fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache
     ranged_lookup_options.lookup.feature_ranges = feature_ranges;
     if (shape_profile) |p| p.options_ns += shape_profile_mod.elapsed(options_start, profile_io);
 
-    try segment_pipeline.run(.{
+    const segment_result = try segment_pipeline.run(.{
         .font = font,
         .metrics_cache = metrics_cache,
         .glyph_index_cache = glyph_index_cache,
@@ -549,7 +549,10 @@ pub fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache
         .lookup_options = ranged_lookup_options,
     });
     const bidi_start = shape_profile_mod.now(shape_profile, profile_io);
-    if (plan_bidi.shouldReorderShapedRun(text, options, lookup_options.all_ascii)) {
+    if (plan_bidi.shouldReorderResolvedRun(
+        options,
+        segment_result.may_need_bidi_reorder,
+    )) {
         try applyBidiVisualOrder(buffer, text, options.direction, font);
     }
     if (shape_profile) |p| p.bidi_ns += shape_profile_mod.elapsed(bidi_start, profile_io);
@@ -824,7 +827,7 @@ const defaultBaselineMetrics = paragraph_reflow.defaultBaselineMetrics;
 
 fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, font_index: usize, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen: PenPosition, lookup_options: ResolvedLookupOptions) !PenPosition {
     const glyph_start = buffer.glyphs.items.len;
-    try segment_pipeline.run(.{
+    _ = try segment_pipeline.run(.{
         .font = font,
         .metrics_cache = metrics_cache,
         .glyph_index_cache = glyph_index_cache,

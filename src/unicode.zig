@@ -969,6 +969,27 @@ pub fn exactBidiClassForCodepoint(codepoint: u21) ExactBidiClass {
     return bidi_paragraph.classForCodepoint(codepoint);
 }
 
+/// Whether an LTR run may require UAX #9 visual reordering because of this
+/// scalar. Keep this predicate shared by source scanning and fallback bidi
+/// scans so their trigger sets cannot drift.
+pub fn mayNeedBidiVisualReorder(codepoint: u21) bool {
+    return switch (exactBidiClassForCodepoint(codepoint)) {
+        .r,
+        .al,
+        .rle,
+        .rlo,
+        .rli,
+        .lre,
+        .lro,
+        .lri,
+        .fsi,
+        .pdf,
+        .pdi,
+        => true,
+        else => false,
+    };
+}
+
 fn bidiClassFast(codepoint: u21) ?BidiClass {
     // This is the legacy four-class compatibility view, not the UAX #9 input
     // classifier. Exact paragraph analysis uses the generated property table.

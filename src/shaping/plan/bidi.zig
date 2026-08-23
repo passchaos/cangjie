@@ -21,6 +21,19 @@ pub fn shouldReorderShapedRun(
     return hasVisualReorderInput(text);
 }
 
+/// Decide after source decoding has already classified every scalar.
+///
+/// The caller-provided direction and layout policy remain authoritative; the
+/// final flag is only a cached answer to `hasVisualReorderInput`.
+pub fn shouldReorderResolvedRun(
+    options: plan.ShapeOptions,
+    may_need_bidi_reorder: bool,
+) bool {
+    if (!options.reorder_bidi) return false;
+    if (options.writing_mode.isVertical()) return false;
+    return options.direction == .rtl or may_need_bidi_reorder;
+}
+
 pub fn paragraphNeedsReorder(
     text: []const u8,
     direction: pipeline_types.TextDirection,
@@ -45,21 +58,7 @@ pub fn hasRtl(text: []const u8) bool {
 fn hasVisualReorderInput(text: []const u8) bool {
     var iterator = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
     while (iterator.nextCodepoint()) |codepoint| {
-        switch (unicode.exactBidiClassForCodepoint(codepoint)) {
-            .r,
-            .al,
-            .rle,
-            .rlo,
-            .rli,
-            .lre,
-            .lro,
-            .lri,
-            .fsi,
-            .pdf,
-            .pdi,
-            => return true,
-            else => {},
-        }
+        if (unicode.mayNeedBidiVisualReorder(codepoint)) return true;
     }
     return false;
 }
@@ -82,5 +81,22 @@ test "ASCII proof rejects visual reorder without hiding RTL scripts" {
     try std.testing.expect(paragraphNeedsReorder(
         "\u{202e}ABC\u{202c}",
         .ltr,
+    ));
+}
+
+test "resolved bidi proof preserves direction and writing-mode policy" {
+    try std.testing.expect(!shouldReorderResolvedRun(.{}, false));
+    try std.testing.expect(shouldReorderResolvedRun(.{}, true));
+    try std.testing.expect(shouldReorderResolvedRun(
+        .{ .direction = .rtl },
+        false,
+    ));
+    try std.testing.expect(!shouldReorderResolvedRun(
+        .{ .direction = .rtl, .reorder_bidi = false },
+        true,
+    ));
+    try std.testing.expect(!shouldReorderResolvedRun(
+        .{ .direction = .rtl, .writing_mode = .vertical_rl },
+        true,
     ));
 }

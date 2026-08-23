@@ -61,6 +61,10 @@ pub const Input = struct {
     lookup_options: ResolvedLookupOptions,
 };
 
+pub const Result = struct {
+    may_need_bidi_reorder: bool,
+};
+
 fn gdefMetadataForShaping(
     font: *const Font,
     allocator: std.mem.Allocator,
@@ -75,7 +79,7 @@ fn gdefMetadataForShaping(
     return &out_owned.*.?;
 }
 
-pub fn run(input: Input) !void {
+pub fn run(input: Input) !Result {
     const font = input.font;
     const metrics_cache = input.metrics_cache;
     const glyph_index_cache = input.glyph_index_cache;
@@ -701,6 +705,9 @@ pub fn run(input: Input) !void {
         if (shape_profile) |p| p.position_reverse_ns += shape_profile_mod.elapsed(reverse_start, profile_io);
     }
     if (shape_profile) |p| p.position_ns += shape_profile_mod.elapsed(position_start, profile_io);
+    return .{
+        .may_need_bidi_reorder = source_result.may_need_bidi_reorder,
+    };
 }
 
 fn insertBeginningDottedCircle(

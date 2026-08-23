@@ -119,3 +119,43 @@ test "accelerated GSUB chaining uses a comptime nested binding" {
         ),
     );
 }
+
+test "accelerated GSUB fast profile records through the profiled path" {
+    const allocator = std.testing.allocator;
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 7);
+    var digest = @import("../../../../glyph_digest.zig").GlyphDigest.empty();
+    digest.add(7);
+    const sidecars = [_]acceleration.Lookup{.{
+        .lookup_offset = 12,
+        .lookup_type = 6,
+        .subtable_count = 1,
+        .chaining_coverage_only = true,
+        .chaining_input_digest = digest,
+    }};
+    var counters = @import("../../../../shape_profile.zig").ShapeStageProfile{};
+    try std.testing.expectError(
+        error.BadGsub,
+        accelerated.apply(
+            Binding,
+            .{
+                .data = &.{},
+                .offset = 0,
+                .length = 0,
+                .assume_validated = true,
+            },
+            12,
+            0,
+            &glyphs,
+            allocator,
+            .{
+                .lookup_accelerators = &sidecars,
+                .shape_profile = &counters,
+                .profile_fast_path = true,
+                .profile_io = std.testing.io,
+            },
+            null,
+        ),
+    );
+}

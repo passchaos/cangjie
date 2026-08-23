@@ -3773,3 +3773,12 @@ shaping-performance superiority.
   about `0.15%` in both counters, and Roboto `en-words` remained effectively
   neutral. The complete ReleaseFast suite and shaping parity umbrella pass
   unchanged.
+- Validated accelerated GSUB dispatch now selects a separate unprofiled
+  executor before crossing its noinline boundary. Ordinary shaping therefore
+  carries neither lookup timestamps/count snapshots nor per-lookup recording
+  calls; `--profile-fast-path` retains the original instrumented executor and
+  its static nested binding. Fixed-CPU-8 reverse A/B counters over five corpus
+  passes reduced retired instructions by about `2.5%` for Devanagari
+  `hi-words`, `2.0%` for Roboto `en-words`, and `3.9%` for Amiri `fa-words`;
+  branches also fell about `0.7%`, `1.0%`, and `0.9%`. The full ReleaseFast
+  suite, benchmark smoke gate, and shaping parity umbrella pass unchanged.

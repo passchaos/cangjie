@@ -66,33 +66,157 @@ pub fn apply(
             try filtering.validateMarkFilteringSetIndex(customized);
         }
         customized.match_source_syllable = scoped_syllable;
-        return applyPrepared(
+        return if (customized.shape_profile == null)
+            applyPreparedUnprofiled(
+                Executor,
+                view,
+                lookup_offset,
+                glyphs,
+                allocator,
+                customized,
+                run_digest_cache,
+                sidecar,
+            )
+        else
+            applyPrepared(
+                Executor,
+                view,
+                lookup_offset,
+                lookup_index,
+                glyphs,
+                allocator,
+                customized,
+                run_digest_cache,
+                sidecar,
+                lookup_start,
+                glyph_count_before,
+            );
+    }
+    return if (run.shape_profile == null)
+        applyPreparedUnprofiled(
+            Executor,
+            view,
+            lookup_offset,
+            glyphs,
+            allocator,
+            run,
+            run_digest_cache,
+            sidecar,
+        )
+    else
+        applyPrepared(
             Executor,
             view,
             lookup_offset,
             lookup_index,
             glyphs,
             allocator,
-            customized,
+            run,
             run_digest_cache,
             sidecar,
             lookup_start,
             glyph_count_before,
         );
+}
+
+noinline fn applyPreparedUnprofiled(
+    comptime Executor: type,
+    view: View,
+    lookup_offset: usize,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    run: Options,
+    run_digest_cache: ?*RunDigestCache,
+    sidecar: *const Lookup,
+) Error!bool {
+    switch (sidecar.lookup_type) {
+        4 => {
+            if (sidecar.subtable_count != 1 or
+                sidecar.ligature_subst.sets.len == 0) return false;
+            if (run_digest_cache) |cache| {
+                const digest = cache.digestForRun(
+                    glyphs.items,
+                    sidecar.lookup_flag,
+                    run,
+                );
+                if (digest.isEmpty() or
+                    !sidecar.ligature_subst.first_component_digest
+                        .mayIntersect(digest)) return true;
+            }
+            if (sidecar.ligature_subst.prefilter_second) {
+                try direct_ligature.acceleratedPrefiltered(
+                    sidecar.ligature_subst,
+                    glyphs,
+                    allocator,
+                    sidecar.lookup_flag,
+                    run,
+                );
+            } else if (sidecar.ligature_subst.required_second_len != 0) {
+                try direct_ligature.acceleratedRequiredSecond(
+                    sidecar.ligature_subst,
+                    glyphs,
+                    allocator,
+                    sidecar.lookup_flag,
+                    run,
+                );
+            } else {
+                try direct_ligature.accelerated(
+                    sidecar.ligature_subst,
+                    glyphs,
+                    allocator,
+                    sidecar.lookup_flag,
+                    run,
+                );
+            }
+        },
+        5 => {
+            if (sidecar.context_class_subtables.len != 0) {
+                try contextual_context.acceleratedClassLookup(
+                    Executor,
+                    view,
+                    sidecar.subtable_count,
+                    glyphs,
+                    allocator,
+                    sidecar.lookup_flag,
+                    run,
+                    sidecar,
+                );
+            } else if (sidecar.context_coverage_subtables.len != 0) {
+                try contextual_context.acceleratedCoverageLookup(
+                    Executor,
+                    view,
+                    glyphs,
+                    allocator,
+                    sidecar.lookup_flag,
+                    run,
+                    sidecar,
+                );
+            } else return false;
+        },
+        6 => {
+            if (!sidecar.chaining_coverage_only) return false;
+            const digest = if (run_digest_cache) |cache|
+                cache.digestForRun(glyphs.items, sidecar.lookup_flag, run)
+            else
+                prefilter.digest(glyphs.items, sidecar.lookup_flag, run);
+            if (!digest.isEmpty() and
+                sidecar.chaining_input_digest.mayIntersect(digest))
+            {
+                try Executor.applyChainingLookup(
+                    view,
+                    lookup_offset,
+                    sidecar.subtable_count,
+                    glyphs,
+                    allocator,
+                    sidecar.lookup_flag,
+                    run,
+                    sidecar,
+                );
+            }
+        },
+        else => return false,
     }
-    return applyPrepared(
-        Executor,
-        view,
-        lookup_offset,
-        lookup_index,
-        glyphs,
-        allocator,
-        run,
-        run_digest_cache,
-        sidecar,
-        lookup_start,
-        glyph_count_before,
-    );
+    return true;
 }
 
 noinline fn applyPrepared(

@@ -59,6 +59,17 @@ pub fn acceleratedGroup(
     {
         return error.UnsupportedGsub;
     }
+    if (lookup_flag == 0 and run.run_has_default_ignorables == false) {
+        return acceleratedSimpleGroup(
+            view,
+            parsed,
+            group,
+            glyphs,
+            position,
+            run,
+            result,
+        );
+    }
 
     var candidate_window = window.Window.init(
         view,
@@ -84,6 +95,103 @@ pub fn acceleratedGroup(
             &candidate_window,
             result,
         )) return true;
+    }
+    return false;
+}
+
+fn acceleratedSimpleGroup(
+    view: View,
+    parsed: Subtable,
+    group: *const class_context.RuleGroup,
+    glyphs: []const GlyphId,
+    position: usize,
+    run: Options,
+    result: *match.Match,
+) Error!bool {
+    const simple = window.SimpleWindow.init(
+        view,
+        glyphs,
+        position,
+        .{
+            .backtrack = parsed.backtrack_class_def,
+            .input = parsed.input_class_def,
+            .lookahead = parsed.lookahead_class_def,
+        },
+        run,
+    );
+    for (parsed.rules[group.start .. group.start + group.len]) |rule| {
+        const backtrack_count: usize = @intCast(rule.records_offset);
+        const input_count: usize = rule.input_count;
+        const lookahead_count: usize = rule.lookahead_count;
+        if (backtrack_count > position or input_count == 0 or
+            input_count > glyphs.len - position or
+            lookahead_count > glyphs.len - position - input_count)
+        {
+            continue;
+        }
+        var expected_index: usize = rule.classes_start;
+        var matches = true;
+        for (0..backtrack_count) |index| {
+            const actual = (try simple.classAt(
+                simple.class_defs.backtrack,
+                position - index - 1,
+            )) orelse {
+                matches = false;
+                break;
+            };
+            if (parsed.classes[expected_index] != actual) {
+                matches = false;
+                break;
+            }
+            expected_index += 1;
+        }
+        if (!matches) continue;
+        for (1..input_count) |index| {
+            const actual = (try simple.classAt(
+                simple.class_defs.input,
+                position + index,
+            )) orelse {
+                matches = false;
+                break;
+            };
+            if (parsed.classes[expected_index] != actual) {
+                matches = false;
+                break;
+            }
+            expected_index += 1;
+        }
+        if (!matches) continue;
+        for (0..lookahead_count) |index| {
+            const relative = input_count + index;
+            const actual = (try simple.classAt(
+                simple.class_defs.lookahead,
+                position + relative,
+            )) orelse {
+                matches = false;
+                break;
+            };
+            if (parsed.classes[expected_index] != actual) {
+                matches = false;
+                break;
+            }
+            expected_index += 1;
+        }
+        if (!matches) continue;
+
+        result.input_count = input_count;
+        result.backtrack_count = backtrack_count;
+        result.lookahead_count = lookahead_count;
+        result.action = .{ .nested_lookup = rule.lookup_index };
+        for (0..backtrack_count) |index| {
+            result.backtrack[index] = position - index - 1;
+        }
+        for (0..input_count) |index| {
+            result.input[index] = position + index;
+        }
+        for (0..lookahead_count) |index| {
+            result.lookahead[index] = position + input_count + index;
+        }
+        return true;
     }
     return false;
 }

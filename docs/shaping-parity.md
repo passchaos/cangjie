@@ -3732,3 +3732,16 @@ shaping-performance superiority.
   for Amiri `fa-words`, with branches down about `0.20%` and `0.16%`; Roboto
   `en-words` stayed within `0.02%`. Current HarfBuzz parity remains exact on
   all 10,000 Devanagari lines with checksum `b01a5388ce792b49`.
+- ChainContextSubst format-2 matching now uses a compact physical-adjacency
+  window when a zero LookupFlag and the source-run proof establish that no
+  default-ignorable glyph can intervene. It computes input, backtrack, and
+  lookahead positions arithmetically while preserving source-syllable bounds;
+  filtered and default-ignorable runs retain the lazy skip-aware window. A
+  focused reversed-backtrack regression covers the direct-index ordering.
+  Fixed-CPU-8 A/B/B/A counters over five complete NotoSansDevanagari
+  `hi-words` passes reduced retired instructions by about `0.58%` and branches
+  by about `0.56%`. Roboto `en-words` and Amiri `fa-words` controls improved
+  about `0.1%` in retired instructions with unchanged checksums. The full
+  ReleaseFast suite and shaping parity umbrella pass, including exact
+  HarfBuzz parity for all 10,000 Devanagari lines with checksum
+  `b01a5388ce792b49`.

@@ -182,3 +182,55 @@ test "accelerated chaining class uses physical adjacency proof" {
     try std.testing.expect(result.matched);
     try std.testing.expectEqualSlices(u16, &.{ 1, 14, 1, 3 }, glyphs.items);
 }
+
+test "physical adjacency fast path preserves reversed backtrack order" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 64;
+    support.writeClassDef1(&bytes, 0, 1, &.{ 2, 6, 3, 7 });
+    const classes = [_]u16{
+        6,                                             2, 7,
+        accelerator.index.class_first.sorted_encoding, 3, 0,
+    };
+    const rules = [_]class_context.Rule{.{
+        .class_set = 3,
+        .input_count = 1,
+        .lookahead_count = 1,
+        .hash = class_context.sequenceHash(classes[0..3]),
+        .order = 0,
+        .lookup_index = 0,
+        .classes_start = 0,
+        .records_offset = 2,
+    }};
+    const groups = [_]class_context.RuleGroup{.{
+        .class_set = 3,
+        .start = 0,
+        .len = 1,
+        .max_input_count = 1,
+        .max_lookahead_count = 1,
+    }};
+    const parsed = accelerator.model.ChainingClassSubtable{
+        .first_index_start = 3,
+        .backtrack_class_def = 0,
+        .input_class_def = 0,
+        .lookahead_class_def = 0,
+        .rules = &rules,
+        .classes = &classes,
+        .groups = &groups,
+    };
+    var glyphs = std.ArrayList(u16).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 2, 3, 4 });
+
+    const result = try chaining_class.acceleratedAt(
+        support.Executor,
+        support.validatedView(&bytes),
+        parsed,
+        &glyphs,
+        2,
+        allocator,
+        0,
+        .{ .run_has_default_ignorables = false },
+    );
+    try std.testing.expect(result.matched);
+    try std.testing.expectEqualSlices(u16, &.{ 1, 2, 13, 4 }, glyphs.items);
+}

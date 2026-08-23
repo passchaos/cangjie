@@ -3802,3 +3802,13 @@ shaping-performance superiority.
   `1.05%` and branches by about `2.1%`; Roboto `en-words` and Amiri `fa-words`
   controls remained within about `0.03%`. The full ReleaseFast suite,
   benchmark smoke gate, and shaping parity umbrella pass unchanged.
+- The production-only accelerated GSUB executor is now inlined into its small
+  caller. This lets the optimizer specialize the lookup-kind dispatch together
+  with already-resolved source/LookupFlag options, while the instrumented
+  executor remains out of line for profiling. Fixed-CPU-8 reverse A/B counters
+  over five corpus passes reduced retired instructions by about `3.1%` for
+  Devanagari `hi-words`, `1.1%` for Roboto `en-words`, and `3.1%` for Amiri
+  `fa-words`; fixed E-core CPU 30 reproduced about `3.1%` for Devanagari.
+  Branches fell about `3.2%`, `0.6%`, and `2.4%`, respectively. The complete
+  ReleaseFast suite, benchmark smoke gate, and shaping parity umbrella pass
+  unchanged.

@@ -155,7 +155,7 @@ inline fn applyUnprofiled(
     );
 }
 
-noinline fn applyPreparedUnprofiled(
+inline fn applyPreparedUnprofiled(
     comptime Executor: type,
     view: View,
     lookup_offset: usize,

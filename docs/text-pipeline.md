@@ -2054,3 +2054,14 @@ retired instructions from `4.3981B/4.3873B` to `4.2460B/4.2450B` (about
 cycles fell about `1.8--3.8%`. Checksum `fb80f404e4d69aff`, 144 glyphs, and six
 lines were unchanged. The Latin spacing control retained checksum
 `510135a8179bf5e4`, 105 glyphs, six lines, and neutral retired work.
+
+A fresh same-artifact recheck with the installed Noto Kufi Arabic Regular and
+the first 200 UTF-8 bytes of Parley's Arabic sample now closes the previously
+recorded paragraph gap. On fixed CPU 30 with 1,000 iterations and nine samples,
+both engines produced 109 glyphs and five lines for default and spacing, and
+109 glyphs and six lines for the alternating two-span style. Cangjie/Parley
+medians were about `33.98/48.47 us` for default, `32.97/49.51 us` for
+spacing, and `42.77/51.38 us` for alternating: leads of roughly `1.43x`,
+`1.50x`, and `1.20x`. These results supersede the older 144-glyph rows above,
+which used a different locally installed font artifact; they establish the
+current controlled Parley matrix, not a universal cross-platform claim.

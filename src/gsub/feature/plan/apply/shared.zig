@@ -29,6 +29,21 @@ pub fn entry(
         return error.BadGsub;
     }
     if (run.disabled_lookups.len == 0) {
+        if (run.shape_profile == null) {
+            for (plan_entry.lookups, plan_entry.lookup_offsets) |index, offset| {
+                if (index >= lookup_count) return error.BadGsub;
+                try Executor.applyLookupUnprofiled(
+                    view,
+                    offset,
+                    index,
+                    glyphs,
+                    allocator,
+                    run,
+                    cache,
+                );
+            }
+            return;
+        }
         for (plan_entry.lookups, plan_entry.lookup_offsets) |index, offset| {
             if (index >= lookup_count) return error.BadGsub;
             try Executor.applyLookup(

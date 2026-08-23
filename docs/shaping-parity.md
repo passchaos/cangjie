@@ -3842,3 +3842,13 @@ shaping-performance superiority.
   about `1.28%`, branches by about `2.10%`, and cycles by about `1.5%`.
   Roboto and Amiri retired work remained within `0.02%`; the full 10,000-line
   HarfBuzz comparison still passes with checksum `b01a5388ce792b49`.
+- Cached staged GSUB plans now enter a dedicated unprofiled executor when the
+  run has neither disabled JSTF lookups nor a profiling sink. The plan already
+  owns concrete LookupList indexes and validated offsets, so this boundary
+  avoids rebuilding the optional/profiling wrapper on every staged lookup while
+  preserving the generic fallback for unsupported sidecars. Fixed-CPU-8/30
+  reverse A/B counters reduced Devanagari `hi-words` retired instructions by
+  about `3.0%`, branches by about `2.6%`, and cycles by `1.0--1.8%`; Amiri
+  `fa-words` improved about `0.75%`/`0.69%` in instructions/branches, while
+  Roboto remained neutral. The complete Devanagari HarfBuzz corpus still
+  passes with checksum `b01a5388ce792b49`.

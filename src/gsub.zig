@@ -679,6 +679,43 @@ fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std
 }
 
 const ContextualRecordExecutor = struct {
+    pub fn applyLookupUnprofiled(
+        table: Table,
+        lookup_offset: usize,
+        lookup_index: u16,
+        glyphs: *std.ArrayList(GlyphId),
+        allocator: std.mem.Allocator,
+        options: LookupOptions,
+        run_digest_cache: *runtime_prefilter.Cache,
+    ) (GsubError || std.mem.Allocator.Error)!void {
+        if (table.assume_validated) {
+            const sidecar = runtime.dispatch.any(lookup_index, options);
+            if (sidecar != null and
+                sidecar.?.lookup_offset == lookup_offset and
+                sidecar.?.lookup_type != 0 and
+                try lookup_execution.accelerated.applyUnprofiled(
+                    ContextualRecordExecutor,
+                    table,
+                    lookup_offset,
+                    lookup_index,
+                    glyphs,
+                    allocator,
+                    options,
+                    run_digest_cache,
+                    sidecar.?,
+                )) return;
+        }
+        return applyLookupWithIndexGeneric(
+            table,
+            lookup_offset,
+            lookup_index,
+            glyphs,
+            allocator,
+            options,
+            run_digest_cache,
+        );
+    }
+
     pub fn applyLookup(
         table: Table,
         lookup_offset: usize,

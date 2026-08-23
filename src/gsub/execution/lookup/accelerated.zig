@@ -108,7 +108,7 @@ pub fn apply(
     );
 }
 
-inline fn applyUnprofiled(
+pub inline fn applyUnprofiled(
     comptime Executor: type,
     view: View,
     lookup_offset: usize,

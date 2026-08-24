@@ -1830,6 +1830,14 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   `TestGVAREight.ttf` fixture also has a stale optional fvar named-instance
   label; shaping and axis APIs now remain usable while `variationInstances()`
   continues to reject unresolved instance metadata.
+- Legacy kern format 0 now treats `searchRange`, `entrySelector`, and
+  `rangeShift` as non-authoritative acceleration hints, matching HarfBuzz and
+  FreeType. It also recovers a wrapped UInt16 subtable length when the final
+  subtable's authoritative pair count fits exactly inside the SFNT `kern`
+  record. A 10,921-pair synthetic regression protects that unambiguous
+  recovery while sorted pairs, glyph bounds, table ownership, and checksums
+  remain strict. This admits the deployed PT Sans Caption fuzz fixture whose
+  22,076-pair table previously failed before shaping.
 - All 17 Unicode text-rendering `AVAR-1.tests` design locations from
   `TEST=100` through `TEST=900` are retained with HarfBuzz glyph-extents and
   HarfRust shaping parity for `TestAVAR.ttf`. The complete sampling protects

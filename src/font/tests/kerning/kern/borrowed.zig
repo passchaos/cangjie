@@ -41,7 +41,7 @@ test "Font kern revalidates borrowed pair arrays and checksum" {
     try std.testing.expectError(error.BadSfnt, font.kerning(1, 1));
 }
 
-test "Font kern revalidates borrowed format 0 search metadata" {
+test "Font kern revalidates checksum around ignored search metadata" {
     const allocator = std.testing.allocator;
     var table = legacyTable();
     const bytes = try test_font.buildMinimalTtfWithKern(allocator, &table);

@@ -26,12 +26,14 @@ fn validateLegacyKernTable(data: []const u8, kern: sfnt.Record, glyph_count: u16
     const table_count = try bin.readU16At(data, kern.offset + 2);
     const table_end = kern.offset + kern.length;
     var subtable_offset = kern.offset + 4;
-    for (0..table_count) |_| {
+    for (0..table_count) |subtable_index| {
         if (subtable_offset > table_end or table_end - subtable_offset < 6) return error.BadSfnt;
         const subtable_version = try bin.readU16At(data, subtable_offset);
-        const length = try bin.readU16At(data, subtable_offset + 2);
+        const declared_length = try bin.readU16At(data, subtable_offset + 2);
         const coverage = try bin.readU16At(data, subtable_offset + 4);
-        if (length < 6 or length > table_end - subtable_offset) return error.BadSfnt;
+        const available = table_end - subtable_offset;
+        var length: usize = declared_length;
+        if (length > available) return error.BadSfnt;
 
         // Legacy OpenType kern subtables carry their own UInt16 version, which
         // must be zero. Rejecting private variants here keeps later coverage
@@ -43,8 +45,21 @@ fn validateLegacyKernTable(data: []const u8, kern: sfnt.Record, glyph_count: u16
         const minimum = (coverage & 0x0002) != 0;
         const cross_stream = (coverage & 0x0004) != 0;
         if (format == 0 and horizontal and !minimum and !cross_stream) {
+            if (available < 14) return error.BadSfnt;
+            const pair_count = try bin.readU16At(data, subtable_offset + 6);
+            const required_length = 14 + @as(usize, pair_count) * 6;
+            if (required_length > available) return error.BadSfnt;
+            // Some historical writers truncated the UInt16 subtable length
+            // after emitting more than 10,920 format-0 pairs. The pair count
+            // and SFNT table boundary still identify the complete final
+            // subtable unambiguously; match HarfBuzz/FreeType by recovering
+            // that length only for the last legacy subtable.
+            if (required_length > length and subtable_index + 1 == table_count) {
+                length = required_length;
+            }
             try validateFormat0(data[subtable_offset + 6 .. subtable_offset + length], glyph_count);
         }
+        if (length < 6) return error.BadSfnt;
         subtable_offset += length;
     }
     // The SFNT directory length is the unpadded kern payload length. Require
@@ -87,12 +102,12 @@ fn validateAppleKernTable(data: []const u8, kern: sfnt.Record, glyph_count: u16)
 
 pub fn validateFormat0(data: []const u8, glyph_count: u16) Error!void {
     // Format-0 kern subtables are searched with a binary search over packed
-    // left/right glyph pairs. Validate the search header and complete pair
-    // array while parsing so malformed fonts cannot hide out-of-range glyph IDs
-    // or depend on non-canonical binary-search metadata.
+    // left/right glyph pairs. The three search-acceleration fields are only
+    // hints and are ignored by Cangjie, HarfBuzz, and FreeType; deployed fonts
+    // contain stale values, so validate only the authoritative pair count and
+    // complete sorted pair array.
     if (data.len < 8) return error.BadSfnt;
     const pair_count = try bin.readU16At(data, 0);
-    try validateKernFormat0SearchParameters(data, pair_count);
     if (@as(usize, pair_count) * 6 > data.len - 8) return error.BadSfnt;
 
     var previous_pair: ?u32 = null;
@@ -148,35 +163,6 @@ fn validateFormat2ClassTable(
     for (0..glyph_len) |index| {
         const value = try bin.readU16At(data, values_offset + index * 2);
         if (@as(usize, value) > data.len + 8 - 2) return error.BadSfnt;
-    }
-}
-
-fn validateKernFormat0SearchParameters(data: []const u8, pair_count: u16) Error!void {
-    // FontTools and deployed fonts retain the one-record searchRange (6)
-    // when nPairs is zero, with a zero rangeShift. Treat that de-facto empty
-    // descriptor explicitly rather than subtracting 6 from a zero-byte pair
-    // array, which otherwise underflows before the header can be accepted.
-    var max_power_of_two: usize = 1;
-    var expected_entry_selector: u16 = 0;
-    while (max_power_of_two * 2 <= pair_count) {
-        max_power_of_two *= 2;
-        expected_entry_selector += 1;
-    }
-
-    const expected_search_range = max_power_of_two * 6;
-    const pair_record_bytes = @as(usize, pair_count) * 6;
-    if (expected_search_range > std.math.maxInt(u16) or pair_record_bytes > std.math.maxInt(u16)) return error.BadSfnt;
-    const expected_range_shift = if (pair_count == 0) 0 else pair_record_bytes - expected_search_range;
-
-    // The legacy and Apple kern format-0 bodies share this OpenType binary
-    // search descriptor. Cangjie validates it even though lookups recompute the
-    // search bounds from nPairs; accepting inconsistent values would mean the
-    // same font bytes describe different pair arrays to different consumers.
-    if (try bin.readU16At(data, 2) != expected_search_range or
-        try bin.readU16At(data, 4) != expected_entry_selector or
-        try bin.readU16At(data, 6) != expected_range_shift)
-    {
-        return error.BadSfnt;
     }
 }
 

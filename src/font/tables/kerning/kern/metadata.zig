@@ -37,10 +37,25 @@ fn legacyInfo(
     errdefer allocator.free(subtables);
 
     var subtable_offset = kern.offset + 4;
-    for (subtables) |*subtable_info| {
-        const length = try bin.readU16At(data, subtable_offset + 2);
+    for (subtables, 0..) |*subtable_info, subtable_index| {
+        if (subtable_offset > kern.offset + kern.length or
+            kern.offset + kern.length - subtable_offset < 6)
+        {
+            return error.BadSfnt;
+        }
+        var length: usize = try bin.readU16At(data, subtable_offset + 2);
         const coverage = try bin.readU16At(data, subtable_offset + 4);
         const format = coverage >> 8;
+        if (format == 0 and subtable_index + 1 == subtables.len) {
+            if (kern.offset + kern.length - subtable_offset < 14) {
+                return error.BadSfnt;
+            }
+            const pair_count = try bin.readU16At(data, subtable_offset + 6);
+            const required_length = 14 + @as(usize, pair_count) * 6;
+            if (required_length <= kern.offset + kern.length - subtable_offset) {
+                length = @max(length, required_length);
+            }
+        }
         subtable_info.* = .{
             .offset = subtable_offset,
             .length = length,

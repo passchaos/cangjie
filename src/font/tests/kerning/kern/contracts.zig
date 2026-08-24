@@ -209,15 +209,16 @@ test "kern subtable sequences consume the complete declared payload" {
     }
 }
 
-test "format 0 search metadata is canonical for legacy and Apple tables" {
+test "format 0 ignores stale binary-search metadata" {
     {
         var data = [_]u8{0} ** 24;
         writeU16(&data, 2, 1);
         writeLegacyFormat0(&data, 4, 0x0001, 1, 1, -40);
         writeU16(&data, 12, 12);
-        try std.testing.expectError(
-            error.BadSfnt,
-            kern.validate(&data, record(&data), 2),
+        try kern.validate(&data, record(&data), 2);
+        try std.testing.expectEqual(
+            @as(i16, -40),
+            try kern.kerningAfterProof(&data, record(&data), 1, 1),
         );
     }
     {
@@ -226,11 +227,38 @@ test "format 0 search metadata is canonical for legacy and Apple tables" {
         writeU32(&data, 4, 1);
         writeAppleFormat0(&data, 8, 0x0000, 1, 1, -35);
         writeU16(&data, 22, 2);
-        try std.testing.expectError(
-            error.BadSfnt,
-            kern.validate(&data, record(&data), 2),
+        try kern.validate(&data, record(&data), 2);
+        try std.testing.expectEqual(
+            @as(i16, -35),
+            try kern.kerningAfterProof(&data, record(&data), 1, 1),
         );
     }
+}
+
+test "legacy final format 0 recovers a wrapped UInt16 length" {
+    const pair_count: u16 = 10_921;
+    const actual_length = 4 + 14 + @as(usize, pair_count) * 6;
+    const data = try std.testing.allocator.alloc(u8, actual_length);
+    defer std.testing.allocator.free(data);
+    @memset(data, 0);
+    writeU16(data, 2, 1);
+    // The true subtable length is 65,540 and therefore wraps to four.
+    writeU16(data, 6, @truncate(actual_length - 4));
+    writeU16(data, 8, 0x0001);
+    writeU16(data, 10, pair_count);
+    for (0..pair_count) |index| {
+        const offset = 18 + index * 6;
+        writeU16(data, offset, @intCast(index));
+        writeU16(data, offset + 2, 1);
+        writeI16(data, offset + 4, -1);
+    }
+
+    const table = record(data);
+    try kern.validate(data, table, pair_count + 1);
+    try std.testing.expectEqual(
+        @as(i16, -1),
+        try kern.kerningAfterProof(data, table, pair_count - 1, 1),
+    );
 }
 
 test "format 0 rejects truncated binary search headers" {

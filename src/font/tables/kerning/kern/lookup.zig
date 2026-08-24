@@ -29,12 +29,14 @@ fn legacyKerning(data: []const u8, kern: sfnt.Record, left: GlyphId, right: Glyp
     var subtable_offset = kern.offset + 4;
     var total: i32 = 0;
     var saw_matching_pair = false;
-    for (0..table_count) |_| {
+    for (0..table_count) |subtable_index| {
         if (subtable_offset > table_end or table_end - subtable_offset < 6) return error.BadSfnt;
         const subtable_version = try bin.readU16At(data, subtable_offset);
-        const length = try bin.readU16At(data, subtable_offset + 2);
+        const declared_length = try bin.readU16At(data, subtable_offset + 2);
         const coverage = try bin.readU16At(data, subtable_offset + 4);
-        if (length < 6 or length > table_end - subtable_offset) return error.BadSfnt;
+        const available = table_end - subtable_offset;
+        var length: usize = declared_length;
+        if (length > available) return error.BadSfnt;
         if (subtable_version != 0) return error.BadSfnt;
         const format = coverage >> 8;
         const horizontal = (coverage & 0x0001) != 0;
@@ -42,6 +44,13 @@ fn legacyKerning(data: []const u8, kern: sfnt.Record, left: GlyphId, right: Glyp
         const cross_stream = (coverage & 0x0004) != 0;
         const override = (coverage & 0x0008) != 0;
         if (format == 0 and horizontal and !minimum and !cross_stream) {
+            if (available < 14) return error.BadSfnt;
+            const pair_count = try bin.readU16At(data, subtable_offset + 6);
+            const required_length = 14 + @as(usize, pair_count) * 6;
+            if (required_length > available) return error.BadSfnt;
+            if (required_length > length and subtable_index + 1 == table_count) {
+                length = required_length;
+            }
             // OpenType/Windows subtables have a six-byte common header
             // before the format-0 binary-search payload.
             if (try kernFormat0Body(data[subtable_offset + 6 .. subtable_offset + length], left, right)) |value| {
@@ -53,6 +62,7 @@ fn legacyKerning(data: []const u8, kern: sfnt.Record, left: GlyphId, right: Glyp
                 }
             }
         }
+        if (length < 6) return error.BadSfnt;
         subtable_offset += length;
     }
     if (!saw_matching_pair) return 0;

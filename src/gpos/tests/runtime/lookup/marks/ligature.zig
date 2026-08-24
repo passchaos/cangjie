@@ -111,6 +111,61 @@ test "MarkLigPos uses source metadata for component selection" {
     try std.testing.expectEqual(@as(i16, 285), mark.y_placement);
 }
 
+test "MarkLigPos uses last component for a MultipleSubst base" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 64;
+    writeMarkLigatureHeader(&bytes, 12, 18, 24, 36);
+    writeCoverage1(&bytes, 12, 22);
+    writeCoverage1(&bytes, 18, 20);
+    writeU16(&bytes, 24, 1);
+    writeU16(&bytes, 26, 0);
+    writeU16(&bytes, 28, 6);
+    writeAnchor1(&bytes, 30, 10, 15);
+    writeU16(&bytes, 36, 1);
+    writeU16(&bytes, 38, 4);
+    writeU16(&bytes, 40, 2);
+    writeU16(&bytes, 42, 8);
+    writeU16(&bytes, 44, 14);
+    writeAnchor1(&bytes, 48, 100, 120);
+    writeAnchor1(&bytes, 54, 260, 300);
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+    };
+    var components = ligature_provenance.Store{};
+    defer components.deinit(allocator);
+    try components.infos.appendSlice(allocator, &.{
+        .{ .flags = .{
+            .multiplied = true,
+            .multiple_component = 0,
+        } },
+        .{ .flags = .{
+            .multiplied = true,
+            .multiple_component = 1,
+        } },
+        .{},
+    });
+    var adjustments = std.ArrayList(marks.ligature.Adjustment).empty;
+    defer adjustments.deinit(allocator);
+
+    try marks.ligature.collect(
+        view,
+        0,
+        &.{ 20, 21, 22 },
+        &adjustments,
+        allocator,
+        0,
+        .{ .run_metadata = &.{
+            .ligature_components = &components,
+        } },
+    );
+    const mark = output_state.adjustments.find(adjustments.items, 2).?;
+    try std.testing.expectEqual(@as(?usize, 0), mark.attachment_parent_index);
+    try std.testing.expectEqual(@as(i16, 250), mark.x_placement);
+    try std.testing.expectEqual(@as(i16, 285), mark.y_placement);
+}
+
 test "MarkLigPos skips lookup-flag ignored glyphs" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 64;

@@ -4178,11 +4178,17 @@ shaping-performance superiority.
 - Contextual GSUB now distinguishes input-iterator and context-iterator joiner
   policy exactly: `auto_zwj=false` keeps ZWJ visible as authored input, while
   lookbehind/lookahead still skips an untouched ZWJ. This closes HarfRust's
-  Sinhala fuzz regression `U+0DC1 U+200D U+0DCA U+200D U+0DBB U+0DD2`;
-  Cangjie, HarfBuzz 14.3.0, and HarfRust now produce glyph ids `2,7,0`,
-  advances `917,0,600`, and comparison checksum `fece9011cdd48750`.
+  upstream Sinhala fuzz regression
+  `U+0DC1 U+200D U+0DCA U+200D U+0DBB U+0DD3`.
 - Generic mark zeroing now follows the default-shaper policy for Thai and Lao
   while preserving the explicit no-zeroing policies for Indic, Khmer, Hangul,
   and Myanmar Zawgyi. This restores all four retained Thai
   `zero-width-marks.tests` cases and keeps the Zawgyi authored-advance control
   unchanged.
+- MultipleSubst output now retains HarfBuzz's MarkLig component semantics: its
+  first piece may act as the attachment base but, without a real ligature id,
+  selects the last component anchor. The Rasa Gujarati fuzz row
+  `U+0A93 U+0ABC` now matches HarfBuzz 14.3.0 and HarfRust with glyph ids
+  `5,22,21`, advances `982,0,0`, offsets `0,-1,0`, and checksum
+  `993f2b76f17eda72`. All nine upstream HarfRust `tests/custom/fuzzer.tests`
+  rows are retained as `shaping-corpus-parity-smoke` HarfRust gates.

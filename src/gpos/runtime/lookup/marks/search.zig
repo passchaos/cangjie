@@ -241,15 +241,35 @@ pub fn ligatureComponentIndex(
     if (component_count <= 1) return 0;
 
     const metadata = run.run_metadata;
+    const ligature_info = if (metadata.ligature_components) |store|
+        if (ligature_position < store.infos.items.len)
+            store.infos.items[ligature_position]
+        else
+            null
+    else
+        null;
+    if (ligature_info) |info| {
+        if (baseMarkLigatureActsAsSingleBase(
+            run.script_tag,
+            info.flags.base_mark_ligature,
+        )) return 0;
+        if (info.flags.multiplied and
+            info.flags.multiple_component == 0 and
+            !info.isLigature())
+        {
+            // MultipleSubst pieces share a cluster but do not acquire a real
+            // ligature id. HarfBuzz consequently treats the first piece as
+            // the attachment base and selects the last MarkLig component,
+            // rather than inferring a component from marks that precede the
+            // target. A multiplied real ligature still has source provenance
+            // below and must retain source-based component selection.
+            return component_count - 1;
+        }
+    }
     if (metadata.glyph_source_indices) |sources| {
         if (mark_position < sources.len) {
             if (metadata.ligature_components) |store| {
-                if (ligature_position < store.infos.items.len) {
-                    const info = store.infos.items[ligature_position];
-                    if (baseMarkLigatureActsAsSingleBase(
-                        run.script_tag,
-                        info.flags.base_mark_ligature,
-                    )) return 0;
+                if (ligature_info) |info| {
                     const component_sources =
                         store.logicalComponentSources(info) orelse
                         return error.InvalidShapingInput;

@@ -1895,8 +1895,36 @@ const retained_harfrust_custom_parity_gates = [_]struct {
         .text = "\u{1ea4}n",
     },
     .{
+        .font_file = "AdobeBlank-Regular.ttf",
+        .text = "\u{0f42}\u{0fb7}",
+    },
+    .{
+        .font_file = "Rasa.subset1.otf",
+        .text = "\u{0a93}\u{0abc}",
+    },
+    .{
+        .font_file = "AdobeBlank-Regular.ttf",
+        .text = "\u{104a}\u{102f}",
+    },
+    .{
+        .font_file = "NotoSansMyanmarUI-Regular.subset1.otf",
+        .text = "\u{1004}\u{103a}\u{1039}\u{1002}\u{101c}",
+    },
+    .{
         .font_file = "NotoSansSinhala.subset1.otf",
-        .text = "\u{0dc1}\u{200d}\u{0dca}\u{200d}\u{0dbb}\u{0dd2}",
+        .text = "\u{0dc1}\u{200d}\u{0dca}\u{200d}\u{0dbb}\u{0dd3}",
+    },
+    .{
+        .font_file = "LaBelleAurore.ttf",
+        .text = "ke\u{031d}",
+    },
+    .{
+        .font_file = "Linefont.ttf",
+        .text = "T\u{021f}",
+    },
+    .{
+        .font_file = "Linefont.ttf",
+        .text = "\u{021f}a",
     },
 };
 

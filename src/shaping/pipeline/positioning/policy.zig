@@ -54,7 +54,9 @@ pub fn markAdvanceZeroing(
     // HarfBuzz's default shaper zeroes late for every GDEF mark, and when a
     // font has no GlyphClassDef it synthesizes that class from Unicode Mn.
     // Script shapers with an explicit NONE policy must remain exempt: Indic,
-    // Khmer, Hangul, Thai, and Lao intentionally retain authored advances.
+    // Khmer, Hangul, and Myanmar Zawgyi intentionally retain authored
+    // advances. Thai and Lao use the late-zero policy despite disabling
+    // fallback mark positioning.
     const synthesized_mark = !has_gdef_glyph_classes and
         unicode.isNonspacingMarkCodepoint(source_codepoint) and
         !unicode.isDefaultIgnorableForShaping(source_codepoint) and
@@ -207,7 +209,7 @@ fn usesLateGdefMarkZeroing(
 ) bool {
     if (indic.shouldShape(script_tag)) return false;
     return switch (script_tag) {
-        .hang, .khmr, .thai, .lao => false,
+        .hang, .khmr, .qaag => false,
         else => true,
     };
 }
@@ -383,4 +385,30 @@ test "generic shaping zeroes synthesized Unicode nonspacing marks late" {
         .{ .script_tag = .hang },
     );
     try std.testing.expectEqual(MarkAdvanceZeroing{}, hangul);
+
+    const thai = markAdvanceZeroing(
+        false,
+        .unclassified,
+        false,
+        0x0e34,
+        false,
+        false,
+        false,
+        false,
+        .{ .script_tag = .thai },
+    );
+    try std.testing.expect(thai.zero_advance);
+
+    const zawgyi = markAdvanceZeroing(
+        false,
+        .unclassified,
+        false,
+        0x1037,
+        false,
+        false,
+        false,
+        false,
+        .{ .script_tag = .qaag },
+    );
+    try std.testing.expectEqual(MarkAdvanceZeroing{}, zawgyi);
 }

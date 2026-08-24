@@ -4181,3 +4181,8 @@ shaping-performance superiority.
   Sinhala fuzz regression `U+0DC1 U+200D U+0DCA U+200D U+0DBB U+0DD2`;
   Cangjie, HarfBuzz 14.3.0, and HarfRust now produce glyph ids `2,7,0`,
   advances `917,0,600`, and comparison checksum `fece9011cdd48750`.
+- Generic mark zeroing now follows the default-shaper policy for Thai and Lao
+  while preserving the explicit no-zeroing policies for Indic, Khmer, Hangul,
+  and Myanmar Zawgyi. This restores all four retained Thai
+  `zero-width-marks.tests` cases and keeps the Zawgyi authored-advance control
+  unchanged.

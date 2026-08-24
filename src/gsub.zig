@@ -728,7 +728,8 @@ const ContextualRecordExecutor = struct {
             run_digest_cache,
             sidecar,
         )) return;
-        return applyLookupWithIndexGeneric(
+        return lookup_execution.generic.applyAfterPlanProof(
+            ContextualRecordExecutor,
             table,
             lookup_offset,
             lookup_index,
@@ -736,6 +737,7 @@ const ContextualRecordExecutor = struct {
             allocator,
             options,
             run_digest_cache,
+            sidecar,
         );
     }
 

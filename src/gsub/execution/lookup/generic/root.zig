@@ -97,3 +97,41 @@ pub noinline fn apply(
         run_digest_cache,
     );
 }
+
+/// Defensive lookup execution after a cached plan proved the exact validated
+/// sidecar identity. This keeps unsupported accelerator payloads on the
+/// generic semantic path without parsing or re-indexing their fixed header.
+pub noinline fn applyAfterPlanProof(
+    comptime Executor: type,
+    view: View,
+    lookup_offset: usize,
+    lookup_index: u16,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    run: Options,
+    run_digest_cache: *RunDigestCache,
+    sidecar: *const runtime_dispatch.Lookup,
+) Error!void {
+    std.debug.assert(view.assume_validated);
+    std.debug.assert(run.shape_profile == null);
+    var lookup_run = run;
+    if ((sidecar.lookup_flag & 0x0010) != 0) {
+        lookup_run.active_mark_filtering_set = sidecar.mark_filtering_set;
+        try filtering.validateMarkFilteringSetIndex(lookup_run);
+    }
+    lookup_run.match_source_syllable =
+        runtime_dispatch.matchesSourceSyllable(lookup_index, run);
+    return execute.apply(
+        Executor,
+        view,
+        lookup_offset,
+        lookup_index,
+        sidecar.lookup_type,
+        sidecar.lookup_flag,
+        sidecar.subtable_count,
+        glyphs,
+        allocator,
+        lookup_run,
+        run_digest_cache,
+    );
+}

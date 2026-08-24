@@ -1146,6 +1146,15 @@ Current local snapshot after the Nastaliq parity work:
   200 passes reduced instructions by another `0.43%`, branches by `1.31%`, and
   cycles by about `1.98%`; 11-sample medians improved from an average
   `938.641` to `924.755 ns/glyph`.
+- Generic GSUB fallback execution now accepts the same cached-plan proof after
+  an accelerator intentionally declines an unsupported fast payload. This
+  preserves the complete generic semantics while bypassing profiling setup,
+  header lookup, validation gates, and an unconditional options copy that the
+  validated plan had already discharged. Fixed-CPU-30 A/B/B/A counters over
+  200 complete Devanagari `hi-words` passes reduced retired instructions by
+  about `2.27%`, branches by `2.82%`, and cycles by about `2.20%`; branch
+  misses rose about `0.73%`. The corresponding 11-sample medians improved from
+  an average `944.678` to `912.692 ns/glyph`, with identical checksums.
 - Validated, non-profiled GSUB now also dispatches accelerated direct
   ContextSubst lookups through the small fast wrapper instead of entering the
   generic profiling-capable dispatcher before reaching the same predecoded

@@ -1886,6 +1886,20 @@ const retained_text_rendering_rejection_gates = [_]struct {
     },
 };
 
+const retained_harfrust_custom_parity_gates = [_]struct {
+    font_file: []const u8,
+    text: []const u8,
+}{
+    .{
+        .font_file = "PT_Sans-Caption-Web-Regular.ttf",
+        .text = "\u{1ea4}n",
+    },
+    .{
+        .font_file = "NotoSansSinhala.subset1.otf",
+        .text = "\u{0dc1}\u{200d}\u{0dca}\u{200d}\u{0dbb}\u{0dd2}",
+    },
+};
+
 const retained_inline_harfrust_parity_gates = [_]struct {
     font_hash: []const u8,
     text: []const u8,
@@ -3269,6 +3283,26 @@ pub fn build(b: *std.Build) void {
                 inline_harfrust_parity_cmd.addArg("--bot");
             }
             shaping_corpus_parity_smoke_step.dependOn(&inline_harfrust_parity_cmd.step);
+        }
+        for (retained_harfrust_custom_parity_gates) |gate| {
+            const font_path = b.fmt(
+                "{s}/harfrust/harfrust/tests/fonts/rb_custom/{s}",
+                .{ work_root, gate.font_file },
+            );
+            const custom_harfrust_parity_cmd =
+                b.addRunArtifact(shape_bench_exe);
+            custom_harfrust_parity_cmd.addArgs(&.{
+                "--engine",     "compare-harfrust",
+                "--font",       font_path,
+                "--text",       gate.text,
+                "--direction",  "ltr",
+                "--iterations", "1",
+                "--warmup",     "0",
+                "--samples",    "1",
+            });
+            shaping_corpus_parity_smoke_step.dependOn(
+                &custom_harfrust_parity_cmd.step,
+            );
         }
         for (retained_inline_cangjie_expected_gates) |gate| {
             const expected_cmd = b.addRunArtifact(shape_bench_exe);

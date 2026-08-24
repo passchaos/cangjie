@@ -35,8 +35,10 @@ pub fn staged(
         if (plan.entries.len != 0) return error.BadGsub;
         return;
     }
-    const lookup_list = try requiredLookupList(view);
-    const lookup_count = try view.readU16(lookup_list);
+    const lookup_count = if (plan_sidecars_proved)
+        undefined
+    else
+        try view.readU16(try requiredLookupList(view));
     var cache = prefilter.Cache.init();
     for (plan.entries) |entry| {
         var selected = prepared;

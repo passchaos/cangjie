@@ -4024,6 +4024,14 @@ shaping-performance superiority.
   about `1.5%`, and cycles by about `1.4%`; 11-sample medians improved by
   roughly `1.1--1.3%`. Roboto and Amiri retired-work controls remained within
   `0.02%`, and all checksums were unchanged.
+- Cached GSUB plans whose sidecars share the plan's construction proof no
+  longer decode LookupList solely to recover a defensive lookup count. Their
+  per-lookup bounds checks are debug ownership assertions, while detached plans
+  retain the runtime count and errors. Fixed-CPU-30 A/B/B/A counters over 200
+  NotoSansDevanagari `hi-words` passes reduced retired instructions by about
+  `0.86%`, branches by about `1.09%`, and cycles by about `0.5%`. Roboto stayed
+  instruction-neutral, Amiri improved about `0.08%`, and checksums were
+  unchanged.
 - Direct scan conversion now dispatches the common two-active-edge row once,
   outside the subpixel loop, instead of retesting that invariant for all four
   vertical samples. Fixed-CPU-30 A/B/B/A counters over 20,000 direct dirty

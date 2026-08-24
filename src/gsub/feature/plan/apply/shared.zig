@@ -26,7 +26,11 @@ pub fn entry(
     run: Options,
     cache: *RunDigestCache,
 ) Error!void {
-    if (plan_entry.lookup_offsets.len != plan_entry.lookups.len) {
+    if (plan_sidecars_proved) {
+        std.debug.assert(
+            plan_entry.lookup_offsets.len == plan_entry.lookups.len,
+        );
+    } else if (plan_entry.lookup_offsets.len != plan_entry.lookups.len) {
         return error.BadGsub;
     }
     const plan_sidecars = if (plan_sidecars_proved)
@@ -36,7 +40,6 @@ pub fn entry(
     if (run.disabled_lookups.len == 0) {
         if (run.shape_profile == null) {
             for (plan_entry.lookups, plan_entry.lookup_offsets) |index, offset| {
-                if (index >= lookup_count) return error.BadGsub;
                 if (plan_sidecars_proved) {
                     std.debug.assert(index < plan_sidecars.len);
                     const sidecar = &plan_sidecars[index];
@@ -57,6 +60,7 @@ pub fn entry(
                         sidecar,
                     );
                 } else {
+                    if (index >= lookup_count) return error.BadGsub;
                     try Executor.applyLookupUnprofiled(
                         view,
                         offset,
@@ -71,7 +75,11 @@ pub fn entry(
             return;
         }
         for (plan_entry.lookups, plan_entry.lookup_offsets) |index, offset| {
-            if (index >= lookup_count) return error.BadGsub;
+            if (plan_sidecars_proved) {
+                std.debug.assert(index < plan_sidecars.len);
+            } else if (index >= lookup_count) {
+                return error.BadGsub;
+            }
             try Executor.applyLookup(
                 view,
                 offset,
@@ -85,7 +93,11 @@ pub fn entry(
         return;
     }
     for (plan_entry.lookups, plan_entry.lookup_offsets) |index, offset| {
-        if (index >= lookup_count) return error.BadGsub;
+        if (plan_sidecars_proved) {
+            std.debug.assert(index < plan_sidecars.len);
+        } else if (index >= lookup_count) {
+            return error.BadGsub;
+        }
         if (lookup_order.contains(run.disabled_lookups, index)) continue;
         try Executor.applyLookup(
             view,

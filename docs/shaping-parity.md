@@ -1139,6 +1139,13 @@ Current local snapshot after the Nastaliq parity work:
   fell about `0.74%` while cycles were effectively neutral. The same check's
   11-sample medians averaged `937.007` versus `936.558 ns/glyph`, with
   identical output checksums.
+  The internal proof now also hoists the accelerator-slice unwrap outside each
+  plan entry and keeps its length/offset/type invariants as debug assertions;
+  release shaping therefore reaches the proved sidecar without repeating
+  impossible failure branches. Incremental fixed-CPU-30 A/B/B/A counters over
+  200 passes reduced instructions by another `0.43%`, branches by `1.31%`, and
+  cycles by about `1.98%`; 11-sample medians improved from an average
+  `938.641` to `924.755 ns/glyph`.
 - Validated, non-profiled GSUB now also dispatches accelerated direct
   ContextSubst lookups through the small fast wrapper instead of entering the
   generic profiling-capable dispatcher before reaching the same predecoded

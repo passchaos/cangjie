@@ -29,25 +29,23 @@ pub fn entry(
     if (plan_entry.lookup_offsets.len != plan_entry.lookups.len) {
         return error.BadGsub;
     }
+    const plan_sidecars = if (plan_sidecars_proved)
+        run.lookup_accelerators.?
+    else
+        undefined;
     if (run.disabled_lookups.len == 0) {
         if (run.shape_profile == null) {
             for (plan_entry.lookups, plan_entry.lookup_offsets) |index, offset| {
                 if (index >= lookup_count) return error.BadGsub;
                 if (plan_sidecars_proved) {
-                    const accelerators = run.lookup_accelerators orelse
-                        return error.InvalidShapingInput;
-                    if (index >= accelerators.len) {
-                        return error.InvalidShapingInput;
-                    }
-                    const sidecar = &accelerators[index];
+                    std.debug.assert(index < plan_sidecars.len);
+                    const sidecar = &plan_sidecars[index];
                     // The internal plan and sidecar slices were built from the
                     // same validated font table. Keep a debug assertion for
                     // that ownership contract without paying an identity
                     // branch for every lookup in release shaping.
                     std.debug.assert(sidecar.lookup_offset == offset);
-                    if (sidecar.lookup_type == 0) {
-                        return error.InvalidShapingInput;
-                    }
+                    std.debug.assert(sidecar.lookup_type != 0);
                     try Executor.applyLookupUnprofiledAfterPlanProof(
                         view,
                         offset,

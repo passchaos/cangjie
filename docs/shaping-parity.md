@@ -120,7 +120,10 @@ regression gate, not a replacement for coverage-guided fuzzing or the broader
 malformed-table matrix still required by the completion bar.
 
 The same seed set also drives Zig 0.16's coverage-guided fuzzer through a
-bounded sequence of correlated byte replacements plus optional truncation:
+bounded sequence of correlated byte replacements plus optional truncation. A
+second fuzz target constructs valid `morx`, `mort`, `kerx`, and `trak` fonts
+before applying the same edit strategy, keeping AAT parsers reachable without
+depending on an external Apple-font corpus:
 
 ```sh
 zig build font-fuzz --fuzz=100K
@@ -129,7 +132,12 @@ zig build font-fuzz --fuzz=100K
 Without `--fuzz`, the step executes each embedded seed and one deterministic
 Smith input as a fast CI-compatible smoke check. ReleaseSafe is forced for
 this target so safety checks remain enabled regardless of the surrounding
-build mode.
+build mode. A retained 100K-run campaign exercised both targets for 213,657
+inputs and reached 4,419 of 28,926 instrumented edges without a crash, leak, or
+safety trap. The initial campaign exposed a CID CFF ownership leak when parsing
+succeeded but a later whole-font validation failed; `Font.parseFace` now
+releases that decoded Font DICT state transactionally and a regression retains
+the exact failure path.
 
 For output parity against HarfRust, build the local CLI once:
 

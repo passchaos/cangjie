@@ -1,6 +1,7 @@
 //! Coverage-guided malformed-font fuzz entry point for Zig's built-in fuzzer.
 
 const std = @import("std");
+const cangjie = @import("cangjie");
 const driver = @import("font_fuzz/driver.zig");
 
 const seeds = [_][]const u8{
@@ -48,4 +49,32 @@ fn fuzzOne(_: void, smith: *std.testing.Smith) !void {
     else
         @as(u16, @intCast(seed.len));
     try driver.exerciseCase(std.testing.allocator, input[0..input_len]);
+}
+
+test "coverage-guided AAT table parsing" {
+    try std.testing.fuzz({}, fuzzAatTables, .{});
+}
+
+fn fuzzAatTables(_: void, smith: *std.testing.Smith) !void {
+    const allocator = std.testing.allocator;
+    const Kind = enum(u8) { morx, mort, kerx, trak };
+    const kind = smith.value(Kind);
+    const seed = switch (kind) {
+        .morx => try cangjie.testing.test_font.buildMorxTtf(allocator),
+        .mort => try cangjie.testing.test_font.buildMortTtf(allocator),
+        .kerx => try cangjie.testing.test_font.buildKerxTtf(allocator),
+        .trak => try cangjie.testing.test_font.buildTrakTtf(allocator),
+    };
+    defer allocator.free(seed);
+
+    const mutation_count = smith.valueRangeAtMost(u8, 0, 32);
+    for (0..mutation_count) |_| {
+        seed[smith.index(seed.len)] = smith.value(u8);
+    }
+    const truncate = smith.boolWeighted(8, 1);
+    const input_len = if (truncate)
+        smith.valueRangeAtMost(u16, 0, @intCast(seed.len))
+    else
+        @as(u16, @intCast(seed.len));
+    try driver.exerciseCase(allocator, seed[0..input_len]);
 }

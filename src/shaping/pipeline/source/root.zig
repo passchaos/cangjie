@@ -107,10 +107,7 @@ pub fn populate(
         }
         if (track_bidi_reorder and
             !result.may_need_bidi_reorder and
-            !(if (common_ltr_script) |range|
-                codepoint -% range.start < range.len
-            else
-                false))
+            !scalarInRange(codepoint, common_ltr_script))
         {
             result.may_need_bidi_reorder =
                 unicode.mayNeedBidiVisualReorder(codepoint);
@@ -288,6 +285,11 @@ fn commonLtrScriptRange(script: unicode.Script) ?ScriptRange {
     };
 }
 
+inline fn scalarInRange(codepoint: u21, range: ?ScriptRange) bool {
+    const active = range orelse return false;
+    return codepoint -% active.start < active.len;
+}
+
 const DecodedUtf8 = struct {
     codepoint: u21,
     byte_len: u3,
@@ -356,14 +358,13 @@ test "validated source decoder matches the standard UTF-8 decoder" {
 test "source scan recognizes bidi visual-reorder triggers" {
     for (0x0900..0x0980) |codepoint| {
         const range = commonLtrScriptRange(.devanagari).?;
-        try std.testing.expect(@as(u21, @intCast(codepoint)) -%
-            range.start < range.len);
+        try std.testing.expect(scalarInRange(@intCast(codepoint), range));
         try std.testing.expect(!unicode.mayNeedBidiVisualReorder(
             @intCast(codepoint),
         ));
     }
     const range = commonLtrScriptRange(.devanagari).?;
-    try std.testing.expect(!(0x202e -% range.start < range.len));
+    try std.testing.expect(!scalarInRange(0x202e, range));
     try std.testing.expect(unicode.mayNeedBidiVisualReorder(0x05d0));
     try std.testing.expect(unicode.mayNeedBidiVisualReorder(0x202e));
 }

@@ -1084,8 +1084,8 @@ Current local snapshot after the Nastaliq parity work:
   proof, while mixed text and explicit UAX #9 controls retain exact-class
   lookup. Fixed-CPU-30 A/B/B/A counters over 200 complete
   NotoSansDevanagari `hi-words` passes reduced retired instructions by about
-  `2.07%` and branches by about `2.15%`; the candidate timing pair measured
-  `991.230`/`990.677 ns/glyph` against baseline
+  `2.1%` and branches by about `2.0%`; the retained A/B/B/A candidate timing
+  pair measured `991.230`/`990.677 ns/glyph` against baseline
   `993.876`/`995.112 ns/glyph`. Full corpus comparison still passes HarfBuzz
   with checksum `b01a5388ce792b49`. A subsequent strict
   Cangjie/HarfRust/HarfRust/Cangjie matrix over ten passes and 11 samples

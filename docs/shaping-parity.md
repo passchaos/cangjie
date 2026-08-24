@@ -2760,9 +2760,11 @@ shaping-performance superiority.
 - Expand Myanmar parity beyond the current focused `mym2` fonts and in-house
   rows. The Unicode 17 maximal-munch syllable grammar, kinzi, broken-cluster
   dotted circles, explicit FE00 handling, and the legacy `mymr` default-shaper
-  selection now have retained coverage, but broader production fonts,
-  extension-block combinations, malformed tables, and fuzz/corpus failures
-  still need retained gates before claiming broad Myanmar parity. The in-house
+  selection now have retained coverage. Broader production-font coverage now
+  includes installed Noto Sans Myanmar UI and Noto Serif Myanmar, and retained
+  upstream corpora cover Myanmar, Shan, and extension-block sequences, but
+  more independent font families and malformed-table/corpus discoveries remain
+  before claiming broad Myanmar parity. The in-house
   `myanmar-zawgyi.tests` `Qaag` row passes by
   treating Myanmar Zawgyi as HarfBuzz does: a script tag with auto shaping,
   normalization, zero-width-mark handling, and fallback positioning disabled.

@@ -3849,6 +3849,17 @@ pub fn build(b: *std.Build) void {
     });
     bench_smoke_step.dependOn(&glyph_outline_smoke_cmd.step);
 
+    const glyph_bounds_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
+    glyph_bounds_smoke_cmd.addArgs(&.{
+        "--mode",       "bounds",
+        "--format",     "tsv",
+        "--builtin",    "gvar-compound",
+        "--iterations", "1",
+        "--warmup",     "0",
+        "--samples",    "1",
+    });
+    bench_smoke_step.dependOn(&glyph_bounds_smoke_cmd.step);
+
     const glyph_global_metrics_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
     glyph_global_metrics_smoke_cmd.addArgs(&.{
         "--mode",       "global-metrics",

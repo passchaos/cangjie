@@ -446,7 +446,7 @@ test "trusted glyph bounds reuse the immutable parsed face proof" {
     // the parse proof and read the same already-validated header.
     bytes[glyf_tail orelse return error.MissingTable] +%= 1;
     try std.testing.expectError(error.BadSfnt, face.glyphs().bounds(1));
-    try std.testing.expectEqual(expected, try face.glyphs().boundsTrusted(1));
+    try std.testing.expectEqual(expected, try face.glyphs().session().bounds(1));
 }
 
 test "caches glyph metrics by variation coordinates during shaping" {

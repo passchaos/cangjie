@@ -206,6 +206,21 @@ pub const View = struct {
 pub const Session = struct {
     implementation: *const font_mod.Font,
 
+    /// Read bounds using the validation proof established by `Face.parse`.
+    ///
+    /// As with `outline`, the face and its borrowed source bytes must remain
+    /// alive and unchanged for the complete session lifetime. Callers that
+    /// permit post-parse byte mutation must use `Face.glyphs().bounds`.
+    pub fn bounds(
+        self: Session,
+        glyph_id: glyph_mod.GlyphId,
+    ) font_mod.FontError!glyph_mod.Bounds {
+        return font_mod.immutable_face_backend.glyphBounds(
+            self.implementation,
+            glyph_id,
+        );
+    }
+
     pub fn outline(
         self: Session,
         allocator: std.mem.Allocator,
@@ -259,5 +274,19 @@ test "glyph extents use HarfBuzz bearing signs" {
             .x_max = 30,
             .y_max = 80,
         }),
+    );
+}
+
+test "glyph sessions expose parse-proven bounds" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("../../../test_font.zig")
+        .buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try @import("../root.zig").Face.parse(allocator, bytes);
+    defer face.deinit();
+
+    try std.testing.expectEqual(
+        try face.glyphs().bounds(1),
+        try face.glyphs().session().bounds(1),
     );
 }

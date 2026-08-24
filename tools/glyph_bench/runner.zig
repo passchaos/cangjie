@@ -170,6 +170,7 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, g
     switch (options.mode) {
         .charmap => try runCharmapIterations(font, options, iterations, checksum),
         .metrics => try runMetricsIterations(font, glyph_id, iterations, checksum),
+        .bounds => try runBoundsIterations(font, glyph_id, iterations, checksum),
         .global_metrics => try runGlobalMetricsIterations(font, iterations, checksum),
         .family_name => try runFamilyNameIterations(allocator, font, iterations, checksum),
         .glyph_name => try runGlyphNameIterations(font, glyph_id, iterations, checksum),
@@ -185,6 +186,22 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, g
         .raster_reuse => try runRasterReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_prepare => try runRasterPrepareIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_prepared => try runRasterPreparedIterations(allocator, font, glyph_id, options, iterations, checksum),
+    }
+}
+
+fn runBoundsIterations(
+    font: *const cangjie.font.Face,
+    glyph_id: cangjie.font.GlyphId,
+    iterations: usize,
+    checksum: *u64,
+) !void {
+    const session = font.glyphs().session();
+    for (0..iterations) |_| {
+        const bounds = try session.bounds(glyph_id);
+        checksum.* +%= @as(u32, @bitCast(@as(f32, @floatFromInt(bounds.x_min))));
+        checksum.* +%= @as(u32, @bitCast(@as(f32, @floatFromInt(bounds.y_min))));
+        checksum.* +%= @as(u32, @bitCast(@as(f32, @floatFromInt(bounds.x_max))));
+        checksum.* +%= @as(u32, @bitCast(@as(f32, @floatFromInt(bounds.y_max))));
     }
 }
 

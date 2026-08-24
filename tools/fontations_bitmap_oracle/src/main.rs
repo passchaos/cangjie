@@ -28,6 +28,7 @@ fn main() {
         "bitmap-bench" => bitmap_bench(&font, glyph_id, &mut args),
         "outline" => outline(&font, glyph_id, &mut args),
         "metrics" => metrics(&font, glyph_id, &mut args),
+        "bounds" => bounds(&font, glyph_id, &mut args),
         "global-metrics" => global_metrics(&font, &mut args),
         "family-name" => family_name(&font, &mut args),
         "glyph-name" => glyph_name(&font, glyph_id, &mut args),
@@ -432,6 +433,41 @@ fn metrics(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = St
     }
     values.sort_by(f64::total_cmp);
     println!("engine=skrifa\tmode=metrics\titerations={iterations}\tsamples={samples}\tmedian_ns_per_iter={:.3}\tchecksum={checksum:016x}", values[values.len()/2]);
+}
+
+fn bounds(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {
+    let (iterations, samples) = repeated_args(args);
+    let metrics = font.glyph_metrics(Size::unscaled(), LocationRef::default());
+    let gid = GlyphId::new(glyph_id);
+    let expected = metrics
+        .bounds(gid)
+        .unwrap_or_else(|| fail("missing glyph bounds"));
+    let mut values = Vec::with_capacity(samples);
+    let mut checksum = 0_u64;
+    for _ in 0..samples {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let bounds = metrics
+                .bounds(gid)
+                .unwrap_or_else(|| fail("missing glyph bounds"));
+            checksum = checksum
+                .wrapping_add(u64::from(bounds.x_min.to_bits()))
+                .wrapping_add(u64::from(bounds.y_min.to_bits()))
+                .wrapping_add(u64::from(bounds.x_max.to_bits()))
+                .wrapping_add(u64::from(bounds.y_max.to_bits()));
+            black_box(bounds);
+        }
+        values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
+    }
+    values.sort_by(f64::total_cmp);
+    println!(
+        "engine=skrifa\tmode=bounds\titerations={iterations}\tsamples={samples}\tmedian_ns_per_iter={:.3}\tbounds={},{},{},{}\tchecksum={checksum:016x}",
+        values[values.len() / 2],
+        expected.x_min,
+        expected.y_min,
+        expected.x_max,
+        expected.y_max,
+    );
 }
 
 fn charmap(font: &FontRef<'_>, codepoint: u32, args: &mut impl Iterator<Item = String>) {

@@ -28,11 +28,14 @@ cargo run --release --manifest-path tools/fontations_bitmap_oracle/Cargo.toml --
 ```
 
 Repeated unscaled glyph metrics and Unicode charmap lookups use the same final
-two arguments (`ITERATIONS SAMPLES`):
+two arguments (`ITERATIONS SAMPLES`). `bounds` compares the complete unscaled
+glyph bounding box, including outline-derived CFF and variable-font bounds:
 
 ```sh
 cargo run --release --manifest-path tools/fontations_bitmap_oracle/Cargo.toml -- \
   /path/to/font.ttf metrics GLYPH_ID 1000000 31
+cargo run --release --manifest-path tools/fontations_bitmap_oracle/Cargo.toml -- \
+  /path/to/font.ttf bounds GLYPH_ID 1000000 31
 cargo run --release --manifest-path tools/fontations_bitmap_oracle/Cargo.toml -- \
   /path/to/font.ttf charmap CODEPOINT 1000000 31
 ```

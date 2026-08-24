@@ -256,6 +256,15 @@ fresh Skrifa controls at `67.78` and `104.61 ns`. Low-level attribute reads stil
 post-parse checksum mutations. These are narrow repeated classification
 lookups, not an overall Fontations performance claim.
 
+Unscaled glyph bounds now have a dedicated same-host benchmark boundary in
+both `glyph-bench` and the pinned Skrifa oracle. Both produce `(29,0,1310,1456)`
+for Roboto glyph 38 and `(37,-240,493,487)` for Source Serif Variable glyph
+34. Fixed-CPU-30 Cangjie/Skrifa/Skrifa/Cangjie medians were
+`9.47/32.30/32.31/9.47 ns` for the static glyf row and
+`9.90/982.61/973.03/9.89 ns` for the variable-font default-location row. The
+latter difference reflects Cangjie's immutable default-instance fast path;
+non-default gvar/CFF bounds remain separately covered by outline parity.
+
 Variation axes and named instances now have a combined, non-allocating Face
 summary boundary as well. The retained two-axis/two-instance fixture yields
 the same complete field checksum `000000038fe9e2f0` in Cangjie and Skrifa,

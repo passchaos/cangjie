@@ -169,6 +169,39 @@ fn markDev2SourceSyllablesAndBasicFeatures(
     return marked;
 }
 
+/// Facts gathered alongside the `dev2` syllable/source-feature pass. They let
+/// later reordering stages skip complete glyph scans when a source run cannot
+/// contain the relevant character at all.
+pub const Dev2SourceSummary = struct {
+    has_basic_source_features: bool,
+    has_placeholder: bool,
+    has_pre_base_matra: bool,
+};
+
+pub fn markDev2SourceMetadata(
+    source_syllables: []u8,
+    source_features: []u32,
+    codepoints: []const u21,
+) Dev2SourceSummary {
+    const has_basic_source_features =
+        markDev2SourceSyllablesAndBasicFeatures(
+            source_syllables,
+            source_features,
+            codepoints,
+        );
+    var has_placeholder = false;
+    var has_pre_base_matra = false;
+    for (codepoints) |codepoint| {
+        has_placeholder = has_placeholder or codepoint == 0x25cc;
+        has_pre_base_matra = has_pre_base_matra or codepoint == 0x093f;
+    }
+    return .{
+        .has_basic_source_features = has_basic_source_features,
+        .has_placeholder = has_placeholder,
+        .has_pre_base_matra = has_pre_base_matra,
+    };
+}
+
 fn hasDev2InitialReph(
     codepoints: []const u21,
     start: usize,
@@ -989,6 +1022,30 @@ test "specialized dev2 source maps match generic marking" {
             }
         }
     }
+}
+
+test "dev2 source summary reports reordering triggers" {
+    const codepoints = [_]u21{ 0x0915, 0x093f, 0x25cc, 0x093e };
+    var syllables: [codepoints.len]u8 = undefined;
+    var features: [codepoints.len]u32 = undefined;
+    const summary = markDev2SourceMetadata(
+        &syllables,
+        &features,
+        &codepoints,
+    );
+    try std.testing.expect(summary.has_pre_base_matra);
+    try std.testing.expect(summary.has_placeholder);
+
+    const ordinary = [_]u21{ 0x0915, 0x093e };
+    var ordinary_syllables: [ordinary.len]u8 = undefined;
+    var ordinary_features: [ordinary.len]u32 = undefined;
+    const ordinary_summary = markDev2SourceMetadata(
+        &ordinary_syllables,
+        &ordinary_features,
+        &ordinary,
+    );
+    try std.testing.expect(!ordinary_summary.has_placeholder);
+    try std.testing.expect(!ordinary_summary.has_pre_base_matra);
 }
 
 pub fn recordPrefSubstitutions(glyph_source_indices: []const usize, glyph_stage_substituted: []const bool, source_pref_substituted: []bool) void {

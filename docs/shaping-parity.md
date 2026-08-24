@@ -1107,6 +1107,13 @@ Current local snapshot after the Nastaliq parity work:
   `0.27%` of retired instructions without changing the hot cache-hit contract.
   The full 10,000-line corpus retains checksum `b01a5388ce792b49` against both
   HarfBuzz and HarfRust.
+- The specialized `dev2` syllable/source-feature pass now also reports whether
+  the source contains U+25CC or U+093F. Devanagari finish can therefore avoid
+  whole-glyph placeholder and pre-base-matra scans for words that cannot need
+  them, without changing the generic Indic path. A fixed-CPU-30 A/B/B/A matrix
+  over 200 complete `hi-words` passes reduced retired instructions by about
+  `0.96%`, branches by about `1.13%`, and cycles by about `0.59%`; output
+  remained unchanged.
 - Validated, non-profiled GSUB now also dispatches accelerated direct
   ContextSubst lookups through the small fast wrapper instead of entering the
   generic profiling-capable dispatcher before reaching the same predecoded

@@ -115,11 +115,6 @@ fn finishDev2(input: Input, prepared: Prepared) !void {
         input.codepoints.items,
         dotted_circle_glyph,
     );
-    indic.mergeDev2PlaceholderDependentMarks(
-        input.glyph_cluster_indices,
-        input.glyph_source_indices,
-        input.codepoints.items,
-    );
     try finishStages(input, false);
 }
 
@@ -157,13 +152,32 @@ fn finishStages(input: Input, generic_script: bool) !void {
         input.allocator,
         input.codepoints.items.len,
     );
-    const has_basic_source_features =
+    const dev2_summary = if (!generic_script)
+        indic.markDev2SourceMetadata(
+            input.source_syllables.items,
+            input.source_features.items,
+            input.codepoints.items,
+        )
+    else
+        null;
+    const has_basic_source_features = if (dev2_summary) |summary|
+        summary.has_basic_source_features
+    else
         indic.markSourceSyllablesAndBasicFeatures(
             input.source_syllables.items,
             input.source_features.items,
             input.codepoints.items,
             input.lookup_options.script_tag,
         );
+    if (dev2_summary) |summary| {
+        if (summary.has_placeholder) {
+            indic.mergeDev2PlaceholderDependentMarks(
+                input.glyph_cluster_indices,
+                input.glyph_source_indices,
+                input.codepoints.items,
+            );
+        }
+    }
     const tracks_pref = indic.tracksPrefSubstitutions(
         input.lookup_options.script_tag,
     );
@@ -273,7 +287,10 @@ fn finishStages(input: Input, generic_script: bool) !void {
             input.gdef_metadata,
         );
     }
-    reorderAfterPref(input);
+    reorderAfterPref(
+        input,
+        generic_script or dev2_summary.?.has_pre_base_matra,
+    );
     if (cached_plans) try executor.applyPlanAfterRunProofWithRanges(
         input.font,
         input.context,
@@ -414,17 +431,19 @@ fn applyPref(input: Input, plan: ?gsub.feature.LookupPlan) !void {
     input.glyph_stage_substituted.clearRetainingCapacity();
 }
 
-fn reorderAfterPref(input: Input) void {
+fn reorderAfterPref(input: Input, may_have_pre_base_matra: bool) void {
     if (input.lookup_options.script_tag == .dev2) {
-        indic.reorderDev2PreBaseMatras(
-            input.glyph_ids,
-            input.glyph_source_indices,
-            input.glyph_cluster_indices,
-            input.glyph_substituted,
-            input.ligature_components,
-            input.codepoints.items,
-            input.source_syllables.items,
-        );
+        if (may_have_pre_base_matra) {
+            indic.reorderDev2PreBaseMatras(
+                input.glyph_ids,
+                input.glyph_source_indices,
+                input.glyph_cluster_indices,
+                input.glyph_substituted,
+                input.ligature_components,
+                input.codepoints.items,
+                input.source_syllables.items,
+            );
+        }
     } else {
         indic.reorderPreBaseMatras(
             input.glyph_ids,
@@ -447,12 +466,14 @@ fn reorderAfterPref(input: Input) void {
         input.lookup_options.script_tag,
     );
     if (input.lookup_options.script_tag == .dev2) {
-        _ = indic.markDev2InitialMatraGlyphSources(
-            input.source_features.items,
-            input.glyph_source_indices.items,
-            input.codepoints.items,
-            input.source_syllables.items,
-        );
+        if (may_have_pre_base_matra) {
+            _ = indic.markDev2InitialMatraGlyphSources(
+                input.source_features.items,
+                input.glyph_source_indices.items,
+                input.codepoints.items,
+                input.source_syllables.items,
+            );
+        }
     } else {
         _ = indic.markInitialMatraGlyphSources(
             input.source_features.items,

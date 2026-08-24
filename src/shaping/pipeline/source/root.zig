@@ -82,6 +82,32 @@ pub fn populate(
         }
         return result;
     }
+    if (options.script == .devanagari and
+        options.direction == .ltr and
+        !options.writing_mode.isVertical() and
+        options.cluster_level == null and
+        isDevanagariBlockUtf8(text))
+    {
+        // A homogeneous Devanagari-block run cannot contain variation
+        // selectors, Arabic presentation composition, default-ignorables, or
+        // bidi controls. Its default cluster policy is one source per scalar,
+        // so populate the already-reserved parallel arrays directly instead
+        // of evaluating every generic-script predicate for every character.
+        var byte_index: usize = 0;
+        while (byte_index < text.len) : (byte_index += 3) {
+            const codepoint: u21 = (@as(u21, text[byte_index] & 0x0f) << 12) |
+                (@as(u21, text[byte_index + 1] & 0x3f) << 6) |
+                @as(u21, text[byte_index + 2] & 0x3f);
+            source_buffer.appendIdentity(
+                scratch,
+                try support.glyphIndex(font, glyph_index_cache, codepoint),
+                codepoint,
+                cluster_base + byte_index,
+                cluster_base + byte_index + 3,
+            );
+        }
+        return result;
+    }
     const track_bidi_reorder = options.reorder_bidi and
         !options.writing_mode.isVertical() and
         options.direction != .rtl;
@@ -278,6 +304,19 @@ const ScriptRange = struct {
     len: u21,
 };
 
+fn isDevanagariBlockUtf8(text: []const u8) bool {
+    if (text.len == 0 or text.len % 3 != 0) return false;
+    var index: usize = 0;
+    while (index < text.len) : (index += 3) {
+        // U+0900..U+097F is exactly E0 A4 80..BF plus E0 A5 80..BF. UTF-8
+        // validity was proved by the public shaping boundary.
+        if (text[index] != 0xe0 or
+            text[index + 1] -% 0xa4 > 1 or
+            text[index + 2] & 0xc0 != 0x80) return false;
+    }
+    return true;
+}
+
 fn commonLtrScriptRange(script: unicode.Script) ?ScriptRange {
     return switch (script) {
         .devanagari => .{ .start = 0x0900, .len = 0x80 },
@@ -367,6 +406,14 @@ test "source scan recognizes bidi visual-reorder triggers" {
     try std.testing.expect(!scalarInRange(0x202e, range));
     try std.testing.expect(unicode.mayNeedBidiVisualReorder(0x05d0));
     try std.testing.expect(unicode.mayNeedBidiVisualReorder(0x202e));
+}
+
+test "Devanagari UTF-8 fast-path proof requires the complete block" {
+    try std.testing.expect(isDevanagariBlockUtf8("किताब"));
+    try std.testing.expect(isDevanagariBlockUtf8("०१२"));
+    try std.testing.expect(!isDevanagariBlockUtf8("क test"));
+    try std.testing.expect(!isDevanagariBlockUtf8("क\u{200d}ष"));
+    try std.testing.expect(!isDevanagariBlockUtf8(""));
 }
 
 pub const ArabicCompositionMatch = support.ArabicCompositionMatch;

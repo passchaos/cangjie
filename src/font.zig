@@ -2781,6 +2781,15 @@ pub const Font = struct {
         codepoint: u21,
     ) FontError!glyph_mod.GlyphId {
         try cmap_mod.validatePublicScalar(codepoint);
+        return self.glyphIndexForShaping(codepoint);
+    }
+
+    /// Internal shaping lookup after the caller has validated the UTF-8 scalar
+    /// and the Face continues to own immutable bytes.
+    fn glyphIndexForShaping(
+        self: *const Font,
+        codepoint: u21,
+    ) FontError!glyph_mod.GlyphId {
         if (codepoint < self.selected_cmap_ascii.len) {
             return self.selected_cmap_ascii[codepoint];
         }
@@ -6835,6 +6844,7 @@ pub const shaping = struct {
     pub const verticalOriginYAtCoords = Font.shapingVerticalOriginYAtCoords;
     pub const horizontalMetricsAtCoords = Font.horizontalMetricsAtCoordsForShaping;
     pub const horizontalTrackingForShaping = Font.horizontalTrackingForShaping;
+    pub const glyphIndexForShaping = Font.glyphIndexForShaping;
     pub const kernLookupForShaping = Font.kernLookupForShaping;
     pub const kerxLookupForShaping = Font.kerxLookupForShaping;
     pub const applyGsubWithOptionsUsingGdefForShaping = Font.applyGsubWithOptionsUsingGdefForShaping;

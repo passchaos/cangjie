@@ -1091,6 +1091,22 @@ Current local snapshot after the Nastaliq parity work:
   Cangjie/HarfRust/HarfRust/Cangjie matrix over ten passes and 11 samples
   measured `988.042`/`991.416` versus `878.737`/`876.135 ns/glyph`, leaving
   the library-level HarfRust gap at about `12.8%`.
+- Homogeneous default-cluster Devanagari runs now use a validated three-byte
+  UTF-8 source-population loop. The compact proof accepts only U+0900..U+097F,
+  which excludes variation selectors, default-ignorables, bidi controls, and
+  Arabic/Thai preprocessing before it bypasses those generic per-scalar
+  predicates. The glyph-index cache miss path also reuses the parsed immutable
+  face's cmap proof. On fixed CPU 30, an A/B/B/A counter matrix over 200 full
+  `hi-words` passes reduced retired instructions by about `3.4%`, branches by
+  about `4.3%`, and cycles by about `3.0%`; the candidate timing pair measured
+  `955.166`/`953.848 ns/glyph` against baseline
+  `963.178`/`958.788 ns/glyph`. A strict 11-sample library matrix measured
+  Cangjie at `951.011`/`955.420 ns/glyph` versus HarfRust at
+  `869.035`/`871.354 ns/glyph`, narrowing the remaining gap to about `9.5%`.
+  Reusing the parsed immutable cmap path on cache misses removed a further
+  `0.27%` of retired instructions without changing the hot cache-hit contract.
+  The full 10,000-line corpus retains checksum `b01a5388ce792b49` against both
+  HarfBuzz and HarfRust.
 - Validated, non-profiled GSUB now also dispatches accelerated direct
   ContextSubst lookups through the small fast wrapper instead of entering the
   generic profiling-capable dispatcher before reaching the same predecoded

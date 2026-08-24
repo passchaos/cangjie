@@ -282,7 +282,10 @@ pub const GlyphIndexCache = struct {
             return glyph_id;
         }
         self.misses += 1;
-        const glyph_id = try font.glyphIndex(codepoint);
+        const glyph_id = try font_mod.shaping.glyphIndexForShaping(
+            font,
+            codepoint,
+        );
         try self.entries.put(key, glyph_id);
         direct.* = .{
             .font_addr = font_addr,

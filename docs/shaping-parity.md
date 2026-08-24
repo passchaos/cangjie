@@ -1135,9 +1135,10 @@ Current local snapshot after the Nastaliq parity work:
   repeating the offset comparison inside every lookup dispatch; public and
   uncached paths retain the defensive identity check. Fixed-CPU-30 A/B/B/A
   counters over 200 complete Devanagari `hi-words` passes reduced retired
-  instructions by about `0.26%` and branches by about `0.10%`; cycles improved
-  about `1.48%`, and 11-sample medians improved from an average `945.411` to
-  `938.388 ns/glyph`, with identical output checksums.
+  instructions by about `0.08%` and branches by about `0.52%`; branch misses
+  fell about `0.74%` while cycles were effectively neutral. The same check's
+  11-sample medians averaged `937.007` versus `936.558 ns/glyph`, with
+  identical output checksums.
 - Validated, non-profiled GSUB now also dispatches accelerated direct
   ContextSubst lookups through the small fast wrapper instead of entering the
   generic profiling-capable dispatcher before reaching the same predecoded

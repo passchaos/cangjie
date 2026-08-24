@@ -40,9 +40,12 @@ pub fn entry(
                         return error.InvalidShapingInput;
                     }
                     const sidecar = &accelerators[index];
-                    if (sidecar.lookup_offset != offset or
-                        sidecar.lookup_type == 0)
-                    {
+                    // The internal plan and sidecar slices were built from the
+                    // same validated font table. Keep a debug assertion for
+                    // that ownership contract without paying an identity
+                    // branch for every lookup in release shaping.
+                    std.debug.assert(sidecar.lookup_offset == offset);
+                    if (sidecar.lookup_type == 0) {
                         return error.InvalidShapingInput;
                     }
                     try Executor.applyLookupUnprofiledAfterPlanProof(

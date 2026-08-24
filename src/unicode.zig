@@ -137,7 +137,15 @@ fn canonicalCombiningClass(codepoint: u21) u8 {
 }
 
 pub fn canonicalDecomposition(codepoint: u21) ?[]const u21 {
+    return canonical_decomposition.markLeadingForCodepoint(codepoint);
+}
+
+pub fn canonicalDecompositionAll(codepoint: u21) ?[]const u21 {
     return canonical_decomposition.forCodepoint(codepoint);
+}
+
+pub fn canonicalDecompositionDirect(codepoint: u21) ?[]const u21 {
+    return canonical_decomposition.directForCodepoint(codepoint);
 }
 
 pub fn modifiedCombiningClassForShaping(codepoint: u21) u8 {

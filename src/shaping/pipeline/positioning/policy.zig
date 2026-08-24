@@ -43,6 +43,7 @@ pub fn markAdvanceZeroing(
     synthetic_base: bool,
     mark_attachment: bool,
     has_gpos_positioning: bool,
+    has_fallback_positioning: bool,
     options: pipeline_types.LookupOptions,
 ) MarkAdvanceZeroing {
     if (synthetic_base) return .{};
@@ -50,8 +51,10 @@ pub fn markAdvanceZeroing(
     const gdef_mark = glyph_class == .mark and
         (!unicode.isSpacingMarkCodepoint(source_codepoint) or use_shape) and
         !indic.shouldShape(options.script_tag);
-    // A present ClassDef is authoritative even when this glyph is
-    // unclassified; per-glyph Unicode fallback would override font intent.
+    // HarfBuzz's default shaper zeroes late for every GDEF mark, and when a
+    // font has no GlyphClassDef it synthesizes that class from Unicode Mn.
+    // Script shapers with an explicit NONE policy must remain exempt: Indic,
+    // Khmer, Hangul, Thai, and Lao intentionally retain authored advances.
     const synthesized_mark = !has_gdef_glyph_classes and
         unicode.isNonspacingMarkCodepoint(source_codepoint) and
         !unicode.isDefaultIgnorableForShaping(source_codepoint) and
@@ -66,9 +69,12 @@ pub fn markAdvanceZeroing(
         options.writing_mode.isVertical() or options.shapingDirection() == .ltr;
     return .{
         .zero_advance = true,
-        // USE zeroes early, but shifts the provisional origin only when no
-        // later GPOS pass can replace that placement.
-        .adjust_offsets = use_shape and !has_gpos_positioning and forward_direction,
+        // With no positioning engine, HarfBuzz shifts the provisional mark
+        // origin in forward runs before either fallback mark geometry or final
+        // output consumes it. GPOS owns the origin when it is available.
+        .adjust_offsets = !has_gpos_positioning and
+            !has_fallback_positioning and
+            forward_direction,
     };
 }
 
@@ -199,9 +205,10 @@ pub fn verticalMetrics(
 fn usesLateGdefMarkZeroing(
     script_tag: unicode.OpenTypeScriptTag,
 ) bool {
+    if (indic.shouldShape(script_tag)) return false;
     return switch (script_tag) {
-        .arab, .hebr, .thai, .lao, .dflt => true,
-        else => false,
+        .hang, .khmr, .thai, .lao => false,
+        else => true,
     };
 }
 
@@ -237,6 +244,7 @@ test "USE mark zeroing synthesizes only marks without GDEF classes" {
         false,
         false,
         false,
+        false,
         options,
     );
     try std.testing.expect(nonspacing.zero_advance);
@@ -250,6 +258,7 @@ test "USE mark zeroing synthesizes only marks without GDEF classes" {
         false,
         false,
         false,
+        false,
         options,
     );
     try std.testing.expectEqual(MarkAdvanceZeroing{}, spacing);
@@ -259,6 +268,7 @@ test "USE mark zeroing synthesizes only marks without GDEF classes" {
         .unclassified,
         true,
         0x11038,
+        false,
         false,
         false,
         false,
@@ -277,6 +287,7 @@ test "USE mark zeroing synthesizes only marks without GDEF classes" {
         true,
         false,
         false,
+        false,
         options,
     );
     try std.testing.expectEqual(MarkAdvanceZeroing{}, dotted_circle);
@@ -292,6 +303,7 @@ test "mark zeroing respects Indic and USE timing policies" {
         false,
         false,
         false,
+        false,
         .{ .script_tag = .mlm2 },
     );
     try std.testing.expectEqual(MarkAdvanceZeroing{}, malayalam);
@@ -301,6 +313,7 @@ test "mark zeroing respects Indic and USE timing policies" {
         .mark,
         true,
         0x1a6e,
+        false,
         false,
         false,
         false,
@@ -317,6 +330,7 @@ test "mark zeroing respects Indic and USE timing policies" {
         false,
         false,
         true,
+        false,
         .{ .script_tag = .brah },
     );
     try std.testing.expect(with_gpos.zero_advance);
@@ -331,6 +345,7 @@ test "mark zeroing respects Indic and USE timing policies" {
         false,
         false,
         false,
+        false,
         .{
             .script_tag = .brah,
             .direction = .rtl,
@@ -338,4 +353,34 @@ test "mark zeroing respects Indic and USE timing policies" {
         },
     );
     try std.testing.expect(native_ltr.adjust_offsets);
+}
+
+test "generic shaping zeroes synthesized Unicode nonspacing marks late" {
+    const std = @import("std");
+    const latin = markAdvanceZeroing(
+        false,
+        .unclassified,
+        false,
+        0x0301,
+        false,
+        false,
+        false,
+        true,
+        .{ .script_tag = .latn },
+    );
+    try std.testing.expect(latin.zero_advance);
+    try std.testing.expect(!latin.adjust_offsets);
+
+    const hangul = markAdvanceZeroing(
+        false,
+        .unclassified,
+        false,
+        0x0301,
+        false,
+        false,
+        false,
+        false,
+        .{ .script_tag = .hang },
+    );
+    try std.testing.expectEqual(MarkAdvanceZeroing{}, hangul);
 }

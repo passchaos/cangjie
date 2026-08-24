@@ -4164,3 +4164,14 @@ shaping-performance superiority.
   Roboto 64 px direct dirty renders reduced branches by about `2.5%` for `A`,
   `3.0%` for `g`, and `1.7%` for `é`; cycles improved about `2.3%`, `3.0%`,
   and `0.7%`, respectively, with byte-identical output.
+- Generic shaping normalization now preserves supported precomposed cmap
+  glyphs, decomposes missing scalars through the shortest supported canonical
+  chain, and falls back to recursive NFD when necessary. The generated Unicode
+  17 table includes both direct and recursive canonical mappings while retaining
+  the former mark-leading USE view. Generic scripts now also synthesize late
+  zero-width Mn behavior when GDEF classes are absent. The HarfRust fuzz
+  regression `PT_Sans-Caption-Web-Regular.ttf` with `U+1EA4 U+006E` matches
+  HarfBuzz 14.3.0 and HarfRust exactly: glyph ids `132,609,81`, advances
+  `645,0,641`, and comparison checksum `ee69c47f6c0d1b83`. Synthetic tests cover
+  direct decomposition, recursive-NFD fallback, singleton canonical mappings,
+  original UTF-8 spans, and zero-width decomposed marks.

@@ -67,6 +67,7 @@ pub fn resolve(
         synthetic_base,
         adjustment.attachment_type == .mark,
         input.has_gpos_positioning,
+        input.fallback_mark_enabled,
         input.options,
     );
     const fallback_space_advance =

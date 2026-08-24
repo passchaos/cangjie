@@ -19,6 +19,7 @@ const shaping_metadata = @import("../../shaping_metadata.zig");
 const normalization = @import("normalization/root.zig");
 const normalize_marks = normalization.marks;
 const normalize_native = normalization.native;
+const normalize_decompose = normalization.decompose;
 const source_pipeline = @import("source/root.zig");
 const gsub_pipeline = @import("gsub/root.zig");
 const gsub_executor = gsub_pipeline.executor;
@@ -133,6 +134,14 @@ pub fn run(input: Input) !void {
         resolved_lookup_options.all_ascii,
         selected_lookup_options,
     );
+    if (!resolved_lookup_options.all_ascii) {
+        try normalize_decompose.missingPrecomposed(
+            buffer.allocator,
+            font,
+            glyph_index_cache,
+            scratch,
+        );
+    }
     const has_default_ignorable = source_result.has_default_ignorable;
     var default_ignorable_invisible_glyph_id =
         source_result.default_ignorable_invisible_glyph_id;

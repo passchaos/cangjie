@@ -215,6 +215,101 @@ test "Arabic normalization composes base mark pairs when the font has the precom
     try std.testing.expect(saw_maddah);
 }
 
+test "missing precomposed Latin uses the shortest supported canonical decomposition" {
+    const test_font = @import("../../../test_font.zig");
+    const allocator = std.testing.allocator;
+
+    // U+1EA4 decomposes directly to U+00C2 U+0301, while recursive NFD is
+    // U+0041 U+0302 U+0301. Omitting A and circumflex proves the normalizer
+    // accepts the direct chain instead of requiring every NFD component.
+    const bytes = try test_font.buildCodepointSetTtf(
+        allocator,
+        &.{ 0x006e, 0x00c2, 0x0301 },
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const run = try TextShaper.shapeUtf8(&font, &buffer, "Ấn", 1000);
+
+    try std.testing.expectEqual(@as(usize, 3), run.glyphs.len);
+    try std.testing.expectEqualSlices(
+        GlyphId,
+        &.{ 2, 3, 1 },
+        &.{
+            run.glyphs[0].glyph_id,
+            run.glyphs[1].glyph_id,
+            run.glyphs[2].glyph_id,
+        },
+    );
+    try std.testing.expectEqual(@as(u21, 0x00c2), run.glyphs[0].codepoint);
+    try std.testing.expectEqual(@as(u21, 0x0301), run.glyphs[1].codepoint);
+    try std.testing.expectEqual(@as(usize, 0), run.glyphs[0].cluster);
+    try std.testing.expectEqual(@as(usize, 0), run.glyphs[1].cluster);
+    try std.testing.expectEqual(@as(usize, "Ấ".len), run.glyphs[0].source_byte_len);
+    try std.testing.expectEqual(@as(usize, "Ấ".len), run.glyphs[1].source_byte_len);
+    // Fonts without GDEF synthesize mark classes from Unicode Mn. The source
+    // mark must therefore be zero-width even when hmtx authors a spacing
+    // advance, matching HarfBuzz's default-shaper late-zero policy.
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0),
+        run.glyphs[1].x_advance,
+        0.001,
+    );
+}
+
+test "missing precomposed Latin falls back to recursive NFD components" {
+    const test_font = @import("../../../test_font.zig");
+    const allocator = std.testing.allocator;
+
+    const bytes = try test_font.buildCodepointSetTtf(
+        allocator,
+        &.{ 0x0041, 0x0301, 0x0302 },
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const run = try TextShaper.shapeUtf8(&font, &buffer, "Ấ", 1000);
+
+    try std.testing.expectEqual(@as(usize, 3), run.glyphs.len);
+    try std.testing.expectEqual(@as(u21, 0x0041), run.glyphs[0].codepoint);
+    try std.testing.expectEqual(@as(u21, 0x0302), run.glyphs[1].codepoint);
+    try std.testing.expectEqual(@as(u21, 0x0301), run.glyphs[2].codepoint);
+    for (run.glyphs) |glyph| {
+        try std.testing.expectEqual(@as(usize, 0), glyph.cluster);
+        try std.testing.expectEqual(@as(usize, "Ấ".len), glyph.source_byte_len);
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 0), run.glyphs[1].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), run.glyphs[2].x_advance, 0.001);
+}
+
+test "missing canonical singleton decomposes through its supported target" {
+    const test_font = @import("../../../test_font.zig");
+    const allocator = std.testing.allocator;
+
+    // ANGSTROM SIGN canonically aliases A WITH RING ABOVE. HarfBuzz follows
+    // canonical singleton mappings as well as the more common 1:2 mappings.
+    const bytes = try test_font.buildCodepointSetTtf(allocator, &.{0x00c5});
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const run = try TextShaper.shapeUtf8(&font, &buffer, "Å", 1000);
+
+    try std.testing.expectEqual(@as(usize, 1), run.glyphs.len);
+    try std.testing.expectEqual(@as(GlyphId, 1), run.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(u21, 0x00c5), run.glyphs[0].codepoint);
+    try std.testing.expectEqual(@as(usize, 0), run.glyphs[0].cluster);
+    try std.testing.expectEqual(@as(usize, "Å".len), run.glyphs[0].source_byte_len);
+}
+
 test "font fallback accepts Arabic clusters covered through normalization" {
     const test_font = @import("../../../test_font.zig");
     const allocator = std.testing.allocator;

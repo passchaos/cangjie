@@ -4016,6 +4016,14 @@ shaping-performance superiority.
   by about `1.64%`; 11-sample medians improved by roughly `1.3--1.7%`. Roboto
   `en-words` and Amiri `fa-words` retired work remained within `0.01%`, and all
   shaping checksums were unchanged.
+- Syllable-scoped coverage ContextSubst now applies the same exact-first-
+  coverage rejection before source-syllable and GDEF filtering. Unscoped
+  scripts retain their prior branch layout. Fixed-CPU-30 A/B/B/A counters over
+  200 complete NotoSansDevanagari `hi-words` passes reduced retired
+  instructions by about `1.72%`, branches by about `2.04%`, branch misses by
+  about `1.5%`, and cycles by about `1.4%`; 11-sample medians improved by
+  roughly `1.1--1.3%`. Roboto and Amiri retired-work controls remained within
+  `0.02%`, and all checksums were unchanged.
 - Direct scan conversion now dispatches the common two-active-edge row once,
   outside the subpixel loop, instead of retesting that invariant for all four
   vertical samples. Fixed-CPU-30 A/B/B/A counters over 20,000 direct dirty

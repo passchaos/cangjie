@@ -29,10 +29,29 @@ pub fn apply(
     while (position < glyphs.items.len) {
         var next_position = position + 1;
         defer position = next_position;
-        if (!filtering.lookupCursorAllowsGlyph(run, position)) continue;
         const first = glyphs.items[position];
-        if (filtering.lookupIgnoresGlyph(lookup_flag, run, first)) continue;
-        const candidates = try candidateSubtables(lookup, first) orelse continue;
+        const candidates = if (run.match_source_syllable) scoped: {
+            // Syllable-scoped Indic stages pay source metadata costs at every
+            // cursor. Reject their overwhelmingly common exact-index misses
+            // first, while leaving ordinary unscoped scripts on the existing
+            // filtering-first layout.
+            const indexed = try candidateSubtables(lookup, first) orelse
+                continue;
+            if (!filtering.lookupCursorAllowsGlyph(run, position) or
+                filtering.lookupIgnoresGlyph(lookup_flag, run, first))
+            {
+                continue;
+            }
+            break :scoped indexed;
+        } else unscoped: {
+            if (!filtering.lookupCursorAllowsGlyph(run, position) or
+                filtering.lookupIgnoresGlyph(lookup_flag, run, first))
+            {
+                continue;
+            }
+            break :unscoped try candidateSubtables(lookup, first) orelse
+                continue;
+        };
         for (candidates) |subtable_index| {
             if (subtable_index >= lookup.context_coverage_subtables.len) {
                 return error.BadGsub;

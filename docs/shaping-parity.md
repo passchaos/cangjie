@@ -4090,3 +4090,9 @@ shaping-performance superiority.
   Roboto 64 px direct dirty renders reduced branches by about `1.65%` for `g`
   and `0.9%` for `é`, and cycles by about `3.1%` and `2.0%`; `A` stayed on the
   former path. Checksums remained byte-identical.
+- The complex four-intersection path now folds its ordered span results into
+  row dirty bounds once per subpixel sample rather than after every occupied
+  span. Fixed-CPU-30 A/B/B/A counters over 200,000 Roboto 64 px direct dirty
+  renders reduced retired instructions by about `1.2%` for `A`, `1.2%` for
+  `g`, and `0.4%` for `é`; branches fell about `0.02%`, `2.9%`, and `2.0%`,
+  respectively. Cycles improved about `1.8--2.8%` with byte-identical output.

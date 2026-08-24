@@ -264,7 +264,12 @@ inline fn fillPreparedRow(
                 {
                     // Each edge contributes ±1. The winding after one or three
                     // crossings is therefore odd and cannot be zero; only the
-                    // middle span needs a runtime winding test.
+                    // middle span needs a runtime winding test. Because these
+                    // spans are already ordered, retain their first and last
+                    // covered pixels and merge row bounds only once.
+                    var sample_has_coverage = false;
+                    var sample_min_x: i32 = undefined;
+                    var sample_max_x: i32 = undefined;
                     if (row_accumulator.cover(
                         min_x,
                         max_x,
@@ -272,9 +277,9 @@ inline fn fillPreparedRow(
                         intersections[0].x,
                         intersections[1].x,
                     )) |span| {
-                        row_has_coverage = true;
-                        row_min_x = @min(row_min_x, span.min_x);
-                        row_max_x = @max(row_max_x, span.max_x);
+                        sample_has_coverage = true;
+                        sample_min_x = span.min_x;
+                        sample_max_x = span.max_x;
                     }
                     if (intersections[0].delta == intersections[1].delta) {
                         if (row_accumulator.cover(
@@ -284,9 +289,9 @@ inline fn fillPreparedRow(
                             intersections[1].x,
                             intersections[2].x,
                         )) |span| {
-                            row_has_coverage = true;
-                            row_min_x = @min(row_min_x, span.min_x);
-                            row_max_x = @max(row_max_x, span.max_x);
+                            if (!sample_has_coverage) sample_min_x = span.min_x;
+                            sample_has_coverage = true;
+                            sample_max_x = span.max_x;
                         }
                     }
                     if (row_accumulator.cover(
@@ -296,9 +301,14 @@ inline fn fillPreparedRow(
                         intersections[2].x,
                         intersections[3].x,
                     )) |span| {
+                        if (!sample_has_coverage) sample_min_x = span.min_x;
+                        sample_has_coverage = true;
+                        sample_max_x = span.max_x;
+                    }
+                    if (sample_has_coverage) {
                         row_has_coverage = true;
-                        row_min_x = @min(row_min_x, span.min_x);
-                        row_max_x = @max(row_max_x, span.max_x);
+                        row_min_x = @min(row_min_x, sample_min_x);
+                        row_max_x = @max(row_max_x, sample_max_x);
                     }
                     continue;
                 }

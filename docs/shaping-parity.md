@@ -98,6 +98,27 @@ dispatcher. Use `--profile-fast-path` when investigating optimized production
 paths; it keeps validated lookup accelerators active and records lightweight
 per-lookup timings without glyph-window snapshots.
 
+Run the deterministic malformed-font smoke harness under safety checks with a
+small, structurally varied seed set:
+
+```sh
+zig build font-fuzz-smoke -Doptimize=ReleaseSafe -- \
+  src/tests/data/fontations_cmap12_font1.ttf \
+  src/tests/data/fontations_names_only.ttf \
+  src/tests/data/fontations_simple_glyf.ttf \
+  src/tests/data/fontations_cmap14_font1.ttf \
+  src/tests/data/fontations_vazirmatn_var.ttf \
+  tests/data/fontations/vorg.ttf
+```
+
+For each seed, the harness tries the unmodified font, every prefix through byte
+256, and 256 deterministic single-byte mutations. Every successfully parsed
+case continues through public cmap lookup, glyph extents, outline decoding, and
+grayscale rasterization. Parse or table-access errors are expected; a crash,
+safety trap, or out-of-bounds access fails the command. This is a quick
+regression gate, not a replacement for coverage-guided fuzzing or the broader
+malformed-table matrix still required by the completion bar.
+
 For output parity against HarfRust, build the local CLI once:
 
 ```sh

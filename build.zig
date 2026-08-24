@@ -2638,6 +2638,25 @@ pub fn build(b: *std.Build) void {
     const system_font_raster_test_step = b.step("system-font-raster-test", "Run macOS system font raster regression tests");
     system_font_raster_test_step.dependOn(&b.addRunArtifact(system_font_raster_tests).step);
 
+    const font_fuzz_smoke_exe = b.addExecutable(.{
+        .name = "cangjie-font-fuzz-smoke",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/font_fuzz_smoke.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "cangjie", .module = mod }},
+        }),
+    });
+    const font_fuzz_smoke_step = b.step(
+        "font-fuzz-smoke",
+        "Run deterministic malformed-font parser and renderer mutations",
+    );
+    const font_fuzz_smoke_cmd = b.addRunArtifact(font_fuzz_smoke_exe);
+    font_fuzz_smoke_step.dependOn(&font_fuzz_smoke_cmd.step);
+    if (b.args) |args| {
+        font_fuzz_smoke_cmd.addArgs(args);
+    }
+
     const render_text_exe = b.addExecutable(.{
         .name = "cangjie-render-text",
         .root_module = b.createModule(.{

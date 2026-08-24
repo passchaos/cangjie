@@ -1163,6 +1163,21 @@ Current local snapshot after the Nastaliq parity work:
   instructions by about `1.44%`, branches by `0.56%`, and cycles by about
   `1.88%`; branch misses rose about `0.23%`. Eleven-sample medians improved
   from an average `913.812` to `908.221 ns/glyph`, with identical checksums.
+- Accelerated cached-plan dispatch now consumes the feature-stage syllable
+  scope that was already projected into its options rather than searching the
+  whole-table per-lookup override list. Fixed-CPU-30 A/B/B/A counters over 200
+  complete Devanagari `hi-words` passes reduced retired instructions by about
+  `0.35%`, branches by `1.18%`, branch misses by `0.69%`, and cycles by about
+  `0.06%`; 11-sample medians improved from an average `908.267` to
+  `906.401 ns/glyph`, with identical checksums.
+- The owned shaping pipeline now installs the validated GSUB/GDEF option state
+  once before entering cached script stages. Each stage therefore applies its
+  plan directly instead of recopying the full options value and reattaching
+  the same immutable GDEF slices. Fixed-CPU-30 A/B/B/A counters over 200 full
+  Devanagari `hi-words` passes reduced retired instructions by about `1.16%`,
+  branches by `0.88%`, branch misses by `0.90%`, and cycles by about `1.45%`;
+  11-sample medians improved from an average `906.894` to `896.611 ns/glyph`,
+  with identical checksums.
 - Validated, non-profiled GSUB now also dispatches accelerated direct
   ContextSubst lookups through the small fast wrapper instead of entering the
   generic profiling-capable dispatcher before reaching the same predecoded

@@ -178,15 +178,14 @@ pub fn applyPlanAfterRunProof(
     plan: gsub.feature.LookupPlan,
     glyph_ids: *std.ArrayList(GlyphId),
     options: gsub.runtime.Options,
-    gdef_metadata: GdefLookupMetadata,
+    _: GdefLookupMetadata,
 ) !void {
-    return font_shaping.applyGsubFeatureLookupPlanUsingGdefAfterRunProof(
+    return font_shaping.applyGsubFeatureLookupPlanAfterRunProof(
         font,
         plan,
         glyph_ids,
         context.allocator,
         options,
-        gdef_metadata,
     );
 }
 

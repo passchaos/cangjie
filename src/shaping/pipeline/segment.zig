@@ -230,6 +230,10 @@ pub fn run(input: Input) !void {
     if (buffer.lookup_selection_cache) |selection_cache| {
         gsub_options.lookup_accelerators = try selection_cache.gsubLookupAccelerators(font);
     }
+    if (gsub_after_proof) {
+        gsub_options.assume_validated = true;
+        gdef_metadata.applyToGsubOptions(&gsub_options);
+    }
     const gsub_context = gsub_executor.Context{
         .allocator = buffer.allocator,
         .lookup_selection_cache = buffer.lookup_selection_cache,

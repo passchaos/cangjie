@@ -484,7 +484,7 @@ pub const GdefLookupMetadata = struct {
         return std.enums.fromInt(GlyphClass, classes[index]) orelse .unclassified;
     }
 
-    fn applyToGsubOptions(self: GdefLookupMetadata, options: *gsub_mod.runtime.Options) void {
+    pub fn applyToGsubOptions(self: GdefLookupMetadata, options: *gsub_mod.runtime.Options) void {
         if (self.glyph_classes) |classes| options.glyph_classes = classes;
         if (self.mark_attach_classes) |classes| options.mark_attach_classes = classes;
         if (self.mark_filtering_sets) |sets| options.mark_filtering_sets = sets;
@@ -3560,6 +3560,29 @@ pub const Font = struct {
             glyphs,
             allocator,
             gsub_options,
+        );
+    }
+
+    /// Apply a cached feature plan after the shaping pipeline has installed
+    /// its GDEF metadata and proved the GSUB table. Script shapers invoke this
+    /// boundary repeatedly, so they prepare the large options value once.
+    fn applyGsubFeatureLookupPlanAfterRunProof(
+        self: *const Font,
+        plan: gsub_mod.feature.LookupPlan,
+        glyphs: *std.ArrayList(glyph_mod.GlyphId),
+        allocator: std.mem.Allocator,
+        options: gsub_mod.runtime.Options,
+    ) FontError!void {
+        const gsub = self.gsub orelse return;
+        std.debug.assert(options.assume_validated);
+        try gsub_mod.feature.applyLookupPlanAfterPlanProof(
+            self.data,
+            gsub.offset,
+            gsub.length,
+            plan,
+            glyphs,
+            allocator,
+            options,
         );
     }
 
@@ -6865,6 +6888,7 @@ pub const shaping = struct {
     pub const applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof = Font.applyGsubFeatureSequenceWithOptionsUsingGdefAfterProof;
     pub const applyGsubFeatureLookupPlanUsingGdefAfterProof = Font.applyGsubFeatureLookupPlanUsingGdefAfterProof;
     pub const applyGsubFeatureLookupPlanUsingGdefAfterRunProof = Font.applyGsubFeatureLookupPlanUsingGdefAfterRunProof;
+    pub const applyGsubFeatureLookupPlanAfterRunProof = Font.applyGsubFeatureLookupPlanAfterRunProof;
     pub const applyGsubMergedFeatureLookupPlanUsingGdefAfterProof = Font.applyGsubMergedFeatureLookupPlanUsingGdefAfterProof;
     pub const applyGsubMergedFeatureLookupPlanUsingGdefAfterRunProof = Font.applyGsubMergedFeatureLookupPlanUsingGdefAfterRunProof;
     pub const collectGposAdjustmentsWithOptionsUsingGdefForShaping = Font.collectGposAdjustmentsWithOptionsUsingGdefForShaping;

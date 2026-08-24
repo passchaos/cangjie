@@ -1114,6 +1114,15 @@ Current local snapshot after the Nastaliq parity work:
   over 200 complete `hi-words` passes reduced retired instructions by about
   `0.96%`, branches by about `1.13%`, and cycles by about `0.59%`; output
   remained unchanged.
+- Validated GPOS traversal now carries the exact lookup accelerator from the
+  LookupList loop into dispatch. The same sidecar had already supplied the
+  proved lookup offset, so the dispatcher no longer indexes it again and
+  repeats its offset/identity checks merely to recover the cached header.
+  Detached, unvalidated, and incomplete sidecars retain the defensive parser.
+  Fixed-CPU-30 A/B/B/A counters over 200 complete Devanagari `hi-words`
+  passes reduced retired instructions by about `1.31%` and branches by about
+  `1.58%`; cycles improved by about `0.15%` in the interleaved matrix while
+  branch misses rose about `0.25%`. Output checksums remained identical.
 - Validated, non-profiled GSUB now also dispatches accelerated direct
   ContextSubst lookups through the small fast wrapper instead of entering the
   generic profiling-capable dispatcher before reaching the same predecoded

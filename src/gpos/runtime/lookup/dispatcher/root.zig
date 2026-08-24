@@ -2,6 +2,7 @@
 
 const std = @import("std");
 pub const execute = @import("execute.zig");
+const accelerator = @import("../../../accelerator/root.zig");
 const GlyphId = @import("../../../../glyph.zig").GlyphId;
 const lookup_order = @import("../../../../opentype/lookup_order.zig");
 const options = @import("../../options.zig");
@@ -71,6 +72,71 @@ pub fn collectWithIndex(
         lookup_index,
         run,
     );
+    return executePrepared(
+        view,
+        lookup_offset,
+        lookup_index,
+        glyphs,
+        adjustments,
+        allocator,
+        run,
+        run_digest_cache,
+        resolved,
+    );
+}
+
+/// Execute a validated font-owned lookup directly from its immutable sidecar.
+///
+/// Whole-run selection already indexes this exact sidecar to obtain the
+/// proved LookupList offset. Reusing its header here avoids indexing and
+/// identity-checking the same array again at the dispatcher boundary.
+pub fn collectAfterAcceleratorProof(
+    view: View,
+    lookup_index: u16,
+    glyphs: []const GlyphId,
+    adjustments: *std.ArrayList(Adjustment),
+    allocator: std.mem.Allocator,
+    run: Options,
+    run_digest_cache: *DigestCache,
+    sidecar: *const accelerator.Lookup,
+) Error!void {
+    std.debug.assert(view.assume_validated);
+    std.debug.assert(sidecar.lookup_offset_proved);
+    std.debug.assert(sidecar.lookup_type != 0);
+    if (lookup_order.contains(run.disabled_lookups, lookup_index)) return;
+    const lookup_start = profileNow(run);
+    defer {
+        if (run.shape_profile) |profile| {
+            profile.recordGposLookupTime(
+                lookup_index,
+                profileElapsed(lookup_start, run),
+            );
+        }
+    }
+    return executePrepared(
+        view,
+        sidecar.lookup_offset,
+        lookup_index,
+        glyphs,
+        adjustments,
+        allocator,
+        run,
+        run_digest_cache,
+        prepare.headerAfterAcceleratorProof(sidecar, run),
+    );
+}
+
+fn executePrepared(
+    view: View,
+    lookup_offset: usize,
+    lookup_index: ?u16,
+    glyphs: []const GlyphId,
+    adjustments: *std.ArrayList(Adjustment),
+    allocator: std.mem.Allocator,
+    run: Options,
+    run_digest_cache: ?*DigestCache,
+    resolved: prepare.Header,
+) Error!void {
     if (try prepare.markFilteringOptions(resolved, run)) |customized| {
         return execute.collect(
             view,

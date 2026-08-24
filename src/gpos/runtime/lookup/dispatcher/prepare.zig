@@ -5,6 +5,7 @@
 //! lives in the Lookup header rather than in run-wide shaping state.
 
 const matching = @import("../../matching.zig");
+const LookupAccelerator = @import("../../../accelerator/model.zig").Lookup;
 const options = @import("../../options.zig");
 const runtime_dispatch = @import("../../dispatch.zig");
 const shape_profile = @import("../../../../shape_profile.zig");
@@ -31,6 +32,22 @@ pub fn header(
     );
     recordProfile(run.shape_profile, resolved.lookup_type);
     return resolved;
+}
+
+/// Reconstruct a Lookup header from the sidecar produced while validating the
+/// exact GPOS table. The caller must prove both table ownership and the
+/// sidecar's `lookup_offset_proved` contract before entering this path.
+pub fn headerAfterAcceleratorProof(
+    accelerator: *const LookupAccelerator,
+    run: Options,
+) Header {
+    recordProfile(run.shape_profile, accelerator.lookup_type);
+    return .{
+        .lookup_type = accelerator.lookup_type,
+        .lookup_flag = accelerator.lookup_flag,
+        .subtable_count = accelerator.subtable_count,
+        .mark_filtering_set = accelerator.mark_filtering_set,
+    };
 }
 
 /// Build the exceptional lookup-local options required by mark filtering.

@@ -4082,3 +4082,11 @@ shaping-performance superiority.
   dirty renders reduced retired instructions by about `0.14%` for `A`, `0.03%`
   for `g`, and `0.20%` for `é`; cycles improved about `1.5%`, remained neutral,
   and improved about `1.2%`, respectively. Checksums remained byte-identical.
+- Four-intersection rows belonging to complex active-edge sets now use
+  insertion sorting instead of the fixed five-comparator network. Their edge
+  order is strongly correlated across adjacent sample rows, so this path often
+  finishes after the three already-sorted comparisons while simple contours
+  retain the compact network. Fixed-CPU-30 A/B/B/A counters over 200,000
+  Roboto 64 px direct dirty renders reduced branches by about `1.65%` for `g`
+  and `0.9%` for `é`, and cycles by about `3.1%` and `2.0%`; `A` stayed on the
+  former path. Checksums remained byte-identical.

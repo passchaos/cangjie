@@ -236,7 +236,11 @@ inline fn fillPreparedRow(
         }
         const intersections = intersection_storage[0..intersection_count];
         if (intersections.len < 2) continue;
-        sortWindingIntersections(intersections);
+        if (intersections.len == 4 and row_lines.len >= 5) {
+            insertionSortIntersections(intersections);
+        } else {
+            sortWindingIntersections(intersections);
+        }
 
         if (intersections.len == 2 and
             intersections[1].x - intersections[0].x > 0.000001)
@@ -775,6 +779,18 @@ pub inline fn sortWindingIntersections(intersections: []WindingIntersection) voi
         return;
     }
     std.sort.heap(WindingIntersection, intersections, {}, lessThanWindingIntersection);
+}
+
+inline fn insertionSortIntersections(intersections: []WindingIntersection) void {
+    var index: usize = 1;
+    while (index < intersections.len) : (index += 1) {
+        const value = intersections[index];
+        var cursor = index;
+        while (cursor > 0 and intersections[cursor - 1].x > value.x) : (cursor -= 1) {
+            intersections[cursor] = intersections[cursor - 1];
+        }
+        intersections[cursor] = value;
+    }
 }
 
 inline fn compareSwapIntersections(a: *WindingIntersection, b: *WindingIntersection) void {

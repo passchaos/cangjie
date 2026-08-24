@@ -4058,3 +4058,10 @@ shaping-performance superiority.
   20,000 dirty renders kept retired work neutral while slightly reducing cycles
   and instruction-cache misses for the retained Roboto `A`, `g`, and `é`
   matrix. The complete raster checksum matrix is unchanged.
+- Prepared direct-scan edges now store the line x-intercept rather than the x
+  coordinate at their lower endpoint. Each of the four vertical samples can
+  therefore evaluate an intersection with one multiply-add instead of first
+  subtracting `y_min`. Fixed-CPU-30 counters over 200,000 Roboto 64 px direct
+  dirty renders reduced retired instructions by about `0.95%` for `A`, `0.62%`
+  for `g`, and `0.59%` for `é`; cycles improved about `1.2%`, `1.7%`, and
+  `0.5%`, respectively, with byte-identical target checksums.

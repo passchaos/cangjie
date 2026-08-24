@@ -3552,7 +3552,7 @@ pub const Font = struct {
         var gsub_options = options;
         gsub_options.assume_validated = true;
         gdef_metadata.applyToGsubOptions(&gsub_options);
-        try gsub_mod.feature.applyLookupPlanAfterMetadataProof(
+        try gsub_mod.feature.applyLookupPlanAfterPlanProof(
             self.data,
             gsub.offset,
             gsub.length,

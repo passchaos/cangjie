@@ -1128,6 +1128,16 @@ Current local snapshot after the Nastaliq parity work:
   reduced instructions by a further `0.27%`, branches by `0.53%`, and cycles
   by about `1.03%`; 11-sample medians improved from an average `951.001` to
   `947.829 ns/glyph`. Output checksums remained identical.
+- Cached GSUB feature plans now carry their table-identity proof into the
+  unprofiled lookup boundary. The plan already contains validated lookup
+  offsets and shares the exact accelerator slice used to build it, so this
+  internal path can reject stale or incomplete sidecars once and avoid
+  repeating the offset comparison inside every lookup dispatch; public and
+  uncached paths retain the defensive identity check. Fixed-CPU-30 A/B/B/A
+  counters over 200 complete Devanagari `hi-words` passes reduced retired
+  instructions by about `0.26%` and branches by about `0.10%`; cycles improved
+  about `1.48%`, and 11-sample medians improved from an average `945.411` to
+  `938.388 ns/glyph`, with identical output checksums.
 - Validated, non-profiled GSUB now also dispatches accelerated direct
   ContextSubst lookups through the small fast wrapper instead of entering the
   generic profiling-capable dispatcher before reaching the same predecoded

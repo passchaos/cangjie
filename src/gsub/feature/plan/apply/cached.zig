@@ -18,6 +18,7 @@ pub const View = table.View;
 
 pub fn staged(
     comptime Executor: type,
+    comptime plan_sidecars_proved: bool,
     view: View,
     plan: model.LookupPlan,
     glyphs: *std.ArrayList(GlyphId),
@@ -52,6 +53,7 @@ pub fn staged(
         selected.active_feature_random = merge.isRandom(entry.application);
         try shared.entry(
             Executor,
+            plan_sidecars_proved,
             view,
             lookup_count,
             entry,

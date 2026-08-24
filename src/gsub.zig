@@ -59,6 +59,8 @@ pub const feature = struct {
     pub const applyLookupPlan = applyFeatureLookupPlanWithOptions;
     pub const applyLookupPlanAfterMetadataProof =
         applyFeatureLookupPlanWithOptionsAfterMetadataProof;
+    pub const applyLookupPlanAfterPlanProof =
+        applyFeatureLookupPlanWithOptionsAfterPlanProof;
     pub const applyMergedLookupPlan = applyMergedFeatureLookupPlanWithOptions;
     pub const applyMergedLookupPlanAfterMetadataProof =
         applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof;
@@ -415,6 +417,7 @@ fn applyFeatureLookupPlanWithOptions(
         allocator,
         options,
         true,
+        false,
     );
 }
 
@@ -436,6 +439,29 @@ fn applyFeatureLookupPlanWithOptionsAfterMetadataProof(
         allocator,
         options,
         false,
+        false,
+    );
+}
+
+fn applyFeatureLookupPlanWithOptionsAfterPlanProof(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    plan: feature.LookupPlan,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GsubError || std.mem.Allocator.Error)!void {
+    return applyFeatureLookupPlan(
+        data,
+        offset,
+        length,
+        plan,
+        glyphs,
+        allocator,
+        options,
+        false,
+        true,
     );
 }
 
@@ -448,6 +474,7 @@ fn applyFeatureLookupPlan(
     allocator: std.mem.Allocator,
     options: LookupOptions,
     prove_metadata: bool,
+    comptime plan_sidecars_proved: bool,
 ) (GsubError || std.mem.Allocator.Error)!void {
     if (length < 10 or offset > data.len or length > data.len - offset) {
         return error.BadGsub;
@@ -461,6 +488,7 @@ fn applyFeatureLookupPlan(
     if (try readU16(table, 0) != 1) return error.UnsupportedGsub;
     return feature_domain.plan.apply.cached.staged(
         ContextualRecordExecutor,
+        plan_sidecars_proved,
         table,
         plan,
         glyphs,
@@ -679,6 +707,38 @@ fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std
 }
 
 const ContextualRecordExecutor = struct {
+    pub fn applyLookupUnprofiledAfterPlanProof(
+        table: Table,
+        lookup_offset: usize,
+        lookup_index: u16,
+        glyphs: *std.ArrayList(GlyphId),
+        allocator: std.mem.Allocator,
+        options: LookupOptions,
+        run_digest_cache: *runtime_prefilter.Cache,
+        sidecar: *const LookupAccelerator,
+    ) (GsubError || std.mem.Allocator.Error)!void {
+        if (try lookup_execution.accelerated.applyUnprofiled(
+            ContextualRecordExecutor,
+            table,
+            lookup_offset,
+            lookup_index,
+            glyphs,
+            allocator,
+            options,
+            run_digest_cache,
+            sidecar,
+        )) return;
+        return applyLookupWithIndexGeneric(
+            table,
+            lookup_offset,
+            lookup_index,
+            glyphs,
+            allocator,
+            options,
+            run_digest_cache,
+        );
+    }
+
     pub fn applyLookupUnprofiled(
         table: Table,
         lookup_offset: usize,

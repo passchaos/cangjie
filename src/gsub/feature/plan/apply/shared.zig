@@ -17,6 +17,7 @@ pub const View = table.View;
 
 pub fn entry(
     comptime Executor: type,
+    comptime plan_sidecars_proved: bool,
     view: View,
     lookup_count: u16,
     plan_entry: model.LookupPlanEntry,
@@ -32,15 +33,39 @@ pub fn entry(
         if (run.shape_profile == null) {
             for (plan_entry.lookups, plan_entry.lookup_offsets) |index, offset| {
                 if (index >= lookup_count) return error.BadGsub;
-                try Executor.applyLookupUnprofiled(
-                    view,
-                    offset,
-                    index,
-                    glyphs,
-                    allocator,
-                    run,
-                    cache,
-                );
+                if (plan_sidecars_proved) {
+                    const accelerators = run.lookup_accelerators orelse
+                        return error.InvalidShapingInput;
+                    if (index >= accelerators.len) {
+                        return error.InvalidShapingInput;
+                    }
+                    const sidecar = &accelerators[index];
+                    if (sidecar.lookup_offset != offset or
+                        sidecar.lookup_type == 0)
+                    {
+                        return error.InvalidShapingInput;
+                    }
+                    try Executor.applyLookupUnprofiledAfterPlanProof(
+                        view,
+                        offset,
+                        index,
+                        glyphs,
+                        allocator,
+                        run,
+                        cache,
+                        sidecar,
+                    );
+                } else {
+                    try Executor.applyLookupUnprofiled(
+                        view,
+                        offset,
+                        index,
+                        glyphs,
+                        allocator,
+                        run,
+                        cache,
+                    );
+                }
             }
             return;
         }

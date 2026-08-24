@@ -4067,3 +4067,11 @@ shaping-performance superiority.
   `6.2%` and `7.7%`, and cycles by about `4.4%` and `3.4%`; `A` remained
   frequency-sensitive and did not regress consistently. Checksums stayed
   byte-identical.
+- Four-sample row blending now includes zero-coverage pixels in the same
+  branchless max/LUT loop. The zero LUT entry preserves exact compositing while
+  allowing LLVM to eliminate a data-dependent branch for every pixel in the
+  dirty span. Fixed-CPU-30 A/B/B/A counters over 200,000 Roboto 64 px direct
+  dirty renders reduced branches by about `9--11%` and cycles by about
+  `1.4--2.4%` for `A`, `g`, and `é`. Retired instructions improved about
+  `1.2%` for `é`, stayed near-neutral for `g`, and traded about `0.6%` more for
+  `A`; all target checksums remained byte-identical.

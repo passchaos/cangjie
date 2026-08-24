@@ -99,9 +99,7 @@ pub const RowAccumulator = struct {
                 coverage += difference.*;
                 difference.* = 0;
                 std.debug.assert(coverage >= 0 and coverage <= 16);
-                if (coverage != 0) {
-                    pixel.* = @max(pixel.*, coverage_lut[@intCast(coverage)]);
-                }
+                pixel.* = @max(pixel.*, coverage_lut[@intCast(coverage)]);
             }
             // Include the sentinel after the final pixel: every interval writes
             // its negative delta there, and leaving it live would contaminate

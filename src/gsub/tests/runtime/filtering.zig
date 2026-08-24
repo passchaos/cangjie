@@ -149,6 +149,41 @@ test "context filtering preserves substituted joiners CGJ and Mongolian FVS rule
     try std.testing.expect(
         filtering.contextualMaySkipGlyph(0, run, &glyphs, 1, true),
     );
+    try std.testing.expect(
+        filtering.contextualMaySkipGlyph(0, run, &glyphs, 1, false),
+    );
+    var manual_joiners = run;
+    manual_joiners.active_auto_zwnj = false;
+    try std.testing.expect(
+        !filtering.contextualMaySkipGlyph(
+            0,
+            manual_joiners,
+            &glyphs,
+            1,
+            false,
+        ),
+    );
+    const zwj = [_]u21{ 'A', 0x200d, 'B' };
+    manual_joiners.source_codepoints = &zwj;
+    manual_joiners.active_auto_zwj = false;
+    try std.testing.expect(
+        !filtering.contextualMaySkipGlyph(
+            0,
+            manual_joiners,
+            &glyphs,
+            1,
+            false,
+        ),
+    );
+    try std.testing.expect(
+        filtering.contextualMaySkipGlyph(
+            0,
+            manual_joiners,
+            &glyphs,
+            1,
+            true,
+        ),
+    );
     substituted.items[1] = true;
     try std.testing.expect(
         !filtering.contextualMaySkipGlyph(0, run, &glyphs, 1, true),

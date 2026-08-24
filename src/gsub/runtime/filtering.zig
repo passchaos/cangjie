@@ -173,12 +173,23 @@ pub fn contextualMaySkipGlyph(
     // CGJ is always transparent unless ligature-specific reorder protection
     // below proves it acted as a barrier.
     if (codepoint == 0x034f) return true;
-    if (!context_match) return false;
+    if (!context_match) {
+        // Joiners are only transparent to the input iterator when the active
+        // feature explicitly requests automatic handling. Script shapers set
+        // this false for features such as USE `vatu`, where ZWJ is authored
+        // input and must block a direct ligature match.
+        if (codepoint == 0x200c) return run.active_auto_zwnj;
+        if (codepoint == 0x200d) return run.active_auto_zwj;
+        return false;
+    }
     if (codepoint == 0x180e) return false;
     if (glyphWasSubstituted(run, glyph_index)) return false;
     if (!unicode.isDefaultIgnorableForShaping(codepoint)) return false;
     if (codepoint == 0x200c and !run.active_auto_zwnj) return false;
-    if (codepoint == 0x200d and !run.active_auto_zwj) return false;
+    // Context iterators always skip an untouched ZWJ. `auto_zwj` controls
+    // only whether the input iterator skips it; lookbehind/lookahead must see
+    // through it even for manual-ZWJ features such as USE `abvs`.
+    if (codepoint == 0x200d) return true;
     return true;
 }
 

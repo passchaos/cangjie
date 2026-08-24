@@ -4175,3 +4175,9 @@ shaping-performance superiority.
   `645,0,641`, and comparison checksum `ee69c47f6c0d1b83`. Synthetic tests cover
   direct decomposition, recursive-NFD fallback, singleton canonical mappings,
   original UTF-8 spans, and zero-width decomposed marks.
+- Contextual GSUB now distinguishes input-iterator and context-iterator joiner
+  policy exactly: `auto_zwj=false` keeps ZWJ visible as authored input, while
+  lookbehind/lookahead still skips an untouched ZWJ. This closes HarfRust's
+  Sinhala fuzz regression `U+0DC1 U+200D U+0DCA U+200D U+0DBB U+0DD2`;
+  Cangjie, HarfBuzz 14.3.0, and HarfRust now produce glyph ids `2,7,0`,
+  advances `917,0,600`, and comparison checksum `fece9011cdd48750`.

@@ -1155,6 +1155,14 @@ Current local snapshot after the Nastaliq parity work:
   about `2.27%`, branches by `2.82%`, and cycles by about `2.20%`; branch
   misses rose about `0.73%`. The corresponding 11-sample medians improved from
   an average `944.678` to `912.692 ns/glyph`, with identical checksums.
+- The accelerated GSUB dispatcher now treats decoded class-based
+  ChainContextSubst as a complete fast strategy, alongside its existing
+  coverage-only path, instead of deliberately falling through to the generic
+  dispatcher and rediscovering the same class sidecars. Fixed-CPU-30 A/B/B/A
+  counters over 200 complete Devanagari `hi-words` passes reduced retired
+  instructions by about `1.44%`, branches by `0.56%`, and cycles by about
+  `1.88%`; branch misses rose about `0.23%`. Eleven-sample medians improved
+  from an average `913.812` to `908.221 ns/glyph`, with identical checksums.
 - Validated, non-profiled GSUB now also dispatches accelerated direct
   ContextSubst lookups through the small fast wrapper instead of entering the
   generic profiling-capable dispatcher before reaching the same predecoded

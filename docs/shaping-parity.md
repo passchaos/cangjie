@@ -4058,3 +4058,12 @@ shaping-performance superiority.
   20,000 dirty renders kept retired work neutral while slightly reducing cycles
   and instruction-cache misses for the retained Roboto `A`, `g`, and `é`
   matrix. The complete raster checksum matrix is unchanged.
+- The fused direct edge-preparation pass now retains floating-point extrema
+  and performs saturating floor/ceil conversion only for its final four
+  bounds. This restores the cheaper conversion policy inside the fused path
+  instead of converting both endpoints of every edge. Fixed-CPU-30 A/B/B/A
+  counters over 200,000 Roboto 64 px direct dirty renders reduced retired
+  instructions by about `3.2%` for `g` and `3.9%` for `é`, branches by about
+  `6.2%` and `7.7%`, and cycles by about `4.4%` and `3.4%`; `A` remained
+  frequency-sensitive and did not regress consistently. Checksums stayed
+  byte-identical.

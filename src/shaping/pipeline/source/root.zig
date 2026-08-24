@@ -60,20 +60,18 @@ pub fn populate(
 
     var result = Result{};
     const track_rtl_numeric_guard = options.needsRtlNumericDirectionGuard();
-    const track_bidi_reorder = options.reorder_bidi and
-        !options.writing_mode.isVertical() and
-        options.direction != .rtl;
-    const common_ltr_script =
-        commonLtrScriptRange(options.script);
     if (all_ascii and options.direction == .ltr) {
         // The caller already validated and classified this run. One byte is one
         // source scalar and no variation/default-ignorable handling is needed.
         for (text, 0..) |byte, cluster| {
             const glyph_id = try support.glyphIndex(font, glyph_index_cache, byte);
-            result.run_has_decimal_number =
-                result.run_has_decimal_number or support.isDecimalNumber(byte);
-            result.run_has_letter =
-                result.run_has_letter or support.isLetter(byte);
+            if (track_rtl_numeric_guard) {
+                result.run_has_decimal_number =
+                    result.run_has_decimal_number or
+                    support.isDecimalNumber(byte);
+                result.run_has_letter =
+                    result.run_has_letter or support.isLetter(byte);
+            }
             source_buffer.appendIdentity(
                 scratch,
                 glyph_id,
@@ -84,6 +82,10 @@ pub fn populate(
         }
         return result;
     }
+    const track_bidi_reorder = options.reorder_bidi and
+        !options.writing_mode.isVertical() and
+        options.direction != .rtl;
+    const common_ltr_script = commonLtrScriptRange(options.script);
 
     // Public shaping entry points validate the complete UTF-8 request before
     // any source buffer is mutated. Decode directly here so the hot loop does

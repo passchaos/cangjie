@@ -31,6 +31,8 @@ pub const ShapeScratch = struct {
     kerx_adjustments: std.ArrayList(aat_kerx.Adjustment) = .empty,
     gpos_adjustments: std.ArrayList(gpos.Adjustment) = .empty,
     attachment_links: std.ArrayList(@import("../../attachment.zig").Link) = .empty,
+    /// Source-stage proof consumed after this segment has finished shaping.
+    may_need_bidi_reorder: bool = false,
 
     pub fn deinit(self: *ShapeScratch, allocator: std.mem.Allocator) void {
         self.attachment_links.deinit(allocator);
@@ -82,5 +84,6 @@ pub const ShapeScratch = struct {
         self.kerx_adjustments.clearRetainingCapacity();
         self.gpos_adjustments.clearRetainingCapacity();
         self.attachment_links.clearRetainingCapacity();
+        self.may_need_bidi_reorder = false;
     }
 };

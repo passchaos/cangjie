@@ -119,6 +119,18 @@ safety trap, or out-of-bounds access fails the command. This is a quick
 regression gate, not a replacement for coverage-guided fuzzing or the broader
 malformed-table matrix still required by the completion bar.
 
+The same seed set also drives Zig 0.16's coverage-guided fuzzer through a
+bounded sequence of correlated byte replacements plus optional truncation:
+
+```sh
+zig build font-fuzz --fuzz=100K
+```
+
+Without `--fuzz`, the step executes each embedded seed and one deterministic
+Smith input as a fast CI-compatible smoke check. ReleaseSafe is forced for
+this target so safety checks remain enabled regardless of the surrounding
+build mode.
+
 For output parity against HarfRust, build the local CLI once:
 
 ```sh

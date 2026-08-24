@@ -1057,13 +1057,17 @@ pub const Font = struct {
             if (horizontal_header) |header| header.descender else 0;
         const line_gap =
             if (horizontal_header) |header| header.line_gap else 0;
-        const cff_parsed: ?CffParsedInfo = if (format == .opentype_cff and cff != null) blk: {
+        var cff_parsed: ?CffParsedInfo = if (format == .opentype_cff and cff != null) blk: {
             const cff_table = cff.?;
             var parsed = try cff_mod.parse(allocator, data[cff_table.offset .. cff_table.offset + cff_table.length]);
             errdefer parsed.deinit();
             if (parsed.info.charstrings_count != glyph_count) return error.BadSfnt;
             break :blk parsed;
         } else null;
+        // CFF parsing may allocate decoded CID Font DICT state before the
+        // remaining cross-table and checksum validation below. Transfer that
+        // ownership only when the complete Font is returned.
+        errdefer if (cff_parsed) |*parsed| parsed.deinit();
         if (format == .opentype_cff and cff2 != null) try validateCff2Table(data, cff2.?);
         if (format == .truetype and has_glyf_outlines) {
             const limits = try maxp_info.trueTypeLimits();

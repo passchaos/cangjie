@@ -1,7 +1,7 @@
 //! Deterministic malformed-font smoke coverage for parser and renderer entry points.
 
 const std = @import("std");
-const cangjie = @import("cangjie");
+const driver = @import("font_fuzz/driver.zig");
 
 // Keep accidental huge inputs bounded while still admitting ordinary variable
 // and color-font seeds, which routinely exceed one MiB.
@@ -45,7 +45,7 @@ fn exerciseSeed(
     // the caller-owned byte range.
     const prefix_limit = @min(seed.len, 256);
     for (0..prefix_limit + 1) |len| {
-        try exerciseCase(allocator, seed[0..len]);
+        try driver.exerciseCase(allocator, seed[0..len]);
         case_count.* += 1;
     }
 
@@ -54,7 +54,7 @@ fn exerciseSeed(
     // case for larger fonts so that deeper APIs are exercised even when every
     // checksum-breaking mutation is rejected during parsing.
     if (seed.len > prefix_limit) {
-        try exerciseCase(allocator, seed);
+        try driver.exerciseCase(allocator, seed);
         case_count.* += 1;
     }
 
@@ -74,36 +74,8 @@ fn exerciseSeed(
             const replacement: u8 = @truncate(state >> 40);
             mutable[index] = if (replacement == original) replacement +% 1 else replacement;
         }
-        try exerciseCase(allocator, mutable);
+        try driver.exerciseCase(allocator, mutable);
         mutable[index] = original;
         case_count.* += 1;
     }
-}
-
-fn exerciseCase(allocator: std.mem.Allocator, bytes: []const u8) !void {
-    var face = cangjie.font.Face.parse(allocator, bytes) catch return;
-    defer face.deinit();
-
-    const glyphs = face.glyphs();
-    // Prefer a cmap-derived glyph so successful mutations exercise the link
-    // between cmap and outline tables. Fonts without U+0041 still exercise
-    // the required .notdef geometry.
-    const glyph_id = glyphs.index('A') catch 0;
-    _ = glyphs.extents(glyph_id) catch {};
-    var outline = glyphs.outline(allocator, glyph_id) catch return;
-    defer outline.deinit();
-
-    var target = try cangjie.render.GrayTarget.init(allocator, 32, 32);
-    defer target.deinit();
-    var rasterizer = cangjie.render.Rasterizer.init(allocator);
-    defer rasterizer.deinit();
-    rasterizer.setSampling(4);
-    rasterizer.drawOutline(
-        &target,
-        &outline,
-        0,
-        24,
-        24,
-        face.properties().units_per_em,
-    ) catch {};
 }

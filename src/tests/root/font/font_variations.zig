@@ -210,6 +210,27 @@ test "Fontations VORG fixture matches read-fonts vertical origins" {
     try std.testing.expectEqual(@as(?i16, 824), try font.verticalOriginY(3));
 }
 
+test "CID CFF allocations are released when later font validation fails" {
+    const allocator = std.testing.allocator;
+    const source = @embedFile("../../../../tests/data/fontations/vorg.ttf");
+    const bytes = try allocator.dupe(u8, source);
+    defer allocator.free(bytes);
+
+    // This fuzz-discovered edit script keeps the CFF graph parseable,
+    // including its allocated CID Font DICT state, but fails a later whole-
+    // font validation stage. The allocator verifies that the error path
+    // releases the decoded CFF ownership.
+    const edits = [_]struct { index: usize, value: u8 }{
+        .{ .index = 381, .value = 151 },
+        .{ .index = 176, .value = 16 },
+        .{ .index = 151, .value = 1 },
+        .{ .index = 376, .value = 93 },
+        .{ .index = 0, .value = 0 },
+    };
+    for (edits) |edit| bytes[edit.index] = edit.value;
+    try std.testing.expectError(error.BadSfnt, Font.parse(allocator, bytes));
+}
+
 test "vertical header metadata is exposed when present" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

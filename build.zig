@@ -2657,6 +2657,64 @@ pub fn build(b: *std.Build) void {
         font_fuzz_smoke_cmd.addArgs(args);
     }
 
+    const font_fuzz_seeds = b.addWriteFiles();
+    _ = font_fuzz_seeds.addCopyFile(
+        b.path("src/tests/data/fontations_cmap12_font1.ttf"),
+        "font_fuzz/seeds/fontations_cmap12_font1.ttf",
+    );
+    _ = font_fuzz_seeds.addCopyFile(
+        b.path("src/tests/data/fontations_names_only.ttf"),
+        "font_fuzz/seeds/fontations_names_only.ttf",
+    );
+    _ = font_fuzz_seeds.addCopyFile(
+        b.path("src/tests/data/fontations_simple_glyf.ttf"),
+        "font_fuzz/seeds/fontations_simple_glyf.ttf",
+    );
+    _ = font_fuzz_seeds.addCopyFile(
+        b.path("src/tests/data/fontations_cmap14_font1.ttf"),
+        "font_fuzz/seeds/fontations_cmap14_font1.ttf",
+    );
+    _ = font_fuzz_seeds.addCopyFile(
+        b.path("src/tests/data/fontations_vazirmatn_var.ttf"),
+        "font_fuzz/seeds/fontations_vazirmatn_var.ttf",
+    );
+    _ = font_fuzz_seeds.addCopyFile(
+        b.path("tests/data/fontations/vorg.ttf"),
+        "font_fuzz/seeds/vorg.ttf",
+    );
+    _ = font_fuzz_seeds.addCopyFile(
+        b.path("tools/font_fuzz/driver.zig"),
+        "font_fuzz/driver.zig",
+    );
+    const font_fuzz_cangjie = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+        .imports = &.{
+            .{ .name = "imx", .module = imx_dep.module("imx") },
+            .{ .name = "vort", .module = vort_dep.module("vort") },
+        },
+    });
+    const font_fuzz_tests = b.addTest(.{
+        .name = "cangjie-font-fuzz",
+        .root_module = b.createModule(.{
+            .root_source_file = font_fuzz_seeds.addCopyFile(
+                b.path("tools/font_fuzz_test.zig"),
+                "font_fuzz_test.zig",
+            ),
+            .target = target,
+            // Memory safety is the contract under test even when the rest of
+            // the build requests ReleaseFast.
+            .optimize = .ReleaseSafe,
+            .imports = &.{.{ .name = "cangjie", .module = font_fuzz_cangjie }},
+        }),
+    });
+    const font_fuzz_step = b.step(
+        "font-fuzz",
+        "Fuzz malformed font parsing and rendering with Zig's built-in fuzzer",
+    );
+    font_fuzz_step.dependOn(&b.addRunArtifact(font_fuzz_tests).step);
+
     const render_text_exe = b.addExecutable(.{
         .name = "cangjie-render-text",
         .root_module = b.createModule(.{

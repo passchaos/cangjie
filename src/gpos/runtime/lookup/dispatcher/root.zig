@@ -82,6 +82,7 @@ pub fn collectWithIndex(
         run,
         run_digest_cache,
         resolved,
+        null,
     );
 }
 
@@ -123,6 +124,7 @@ pub fn collectAfterAcceleratorProof(
         run,
         run_digest_cache,
         prepare.headerAfterAcceleratorProof(sidecar, run),
+        sidecar,
     );
 }
 
@@ -136,6 +138,7 @@ fn executePrepared(
     run: Options,
     run_digest_cache: ?*DigestCache,
     resolved: prepare.Header,
+    prepared_accelerator: ?*const accelerator.Lookup,
 ) Error!void {
     if (try prepare.markFilteringOptions(resolved, run)) |customized| {
         return execute.collect(
@@ -148,6 +151,7 @@ fn executePrepared(
             customized,
             run_digest_cache,
             resolved,
+            prepared_accelerator,
         );
     }
     return execute.collect(
@@ -160,6 +164,7 @@ fn executePrepared(
         run,
         run_digest_cache,
         resolved,
+        prepared_accelerator,
     );
 }
 

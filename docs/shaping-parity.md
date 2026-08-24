@@ -1122,7 +1122,12 @@ Current local snapshot after the Nastaliq parity work:
   Fixed-CPU-30 A/B/B/A counters over 200 complete Devanagari `hi-words`
   passes reduced retired instructions by about `1.31%` and branches by about
   `1.58%`; cycles improved by about `0.15%` in the interleaved matrix while
-  branch misses rose about `0.25%`. Output checksums remained identical.
+  branch misses rose about `0.25%`. Passing that proved sidecar through the
+  executor then removed its second lookup-array access before coverage
+  rejection and parsed-subtable dispatch. An incremental A/B/B/A matrix
+  reduced instructions by a further `0.27%`, branches by `0.53%`, and cycles
+  by about `1.03%`; 11-sample medians improved from an average `951.001` to
+  `947.829 ns/glyph`. Output checksums remained identical.
 - Validated, non-profiled GSUB now also dispatches accelerated direct
   ContextSubst lookups through the small fast wrapper instead of entering the
   generic profiling-capable dispatcher before reaching the same predecoded

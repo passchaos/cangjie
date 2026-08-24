@@ -5,6 +5,7 @@
 //! precedence and target-index semantics.
 
 const std = @import("std");
+const accelerator = @import("../../../accelerator/root.zig");
 const contextual = @import("../contextual/root.zig");
 const cursive = @import("../cursive.zig");
 const extension_strategy = @import("execute/extension.zig");
@@ -46,6 +47,7 @@ pub noinline fn collect(
     run: Options,
     run_digest_cache: ?*DigestCache,
     resolved: Header,
+    prepared_accelerator: ?*const accelerator.Lookup,
 ) Error!void {
     const lookup_type = resolved.lookup_type;
     const lookup_flag = resolved.lookup_flag;
@@ -59,24 +61,32 @@ pub noinline fn collect(
             subtable_count,
         );
     }
-    if (runtime_dispatch.acceleratorWithCoverage(lookup_index, run)) |accelerator| {
+    // Whole-run traversal has already selected the exact sidecar while
+    // resolving the LookupList offset. Detached callers still derive it from
+    // the optional index, but the hot font-owned path must not index the large
+    // accelerator array a second time for coverage and parsed subtables.
+    const lookup_accelerator = if (prepared_accelerator) |prepared|
+        if (prepared.coverage_digest.isEmpty()) null else prepared
+    else
+        runtime_dispatch.acceleratorWithCoverage(lookup_index, run);
+    if (lookup_accelerator) |active_accelerator| {
         const run_digest = if (run_digest_cache) |cache|
             cache.get(glyphs, lookup_flag, run)
         else
             prefilter.runDigest(glyphs, lookup_flag, run);
         if (run_digest.isEmpty() or
-            !accelerator.coverage_digest.mayIntersect(run_digest))
+            !active_accelerator.coverage_digest.mayIntersect(run_digest))
         {
             return;
         }
         // Coverage-only chaining already performs this exact group lookup for
         // every glyph. A whole-run preflight would duplicate its first scan.
-        if (!accelerator.chaining_coverage_only and
-            accelerator.coverage_groups.len != 0 and
+        if (!active_accelerator.chaining_coverage_only and
+            active_accelerator.coverage_groups.len != 0 and
             !prefilter.groupsMayMatchRun(
-                accelerator.coverage_groups,
-                accelerator.coverage_group_slots,
-                accelerator.coverage_group_direct,
+                active_accelerator.coverage_groups,
+                active_accelerator.coverage_group_slots,
+                active_accelerator.coverage_group_direct,
                 glyphs,
                 lookup_flag,
                 run,
@@ -123,11 +133,8 @@ pub noinline fn collect(
     }
 
     if (lookup_type == 8) {
-        if (runtime_dispatch.acceleratorWithCoverage(
-            lookup_index,
-            run,
-        )) |accelerator| {
-            if (accelerator.chaining_coverage_only) {
+        if (lookup_accelerator) |active_accelerator| {
+            if (active_accelerator.chaining_coverage_only) {
                 return contextual.chaining.coverage.lookup.collect(
                     view,
                     lookup_offset,
@@ -137,7 +144,7 @@ pub noinline fn collect(
                     allocator,
                     lookup_flag,
                     run,
-                    accelerator,
+                    active_accelerator,
                     nested.records,
                     nested.apply,
                 );
@@ -153,14 +160,11 @@ pub noinline fn collect(
             // SinglePos and PairPos require whole-lookup ordered-alternative
             // semantics and are handled before this per-subtable loop.
             1, 2 => unreachable,
-            3 => if (runtime_dispatch.acceleratorWithCoverage(
-                lookup_index,
-                run,
-            )) |accelerator| {
-                if (subtable_index < accelerator.cursive_subtables.len) {
+            3 => if (lookup_accelerator) |active_accelerator| {
+                if (subtable_index < active_accelerator.cursive_subtables.len) {
                     try cursive.collectParsed(
                         view,
-                        accelerator.cursive_subtables[subtable_index],
+                        active_accelerator.cursive_subtables[subtable_index],
                         glyphs,
                         adjustments,
                         allocator,
@@ -188,16 +192,13 @@ pub noinline fn collect(
                 run,
             ),
             4 => if (runtime_matching.runMayHaveMarkAttachments(glyphs, run)) {
-                if (runtime_dispatch.acceleratorWithCoverage(
-                    lookup_index,
-                    run,
-                )) |accelerator| {
+                if (lookup_accelerator) |active_accelerator| {
                     if (subtable_index <
-                        accelerator.mark_to_base_subtables.len)
+                        active_accelerator.mark_to_base_subtables.len)
                     {
                         try marks.base.collectParsed(
                             view,
-                            accelerator.mark_to_base_subtables[subtable_index],
+                            active_accelerator.mark_to_base_subtables[subtable_index],
                             glyphs,
                             adjustments,
                             allocator,
@@ -229,7 +230,7 @@ pub noinline fn collect(
                 );
             },
             6 => if (runtime_matching.runMayHaveMarkAttachments(glyphs, run)) {
-                if (runtime_dispatch.acceleratorWithCoverage(lookup_index, run)) |accelerator_value| {
+                if (lookup_accelerator) |accelerator_value| {
                     if (subtable_index < accelerator_value.mark_to_mark_subtables.len) {
                         const parsed = accelerator_value.mark_to_mark_subtables[subtable_index];
                         for (0..glyphs.len) |glyph_index| {

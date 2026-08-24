@@ -44,15 +44,19 @@ pub fn parseForValidation(
                 subtable.coverage_offset,
                 .indexed,
             );
-            try table.class_def.validate(
-                view,
-                subtable.backtrack_class_def,
-            );
+            if (subtable.backtrack_class_def != table.class_def.empty_offset) {
+                try table.class_def.validate(
+                    view,
+                    subtable.backtrack_class_def,
+                );
+            }
             try table.class_def.validate(view, subtable.input_class_def);
-            try table.class_def.validate(
-                view,
-                subtable.lookahead_class_def,
-            );
+            if (subtable.lookahead_class_def != table.class_def.empty_offset) {
+                try table.class_def.validate(
+                    view,
+                    subtable.lookahead_class_def,
+                );
+            }
         },
         .coverage => |subtable| {
             if (subtable.records.input_count == 0) return error.BadGpos;
@@ -168,21 +172,21 @@ fn parseClass(
         subtable_offset,
         try view.readU16(try model.advance(view, subtable_offset, 2)),
     );
-    const backtrack_class_def = try table.offset.required16(
+    const backtrack_class_def = (try table.offset.optional16(
         view,
         subtable_offset,
         try view.readU16(try model.advance(view, subtable_offset, 4)),
-    );
+    )) orelse table.class_def.empty_offset;
     const input_class_def = try table.offset.required16(
         view,
         subtable_offset,
         try view.readU16(try model.advance(view, subtable_offset, 6)),
     );
-    const lookahead_class_def = try table.offset.required16(
+    const lookahead_class_def = (try table.offset.optional16(
         view,
         subtable_offset,
         try view.readU16(try model.advance(view, subtable_offset, 8)),
-    );
+    )) orelse table.class_def.empty_offset;
     const set_count =
         try view.readU16(try model.advance(view, subtable_offset, 10));
     const offsets_pos = try model.advance(view, subtable_offset, 12);

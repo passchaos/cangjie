@@ -5,6 +5,8 @@ const cangjie = @import("cangjie");
 const system_font_path = "/System/Library/Fonts/SFNSMono.ttf";
 const linux_noto_sans_arabic_path = "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf";
 const linux_noto_naskh_arabic_path = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf";
+const linux_noto_serif_myanmar_path =
+    "/usr/share/fonts/truetype/noto/NotoSerifMyanmar-Regular.ttf";
 const linux_noto_sans_cjk_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc";
 const local_estedad_variable_path =
     "../../Work/harfbuzz/test/api/fonts/Estedad-VF.ttf";
@@ -115,6 +117,32 @@ test "Linux Noto Sans Arabic parses duplicate contextual GPOS coverage" {
     try std.testing.expect(stats.covered > 100);
     try std.testing.expect(stats.coverage_sum > 1000);
     try std.testing.expect(stats.bounds != null);
+}
+
+test "Linux Noto Serif Myanmar accepts null chaining lookahead ClassDef" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const font_bytes = std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        linux_noto_serif_myanmar_path,
+        allocator,
+        .limited(16 * 1024 * 1024),
+    ) catch |err| switch (err) {
+        error.FileNotFound, error.AccessDenied => return error.SkipZigTest,
+        else => return err,
+    };
+    defer allocator.free(font_bytes);
+
+    var font = try cangjie.font.Face.parse(allocator, font_bytes);
+    defer font.deinit();
+    var engine = cangjie.shaping.Engine.init(allocator, .{});
+    defer engine.deinit();
+    const run = try engine.shape(
+        &font,
+        .{ .text = "မြန်မာ", .font_size = 32 },
+    );
+    try std.testing.expectEqual(@as(usize, 6), run.glyphs.len);
 }
 
 test "Linux Noto Arabic exposes HarfBuzz-compatible tatweel insertion flags" {

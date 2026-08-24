@@ -2766,6 +2766,16 @@ shaping-performance superiority.
   `myanmar-zawgyi.tests` `Qaag` row passes by
   treating Myanmar Zawgyi as HarfBuzz does: a script tag with auto shaping,
   normalization, zero-width-mark handling, and fallback positioning disabled.
+  Noto Serif Myanmar now parses its production GPOS ChainContextPos format-2
+  lookup with a null optional lookahead ClassDef; absent backtrack/lookahead
+  ClassDefs correctly mean class zero, while InputClassDef remains required. A
+  mixed 109-glyph Myanmar, Shan, Tai Laing, and extension-block probe passes
+  both HarfBuzz and HarfRust with checksum `17c9e1cfabec5341`. The installed
+  production-font smoke test retains parsing and shaping of ordinary Myanmar
+  text; a focused synthetic test protects the nullable-offset grammar. All
+  five upstream `myanmar-misc.tests` and `myanmar-syllable.tests` rows are now
+  retained as per-font corpora under `tests/data/myanmar/` and run against both
+  HarfBuzz and HarfRust in the corpus parity umbrella.
 - Continue Arabic hot-path work from measured profile evidence: GSUB `calt`
   context lookups now dominate after the GPOS lookup `37` cleanup; avoid
   retaining speculative prefilters unless they improve both Arabic and Roboto

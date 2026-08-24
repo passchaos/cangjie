@@ -1504,6 +1504,32 @@ const retained_harfbuzz_text_parity_gates = [_]struct {
     },
 };
 
+const retained_myanmar_text_parity_gates = [_]struct {
+    font_hash: []const u8,
+    text_file: []const u8,
+}{
+    .{
+        .font_hash = "065b01e54f35f0d849fd43bd5b936212739a50cb",
+        .text_file = "tests/data/myanmar/misc-065b.txt",
+    },
+    .{
+        .font_hash = "a232bb734d4c6c898a44506547d19768f0eba6a6",
+        .text_file = "tests/data/myanmar/misc-a232.txt",
+    },
+    .{
+        .font_hash = "af3086380b743099c54a3b11b96766039ea62fcd",
+        .text_file = "tests/data/myanmar/syllable-af30.txt",
+    },
+    .{
+        .font_hash = "f4ba5a767ef56a40133844507efb98fee5635e71",
+        .text_file = "tests/data/myanmar/syllable-f4ba.txt",
+    },
+    .{
+        .font_hash = "65d1b9099cfb3191931d8d6112d7a03d979d579f",
+        .text_file = "tests/data/myanmar/syllable-65d1.txt",
+    },
+};
+
 const retained_text_rendering_parity_gates = [_]struct {
     font_file: []const u8,
     text_file: []const u8,
@@ -3058,6 +3084,27 @@ pub fn build(b: *std.Build) void {
                 "--direction", gate.direction,
             });
             shaping_corpus_parity_smoke_step.dependOn(&text_parity_cmd.step);
+        }
+        for (retained_myanmar_text_parity_gates) |gate| {
+            const font_path = b.fmt(
+                "{s}/{s}.ttf",
+                .{ harfbuzz_in_house_fonts, gate.font_hash },
+            );
+            inline for ([_][]const u8{
+                "compare-harfbuzz",
+                "compare-harfrust",
+            }) |engine| {
+                const myanmar_parity_cmd = b.addRunArtifact(shape_bench_exe);
+                myanmar_parity_cmd.addArgs(&.{
+                    "--engine",    engine,
+                    "--font",      font_path,
+                    "--text-file", gate.text_file,
+                    "--direction", "ltr",
+                });
+                shaping_corpus_parity_smoke_step.dependOn(
+                    &myanmar_parity_cmd.step,
+                );
+            }
         }
         for (retained_text_rendering_parity_gates) |gate| {
             const harfbuzz_parity_cmd = b.addRunArtifact(shape_bench_exe);

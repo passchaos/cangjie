@@ -1,11 +1,13 @@
 //! OpenType ClassDef grammar, bounds, and lookup operations for GPOS.
 
+const std = @import("std");
 const GlyphId = @import("../../glyph.zig").GlyphId;
 const layout = @import("../../opentype/layout.zig");
 const view = @import("view.zig");
 
 pub const Error = view.Error || error{UnsupportedGpos};
 pub const View = view.View;
+pub const empty_offset = std.math.maxInt(usize);
 
 pub fn validate(table: View, class_def_offset: usize) Error!void {
     return validateWithLimit(table, class_def_offset, null);
@@ -78,6 +80,10 @@ pub fn value(
     class_def_offset: usize,
     glyph: GlyphId,
 ) Error!u16 {
+    // Optional contextual ClassDefs assign every glyph to class zero when the
+    // offset is null. Parsers normalize that representation to this sentinel
+    // so runtime matching never aliases offset zero with the GPOS header.
+    if (class_def_offset == empty_offset) return 0;
     const format = try table.readU16(class_def_offset);
     switch (format) {
         1 => {

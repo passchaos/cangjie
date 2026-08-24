@@ -4075,3 +4075,10 @@ shaping-performance superiority.
   `1.4--2.4%` for `A`, `g`, and `é`. Retired instructions improved about
   `1.2%` for `é`, stayed near-neutral for `g`, and traded about `0.6%` more for
   `A`; all target checksums remained byte-identical.
+- Scanline edge intersections now use an explicit fused multiply-add. This
+  preserves the exact single-rounding result already selected by ReleaseFast
+  while making that hot arithmetic contract independent of optimizer pattern
+  recognition. Fixed-CPU-30 A/B/B/A counters over 200,000 Roboto 64 px direct
+  dirty renders reduced retired instructions by about `0.14%` for `A`, `0.03%`
+  for `g`, and `0.20%` for `é`; cycles improved about `1.5%`, remained neutral,
+  and improved about `1.2%`, respectively. Checksums remained byte-identical.

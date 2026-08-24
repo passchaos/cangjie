@@ -34,8 +34,6 @@ pub fn lookup(
         var next_position = position + 1;
         defer position = next_position;
         const first = glyphs.items[position];
-        if (!eligible(glyphs.items, position, lookup_flag, run)) continue;
-
         var subtable_index: usize = 0;
         while (subtable_index < subtable_count and
             subtable_index <
@@ -50,6 +48,10 @@ pub fn lookup(
                 parsed.groups,
                 first,
             ) orelse continue;
+            // The compact first-glyph index is an exact necessary condition
+            // and rejects most glyphs. Defer source-scope and LookupFlag
+            // filtering until it proves that a rule group exists.
+            if (!eligible(glyphs.items, position, lookup_flag, run)) break;
             const result = try applyEligibleGroupAt(
                 Executor,
                 view,

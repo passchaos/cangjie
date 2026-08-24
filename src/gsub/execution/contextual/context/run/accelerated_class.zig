@@ -29,15 +29,6 @@ pub fn apply(
         var next_position = position + 1;
         defer position = next_position;
         const first = glyphs.items[position];
-        if (!filtering.lookupCursorAllowsGlyph(run, position) or
-            filtering.lookupIgnoresGlyph(
-                lookup_flag,
-                run,
-                first,
-            ))
-        {
-            continue;
-        }
         var subtable_index: usize = 0;
         while (subtable_index < subtable_count and
             subtable_index <
@@ -54,6 +45,13 @@ pub fn apply(
                 accelerated_subtable.groups,
                 first,
             ) orelse continue;
+            // Most glyphs are absent from the exact first-glyph index. Probe
+            // it before the more expensive source-scope and LookupFlag tests.
+            if (!filtering.lookupCursorAllowsGlyph(run, position) or
+                filtering.lookupIgnoresGlyph(lookup_flag, run, first))
+            {
+                break;
+            }
             const result = try accelerated.applyGroup(
                 Executor,
                 view,

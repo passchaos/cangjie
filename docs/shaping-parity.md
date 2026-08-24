@@ -4007,6 +4007,15 @@ shaping-performance superiority.
   complete corpus passes reduced retired instructions by about `0.11%` for
   Devanagari, `0.10%` for Roboto, and `0.28%` for Amiri; cycles improved about
   `0.96%`, `1.1%`, and `0.29%`, respectively, with unchanged output.
+- Accelerator-backed class ContextSubst and ChainContextSubst now probe their
+  exact first-glyph index before consulting source-scope and LookupFlag
+  metadata. Most run glyphs have no rule group at all, so the hot miss path no
+  longer pays the more expensive filtering predicates. Fixed-CPU-30 A/B/B/A
+  counters over 200 complete NotoSansDevanagari `hi-words` passes reduced
+  retired instructions by about `1.83%`, branches by about `2.45%`, and cycles
+  by about `1.64%`; 11-sample medians improved by roughly `1.3--1.7%`. Roboto
+  `en-words` and Amiri `fa-words` retired work remained within `0.01%`, and all
+  shaping checksums were unchanged.
 - Direct scan conversion now dispatches the common two-active-edge row once,
   outside the subpixel loop, instead of retesting that invariant for all four
   vertical samples. Fixed-CPU-30 A/B/B/A counters over 20,000 direct dirty

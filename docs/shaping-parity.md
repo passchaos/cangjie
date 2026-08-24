@@ -4096,3 +4096,10 @@ shaping-performance superiority.
   renders reduced retired instructions by about `1.2%` for `A`, `1.2%` for
   `g`, and `0.4%` for `é`; branches fell about `0.02%`, `2.9%`, and `2.0%`,
   respectively. Cycles improved about `1.8--2.8%` with byte-identical output.
+- Quantized 4×4 spans now merge adjacent boundary/full-range difference deltas
+  before writing row scratch. The common partial/full/partial span therefore
+  touches four transition slots instead of issuing three separate range
+  updates with six endpoint writes. Fixed-CPU-30 A/B/B/A counters over 200,000
+  Roboto 64 px direct dirty renders reduced branches by about `2.5%` for `A`,
+  `3.0%` for `g`, and `1.7%` for `é`; cycles improved about `2.3%`, `3.0%`,
+  and `0.7%`, respectively, with byte-identical output.

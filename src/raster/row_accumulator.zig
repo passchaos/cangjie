@@ -190,31 +190,28 @@ inline fn coverSpanDifference4QuarterSamples(
 
     const first_offset: i16 = @intCast(first_sample & 3);
     const after_offset: i16 = @intCast(after_sample & 3);
-    var full_start = x_start;
-    var full_end = x_end;
-    if (first_offset != 0) {
-        addDifference(
-            differences,
-            min_x,
-            x_start,
-            x_start,
-            4 - first_offset,
-        );
-        full_start += 1;
+    const start_coverage = 4 - first_offset;
+    const end_coverage = if (after_offset == 0) 4 else after_offset;
+    const first_index: usize = @intCast(x_start - min_x);
+    const end_index: usize = @intCast(x_end - min_x);
+
+    // Merge adjacent boundary/full-span deltas before touching memory. The
+    // former three range updates wrote six endpoints for the common partial /
+    // full / partial shape, even though two pairs address the same transition.
+    differences[first_index] += start_coverage;
+    if (end_index == first_index + 1) {
+        const transition = end_coverage - start_coverage;
+        if (transition != 0) differences[end_index] += transition;
+    } else {
+        if (first_offset != 0) {
+            differences[first_index + 1] += first_offset;
+        }
+        const end_transition = end_coverage - 4;
+        if (end_transition != 0) {
+            differences[end_index] += end_transition;
+        }
     }
-    if (after_offset != 0) {
-        addDifference(
-            differences,
-            min_x,
-            x_end,
-            x_end,
-            after_offset,
-        );
-        full_end -= 1;
-    }
-    if (full_start <= full_end) {
-        addDifference(differences, min_x, full_start, full_end, 4);
-    }
+    differences[end_index + 1] -= end_coverage;
     return .{ .min_x = x_start, .max_x = x_end };
 }
 

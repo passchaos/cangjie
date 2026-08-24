@@ -81,7 +81,7 @@ pub fn build(allocator: std.mem.Allocator, geometry: scanline.Bounds, lines: []c
             var intersection_count: usize = 0;
             for (row_lines) |line| {
                 if (py < line.y_min or py >= line.y_max) continue;
-                const x = line.slope * py + line.x_intercept;
+                const x = line.slope * (py - line.y_min) + line.x_at_y_min;
                 if (!std.math.isFinite(x)) continue;
                 intersection_storage[intersection_count] = .{
                     .x = x,

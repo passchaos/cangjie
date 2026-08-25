@@ -123,15 +123,15 @@ test "dense class ranges enforce the shared total cap" {
 
 test "format 1 dense maps are reserved for broad bounded tables" {
     try std.testing.expect(!accelerator.pair.shouldBuildDenseFormat1(
-        255,
-        255,
+        63,
+        63,
     ));
     try std.testing.expect(accelerator.pair.shouldBuildDenseFormat1(
-        256,
+        64,
         accelerator.pair.max_dense_class_entries,
     ));
     try std.testing.expect(!accelerator.pair.shouldBuildDenseFormat1(
-        256,
+        64,
         accelerator.pair.max_dense_class_entries + 1,
     ));
 }

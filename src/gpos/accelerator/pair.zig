@@ -12,7 +12,7 @@ pub const View = table.View;
 const max_class_glyphs = 16_384;
 const max_class_matrix = 16_384;
 pub const max_dense_class_entries = 8_192;
-const min_dense_pair_sets = 256;
+const min_dense_pair_sets = 64;
 
 pub const DenseRanges = struct {
     coverage_base: GlyphId,

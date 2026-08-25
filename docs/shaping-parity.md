@@ -4215,3 +4215,12 @@ shaping-performance superiority.
   `5.8--7.2%`; Source Serif wall time was noisy despite neutral retired work.
   The complete ReleaseFast suite and HarfBuzz/HarfRust corpus parity umbrella
   pass unchanged.
+- The same PairPos format 1 range index now covers extension-wrapped tables
+  with at least 64 reachable PairSets. Source Serif's five-subtable kerning
+  lookup otherwise searched each subtable's complete record interval for every
+  pair. Relative to the preceding broad-table threshold, fixed-CPU-30 A/B/B/A
+  counters over twenty complete `en-words` passes reduced Source Serif retired
+  instructions by about `0.54%`, branches by `0.70%`, branch misses by `1.85%`,
+  and cycles by `0.85%`. Roboto, whose table already used the dense path, was
+  instruction/branch neutral. Eleven-sample wall medians improved Source Serif
+  by about `0.56%` and left Roboto within noise, with unchanged checksums.

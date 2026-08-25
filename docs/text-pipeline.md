@@ -1307,6 +1307,14 @@ Cangjie matrix measured `75,539`/`75,551 ns` versus `68,314`/`66,560 ns`.
 Direction resolution therefore leaves a stable Arabic deficit of roughly
 `11--13.5%`; it is no longer hidden outside the Cangjie timing boundary.
 
+The reproducible nine-case `parley-matrix` was rerun on fixed CPU 30 with
+5,000 iterations and 15 samples per process. Cangjie led every output-count-
+equivalent row, including Arabic alternating styles at `43,810`/`43,757 ns`
+versus Parley's `49,570`/`49,603 ns` (about `1.13x`). The other eight rows
+ranged from about `1.12x` to `2.43x`. This larger sample closes the earlier
+small-sample Arabic-alternating uncertainty for this retained matrix, while
+still not claiming identical internal geometry representations.
+
 Line-local bidi now retains its glyph/run snapshot, ownership map, cluster
 index, seen bitmap, visual run indexes, L1 levels, and L2 order in the reusable
 layout buffer. The glyph and run list owners are swapped for the transaction

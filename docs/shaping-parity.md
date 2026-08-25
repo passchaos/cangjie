@@ -4234,3 +4234,10 @@ shaping-performance superiority.
   by about `3.5%` for Roboto and `7.6%` for Source Serif. Eleven-sample wall
   medians improved about `4.5%` and `6.9%`, respectively, with unchanged
   output checksums.
+- A fresh fixed-CPU-30 direct dirty-raster comparison (20,000 iterations, 15
+  samples) measured Cangjie/FreeType medians of `4,869/4,388 ns` for Roboto
+  64 px `A`, `6,898/5,593 ns` for `g`, and `5,308/5,284 ns` for `é`. The
+  stable dirty areas and per-engine checksums were unchanged. Cangjie therefore
+  still trails FreeType by about `1.11x`, `1.23x`, and `1.00x` on the direct
+  boundary even though the prepared-coverage boundary remains a clear Cangjie
+  win; overall raster superiority is not yet established.

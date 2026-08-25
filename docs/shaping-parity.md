@@ -4415,3 +4415,14 @@ shaping-performance superiority.
   `134.600` to `133.467 ns/glyph` (about `0.84%`), with identical checksums.
   Roboto controls showed the same instruction/branch reduction, and the full
   ReleaseFast suite plus retained HarfBuzz/HarfRust corpus parity pass.
+- The same ASCII output path now reads the proved-parallel codepoint,
+  substitution, and ligature-info sidecars without repeating per-glyph length
+  fallbacks. This does not assume identity after GSUB: it still consumes the
+  mutated sidecar values and preserves ligature/default-ignorable semantics.
+  Against exact `5ab2adde` parent and candidate binaries, fixed-CPU-30
+  A/B/B/A counters over twenty Source Serif Variable `en-words` passes reduced
+  retired instructions by about `0.19%`, branches by about `0.36%`, and branch
+  misses by about `0.45%`; cycles improved about `3.85%` in the interleaved
+  run. Eleven-sample medians improved from an average `133.317` to
+  `130.314 ns/glyph` (about `2.25%`), with identical checksums. The complete
+  ReleaseFast suite and retained HarfBuzz/HarfRust corpus parity pass.

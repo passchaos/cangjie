@@ -97,8 +97,12 @@ pub fn emit(input: Input) !Result {
                 .start = input.cluster_base,
                 .end = input.cluster_base,
             };
-        const source_codepoint =
-            if (input.scratch.codepoints.items.len == 0) 0 else input.scratch.codepoints.items[source_index];
+        const source_codepoint = if (input.ascii_source)
+            input.scratch.codepoints.items[source_index]
+        else if (input.scratch.codepoints.items.len == 0)
+            0
+        else
+            input.scratch.codepoints.items[source_index];
         var glyph_id = input_glyph_id;
         if (input.arabic_joining_features) |features| {
             if (try arabic.fallbackGlyph(
@@ -127,7 +131,8 @@ pub fn emit(input: Input) !Result {
             input.has_default_ignorable or
             input.options.not_found_variation_selector_glyph != null;
         const was_substituted = needs_substitution_state and
-            index < input.scratch.glyph_substituted.items.len and
+            (input.ascii_source or
+                index < input.scratch.glyph_substituted.items.len) and
             input.scratch.glyph_substituted.items[index];
         const kerx_skips_glyph =
             input.kerx_lookup != null and policy.kerxMachineSkipsGlyph(
@@ -195,14 +200,15 @@ pub fn emit(input: Input) !Result {
             index,
             &adjustment_cursor,
         );
+        const provenance = if (input.ascii_source)
+            input.scratch.ligature_components.infos.items[index]
+        else if (index < input.scratch.ligature_components.infos.items.len)
+            input.scratch.ligature_components.infos.items[index]
+        else
+            ligature_provenance.Info{};
         const stch_action: ligature_provenance.StchAction =
-            if (index < input.scratch.ligature_components.infos.items.len)
-                input.scratch.ligature_components.infos.items[index].flags.stch_action
-            else
-                .none;
-        const synthetic_base =
-            index < input.scratch.ligature_components.infos.items.len and
-            input.scratch.ligature_components.infos.items[index].flags.synthetic_base;
+            provenance.flags.stch_action;
+        const synthetic_base = provenance.flags.synthetic_base;
         const visible_not_found_variation_selector =
             input.options.not_found_variation_selector_glyph != null and
             unicode.isVariationSelector(source_codepoint) and

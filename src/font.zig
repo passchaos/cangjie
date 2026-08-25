@@ -6236,6 +6236,12 @@ pub const Font = struct {
         buffer: *glyph_mod.GlyphOutlineBuffer,
         glyph_id: glyph_mod.GlyphId,
     ) FontError!*const glyph_mod.GlyphOutline {
+        // The caller-owned buffer may retain a decoded glyph as well as its
+        // allocations. Parsed face bytes are immutable for the session, so a
+        // repeat of the same id is exactly the same outline.
+        if (glyph_mod.cachedOutline(buffer, glyph_id)) |outline| {
+            return outline;
+        }
         // A call invalidates the previous borrowed result even when validation
         // fails. Retain allocations so the same buffer remains useful for a
         // later valid glyph.
@@ -6248,7 +6254,7 @@ pub const Font = struct {
             glyph_id,
             .parsed,
         );
-        return buffer.current();
+        return glyph_mod.publishOutlineBuffer(buffer, glyph_id);
     }
 
     fn glyphOutlineForReadMode(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, read_mode: OutlineReadMode) FontError!glyph_mod.GlyphOutline {

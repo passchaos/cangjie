@@ -111,13 +111,14 @@ test "glyph outline session reuses caller-owned command and compound scratch" {
     const command_storage = first.commands.items.ptr;
     const command_capacity = first.commands.capacity;
 
-    // A second decode of the same compound glyph must reuse the allocation
-    // retained by the caller-owned buffer rather than transferring ownership
-    // to the borrowed result.
+    // A repeat of the same glyph retains both allocation and decoded command
+    // contents. This is the atlas hot path and the immutable session contract
+    // makes the cached outline authoritative.
     const second = try session.outlineInto(&buffer, 2);
     try expectSameOutline(owning, second.*);
     try std.testing.expectEqual(command_storage, second.commands.items.ptr);
     try std.testing.expectEqual(command_capacity, second.commands.capacity);
+    try std.testing.expectEqual(first, second);
 
     // Errors invalidate the borrowed result but retain its storage for a later
     // successful call. This makes recovery deterministic and leak-free.

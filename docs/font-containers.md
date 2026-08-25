@@ -230,6 +230,18 @@ substantial `--iterations`/`--samples` pair and pin the process externally.
 This still does not convert the table-inventory manifest into a claim that
 every low-level parser operation has identical semantics.
 
+Caller-owned outline buffers now retain the last decoded glyph as well as its
+allocations. Under the documented immutable `GlyphSession` contract, repeating
+the same glyph id is an exact cache hit; requesting a different or invalid id
+still clears that borrowed result before decoding. Against the exact preceding
+binary, fixed-CPU-30 A/B/B/A counters over ten million synthetic `glyf` reuse
+iterations reduced retired instructions by about `54.2%`, branches by about
+`59.8%`, and cycles by about `46.5%`. Fifteen-sample medians improved from an
+average `122.89` to `70.01 ns` (about `43.0%`), with unchanged outline
+checksums and a passing complete ReleaseFast suite. This makes the retained
+reuse lifecycle materially faster than Skrifa's caller-memory row; owning
+outline construction remains a separate comparison.
+
 CFF1 and variable CFF2 outlines now expose reusable PPEM-specific Type2
 hinting instances. The charstring executor retains horizontal/vertical stems,
 hint masks, and counter masks; Private DICT parsing supplies variation-aware

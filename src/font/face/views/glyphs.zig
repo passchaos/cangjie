@@ -237,8 +237,9 @@ pub const Session = struct {
     ///
     /// This has the same immutable-byte trust contract as `outline`. The
     /// returned pointer is borrowed from `buffer` and remains valid only until
-    /// the next decode into that buffer or `buffer.deinit()`. A call invalidates
-    /// the previous result even if it returns an error.
+    /// a different glyph is decoded into that buffer or `buffer.deinit()`. A
+    /// repeat of the same glyph id reuses the retained decoded outline. A
+    /// failed request still invalidates the previous result.
     pub fn outlineInto(
         self: Session,
         buffer: *glyph_mod.GlyphOutlineBuffer,

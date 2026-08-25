@@ -74,12 +74,14 @@ pub const GlyphOutline = struct {
 /// outlines from one immutable parsed face: its command allocation and the
 /// raw point storage needed by compound `glyf` placement survive between
 /// calls. A borrowed outline returned by `GlyphSession.outlineInto` remains
-/// valid only until the next operation on this buffer or `deinit`.
+/// valid until a different/failed decode on this buffer or `deinit`; repeating
+/// the same glyph id returns the retained decoded outline.
 pub const GlyphOutlineBuffer = struct {
     // These fields are implementation storage shared with the font decoder.
     // Public users should consume `current`; their layout is not a stable API.
     outline_storage: GlyphOutline,
     compound_points: std.ArrayList(Point) = .empty,
+    cached_glyph_id: ?GlyphId = null,
 
     pub fn init(allocator: std.mem.Allocator) GlyphOutlineBuffer {
         return .{
@@ -102,10 +104,10 @@ pub const GlyphOutlineBuffer = struct {
 
     /// Return the most recently materialized outline.
     ///
-/// Before the first successful decode (and after a failed decode), this
-/// returns an empty outline with glyph id and metrics set to zero. The pointer
-/// is invalidated by the next decode into this buffer even when its address
-/// does not change.
+    /// Before the first successful decode (and after a failed decode), this
+    /// returns an empty outline with glyph id and metrics set to zero. The
+    /// pointer is invalidated by a different or failed decode into this buffer
+    /// even when its address does not change.
     pub fn current(self: *const GlyphOutlineBuffer) *const GlyphOutline {
         return &self.outline_storage;
     }
@@ -117,6 +119,7 @@ pub const GlyphOutlineBuffer = struct {
 /// `cangjie.font` namespace. Keeping it here lets the storage owner preserve
 /// all capacity while the table decoder supplies fresh result metadata.
 pub fn resetOutlineBuffer(buffer: *GlyphOutlineBuffer) void {
+    buffer.cached_glyph_id = null;
     buffer.outline_storage.commands.clearRetainingCapacity();
     buffer.compound_points.clearRetainingCapacity();
     configureOutline(
@@ -126,6 +129,22 @@ pub fn resetOutlineBuffer(buffer: *GlyphOutlineBuffer) void {
         0,
         0,
     );
+}
+
+pub fn cachedOutline(
+    buffer: *GlyphOutlineBuffer,
+    glyph_id: GlyphId,
+) ?*const GlyphOutline {
+    if (buffer.cached_glyph_id == glyph_id) return buffer.current();
+    return null;
+}
+
+pub fn publishOutlineBuffer(
+    buffer: *GlyphOutlineBuffer,
+    glyph_id: GlyphId,
+) *const GlyphOutline {
+    buffer.cached_glyph_id = glyph_id;
+    return buffer.current();
 }
 
 pub fn configureOutline(

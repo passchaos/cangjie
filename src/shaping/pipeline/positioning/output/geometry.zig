@@ -44,6 +44,42 @@ pub fn resolve(
             @as(f32, @floatFromInt(metrics.advance_width))
     else
         @as(f32, @floatFromInt(adjustment.x_advance));
+    if (!input.options.writing_mode.isVertical() and
+        source_codepoint < 0x80 and
+        glyph_class != .mark and
+        !synthetic_base and
+        adjustment.attachment_type == .none and
+        !hide_default_ignorable and
+        !visible_not_found_variation_selector and
+        !input.early_zero_mark_shape)
+    {
+        // ASCII cannot need space emulation, default-ignorable handling,
+        // Unicode mark zeroing, or vertical orientation/origins. Retain every
+        // authored GPOS, kerx, and legacy-kern term while avoiding that larger
+        // policy tree for the dominant Latin path.
+        return .{
+            .horizontal_advance = (@as(f32, @floatFromInt(metrics.advance_width)) +
+                adjustment_x_advance +
+                @as(f32, @floatFromInt(kerx_adjustment.x_advance))) *
+                input.scale +
+                kern_x_advance,
+            .vertical_advance = input.font_size,
+            .x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) *
+                input.scale +
+                @as(f32, @floatFromInt(kerx_adjustment.x_offset)) *
+                    input.scale +
+                kern_x_offset,
+            .y_offset = @as(
+                f32,
+                @floatFromInt(
+                    adjustment.y_placement + kerx_adjustment.y_offset,
+                ),
+            ) * input.scale +
+                @as(f32, @floatFromInt(adjustment.attachment_cross_offset)) *
+                    input.scale,
+            .orientation = .horizontal,
+        };
+    }
     const attachment_cross_x =
         if (input.options.writing_mode.isVertical())
             @as(f32, @floatFromInt(adjustment.attachment_cross_offset)) *

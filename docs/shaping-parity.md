@@ -4241,3 +4241,13 @@ shaping-performance superiority.
   still trails FreeType by about `1.11x`, `1.23x`, and `1.00x` on the direct
   boundary even though the prepared-coverage boundary remains a clear Cangjie
   win; overall raster superiority is not yet established.
+- Horizontal ASCII output now returns directly from geometry resolution after
+  applying the equivalent horizontal metrics, GPOS, kerx, and legacy-kern
+  terms. ASCII cannot trigger space-emulation, default-ignorable, mark-zeroing,
+  or vertical-orientation policy; attachment-bearing results remain on the
+  general path. Fixed-CPU-30 A/B/B/A counters over twenty complete `en-words`
+  passes reduced retired instructions by about `5.82%` for Roboto and `5.97%`
+  for Source Serif, branches by `9.73%` and `9.88%`, and cycles by `5.10%` and
+  `2.96%`. Eleven-sample wall medians improved about `5.2%` and `2.4%`, with
+  unchanged checksums; the complete ReleaseFast suite, including mark-
+  attachment coverage, passes.

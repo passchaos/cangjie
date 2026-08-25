@@ -44,6 +44,43 @@ test "dense PairPos accelerator distinguishes coverage holes" {
     );
 }
 
+test "dense format 1 PairPos narrows search to one first glyph" {
+    const lookup = pair.accelerated.Lookup{
+        .pair_pos_records = &.{
+            .{ .first = 5, .second = 7, .x_advance = -10 },
+            .{ .first = 5, .second = 9, .x_advance = -20 },
+            .{ .first = 7, .second = 8, .x_advance = -30 },
+        },
+        .pair_pos_coverage_classes = &.{
+            .{ .glyph = 0, .class = 2 },
+            .{ .glyph = 0, .class = 0 },
+            .{ .glyph = 2, .class = 1 },
+        },
+    };
+    const subtable = pair.accelerated.Subtable{
+        .kind = .format_1_dense_x_advance,
+        .coverage_start = 0,
+        .coverage_len = 3,
+        .class_2_start = 5,
+    };
+
+    try std.testing.expectEqual(
+        @as(i16, -20),
+        pair.accelerated.findDenseFormat1Record(
+            &lookup,
+            subtable,
+            5,
+            9,
+        ).?.x_advance,
+    );
+    try std.testing.expect(pair.accelerated.findDenseFormat1Record(
+        &lookup,
+        subtable,
+        6,
+        9,
+    ) == null);
+}
+
 test "PairPos native data detection ignores generic sidecars" {
     try std.testing.expect(!pair.accelerated.hasNativeData(&.{
         .{ .kind = .generic },

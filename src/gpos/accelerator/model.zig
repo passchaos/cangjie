@@ -51,6 +51,7 @@ pub const Lookup = struct {
 pub const PairPositionKind = enum(u8) {
     generic,
     format_1_x_advance,
+    format_1_dense_x_advance,
     format_2_x_advance,
     format_2_dense_x_advance,
 };

@@ -4199,3 +4199,16 @@ shaping-performance superiority.
   `5,22,21`, advances `982,0,0`, offsets `0,-1,0`, and checksum
   `993f2b76f17eda72`. All nine upstream HarfRust `tests/custom/fuzzer.tests`
   rows are retained as `shaping-corpus-parity-smoke` HarfRust gates.
+- Broad PairPos format 1 tables now retain a dense first-glyph-to-PairSet
+  range beside their compact native records. The hot lookup therefore binary
+  searches only the selected first glyph's second-glyph records instead of the
+  complete 11,509-record Roboto kerning table; small or excessively sparse
+  tables keep the compact global search. Fixed-CPU-30 A/B/B/A counters over
+  twenty complete `en-words` passes reduced Roboto retired instructions by
+  about `4.6%`, branches by `5.9%`, and cycles by `5.6%`. Source Serif, which
+  has a much smaller extension-wrapped format 1 subtable and does not activate
+  the dense map, remained instruction/branch neutral while cycles improved
+  about `1.7%`. Eleven-sample A/B/B/A wall medians improved Roboto by roughly
+  `5.8--7.2%`; Source Serif wall time was noisy despite neutral retired work.
+  The complete ReleaseFast suite and HarfBuzz/HarfRust corpus parity umbrella
+  pass unchanged.

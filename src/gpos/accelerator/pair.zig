@@ -12,6 +12,7 @@ pub const View = table.View;
 const max_class_glyphs = 16_384;
 const max_class_matrix = 16_384;
 pub const max_dense_class_entries = 8_192;
+const min_dense_pair_sets = 256;
 
 pub const DenseRanges = struct {
     coverage_base: GlyphId,
@@ -47,6 +48,7 @@ pub fn append(
             subtable_offset,
             value_size,
             records,
+            coverage_classes,
             allocator,
         ),
         2 => appendFormat2(
@@ -67,6 +69,7 @@ pub fn appendFormat1(
     subtable_offset: usize,
     value_size: usize,
     records: *std.ArrayList(model.PairPositionRecord),
+    dense_ranges: *std.ArrayList(model.PairClassEntry),
     allocator: std.mem.Allocator,
 ) (Error || std.mem.Allocator.Error)!model.PairPositionSubtable {
     const coverage_offset = try requiredOffset(
@@ -75,19 +78,53 @@ pub fn appendFormat1(
         try view.readU16(subtable_offset + 2),
     );
     const pair_set_count = try view.readU16(subtable_offset + 8);
+    const coverage_count = try table.coverage.glyphCount(view, coverage_offset);
+    // Trailing PairSets beyond Coverage are unreachable and intentionally
+    // ignored, matching HarfBuzz and deployed TestGPOSTwo-style fonts.
+    const reachable_count = @min(@as(usize, pair_set_count), coverage_count);
     const record_start = records.items.len;
-    for (0..pair_set_count) |set_index| {
-        // Trailing PairSets beyond Coverage are unreachable and intentionally
-        // ignored, matching HarfBuzz and deployed TestGPOSTwo-style fonts.
-        const first =
-            (try table.coverage.glyphAt(view, coverage_offset, set_index)) orelse
-            break;
+    const first_glyph = if (reachable_count != 0)
+        (try table.coverage.glyphAt(view, coverage_offset, 0)).?
+    else
+        0;
+    const last_glyph = if (reachable_count != 0)
+        (try table.coverage.glyphAt(
+            view,
+            coverage_offset,
+            reachable_count - 1,
+        )).?
+    else
+        0;
+    const dense_len = if (reachable_count != 0 and last_glyph >= first_glyph)
+        @as(usize, last_glyph) - first_glyph + 1
+    else
+        0;
+    const dense_start = dense_ranges.items.len;
+    const build_dense = shouldBuildDenseFormat1(
+        reachable_count,
+        dense_len,
+    );
+    if (build_dense) {
+        try dense_ranges.resize(allocator, dense_start + dense_len);
+        @memset(
+            dense_ranges.items[dense_start..],
+            .{ .glyph = 0, .class = 0 },
+        );
+    }
+    var dense_offsets_fit = build_dense;
+    for (0..reachable_count) |set_index| {
+        const first = (try table.coverage.glyphAt(
+            view,
+            coverage_offset,
+            set_index,
+        )).?;
         const pair_set = try requiredOffset(
             view,
             subtable_offset,
             try view.readU16(subtable_offset + 10 + set_index * 2),
         );
         const pair_count = try view.readU16(pair_set);
+        const set_record_start = records.items.len;
         for (0..pair_count) |pair_index| {
             const record = pair_set + 2 + pair_index * (2 + value_size);
             try records.append(allocator, .{
@@ -96,11 +133,33 @@ pub fn appendFormat1(
                 .x_advance = try view.readI16(record + 2),
             });
         }
+        const relative_start = set_record_start - record_start;
+        if (dense_offsets_fit and relative_start <= std.math.maxInt(u16)) {
+            dense_ranges.items[
+                dense_start + first - first_glyph
+            ] = .{
+                // In a dense format-1 map, these two compact fields store the
+                // record offset and count; the array index owns glyph identity.
+                .glyph = @intCast(relative_start),
+                .class = pair_count,
+            };
+        } else {
+            dense_offsets_fit = false;
+        }
+    }
+    if (!dense_offsets_fit and build_dense) {
+        dense_ranges.shrinkRetainingCapacity(dense_start);
     }
     return .{
-        .kind = .format_1_x_advance,
+        .kind = if (dense_offsets_fit)
+            .format_1_dense_x_advance
+        else
+            .format_1_x_advance,
         .record_start = record_start,
         .record_len = records.items.len - record_start,
+        .coverage_start = dense_start,
+        .coverage_len = if (dense_offsets_fit) dense_len else 0,
+        .class_2_start = first_glyph,
     };
 }
 
@@ -264,6 +323,15 @@ pub fn entriesFitDenseRanges(
 pub fn shouldBuildDense(ranges: DenseRanges) bool {
     return ranges.coverage_len <= max_dense_class_entries and
         ranges.class_2_len <= max_dense_class_entries - ranges.coverage_len;
+}
+
+pub fn shouldBuildDenseFormat1(
+    reachable_pair_sets: usize,
+    dense_glyph_span: usize,
+) bool {
+    return reachable_pair_sets >= min_dense_pair_sets and
+        dense_glyph_span != 0 and
+        dense_glyph_span <= max_dense_class_entries;
 }
 
 fn appendClassDefEntries(

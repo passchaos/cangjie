@@ -27,12 +27,15 @@ test "format 1 ignores PairSets unreachable from Coverage" {
     };
     var records = std.ArrayList(accelerator.model.PairPositionRecord).empty;
     defer records.deinit(std.testing.allocator);
+    var ranges = std.ArrayList(accelerator.model.PairClassEntry).empty;
+    defer ranges.deinit(std.testing.allocator);
 
     const parsed = try accelerator.pair.appendFormat1(
         view,
         0,
         2,
         &records,
+        &ranges,
         std.testing.allocator,
     );
     try std.testing.expectEqual(@as(usize, 1), parsed.record_len);
@@ -116,6 +119,21 @@ test "dense class ranges enforce the shared total cap" {
         .class_2_base = 0,
         .class_2_len = 0,
     }));
+}
+
+test "format 1 dense maps are reserved for broad bounded tables" {
+    try std.testing.expect(!accelerator.pair.shouldBuildDenseFormat1(
+        255,
+        255,
+    ));
+    try std.testing.expect(accelerator.pair.shouldBuildDenseFormat1(
+        256,
+        accelerator.pair.max_dense_class_entries,
+    ));
+    try std.testing.expect(!accelerator.pair.shouldBuildDenseFormat1(
+        256,
+        accelerator.pair.max_dense_class_entries + 1,
+    ));
 }
 
 test "dense class ranges reject entries outside endpoint spans" {

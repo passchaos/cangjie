@@ -131,6 +131,15 @@ fn collectLookupImpl(
                     ) orelse continue;
                     break :value record.x_advance;
                 },
+                .format_1_dense_x_advance => value: {
+                    const record = findDenseFormat1Record(
+                        accelerator,
+                        sidecar,
+                        glyphs[first_index],
+                        glyphs[second_index],
+                    ) orelse continue;
+                    break :value record.x_advance;
+                },
                 .format_2_x_advance => classAdvance(
                     accelerator,
                     sidecar,
@@ -269,6 +278,42 @@ fn findSparseRecord(
             low = middle + 1;
         } else {
             return record;
+        }
+    }
+    return null;
+}
+
+pub fn findDenseFormat1Record(
+    accelerator: *const Lookup,
+    subtable: Subtable,
+    first: GlyphId,
+    second: GlyphId,
+) ?PairRecord {
+    if (first < subtable.class_2_start) return null;
+    const first_offset = @as(usize, first) - subtable.class_2_start;
+    if (first_offset >= subtable.coverage_len) return null;
+    const range_index = subtable.coverage_start + first_offset;
+    if (range_index >= accelerator.pair_pos_coverage_classes.len) return null;
+    const range = accelerator.pair_pos_coverage_classes[range_index];
+    if (range.class == 0) return null;
+    const record_start = subtable.record_start + range.glyph;
+    if (record_start > accelerator.pair_pos_records.len or
+        range.class > accelerator.pair_pos_records.len - record_start)
+    {
+        return null;
+    }
+    const records = accelerator.pair_pos_records[record_start .. record_start + range.class];
+    var low: usize = 0;
+    var high = records.len;
+    while (low < high) {
+        const middle = low + (high - low) / 2;
+        const record = records[middle];
+        if (second < record.second) {
+            high = middle;
+        } else if (second > record.second) {
+            low = middle + 1;
+        } else {
+            return if (record.first == first) record else null;
         }
     }
     return null;

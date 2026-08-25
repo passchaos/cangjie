@@ -90,25 +90,42 @@ def main() -> int:
     failures: list[str] = []
     for case in cases:
         for style in ("default", "spacing", "alternating"):
-            cangjie = run(
+            cangjie_first = run(
                 cangjie_command(args.cangjie, case, style, args.iterations, args.samples),
                 args.cpu,
             )
-            reference = run(
+            parley_first = run(
                 parley_command(parley, case, style, args.iterations, args.samples),
                 args.cpu,
             )
-            shape = (cangjie.get("text_bytes"), cangjie.get("glyphs"), cangjie.get("lines"))
-            expected = (reference.get("text_bytes"), reference.get("glyphs"), reference.get("lines"))
-            if shape != expected:
-                failures.append(f"{case.name}/{style}: Cangjie={shape}, Parley={expected}")
-            cangjie_ns = float(cangjie["median_ns_per_iter"])
-            parley_ns = float(reference["median_ns_per_iter"])
+            parley_second = run(
+                parley_command(parley, case, style, args.iterations, args.samples),
+                args.cpu,
+            )
+            cangjie_second = run(
+                cangjie_command(args.cangjie, case, style, args.iterations, args.samples),
+                args.cpu,
+            )
+            records = (cangjie_first, parley_first, parley_second, cangjie_second)
+            shapes = {
+                (item.get("text_bytes"), item.get("glyphs"), item.get("lines"))
+                for item in records
+            }
+            if len(shapes) != 1:
+                failures.append(f"{case.name}/{style}: output counts={sorted(shapes)}")
+            cangjie_a = float(cangjie_first["median_ns_per_iter"])
+            cangjie_b = float(cangjie_second["median_ns_per_iter"])
+            parley_a = float(parley_first["median_ns_per_iter"])
+            parley_b = float(parley_second["median_ns_per_iter"])
+            cangjie_ns = math.sqrt(cangjie_a * cangjie_b)
+            parley_ns = math.sqrt(parley_a * parley_b)
             speedup = math.inf if cangjie_ns == 0 else parley_ns / cangjie_ns
             print(
-                f"{case.name}/{style}: cangjie_ns={cangjie_ns:.3f} "
-                f"parley_ns={parley_ns:.3f} speedup={speedup:.3f}x "
-                f"glyphs={cangjie.get('glyphs')} lines={cangjie.get('lines')}"
+                f"{case.name}/{style}: "
+                f"cangjie_ns={cangjie_a:.3f}/{cangjie_b:.3f} "
+                f"parley_ns={parley_a:.3f}/{parley_b:.3f} "
+                f"speedup={speedup:.3f}x glyphs={cangjie_first.get('glyphs')} "
+                f"lines={cangjie_first.get('lines')}"
             )
     if failures:
         print("Cangjie/Parley output-count matrix failed:", file=sys.stderr)

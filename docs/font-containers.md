@@ -187,6 +187,15 @@ gate, not proof of per-table semantic parity or superiority; those stronger
 claims require reference differential tests and same-host performance
 measurements.
 
+A fixed-CPU-30 A/B/B/A run with 200,000 iterations and nine samples passed all
+18 semantic cases. Cangjie led Skrifa in every measured boundary: roughly
+`7.11x/4.56x` for the two attribute fixtures, `3.37x` for variations, `1.91x`
+for palettes, `7.39x` for strike enumeration, `2.99x/3.42x` for COLRv0/v1
+selection, `3.42x/1.58x/2.14x` for post/CFF/synthesized names, `1.89x` for
+bitmap selection, and `2.16x/2.91x/3.69x/2.82x` for Roboto cmap, metrics,
+bounds, and global metrics. This is the maintained high-level API matrix; it
+does not assert that every raw table accessor has an equivalent workload.
+
 `zig build fontations-matrix -Doptimize=ReleaseFast` now makes the maintained
 high-level differential reproducible instead of leaving it as a collection of
 manual commands. It builds the pinned local Skrifa oracle, generates all test

@@ -2074,4 +2074,6 @@ equal input-byte, glyph, and line counts before reporting timings. A fixed-CPU-3
 for Latin, `1.38x/1.49x/1.12x` for Arabic, and `2.43x/1.10x/1.12x` for
 Japanese (default/spacing/alternating). These results are tied to the named
 local font artifacts and establish the maintained matrix, not universal
-cross-platform superiority.
+cross-platform superiority. The matrix uses A/B/B/A process ordering and
+reports the geometric-mean ratio of the two per-engine medians so frequency
+drift is not silently attributed to either implementation.

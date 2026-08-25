@@ -10,6 +10,7 @@ A/B/B/A measurements.
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import subprocess
 import sys
@@ -134,7 +135,7 @@ def main() -> int:
     )
     skrifa = args.skrifa_manifest.parent / "target/release/fontations-bitmap-oracle"
     failures: list[str] = []
-    measured: list[tuple[str, str, str]] = []
+    measured: list[tuple[str, float, float, float, float]] = []
     for case in CASES:
         font = args.fixture_dir / case.font
         cangjie_semantic = run(cangjie_command(args.cangjie, case, font, 1, 1))
@@ -144,17 +145,23 @@ def main() -> int:
                 f"{case.name}: checksum: Cangjie={cangjie_semantic.get('checksum')!r}, "
                 f"Skrifa={reference_semantic.get('checksum')!r}"
             )
-        cangjie = cangjie_semantic if args.iterations == 1 and args.samples == 1 else run(
+        cangjie_first = cangjie_semantic if args.iterations == 1 and args.samples == 1 else run(
             cangjie_command(args.cangjie, case, font, args.iterations, args.samples)
         )
-        reference = reference_semantic if args.iterations == 1 and args.samples == 1 else run(
+        reference_first = reference_semantic if args.iterations == 1 and args.samples == 1 else run(
             skrifa_command(skrifa, case, font, args.iterations, args.samples)
         )
-        measured.append((
-            case.name,
-            cangjie.get("sample_median_ns_per_iter", "?"),
-            reference.get("median_ns_per_iter", "?"),
-        ))
+        reference_second = run(
+            skrifa_command(skrifa, case, font, args.iterations, args.samples)
+        )
+        cangjie_second = run(
+            cangjie_command(args.cangjie, case, font, args.iterations, args.samples)
+        )
+        measured.append((case.name,
+            float(cangjie_first["sample_median_ns_per_iter"]),
+            float(cangjie_second["sample_median_ns_per_iter"]),
+            float(reference_first["median_ns_per_iter"]),
+            float(reference_second["median_ns_per_iter"])))
 
     # Production-font queries cover the immutable cmap, metrics, bounds, and
     # complete global-metrics paths that synthetic fixtures cannot represent.
@@ -173,16 +180,33 @@ def main() -> int:
                 f"{case.name}: checksum: Cangjie={cangjie_semantic.get('checksum')!r}, "
                 f"Skrifa={reference_semantic.get('checksum')!r}"
             )
-        cangjie = cangjie_semantic if args.iterations == 1 and args.samples == 1 else run(
+        cangjie_first = cangjie_semantic if args.iterations == 1 and args.samples == 1 else run(
             cangjie_command(args.cangjie, case, roboto, args.iterations, args.samples)
         )
-        reference = reference_semantic if args.iterations == 1 and args.samples == 1 else run(
+        reference_first = reference_semantic if args.iterations == 1 and args.samples == 1 else run(
             skrifa_command(skrifa, case, roboto, args.iterations, args.samples)
         )
-        measured.append((case.name, cangjie.get("sample_median_ns_per_iter", "?"), reference.get("median_ns_per_iter", "?")))
+        reference_second = run(
+            skrifa_command(skrifa, case, roboto, args.iterations, args.samples)
+        )
+        cangjie_second = run(
+            cangjie_command(args.cangjie, case, roboto, args.iterations, args.samples)
+        )
+        measured.append((case.name,
+            float(cangjie_first["sample_median_ns_per_iter"]),
+            float(cangjie_second["sample_median_ns_per_iter"]),
+            float(reference_first["median_ns_per_iter"]),
+            float(reference_second["median_ns_per_iter"])))
 
-    for name, cangjie_ns, skrifa_ns in measured:
-        print(f"{name}: cangjie_ns={cangjie_ns} skrifa_ns={skrifa_ns}")
+    for name, cangjie_first, cangjie_second, skrifa_first, skrifa_second in measured:
+        cangjie_mean = math.sqrt(cangjie_first * cangjie_second)
+        skrifa_mean = math.sqrt(skrifa_first * skrifa_second)
+        speedup = math.inf if cangjie_mean == 0 else skrifa_mean / cangjie_mean
+        print(
+            f"{name}: cangjie_ns={cangjie_first:.3f}/{cangjie_second:.3f} "
+            f"skrifa_ns={skrifa_first:.3f}/{skrifa_second:.3f} "
+            f"speedup={speedup:.3f}x"
+        )
     if failures:
         print("Fontations/Skrifa semantic matrix failed:", file=sys.stderr)
         for failure in failures:

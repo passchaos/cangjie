@@ -3678,6 +3678,10 @@ pub const Font = struct {
         return self.kerx != null;
     }
 
+    fn hasKernTableForShaping(self: *const Font) bool {
+        return self.kern != null;
+    }
+
     fn hasMorxTableForShaping(self: *const Font) bool {
         return self.morx != null;
     }
@@ -6905,6 +6909,7 @@ pub const shaping = struct {
     pub const hasGposTableForShaping = Font.hasGposTableForShaping;
     pub const hasGsubTableForShaping = Font.hasGsubTableForShaping;
     pub const hasKerxTableForShaping = Font.hasKerxTableForShaping;
+    pub const hasKernTableForShaping = Font.hasKernTableForShaping;
     pub const hasMorxTableForShaping = Font.hasMorxTableForShaping;
     pub const hasAatSubstitutionForShaping = Font.hasAatSubstitutionForShaping;
     pub const applyAatSubstitutionForShaping = Font.applyAatSubstitutionForShaping;

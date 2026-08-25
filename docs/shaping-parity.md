@@ -4356,3 +4356,13 @@ shaping-performance superiority.
   repository's pre-existing `MissingTable` failures for the AOTS
   `gsub3_1_simple_f1.otf` and `gsub3_1_lookupflag_f1.otf` feature-range cases;
   direct runs at the parent revision reproduce the same missing-table result.
+- Legacy-kern planning now checks the parsed face's table capability before
+  calling the fallible lookup constructor. This preserves the same nullable
+  result for kern-less OpenType fonts while removing exception-style
+  `MissingTable` control flow from every segment. Against exact `c81ddf7c`
+  parent and candidate binaries, fixed-CPU-30 A/B/B/A counters over twenty
+  complete `en-words` passes reduced retired instructions by about `0.18%` for
+  Roboto and `0.21%` for Source Serif, branches by `0.58%` and `0.56%`, and
+  cycles by about `1.47%` and `1.19%`. Eleven-sample wall medians improved by
+  about `1.9%` and `0.9%`, respectively, with unchanged checksums and a
+  passing complete ReleaseFast suite.

@@ -122,6 +122,7 @@ pub fn prepare(input: Input) !Result {
         !font_shaping.hasKerxTableForShaping(
             input.font,
         ) and
+        font_shaping.hasKernTableForShaping(input.font) and
         !input.options.writing_mode.isVertical() and
         shouldApplyLegacyKernFallback(input.options.script_tag) and
         kerning_enabled)

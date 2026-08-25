@@ -19,3 +19,10 @@ cargo run --release --manifest-path tools/parley_layout_oracle/Cargo.toml -- \
 zig build paragraph-bench -Doptimize=ReleaseFast -- \
   /path/to/Roboto-Regular.ttf /path/to/latin.txt 1000 31 [WIDTH] [PHASE] [DIRECTION] [default|spacing|alternating]
 ```
+
+`zig build parley-matrix -Doptimize=ReleaseFast` runs the default, spacing, and
+alternating-style boundaries over Parley's Latin, Arabic, and Japanese sample
+paragraphs, and rejects mismatched source-byte, glyph, or line counts. Optional
+`-- --iterations N --samples N --cpu CPU` arguments provide a repeatable
+fixed-core performance run. The default font paths target the local Linux Noto
+installation and can be overridden with the script directly when required.

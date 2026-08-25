@@ -2882,6 +2882,31 @@ pub fn build(b: *std.Build) void {
     paragraph_bench_step.dependOn(&paragraph_bench_cmd.step);
     if (b.args) |args| paragraph_bench_cmd.addArgs(args);
 
+    const parley_matrix_step = b.step(
+        "parley-matrix",
+        "Run the cross-script Cangjie/Parley paragraph matrix",
+    );
+    const parley_matrix_cmd = b.addSystemCommand(&.{
+        "python3",
+        "tools/run_parley_matrix.py",
+        "--cangjie",
+    });
+    parley_matrix_cmd.addArtifactArg(paragraph_bench_exe);
+    parley_matrix_cmd.addArgs(&.{
+        "--parley-manifest",
+        "tools/parley_layout_oracle/Cargo.toml",
+        "--parley-root",
+        b.fmt("{s}/parley", .{parity_work_root orelse ""}),
+        "--roboto",
+        b.fmt("{s}/harfrust/harfrust/benches/fonts/Roboto-Regular.ttf", .{parity_work_root orelse ""}),
+        "--arabic-font",
+        "/usr/share/fonts/truetype/noto/NotoKufiArabic-Regular.ttf",
+        "--japanese-font",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    });
+    if (b.args) |args| parley_matrix_cmd.addArgs(args);
+    parley_matrix_step.dependOn(&parley_matrix_cmd.step);
+
     const freetype_c = b.addTranslateC(.{
         .root_source_file = b.path("tools/glyph_bench/freetype.h"),
         .target = target,

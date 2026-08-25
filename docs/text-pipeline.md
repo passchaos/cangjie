@@ -2065,3 +2065,13 @@ spacing, and `42.77/51.38 us` for alternating: leads of roughly `1.43x`,
 `1.50x`, and `1.20x`. These results supersede the older 144-glyph rows above,
 which used a different locally installed font artifact; they establish the
 current controlled Parley matrix, not a universal cross-platform claim.
+
+`zig build parley-matrix -Doptimize=ReleaseFast` now preserves this comparison
+as one reproducible nine-case gate: default, spacing, and alternating spans on
+Parley's own Latin, Arabic, and Japanese sample paragraphs. It first requires
+equal input-byte, glyph, and line counts before reporting timings. A fixed-CPU-30
+500-iteration, nine-sample run measured Cangjie speedups of `2.19x/1.76x/1.74x`
+for Latin, `1.38x/1.49x/1.12x` for Arabic, and `2.43x/1.10x/1.12x` for
+Japanese (default/spacing/alternating). These results are tied to the named
+local font artifacts and establish the maintained matrix, not universal
+cross-platform superiority.

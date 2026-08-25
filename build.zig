@@ -3012,19 +3012,45 @@ pub fn build(b: *std.Build) void {
     const shaping_use_parity_smoke_step = b.step("shaping-use-parity-smoke", "Run retained HarfBuzz USE fixture parity smoke gates");
     const shaping_aat_parity_smoke_step = b.step("shaping-aat-parity-smoke", "Run retained AAT shaping parity gates");
     const shaping_corpus_parity_smoke_step = b.step("shaping-corpus-parity-smoke", "Run retained HarfBuzz Latin, Arabic, and variable-font corpus parity gates");
+    const shaping_performance_matrix_step = b.step(
+        "shaping-performance-matrix",
+        "Benchmark Cangjie against HarfBuzz and HarfRust across retained corpora",
+    );
     if (!enable_harfbuzz) {
         shaping_parity_smoke_step.dependOn(&b.addFail("shaping-parity-smoke requires -Denable-harfbuzz=true").step);
         shaping_use_parity_smoke_step.dependOn(&b.addFail("shaping-use-parity-smoke requires -Denable-harfbuzz=true").step);
         shaping_aat_parity_smoke_step.dependOn(&b.addFail("shaping-aat-parity-smoke requires -Denable-harfbuzz=true").step);
         shaping_corpus_parity_smoke_step.dependOn(&b.addFail("shaping-corpus-parity-smoke requires -Denable-harfbuzz=true").step);
+        shaping_performance_matrix_step.dependOn(&b.addFail("shaping-performance-matrix requires -Denable-harfbuzz=true").step);
     } else if (parity_work_root == null) {
         shaping_parity_smoke_step.dependOn(&b.addFail("shaping-parity-smoke requires HOME or -Dparity-work-root=/path/to/Work").step);
         shaping_use_parity_smoke_step.dependOn(&b.addFail("shaping-use-parity-smoke requires HOME or -Dparity-work-root=/path/to/Work").step);
         shaping_aat_parity_smoke_step.dependOn(&b.addFail("shaping-aat-parity-smoke requires HOME or -Dparity-work-root=/path/to/Work").step);
         shaping_corpus_parity_smoke_step.dependOn(&b.addFail("shaping-corpus-parity-smoke requires HOME or -Dparity-work-root=/path/to/Work").step);
+        shaping_performance_matrix_step.dependOn(&b.addFail("shaping-performance-matrix requires HOME or -Dparity-work-root=/path/to/Work").step);
     } else {
         const work_root = parity_work_root.?;
         const harfrust_benches = b.fmt("{s}/harfrust/harfrust/benches", .{work_root});
+        const shaping_performance_matrix_cmd = b.addSystemCommand(&.{
+            "python3",
+            "tools/run_shaping_performance_matrix.py",
+            "--cangjie",
+        });
+        shaping_performance_matrix_cmd.addArtifactArg(shape_bench_exe);
+        shaping_performance_matrix_cmd.addArgs(&.{
+            "--harfbuzz",
+        });
+        shaping_performance_matrix_cmd.addArtifactArg(shape_bench_exe);
+        shaping_performance_matrix_cmd.addArgs(&.{
+            "--harfrust-manifest",
+            "tools/harfrust_shape_oracle/Cargo.toml",
+            "--corpus-root",
+            harfrust_benches,
+        });
+        if (b.args) |args| shaping_performance_matrix_cmd.addArgs(args);
+        shaping_performance_matrix_step.dependOn(
+            &shaping_performance_matrix_cmd.step,
+        );
         const harfbuzz_in_house_fonts = b.fmt("{s}/harfbuzz/test/shape/data/in-house/fonts", .{work_root});
         const harfbuzz_text_rendering_fonts = b.fmt("{s}/harfbuzz/test/shape/data/text-rendering-tests/fonts", .{work_root});
         const harfbuzz_aots_fonts = b.fmt("{s}/harfbuzz/test/shape/data/aots/fonts", .{work_root});

@@ -49,6 +49,7 @@ zig build shape-bench -Doptimize=ReleaseFast -- --font ~/Work/harfrust/harfrust/
 zig build shape-bench -Doptimize=ReleaseFast -- --font ~/Work/harfrust/harfrust/benches/fonts/Roboto-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/en-words.txt --direction ltr --iterations 1 --warmup 1 --samples 2
 zig build shape-bench -Doptimize=ReleaseFast -- --engine coretext --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/fa-thelittleprince.txt --direction rtl --iterations 1 --warmup 2 --samples 5
 zig build shape-bench -Doptimize=ReleaseFast -- --engine harfbuzz --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/fa-thelittleprince.txt --direction rtl --iterations 1 --warmup 2 --samples 5
+zig build shaping-performance-matrix -Doptimize=ReleaseFast -Denable-harfbuzz=true -Dharfbuzz-prefix=~/.cache/cangjie-next/harfbuzz-prefix -- --iterations 5 --samples 11 --cpu 30
 ```
 
 HarfBuzz reference runs require `-Denable-harfbuzz=true`. If the local
@@ -91,6 +92,13 @@ zig build shaping-corpus-parity-smoke -Doptimize=ReleaseFast -Denable-harfbuzz=t
 
 This is a retained correctness-corpus result, not a completion signal for the
 broader performance and cross-script coverage objectives below.
+The `shaping-performance-matrix` command runs five representative corpora in
+symmetric Cangjie/HarfBuzz/HarfRust/HarfRust/HarfBuzz/Cangjie order and reports
+the geometric-mean speedup against the faster reference. A fresh fixed-CPU-30
+run measured Cangjie ahead on both Amiri corpora and Noto Sans Devanagari, but
+behind HarfRust on Roboto (`0.74x`) and Source Serif Variable (`0.64x`). This
+is direct current evidence that broad shaping-performance superiority remains
+unproven.
 
 Use `--profile` for defensive-path targeting only. It records glyph windows
 around every GSUB lookup and therefore intentionally uses the generic lookup

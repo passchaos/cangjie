@@ -23,3 +23,10 @@ zig build shape-bench -Doptimize=ReleaseFast -- \
 The two tools intentionally keep independent deterministic checksums; exact
 cross-engine glyph and position parity remains the responsibility of
 `shape-bench --engine compare-harfrust`.
+
+`zig build shaping-performance-matrix -Doptimize=ReleaseFast
+-Denable-harfbuzz=true` runs an interleaved
+Cangjie/HarfBuzz/HarfRust/HarfRust/HarfBuzz/Cangjie matrix over the retained
+Roboto, Source Serif, Amiri, and Devanagari corpora. Optional
+`-- --iterations N --samples N --cpu CPU` arguments select its measurement
+depth and CPU affinity.

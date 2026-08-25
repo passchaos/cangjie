@@ -4333,3 +4333,13 @@ shaping-performance superiority.
   Source Serif, branches by `2.04%` and `2.29%`, and cycles by `1.96%` and
   `3.64%`. Eleven-sample wall medians improved about `1.2%` and `5.0%`, with
   unchanged checksums and a passing complete ReleaseFast suite.
+- Large required-second LigatureSubst indexes now encode their three-word
+  second-component digest inside the existing compact component tail. Runtime
+  shaping intersects it with the already-built mutation-aware run digest before
+  entering the exact adjacent matcher, without widening the lookup sidecar.
+  Fixed-CPU-30 A/B/B/A counters over twenty complete `en-words` passes reduced
+  Roboto retired instructions by about `5.99%`, branches by `7.49%`, branch
+  misses by `1.77%`, and cycles by `4.69%`; Source Serif controls improved
+  about `1.98%`, `2.29%`, and `1.93%` in instructions, branches, and cycles.
+  Eleven-sample wall medians improved about `5.4%` and `5.0%`, respectively,
+  with unchanged checksums and a passing complete ReleaseFast suite.

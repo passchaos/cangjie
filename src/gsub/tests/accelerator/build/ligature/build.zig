@@ -59,6 +59,20 @@ test "required second range rejects stale bounds" {
     );
 }
 
+test "required second digest survives compact component storage" {
+    const digest = ligature.requiredSecondDigest(.{
+        .components = &.{
+            0x0001, 0, 0, 0,
+            0x0004, 0, 0, 0,
+            0x0001, 0, 0, 0,
+        },
+        .required_second_start = 0,
+        .required_second_len = 0x800c,
+    }).?;
+    try std.testing.expect(digest.mayHave(2));
+    try std.testing.expect(!digest.mayHave(3));
+}
+
 fn writeCoverage1(bytes: []u8, offset: usize, glyph: u16) void {
     writeU16(bytes, offset, 1);
     writeU16(bytes, offset + 2, 1);

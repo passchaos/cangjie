@@ -56,6 +56,20 @@ pub noinline fn applyRequiredSecond(
     run: Options,
 ) Error!void {
     @branchHint(.cold);
+    if (matching.requiredSecondDigest(ligature)) |second_digest| {
+        if (!hasAdjacentDigestPair(
+            glyphs.items,
+            ligature.first_component_digest,
+            second_digest,
+        )) return;
+        return applyPrefiltered(
+            ligature,
+            glyphs,
+            allocator,
+            lookup_flag,
+            run,
+        );
+    }
     const second_components = matching.requiredSecondComponents(ligature);
     if (second_components.len == 0 or
         !(if (lookup_flag == 0 and
@@ -77,6 +91,20 @@ pub noinline fn applyRequiredSecond(
         lookup_flag,
         run,
     );
+}
+
+fn hasAdjacentDigestPair(
+    glyphs: []const GlyphId,
+    first_digest: @import("../../../../../glyph_digest.zig").GlyphDigest,
+    second_digest: @import("../../../../../glyph_digest.zig").GlyphDigest,
+) bool {
+    if (glyphs.len < 2) return false;
+    for (glyphs[0 .. glyphs.len - 1], glyphs[1..]) |first, second| {
+        if (first_digest.mayHave(first) and second_digest.mayHave(second)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn hasAdjacentRequiredPair(

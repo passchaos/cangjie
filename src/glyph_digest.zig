@@ -58,6 +58,14 @@ pub const GlyphDigest = struct {
         }
     }
 
+    pub fn words(self: GlyphDigest) [shifts.len]u64 {
+        return self.masks;
+    }
+
+    pub fn fromWords(words_value: [shifts.len]u64) GlyphDigest {
+        return .{ .masks = words_value };
+    }
+
     pub fn mayHave(self: GlyphDigest, glyph: GlyphId) bool {
         const g = @as(u64, glyph);
         inline for (shifts, 0..) |shift, i| {

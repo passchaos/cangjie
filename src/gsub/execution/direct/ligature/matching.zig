@@ -26,3 +26,9 @@ pub fn setForGlyph(
 pub fn requiredSecondComponents(ligature: Ligature) []const GlyphId {
     return accelerator.build.ligature.requiredSecondComponents(ligature);
 }
+
+pub fn requiredSecondDigest(
+    ligature: Ligature,
+) ?@import("../../../../glyph_digest.zig").GlyphDigest {
+    return accelerator.build.ligature.requiredSecondDigest(ligature);
+}

@@ -13,6 +13,8 @@ pub const View = table.View;
 
 pub const min_competing_for_prefilter = 32;
 pub const min_competing_for_required_second = 128;
+const required_second_digest_flag: u16 = 0x8000;
+const required_second_digest_u16_len: u16 = 12;
 
 pub fn build(
     view: View,
@@ -32,10 +34,9 @@ pub fn build(
     errdefer definitions.deinit(allocator);
     var components = std.ArrayList(GlyphId).empty;
     errdefer components.deinit(allocator);
-    var second_components = std.ArrayList(GlyphId).empty;
-    defer second_components.deinit(allocator);
     var competing_count: usize = 0;
     var first_digest = GlyphDigest.empty();
+    var second_digest = GlyphDigest.empty();
     var all_require_second = true;
 
     for (sets, 0..) |*set, set_index| {
@@ -82,7 +83,7 @@ pub fn build(
                 );
                 try components.append(allocator, component);
                 if (component_index == 1) {
-                    try second_components.append(allocator, component);
+                    second_digest.add(component);
                 }
             }
             try definitions.append(allocator, .{
@@ -110,16 +111,22 @@ pub fn build(
         competing_count,
         all_require_second,
     )) {
-        std.sort.heap(GlyphId, second_components.items, {}, lessGlyph);
-        deduplicateSorted(&second_components);
         if (components.items.len <= std.math.maxInt(u32) and
-            second_components.items.len <= std.math.maxInt(u16) and
-            second_components.items.len <=
-                std.math.maxInt(u32) - components.items.len)
+            components.items.len <=
+                @as(usize, std.math.maxInt(u32)) -
+                    required_second_digest_u16_len)
         {
             required_second_start = @intCast(components.items.len);
-            required_second_len = @intCast(second_components.items.len);
-            try components.appendSlice(allocator, second_components.items);
+            required_second_len = required_second_digest_flag |
+                required_second_digest_u16_len;
+            for (second_digest.words()) |word| {
+                inline for (0..4) |part| {
+                    try components.append(
+                        allocator,
+                        @truncate(word >> (part * 16)),
+                    );
+                }
+            }
         }
     }
 
@@ -139,6 +146,9 @@ pub fn build(
 }
 
 pub fn requiredSecondComponents(ligature: Ligature) []const GlyphId {
+    if ((ligature.required_second_len & required_second_digest_flag) != 0) {
+        return &.{};
+    }
     const start: usize = ligature.required_second_start;
     const len: usize = ligature.required_second_len;
     if (start > ligature.components.len or
@@ -147,6 +157,29 @@ pub fn requiredSecondComponents(ligature: Ligature) []const GlyphId {
         return &.{};
     }
     return ligature.components[start .. start + len];
+}
+
+pub fn requiredSecondDigest(ligature: Ligature) ?GlyphDigest {
+    if ((ligature.required_second_len & required_second_digest_flag) == 0) {
+        return null;
+    }
+    const len = ligature.required_second_len & ~required_second_digest_flag;
+    if (len != required_second_digest_u16_len) return null;
+    const start: usize = ligature.required_second_start;
+    if (start > ligature.components.len or
+        len > ligature.components.len - start)
+    {
+        return null;
+    }
+    var words_value: [3]u64 = .{ 0, 0, 0 };
+    for (&words_value, 0..) |*word, word_index| {
+        inline for (0..4) |part| {
+            word.* |= @as(u64, ligature.components[
+                start + word_index * 4 + part
+            ]) << (part * 16);
+        }
+    }
+    return GlyphDigest.fromWords(words_value);
 }
 
 pub fn shouldPrefilterSecond(competing_count: usize) bool {
@@ -159,21 +192,6 @@ pub fn shouldBuildRequiredSecondIndex(
 ) bool {
     return all_require_second and
         competing_count >= min_competing_for_required_second;
-}
-
-fn deduplicateSorted(glyphs: *std.ArrayList(GlyphId)) void {
-    if (glyphs.items.len < 2) return;
-    var write: usize = 1;
-    for (glyphs.items[1..]) |glyph| {
-        if (glyph == glyphs.items[write - 1]) continue;
-        glyphs.items[write] = glyph;
-        write += 1;
-    }
-    glyphs.shrinkRetainingCapacity(write);
-}
-
-fn lessGlyph(_: void, lhs: GlyphId, rhs: GlyphId) bool {
-    return lhs < rhs;
 }
 
 fn lessSet(_: void, lhs: model.LigatureSet, rhs: model.LigatureSet) bool {

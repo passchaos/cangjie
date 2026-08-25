@@ -527,16 +527,21 @@ pub fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache
         if (shape_profile) |p| p.total_ns += shape_profile_mod.elapsed(total_start, profile_io);
     }
 
-    const validate_start = shape_profile_mod.now(shape_profile, profile_io);
-    try plan_validation.input(text, font_size, options);
-    if (shape_profile) |p| p.validate_ns += shape_profile_mod.elapsed(validate_start, profile_io);
-
-    buffer.clear();
     const options_start = shape_profile_mod.now(shape_profile, profile_io);
     const lookup_options = plan_resolution.forText(text, options);
     var ranged_lookup_options = lookup_options;
     ranged_lookup_options.lookup.feature_ranges = feature_ranges;
     if (shape_profile) |p| p.options_ns += shape_profile_mod.elapsed(options_start, profile_io);
+
+    const validate_start = shape_profile_mod.now(shape_profile, profile_io);
+    if (lookup_options.all_ascii) {
+        try plan_validation.inputAfterAsciiTextProof(font_size, options);
+    } else {
+        try plan_validation.input(text, font_size, options);
+    }
+    if (shape_profile) |p| p.validate_ns += shape_profile_mod.elapsed(validate_start, profile_io);
+
+    buffer.clear();
 
     try segment_pipeline.run(.{
         .font = font,

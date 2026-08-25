@@ -4224,3 +4224,13 @@ shaping-performance superiority.
   and cycles by `0.85%`. Roboto, whose table already used the dense path, was
   instruction/branch neutral. Eleven-sample wall medians improved Source Serif
   by about `0.56%` and left Roboto within noise, with unchanged checksums.
+- Single-font shaping now resolves script/language before validation and reuses
+  the resulting all-ASCII proof to skip a second full UTF-8 scan of the source
+  text. Context strings, font size, feature overrides, and variation coordinates
+  remain validated at the public boundary, while all non-ASCII requests retain
+  the general UTF-8 validator. Against the preceding PairPos state, fixed-CPU-30
+  A/B/B/A counters over twenty complete `en-words` passes reduced retired
+  instructions by about `0.66--0.67%`, branches by `0.95--0.96%`, and cycles
+  by about `3.5%` for Roboto and `7.6%` for Source Serif. Eleven-sample wall
+  medians improved about `4.5%` and `6.9%`, respectively, with unchanged
+  output checksums.

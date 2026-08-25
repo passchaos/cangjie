@@ -18,6 +18,33 @@ pub fn input(
     try variationCoords(options.normalized_variation_coords);
 }
 
+/// Validate a request after the text scanner proved that every source byte is
+/// ASCII. ASCII is structurally valid UTF-8, so repeating the generic UTF-8
+/// validation pass would only rescan the hottest Latin input. Context slices
+/// remain independent caller input and retain their normal validation.
+pub fn inputAfterAsciiTextProof(
+    font_size: f32,
+    options: plan.ShapeOptions,
+) !void {
+    try utf8(options.context_before);
+    try utf8(options.context_after);
+    try fontSize(font_size);
+    try features(options.features);
+    try variationCoords(options.normalized_variation_coords);
+}
+
+test "ASCII text proof retains validation of every non-text option" {
+    try inputAfterAsciiTextProof(12, .{});
+    try std.testing.expectError(
+        error.InvalidUtf8,
+        inputAfterAsciiTextProof(12, .{ .context_before = "\xff" }),
+    );
+    try std.testing.expectError(
+        error.InvalidFontSize,
+        inputAfterAsciiTextProof(0, .{}),
+    );
+}
+
 pub fn utf8(text: []const u8) !void {
     // Utf8Iterator assumes valid input. Reject malformed bytes before cache
     // keys are built or any caller-owned output buffer can be mutated.

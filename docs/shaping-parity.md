@@ -4297,3 +4297,11 @@ shaping-performance superiority.
   about `6.44%` and `4.40%`. Eleven-sample wall medians improved about `6.8%`
   and `5.5%`, respectively, with unchanged checksums and a passing complete
   ReleaseFast suite.
+- Horizontal post-processing now checks the parsed face's `trak` capability
+  before entering the allocation/validation/interpolation helper. Fonts without
+  AAT tracking therefore skip the helper entirely. Fixed-CPU-30 A/B/B/A
+  counters over twenty complete `en-words` passes reduced retired instructions
+  by about `0.33%` for Roboto and `0.30%` for Source Serif, branches by `0.59%`
+  and `0.76%`, branch misses by `0.94%` and `0.57%`, and cycles by about `3.46%`
+  and `1.62%`. Eleven-sample wall medians improved about `3.4%` and `2.2%`,
+  with unchanged checksums and a passing complete ReleaseFast suite.

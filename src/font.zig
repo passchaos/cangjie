@@ -2505,6 +2505,10 @@ pub const Font = struct {
         return trackingValueForPointSize(info_value.horizontal[0].values, if (point_size > 0) point_size else 12.0);
     }
 
+    fn hasHorizontalTrackingForShaping(self: *const Font) bool {
+        return self.trak != null;
+    }
+
     /// Read validated records from the optional AAT `feat` table.
     pub fn featFeatures(self: *const Font, allocator: std.mem.Allocator) FontError![]FeatureNameInfo {
         const feat = self.feat orelse return try allocator.alloc(FeatureNameInfo, 0);
@@ -6871,6 +6875,7 @@ pub const shaping = struct {
     pub const verticalOriginYAtCoords = Font.shapingVerticalOriginYAtCoords;
     pub const horizontalMetricsAtCoords = Font.horizontalMetricsAtCoordsForShaping;
     pub const horizontalTrackingForShaping = Font.horizontalTrackingForShaping;
+    pub const hasHorizontalTrackingForShaping = Font.hasHorizontalTrackingForShaping;
     pub const glyphIndexForShaping = Font.glyphIndexForShaping;
     pub const kernLookupForShaping = Font.kernLookupForShaping;
     pub const kerxLookupForShaping = Font.kerxLookupForShaping;

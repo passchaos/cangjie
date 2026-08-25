@@ -700,7 +700,9 @@ pub fn run(input: Input) !void {
         );
         if (shape_profile) |p| p.position_stch_ns += shape_profile_mod.elapsed(stch_start, profile_io);
     }
-    if (!lookup_options.writing_mode.isVertical()) {
+    if (!lookup_options.writing_mode.isVertical() and
+        font_shaping.hasHorizontalTrackingForShaping(font))
+    {
         const tracking_start = shape_profile_mod.now(shape_profile, profile_io);
         if (try font_shaping.horizontalTrackingForShaping(font, buffer.allocator, font_size)) |tracking| {
             if (tracking != 0) {

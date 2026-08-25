@@ -540,6 +540,7 @@ pub fn run(input: Input) !void {
             codepoints.items,
             glyph_source_indices.items,
             gdef_metadata.*,
+            resolved_lookup_options.all_ascii,
         );
     const position_collection = try position_collect.run(.{
         .allocator = buffer.allocator,
@@ -575,12 +576,7 @@ pub fn run(input: Input) !void {
                 .vertical = lookup_options.writing_mode.isVertical(),
                 .normalized_variation_coords = lookup_options.normalized_variation_coords,
                 .apply_all_if_unselected = false,
-                .run_may_have_mark_attachments = position_policy.runMayHaveMarkAttachments(
-                    glyph_ids.items,
-                    codepoints.items,
-                    glyph_source_indices.items,
-                    gdef_metadata.*,
-                ),
+                .run_may_have_mark_attachments = run_may_have_mark_attachments,
                 .run_has_default_ignorables = has_default_ignorable,
                 .visible_variation_selectors = lookup_options.not_found_variation_selector_glyph != null,
             };

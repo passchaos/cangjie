@@ -4313,3 +4313,13 @@ shaping-performance superiority.
   `6.12%`, and cycles by about `1.73%` and `4.21%`. Eleven-sample wall medians
   improved about `2.2%` and `1.9%`, with unchanged checksums and a passing
   complete ReleaseFast suite.
+- Post-GSUB mark capability detection now consumes the existing all-ASCII
+  proof. It still checks every output glyph's GDEF class, including ligatures
+  introduced by substitution, but skips source-index recovery and Unicode mark
+  classification because no ASCII scalar can be a Unicode mark. The same
+  result is reused by optional JSTF positioning. Fixed-CPU-30 A/B/B/A counters
+  over twenty complete `en-words` passes reduced retired instructions by about
+  `1.95%` for Roboto and `1.98%` for Source Serif, branches by `2.26%` and
+  `2.29%`, and cycles by about `1.52%` and `3.76%`. Eleven-sample wall medians
+  improved about `1.9%` and `4.6%`, with unchanged checksums and a passing
+  complete ReleaseFast suite.

@@ -123,6 +123,7 @@ pub fn runMayHaveMarkAttachments(
     codepoints: []const u21,
     glyph_source_indices: []const usize,
     metadata: @import("../../../font.zig").GdefLookupMetadata,
+    all_ascii: bool,
 ) bool {
     const classes = metadata.glyph_classes orelse return true;
     for (glyphs, 0..) |glyph, index| {
@@ -131,6 +132,7 @@ pub fn runMayHaveMarkAttachments(
         {
             return true;
         }
+        if (all_ascii) continue;
         const source_index = if (index < glyph_source_indices.len)
             @min(glyph_source_indices[index], codepoints.len -| 1)
         else
@@ -212,6 +214,25 @@ fn usesLateGdefMarkZeroing(
         .hang, .khmr, .qaag => false,
         else => true,
     };
+}
+
+test "ASCII mark proof consults GDEF without Unicode classification" {
+    var classes = [_]u16{0} ** 3;
+    try @import("std").testing.expect(!runMayHaveMarkAttachments(
+        &.{ 1, 2 },
+        &.{ 'A', 'B' },
+        &.{ 0, 1 },
+        .{ .glyph_classes = &classes },
+        true,
+    ));
+    classes[2] = @intFromEnum(GlyphClass.mark);
+    try @import("std").testing.expect(runMayHaveMarkAttachments(
+        &.{ 1, 2 },
+        &.{ 'A', 'B' },
+        &.{ 0, 1 },
+        .{ .glyph_classes = &classes },
+        true,
+    ));
 }
 
 test "kerx machine skips GDEF marks and untouched Unicode controls" {

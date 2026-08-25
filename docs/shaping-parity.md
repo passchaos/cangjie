@@ -97,9 +97,10 @@ symmetric Cangjie/HarfBuzz/HarfRust/HarfRust/HarfBuzz/Cangjie order and reports
 the geometric-mean speedup against the faster reference. The runner normalizes
 the Zig engines' aggregate `iterations * samples` glyph count to the HarfRust
 oracle's one-corpus count before checking output cardinality. A fixed-CPU-30
-`5 * 11` run after the broad PairPos format 1 optimization measured speedups
-of `0.778x` on Roboto, `0.663x` on Source Serif Variable, `1.018x` on Amiri
-words, `1.115x` on long Amiri text, and `0.996x` on Noto Sans Devanagari
+`5 * 11` run after the horizontal-ASCII geometry optimization measured
+speedups of `0.850x` on Roboto, `0.738x` on Source Serif Variable, `1.022x`
+on Amiri words, `1.116x` on long Amiri text, and `1.000x` on Noto Sans
+Devanagari
 against the faster reference. This is direct current evidence that broad
 shaping-performance superiority remains unproven.
 

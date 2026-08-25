@@ -4455,3 +4455,13 @@ shaping-performance superiority.
   average `6890.6` to `6448.9 ns` (about `6.4%`). `A` and `g` remained on
   their existing paths with stable checksums. This narrows but does not close
   the remaining FreeType deficit for complex direct rasterization.
+- Four-edge direct rows now prove their intersection order from the first and
+  last 4×4 sample centers. Because pairwise line differences are linear in y,
+  matching strict endpoint order guarantees the two interior samples cannot
+  cross; those rows sort once instead of four times, while boundary and
+  crossing cases fall back unchanged. Fixed-CPU-30 A/B/B/A counters over
+  200,000 dirty renders reduced retired instructions by about `2.1%` for
+  Roboto `A`, `1.1%` for `g`, and `10.0%` for `é`; the `é` branch count fell
+  about `21.6%` and cycles about `8.8%`. Fifteen-sample medians improved about
+  `0.6%`, `0.5%`, and `8.5%`, respectively, with byte-identical checksums and
+  unchanged dirty rectangles.

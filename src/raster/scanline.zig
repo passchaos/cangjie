@@ -115,6 +115,21 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
         var y = min_y;
         while (y <= max_y) : (y += 1) {
             const row_lines = updateActiveFillLines(active_storage, &active_count, prepared_lines, &next_line, y);
+            if (fill_rule == .non_zero and
+                sample_axis == 4 and
+                row_lines.len == 4 and
+                fillStableFourEdgeRow(
+                    target,
+                    row_lines,
+                    min_x,
+                    max_x,
+                    y,
+                    coverage_lut,
+                    &row_accumulator,
+                ))
+            {
+                continue;
+            }
             fillPreparedRow(target, row_lines, intersection_storage, min_x, max_x, y, fill_rule, sample_offsets, coverage_lut, &row_accumulator);
         }
         return;
@@ -164,6 +179,149 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
             coverage_lut,
             &row_accumulator,
         );
+    }
+}
+
+const OrderedRowLine = struct {
+    line: PreparedFillLine,
+    first_x: f32,
+    last_x: f32,
+};
+
+/// Handle four full-row edges whose x order is stable over all four vertical
+/// samples. The difference between two line intersections is linear in y, so
+/// strict ordering at the first and last sample proves the same ordering for
+/// the two interior samples. This replaces four sorting networks on the
+/// curve-heavy small-outline path while boundary/crossing rows fall back.
+inline fn fillStableFourEdgeRow(
+    target: Target,
+    row_lines: []const PreparedFillLine,
+    min_x: i32,
+    max_x: i32,
+    y: i32,
+    coverage_lut: []const u8,
+    row_accumulator: *RowAccumulator,
+) bool {
+    const y_base: f32 = @floatFromInt(y);
+    const first_y = y_base + sample_offsets_4[0];
+    const last_y = y_base + sample_offsets_4[3];
+    var ordered: [4]OrderedRowLine = undefined;
+    for (row_lines, &ordered) |line, *item| {
+        if (first_y < line.y_min or last_y >= line.y_max) return false;
+        item.* = .{
+            .line = line,
+            .first_x = @mulAdd(
+                f32,
+                line.slope,
+                first_y - line.y_min,
+                line.x_at_y_min,
+            ),
+            .last_x = @mulAdd(
+                f32,
+                line.slope,
+                last_y - line.y_min,
+                line.x_at_y_min,
+            ),
+        };
+    }
+    sortFourRowLines(&ordered);
+    for (1..ordered.len) |index| {
+        if (ordered[index].first_x - ordered[index - 1].first_x <= 0.000001 or
+            ordered[index].last_x - ordered[index - 1].last_x <= 0.000001)
+        {
+            return false;
+        }
+    }
+
+    var row_has_coverage = false;
+    var row_min_x = max_x;
+    var row_max_x = min_x;
+    inline for (sample_offsets_4, 0..) |offset, sample_index| {
+        const py = y_base + offset;
+        var xs: [4]f32 = undefined;
+        inline for (&xs, ordered) |*x, item| {
+            x.* = if (sample_index == 0)
+                item.first_x
+            else if (sample_index == 3)
+                item.last_x
+            else
+                @mulAdd(
+                    f32,
+                    item.line.slope,
+                    py - item.line.y_min,
+                    item.line.x_at_y_min,
+                );
+        }
+        var sample_has_coverage = false;
+        var sample_min_x: i32 = undefined;
+        var sample_max_x: i32 = undefined;
+        if (row_accumulator.cover(
+            min_x,
+            max_x,
+            &sample_offsets_4,
+            xs[0],
+            xs[1],
+        )) |span| {
+            sample_has_coverage = true;
+            sample_min_x = span.min_x;
+            sample_max_x = span.max_x;
+        }
+        if (ordered[0].line.delta == ordered[1].line.delta) {
+            if (row_accumulator.cover(
+                min_x,
+                max_x,
+                &sample_offsets_4,
+                xs[1],
+                xs[2],
+            )) |span| {
+                if (!sample_has_coverage) sample_min_x = span.min_x;
+                sample_has_coverage = true;
+                sample_max_x = span.max_x;
+            }
+        }
+        if (row_accumulator.cover(
+            min_x,
+            max_x,
+            &sample_offsets_4,
+            xs[2],
+            xs[3],
+        )) |span| {
+            if (!sample_has_coverage) sample_min_x = span.min_x;
+            sample_has_coverage = true;
+            sample_max_x = span.max_x;
+        }
+        if (sample_has_coverage) {
+            row_has_coverage = true;
+            row_min_x = @min(row_min_x, sample_min_x);
+            row_max_x = @max(row_max_x, sample_max_x);
+        }
+    }
+    if (row_has_coverage) {
+        row_accumulator.blendAndClear(
+            target,
+            min_x,
+            y,
+            row_min_x,
+            row_max_x,
+            coverage_lut,
+        );
+    }
+    return true;
+}
+
+inline fn sortFourRowLines(lines: *[4]OrderedRowLine) void {
+    compareSwapRowLines(&lines[0], &lines[2]);
+    compareSwapRowLines(&lines[1], &lines[3]);
+    compareSwapRowLines(&lines[0], &lines[1]);
+    compareSwapRowLines(&lines[2], &lines[3]);
+    compareSwapRowLines(&lines[1], &lines[2]);
+}
+
+inline fn compareSwapRowLines(a: *OrderedRowLine, b: *OrderedRowLine) void {
+    if (a.first_x > b.first_x) {
+        const temporary = a.*;
+        a.* = b.*;
+        b.* = temporary;
     }
 }
 

@@ -58,14 +58,18 @@ pub fn emit(input: Input) !Result {
     const loop_start = profileNow(input.profile, input.profile_io);
 
     for (input.scratch.glyph_ids.items, 0..) |input_glyph_id, index| {
-        const source_index = if (index < input.scratch.glyph_source_indices.items.len)
+        const source_index = if (input.ascii_source)
+            input.scratch.glyph_source_indices.items[index]
+        else if (index < input.scratch.glyph_source_indices.items.len)
             @min(
                 input.scratch.glyph_source_indices.items[index],
                 input.scratch.codepoints.items.len -| 1,
             )
         else
             @min(index, input.scratch.codepoints.items.len -| 1);
-        const cluster_index = if (index < input.scratch.glyph_cluster_indices.items.len)
+        const cluster_index = if (input.ascii_source)
+            input.scratch.glyph_cluster_indices.items[index]
+        else if (index < input.scratch.glyph_cluster_indices.items.len)
             @min(
                 input.scratch.glyph_cluster_indices.items[index],
                 input.scratch.clusters.items.len -| 1,

@@ -4390,3 +4390,15 @@ shaping-performance superiority.
   about `1.1%` for `g` and `2.1%` for `é`, while `A` stayed within noise. All
   target checksums and dirty-pixel counts remained unchanged, and the complete
   ReleaseFast suite passes.
+- Final positioning output now carries the existing all-ASCII source proof.
+  GSUB still mutates the glyph-parallel source and cluster maps for ligatures
+  and reordering, but their lengths remain equal to the glyph buffer, so ASCII
+  output can read both maps directly instead of repeating generic missing-map
+  fallbacks and source bounds clamps for every glyph. Against exact
+  `a2d889c3` parent and candidate binaries, fixed-CPU-30 A/B/B/A counters over
+  twenty complete Source Serif Variable `en-words` passes reduced retired
+  instructions by about `1.45%`, branches by about `0.10%`, and cycles by
+  about `1.99%`; branch misses increased by about `2.77%`. Eleven-sample wall
+  medians improved from an average `136.197` to `135.106 ns/glyph` (about
+  `0.80%`), with identical checksums. The complete ReleaseFast suite and the
+  retained HarfBuzz/HarfRust corpus parity umbrella pass.

@@ -649,6 +649,7 @@ pub fn run(input: Input) !void {
         .invisible_glyph_id = invisible_glyph_id,
         .arabic_joining_features = arabic_joining_features,
         .cluster_base = cluster_base,
+        .ascii_source = resolved_lookup_options.all_ascii,
         .font_size = font_size,
         .scale = scale,
         .options = lookup_options,

@@ -41,6 +41,10 @@ pub const Input = struct {
     invisible_glyph_id: GlyphId,
     arabic_joining_features: ?[]const u32,
     cluster_base: usize,
+    /// Source decoding proved one byte per scalar. Output still consults the
+    /// post-GSUB source/cluster maps because substitutions may merge them, but
+    /// can skip their generic bounds clamps and empty-input fallbacks.
+    ascii_source: bool,
     font_size: f32,
     scale: f32,
     options: pipeline_types.LookupOptions,

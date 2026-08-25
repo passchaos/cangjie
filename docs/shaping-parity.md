@@ -4304,3 +4304,12 @@ shaping-performance superiority.
   and `0.76%`, branch misses by `0.94%` and `0.57%`, and cycles by about `3.46%`
   and `1.62%`. Eleven-sample wall medians improved about `3.4%` and `2.2%`,
   with unchanged checksums and a passing complete ReleaseFast suite.
+- Cached ASCII cmap mapping now enters a tiny inline direct-slot lookup after
+  the source stage proves every scalar is below U+0080. Exact font identity is
+  still checked, and cold misses fall through to the authoritative Unicode/hash
+  path. Fixed-CPU-30 A/B/B/A counters over twenty complete `en-words` passes
+  reduced retired instructions by about `1.60%` for Roboto and `1.63%` for
+  Source Serif, branches by `1.89%` and `1.92%`, branch misses by `4.23%` and
+  `6.12%`, and cycles by about `1.73%` and `4.21%`. Eleven-sample wall medians
+  improved about `2.2%` and `1.9%`, with unchanged checksums and a passing
+  complete ReleaseFast suite.

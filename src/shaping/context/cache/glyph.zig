@@ -302,6 +302,24 @@ pub const GlyphIndexCache = struct {
         }
         return glyph_id;
     }
+
+    /// Resolve one ASCII scalar through the exact direct slot. Source
+    /// population proves the byte range once for the complete run, so keeping
+    /// this tiny hit path inline avoids entering the general Unicode/hash-map
+    /// lookup for every Latin byte. Cold misses retain the authoritative path.
+    pub inline fn asciiGlyphIndex(
+        self: *GlyphIndexCache,
+        font: *const Font,
+        byte: u7,
+    ) !GlyphId {
+        const entry = &self.ascii_entries[byte];
+        const font_addr = @intFromPtr(font);
+        if (entry.valid and entry.font_addr == font_addr) {
+            self.hits += 1;
+            return entry.glyph_id;
+        }
+        return self.glyphIndex(font, byte);
+    }
 };
 
 fn directGlyphIndex(key: GlyphIndexKey) usize {
@@ -357,6 +375,26 @@ test "glyph index direct cache is exact for non-ASCII mappings" {
 
     cache.clear();
     try std.testing.expect(!cache.direct_entries[slot].valid);
+}
+
+test "ASCII direct lookup shares the authoritative cache entry" {
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildCodepointSetTtf(
+        std.testing.allocator,
+        &.{'A'},
+    );
+    defer std.testing.allocator.free(bytes);
+
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    var cache = GlyphIndexCache.init(std.testing.allocator);
+    defer cache.deinit();
+
+    const first = try cache.glyphIndex(&font, 'A');
+    const second = try cache.asciiGlyphIndex(&font, 'A');
+    try std.testing.expectEqual(first, second);
+    try std.testing.expectEqual(@as(usize, 1), cache.hits);
+    try std.testing.expectEqual(@as(usize, 1), cache.misses);
 }
 
 fn glyphMetricsKey(font: *const Font, glyph_id: GlyphId, normalized_variation_coords: []const f32) GlyphMetricsKey {

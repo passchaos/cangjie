@@ -319,7 +319,7 @@ noinline fn populateAsciiCached(
 ) !Result {
     var result = Result{};
     for (text, 0..) |byte, cluster| {
-        const glyph_id = try cache.glyphIndex(font, byte);
+        const glyph_id = try cache.asciiGlyphIndex(font, @intCast(byte));
         if (track_rtl_numeric_guard) {
             result.run_has_decimal_number =
                 result.run_has_decimal_number or support.isDecimalNumber(byte);

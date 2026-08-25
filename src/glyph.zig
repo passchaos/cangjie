@@ -67,6 +67,80 @@ pub const GlyphOutline = struct {
     }
 };
 
+/// Caller-owned storage for repeated outline materialization.
+///
+/// `GlyphOutline` remains the owning, one-result API. This buffer is the
+/// explicit alternative for atlas builders and other loops that decode many
+/// outlines from one immutable parsed face: its command allocation and the
+/// raw point storage needed by compound `glyf` placement survive between
+/// calls. A borrowed outline returned by `GlyphSession.outlineInto` remains
+/// valid only until the next operation on this buffer or `deinit`.
+pub const GlyphOutlineBuffer = struct {
+    // These fields are implementation storage shared with the font decoder.
+    // Public users should consume `current`; their layout is not a stable API.
+    outline_storage: GlyphOutline,
+    compound_points: std.ArrayList(Point) = .empty,
+
+    pub fn init(allocator: std.mem.Allocator) GlyphOutlineBuffer {
+        return .{
+            .outline_storage = GlyphOutline.init(
+                allocator,
+                0,
+                .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 },
+                0,
+                0,
+            ),
+        };
+    }
+
+    pub fn deinit(self: *GlyphOutlineBuffer) void {
+        const allocator = self.outline_storage.allocator;
+        self.outline_storage.deinit();
+        self.compound_points.deinit(allocator);
+        self.* = undefined;
+    }
+
+    /// Return the most recently materialized outline.
+    ///
+/// Before the first successful decode (and after a failed decode), this
+/// returns an empty outline with glyph id and metrics set to zero. The pointer
+/// is invalidated by the next decode into this buffer even when its address
+/// does not change.
+    pub fn current(self: *const GlyphOutlineBuffer) *const GlyphOutline {
+        return &self.outline_storage;
+    }
+};
+
+/// Reset reusable storage before a trusted outline decode.
+///
+/// This is an internal cross-module boundary rather than part of the exported
+/// `cangjie.font` namespace. Keeping it here lets the storage owner preserve
+/// all capacity while the table decoder supplies fresh result metadata.
+pub fn resetOutlineBuffer(buffer: *GlyphOutlineBuffer) void {
+    buffer.outline_storage.commands.clearRetainingCapacity();
+    buffer.compound_points.clearRetainingCapacity();
+    configureOutline(
+        &buffer.outline_storage,
+        0,
+        .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 },
+        0,
+        0,
+    );
+}
+
+pub fn configureOutline(
+    outline: *GlyphOutline,
+    glyph_id: GlyphId,
+    bounds: Bounds,
+    advance_width: u16,
+    left_side_bearing: i16,
+) void {
+    outline.glyph_id = glyph_id;
+    outline.bounds = bounds;
+    outline.advance_width = advance_width;
+    outline.left_side_bearing = left_side_bearing;
+}
+
 pub fn boundsForCommands(commands: []const PathCommand) Bounds {
     var acc = PathBoundsAccumulator{};
     for (commands) |command| {

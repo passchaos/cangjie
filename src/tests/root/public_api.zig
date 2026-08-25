@@ -298,6 +298,7 @@ test "public facade uses domain names without legacy aliases" {
     inline for (.{
         cangjie.font.Glyphs,
         cangjie.font.GlyphSession,
+        cangjie.font.OutlineBuffer,
         cangjie.font.Metrics,
         cangjie.font.Names,
         cangjie.font.Variations,
@@ -305,6 +306,7 @@ test "public facade uses domain names without legacy aliases" {
     }) |View| {
         try std.testing.expect(@typeInfo(View) == .@"struct");
     }
+    try std.testing.expect(@hasDecl(cangjie.font.GlyphSession, "outlineInto"));
     inline for (.{
         cangjie.font.metadata.variations.Axis,
         cangjie.font.metadata.variations.Coordinate,

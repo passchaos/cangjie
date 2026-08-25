@@ -93,6 +93,44 @@ test "glyph outline session matches strict output and documents trust boundary" 
     try expectSameOutline(trusted, after_mutation);
 }
 
+test "glyph outline session reuses caller-owned command and compound scratch" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildGvarCompoundTtf(allocator);
+    defer allocator.free(bytes);
+
+    var face = try Face.parse(allocator, bytes);
+    defer face.deinit();
+    const session = face.glyphs().session();
+    var buffer = @import("../../../glyph.zig").GlyphOutlineBuffer.init(allocator);
+    defer buffer.deinit();
+
+    var owning = try session.outline(allocator, 2);
+    defer owning.deinit();
+    const first = try session.outlineInto(&buffer, 2);
+    try expectSameOutline(owning, first.*);
+    const command_storage = first.commands.items.ptr;
+    const command_capacity = first.commands.capacity;
+
+    // A second decode of the same compound glyph must reuse the allocation
+    // retained by the caller-owned buffer rather than transferring ownership
+    // to the borrowed result.
+    const second = try session.outlineInto(&buffer, 2);
+    try expectSameOutline(owning, second.*);
+    try std.testing.expectEqual(command_storage, second.commands.items.ptr);
+    try std.testing.expectEqual(command_capacity, second.commands.capacity);
+
+    // Errors invalidate the borrowed result but retain its storage for a later
+    // successful call. This makes recovery deterministic and leak-free.
+    try std.testing.expectError(
+        error.InvalidGlyph,
+        session.outlineInto(&buffer, face.properties().glyph_count),
+    );
+    try std.testing.expectEqual(@as(usize, 0), buffer.current().commands.items.len);
+    const recovered = try session.outlineInto(&buffer, 2);
+    try expectSameOutline(owning, recovered.*);
+    try std.testing.expectEqual(command_storage, recovered.commands.items.ptr);
+}
+
 fn expectSameOutline(
     expected: @import("../../../glyph.zig").GlyphOutline,
     actual: @import("../../../glyph.zig").GlyphOutline,

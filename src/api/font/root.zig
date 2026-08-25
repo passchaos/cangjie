@@ -47,6 +47,7 @@ pub const GlyphId = glyph.GlyphId;
 pub const GlyphExtents = glyph.Extents;
 pub const Bounds = glyph.Bounds;
 pub const Outline = glyph.GlyphOutline;
+pub const OutlineBuffer = glyph.GlyphOutlineBuffer;
 pub const OutlineBuilder = glyph.OutlineBuilder;
 pub const OutlineCommand = glyph.PathCommand;
 pub const OutlinePoint = glyph.Point;

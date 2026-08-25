@@ -42,7 +42,7 @@ const FreeTypeFace = struct {
 };
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, options: options_mod.Options) !report.Result {
-    if (options.mode == .outline_session or options.mode == .raster_prepare or options.mode == .raster_prepared) return error.InvalidArguments;
+    if (options.mode == .outline_session or options.mode == .outline_reuse or options.mode == .raster_prepare or options.mode == .raster_prepared) return error.InvalidArguments;
     const ft_face = try FreeTypeFace.init(font_bytes, options);
     defer ft_face.deinit();
 
@@ -168,7 +168,7 @@ fn runIterations(face: ft.FT_Face, glyph_id: ft.FT_UInt, options: options_mod.Op
     const load_flags: ft.FT_Int32 = switch (options.mode) {
         .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .bitmap => unreachable,
         .outline => ft.FT_LOAD_NO_SCALE | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
-        .outline_session => unreachable,
+        .outline_session, .outline_reuse => unreachable,
         .raster, .raster_reuse => ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
         .raster_prepare, .raster_prepared => unreachable,
     };
@@ -179,7 +179,7 @@ fn runIterations(face: ft.FT_Face, glyph_id: ft.FT_UInt, options: options_mod.Op
             .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .bitmap => unreachable,
             .outline => outlineChecksum(face.*.glyph),
             .raster, .raster_reuse => rasterTargetChecksum(face.*.glyph, options, target_pixels),
-            .outline_session, .raster_prepare, .raster_prepared => unreachable,
+            .outline_session, .outline_reuse, .raster_prepare, .raster_prepared => unreachable,
         });
     }
 }

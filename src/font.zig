@@ -6231,6 +6231,26 @@ pub const Font = struct {
         return self.glyphOutlineFromParsedTables(allocator, glyph_id, .parsed);
     }
 
+    fn glyphOutlineForRasterInto(
+        self: *const Font,
+        buffer: *glyph_mod.GlyphOutlineBuffer,
+        glyph_id: glyph_mod.GlyphId,
+    ) FontError!*const glyph_mod.GlyphOutline {
+        // A call invalidates the previous borrowed result even when validation
+        // fails. Retain allocations so the same buffer remains useful for a
+        // later valid glyph.
+        glyph_mod.resetOutlineBuffer(buffer);
+        errdefer glyph_mod.resetOutlineBuffer(buffer);
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        try self.fillGlyphOutlineFromParsedTables(
+            &buffer.outline_storage,
+            &buffer.compound_points,
+            glyph_id,
+            .parsed,
+        );
+        return buffer.current();
+    }
+
     fn glyphOutlineForReadMode(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, read_mode: OutlineReadMode) FontError!glyph_mod.GlyphOutline {
         return switch (read_mode) {
             .revalidate => try self.glyphOutline(allocator, glyph_id),
@@ -6375,13 +6395,42 @@ pub const Font = struct {
     }
 
     fn glyphOutlineFromParsedTables(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, read_mode: OutlineReadMode) FontError!glyph_mod.GlyphOutline {
+        var outline = glyph_mod.GlyphOutline.init(
+            allocator,
+            glyph_id,
+            .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 },
+            0,
+            0,
+        );
+        errdefer outline.deinit();
+        try self.fillGlyphOutlineFromParsedTables(
+            &outline,
+            null,
+            glyph_id,
+            read_mode,
+        );
+        return outline;
+    }
+
+    fn fillGlyphOutlineFromParsedTables(
+        self: *const Font,
+        outline: *glyph_mod.GlyphOutline,
+        reusable_compound_points: ?*std.ArrayList(glyph_mod.Point),
+        glyph_id: glyph_mod.GlyphId,
+        read_mode: OutlineReadMode,
+    ) FontError!void {
         const metrics = try self.horizontalMetricsForReadMode(glyph_id, read_mode);
         const bounds = if (self.format == .truetype)
             try self.glyphBoundsFromParsedTables(glyph_id)
         else
             glyph_mod.Bounds{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 };
-        var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, bounds, metrics.advance_width, metrics.left_side_bearing);
-        errdefer outline.deinit();
+        glyph_mod.configureOutline(
+            outline,
+            glyph_id,
+            bounds,
+            metrics.advance_width,
+            metrics.left_side_bearing,
+        );
         if (self.varc) |varc| {
             if (read_mode.shouldRevalidate()) {
                 try sfnt.checksum.validate(self.data, varc);
@@ -6391,19 +6440,48 @@ pub const Font = struct {
                 var stack: [64]glyph_mod.GlyphId = undefined;
                 const axis_count = if (self.fvar != null) try self.fvarAxisCountForReadMode(read_mode) else 0;
                 var scalar_cache = varc_mod.RegionScalarCache{};
-                try self.appendVarcGlyphOutline(&outline, glyph_id, Transform.identity(), &.{}, &.{}, axis_count, read_mode, &stack, &scalar_cache, 0);
+                try self.appendVarcGlyphOutline(outline, glyph_id, Transform.identity(), &.{}, &.{}, axis_count, read_mode, &stack, &scalar_cache, 0);
                 outline.bounds = glyph_mod.boundsForCommands(outline.commands.items);
-                return outline;
+                return;
             }
         }
         if (self.format == .truetype) {
-            try self.appendGlyphOutline(&outline, null, glyph_id, .{ .xx = 1, .yx = 0, .xy = 0, .yy = 1, .dx = 0, .dy = 0 }, 0);
+            if (reusable_compound_points) |points| {
+                const data = try self.glyphData(glyph_id);
+                if (data.len != 0) {
+                    const contour_count = try bin.readI16At(data, 0);
+                    if (contour_count >= 0) {
+                        _ = try truetype_outline.simple.append(
+                            outline,
+                            null,
+                            data,
+                            @intCast(contour_count),
+                            Transform.identity(),
+                            null,
+                        );
+                    } else {
+                        // Compound point matching needs the original glyf point
+                        // stream. The reusable boundary owns that scratch just
+                        // as it owns the command output, so neither allocation
+                        // is repeated after reaching a stable capacity.
+                        try self.appendCompoundGlyph(
+                            outline,
+                            points,
+                            data,
+                            Transform.identity(),
+                            1,
+                        );
+                    }
+                }
+            } else {
+                try self.appendGlyphOutline(outline, null, glyph_id, Transform.identity(), 0);
+            }
         } else if (self.cff2) |cff2| {
             if (read_mode.shouldRevalidate()) {
                 try sfnt.checksum.validate(self.data, cff2);
                 try validateCff2Table(self.data, cff2);
             }
-            if (try cff2_mod.appendGlyphOutline(allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, &outline)) |bounds_info| {
+            if (try cff2_mod.appendGlyphOutline(outline.allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, outline)) |bounds_info| {
                 outline.bounds = cff_outline.boundsFromCff2(bounds_info);
             }
         } else {
@@ -6415,16 +6493,15 @@ pub const Font = struct {
                 // truncated CharStrings INDEX behind still-present glyph ids.
                 try sfnt.checksum.validate(self.data, cff);
                 try validateCffGlyphCount(self.data, cff, self.glyph_count);
-                try cff_mod.appendGlyphOutline(allocator, cff_data, try cff_mod.parseInfo(cff_data), &outline, glyph_id);
+                try cff_mod.appendGlyphOutline(outline.allocator, cff_data, try cff_mod.parseInfo(cff_data), outline, glyph_id);
             } else {
-                try cff_mod.appendGlyphOutlinePrepared(allocator, cff_data, self.cff_parsed orelse try cff_mod.parse(self.allocator, cff_data), &outline, glyph_id);
+                try cff_mod.appendGlyphOutlinePrepared(outline.allocator, cff_data, self.cff_parsed orelse try cff_mod.parse(self.allocator, cff_data), outline, glyph_id);
             }
             // Unlike glyf, CFF has no per-glyph header bounds. Materialize them
             // from the executed Type2 path so public extents and raster callers
             // do not inherit the zero-initialized placeholder.
             outline.bounds = glyph_mod.boundsForCommands(outline.commands.items);
         }
-        return outline;
     }
 
     fn varcGlyphOutlineAtCoords(
@@ -6930,6 +7007,7 @@ pub const raster_backend = struct {
     pub const resolvedSvgGlyphDocument = Font.resolvedSvgGlyphDocumentForRaster;
     pub const glyphOutlineAtCoords = Font.glyphOutlineForRasterAtCoords;
     pub const glyphOutline = Font.glyphOutlineForRaster;
+    pub const glyphOutlineInto = Font.glyphOutlineForRasterInto;
 };
 
 /// Backend for public Face views whose owners explicitly guarantee immutable

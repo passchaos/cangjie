@@ -233,6 +233,24 @@ pub const Session = struct {
         );
     }
 
+    /// Decode into caller-owned storage while retaining its allocations.
+    ///
+    /// This has the same immutable-byte trust contract as `outline`. The
+    /// returned pointer is borrowed from `buffer` and remains valid only until
+    /// the next decode into that buffer or `buffer.deinit()`. A call invalidates
+    /// the previous result even if it returns an error.
+    pub fn outlineInto(
+        self: Session,
+        buffer: *glyph_mod.GlyphOutlineBuffer,
+        glyph_id: glyph_mod.GlyphId,
+    ) font_mod.FontError!*const glyph_mod.GlyphOutline {
+        return font_mod.raster_backend.glyphOutlineInto(
+            self.implementation,
+            buffer,
+            glyph_id,
+        );
+    }
+
     pub fn outlineAt(
         self: Session,
         allocator: std.mem.Allocator,

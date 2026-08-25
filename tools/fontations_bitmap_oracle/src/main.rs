@@ -1,6 +1,6 @@
 use skrifa::{
     bitmap::BitmapData,
-    outline::{DrawSettings, OutlinePen},
+    outline::{DrawSettings, Hinting, OutlinePen},
     prelude::{LocationRef, Size},
     string::StringId,
     FontRef, GlyphId, MetadataProvider,
@@ -28,6 +28,7 @@ fn main() {
         "bitmap-bench" => bitmap_bench(&font, glyph_id, &mut args),
         "bitmap-summary" => bitmap_summary(&font, glyph_id, &mut args),
         "outline" => outline(&font, glyph_id, &mut args),
+        "outline-reuse" => outline_reuse(&font, glyph_id, &mut args),
         "metrics" => metrics(&font, glyph_id, &mut args),
         "bounds" => bounds(&font, glyph_id, &mut args),
         "global-metrics" => global_metrics(&font, &mut args),
@@ -604,8 +605,53 @@ fn outline(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = St
     );
 }
 
+fn outline_reuse(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {
+    let (iterations, samples) = repeated_args(args);
+    let glyph = font
+        .outline_glyphs()
+        .get(GlyphId::new(glyph_id))
+        .unwrap_or_else(|| fail("missing outline glyph"));
+    // Exercise Skrifa's documented caller-owned temporary-memory contract.
+    // HashPen itself is allocation-free and is reset per iteration just like
+    // Cangjie's reusable command buffer is logically cleared before a draw.
+    let mut memory = vec![0_u8; glyph.draw_memory_size(Hinting::None)];
+    let mut values = Vec::with_capacity(samples);
+    let mut checksum = 0_u64;
+    let mut commands = 0_usize;
+    for _ in 0..samples {
+        for _ in 0..3 {
+            let mut pen = HashPen::default();
+            glyph
+                .draw(unscaled_settings_with_memory(&mut memory), &mut pen)
+                .unwrap_or_else(|_| fail("cannot draw outline"));
+            checksum = pen.hash;
+            commands = pen.commands;
+        }
+        let start = Instant::now();
+        let mut batch_hash = 0_u64;
+        for _ in 0..iterations {
+            let mut pen = HashPen::default();
+            glyph
+                .draw(unscaled_settings_with_memory(&mut memory), &mut pen)
+                .unwrap_or_else(|_| fail("cannot draw outline"));
+            batch_hash = batch_hash.wrapping_add(pen.hash);
+        }
+        values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
+        black_box(batch_hash);
+    }
+    values.sort_by(f64::total_cmp);
+    println!(
+        "engine=skrifa	mode=outline-reuse	iterations={iterations}	samples={samples}	median_ns_per_iter={:.3}	commands={commands}	checksum={checksum:016x}",
+        values[values.len() / 2],
+    );
+}
+
 fn unscaled_settings() -> DrawSettings<'static> {
     DrawSettings::unhinted(Size::unscaled(), LocationRef::default())
+}
+
+fn unscaled_settings_with_memory(memory: &mut [u8]) -> DrawSettings<'_> {
+    DrawSettings::unhinted(Size::unscaled(), LocationRef::default()).with_memory(Some(memory))
 }
 
 #[derive(Default)]

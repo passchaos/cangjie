@@ -44,6 +44,10 @@ CASES = (
     # records include engine-specific metadata. Their geometry parity is
     # covered by dedicated HarfBuzz/FreeType differential tests.
     Case("outline-glyf", "outline-session", "synthesized.ttf", 1, False),
+    # Skrifa's public draw takes a caller pen and reuses its parsed glyph; this
+    # row compares that lifecycle with Cangjie's explicit caller-owned output.
+    # Keep the owning outline row above so reuse cannot silently redefine it.
+    Case("outline-glyf-reuse", "outline-reuse", "synthesized.ttf", 1, False),
     Case("outline-cff", "outline-session", "cff.otf", 1, False),
 )
 
@@ -108,6 +112,7 @@ def skrifa_command(
     mode = {
         "bitmap": "bitmap-summary",
         "outline-session": "outline",
+        "outline-reuse": "outline-reuse",
     }.get(case.mode, case.mode)
     command = [str(executable), str(font), mode, str(case.operand)]
     if case.font_size is not None:

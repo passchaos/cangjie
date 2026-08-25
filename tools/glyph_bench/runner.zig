@@ -182,6 +182,7 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, g
         .bitmap => try runBitmapIterations(font, glyph_id, options, iterations, checksum),
         .outline => try runOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
         .outline_session => try runOutlineSessionIterations(allocator, font, glyph_id, options, iterations, checksum),
+        .outline_reuse => try runOutlineReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster => try runRasterIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_reuse => try runRasterReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_prepare => try runRasterPrepareIterations(allocator, font, glyph_id, options, iterations, checksum),
@@ -426,6 +427,18 @@ fn runOutlineSessionIterations(allocator: std.mem.Allocator, font: *const cangji
             try session.outlineAt(allocator, glyph_id, coords);
         checksum.* = updateChecksum(checksum.*, outlineChecksum(outline));
         outline.deinit();
+    }
+}
+
+fn runOutlineReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
+    if (options.normalizedVariationCoords().len != 0) return error.InvalidArguments;
+    const session = font.glyphs().session();
+    var buffer = cangjie.font.OutlineBuffer.init(allocator);
+    defer buffer.deinit();
+    var i: usize = 0;
+    while (i < iterations) : (i += 1) {
+        const outline = try session.outlineInto(&buffer, glyph_id);
+        checksum.* = updateChecksum(checksum.*, outlineChecksum(outline.*));
     }
 }
 

@@ -187,18 +187,34 @@ gate, not proof of per-table semantic parity or superiority; those stronger
 claims require reference differential tests and same-host performance
 measurements.
 
-A fixed-CPU-30 A/B/B/A run with 200,000 iterations and nine samples passed all
-semantic checks in the 18-case matrix. Cangjie led Skrifa in 17 of the 18
-measured boundaries: roughly
-`7.11x/4.56x` for the two attribute fixtures, `3.37x` for variations, `1.91x`
-for palettes, `7.39x` for strike enumeration, `2.99x/3.42x` for COLRv0/v1
-selection, `3.42x/1.58x/2.14x` for post/CFF/synthesized names, `1.89x` for
-bitmap selection, and `2.16x/2.91x/3.69x/2.82x` for Roboto cmap, metrics,
-bounds, and global metrics. The minimal synthetic glyf outline row remains a
-Skrifa lead (`0.80x` Cangjie speedup); the production Roboto and Noto Serif
-glyf outline rows documented below favor Cangjie. This is the maintained
-high-level API matrix; it does not assert that every raw table accessor has an
-equivalent workload.
+A fixed-CPU-30 A/B/B/A run with 200,000 iterations and fifteen samples passed
+all semantic checks in the 19-case matrix. Cangjie led Skrifa in 18 of the 19
+measured boundaries in the retained run: roughly `8.40x/4.55x` for the two
+attribute fixtures, `3.34x` for variations, `1.97x` for palettes, `7.63x` for
+strike enumeration, `2.96x/3.44x` for COLRv0/v1 selection,
+`3.52x/1.56x/2.38x` for post/CFF/synthesized names, `1.91x` for bitmap
+selection, and `2.16x/2.79x/3.48x/2.75x` for Roboto cmap, metrics, bounds,
+and global metrics. The owning minimal synthetic glyf row remains close enough
+to scheduler noise to alternate around parity, so it is not counted as a
+stable cross-engine win. The explicit reuse row is measured separately: a
+fixed-CPU-30 A/B/B/A run with 500,000 iterations and 31 samples measured
+Cangjie at `126.38/122.83 ns` versus Skrifa using its documented caller memory
+at `127.26/130.33 ns`, a `1.03x` geometric-mean Cangjie lead. The production
+Roboto and Noto Serif glyf outline rows documented below also favor Cangjie.
+The reuse
+result does not silently replace the owning result: `GlyphSession.outlineInto`
+borrows an `OutlineBuffer` whose command capacity and compound-point scratch
+survive between calls, whereas the existing `GlyphOutline` API still returns
+an independent owner. Fixed-CPU-30 A/B/B/A counters over five million
+synthetic decodes show that reuse reduces Cangjie retired instructions from
+about `10.438B` to `9.192B` (`11.9%`), branches from `1.512B` to `1.382B`
+(`8.6%`), and cycles from about `2.965B` to `2.489B` (`16.1%`) relative to its
+exact owning-session binary. Cross-engine counters are workload context rather
+than a same-ISA work claim: Cangjie uses more instructions/branches than
+Skrifa on this tiny glyph but finishes in fewer cycles (`2.50B/2.48B` versus
+`2.62B/2.56B` over five million iterations). This is the maintained high-level
+API matrix; it does not assert that every raw table accessor has an equivalent
+workload.
 
 `zig build fontations-matrix -Doptimize=ReleaseFast` now makes the maintained
 high-level differential reproducible instead of leaving it as a collection of

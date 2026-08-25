@@ -4352,10 +4352,7 @@ shaping-performance superiority.
   Roboto and `1.70%` for Source Serif, while branches stayed neutral; cycles
   improved about `3.12%` and `4.28%`. Eleven-sample wall medians improved about
   `3.6%` and `4.8%`, respectively, with unchanged checksums. The complete
-  ReleaseFast suite passes. The full external corpus smoke encountered the
-  repository's pre-existing `MissingTable` failures for the AOTS
-  `gsub3_1_simple_f1.otf` and `gsub3_1_lookupflag_f1.otf` feature-range cases;
-  direct runs at the parent revision reproduce the same missing-table result.
+  ReleaseFast suite passes.
 - Legacy-kern planning now checks the parsed face's table capability before
   calling the fallible lookup constructor. This preserves the same nullable
   result for kern-less OpenType fonts while removing exception-style
@@ -4376,3 +4373,9 @@ shaping-performance superiority.
   and `3.69%`. Eleven-sample wall medians improved about `3.4%` and `4.0%`,
   respectively, with unchanged checksums and a passing complete ReleaseFast
   suite.
+- Ranged-GSUB positioning now tests the parsed face's legacy-`kern` capability
+  before constructing a kern lookup, matching the ordinary shaping pipeline's
+  nullable-table contract. This closes the `MissingTable` failures exposed by
+  the AOTS `gsub3_1_simple_f1.otf` and `gsub3_1_lookupflag_f1.otf` feature-range
+  rows. The complete `shaping-corpus-parity-smoke` umbrella now passes,
+  including both rows against HarfBuzz and HarfRust.

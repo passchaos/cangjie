@@ -218,7 +218,7 @@ pub fn collect(
     if (featureEnabled(
         @import("../../../unicode.zig").tag("kern"),
         options.features,
-    )) {
+    ) and font_shaping.hasKernTableForShaping(font)) {
         const kern = try font_shaping.kernLookupForShaping(
             font,
         );

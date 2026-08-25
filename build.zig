@@ -3913,10 +3913,35 @@ pub fn build(b: *std.Build) void {
         "Write post/CFF/synthesized glyph-name reference fixtures",
     );
     const glyph_name_fixtures_cmd = b.addRunArtifact(glyph_name_fixtures_exe);
-    if (b.args) |args| {
-        glyph_name_fixtures_cmd.addArgs(args);
-    }
+    const generated_fontations_fixtures =
+        glyph_name_fixtures_cmd.addOutputDirectoryArg("fixtures");
     glyph_name_fixtures_step.dependOn(&glyph_name_fixtures_cmd.step);
+
+    const fontations_matrix_step = b.step(
+        "fontations-matrix",
+        "Run the reproducible Cangjie/Skrifa capability matrix",
+    );
+    const fontations_matrix_cmd = b.addSystemCommand(&.{
+        "python3",
+        "tools/run_fontations_matrix.py",
+        "--cangjie",
+    });
+    fontations_matrix_cmd.addArtifactArg(glyph_bench_exe);
+    fontations_matrix_cmd.addArgs(&.{
+        "--skrifa-manifest",
+        "tools/fontations_bitmap_oracle/Cargo.toml",
+        "--fixture-dir",
+    });
+    fontations_matrix_cmd.addDirectoryArg(generated_fontations_fixtures);
+    fontations_matrix_cmd.addArgs(&.{
+        "--roboto",
+        b.fmt(
+            "{s}/harfrust/harfrust/benches/fonts/Roboto-Regular.ttf",
+            .{parity_work_root orelse ""},
+        ),
+    });
+    if (b.args) |args| fontations_matrix_cmd.addArgs(args);
+    fontations_matrix_step.dependOn(&fontations_matrix_cmd.step);
 
     const bench_smoke_step = b.step("bench-smoke", "Run quick TSV smoke checks for benchmark tools");
     const paragraph_bench_smoke_cmd = b.addRunArtifact(paragraph_bench_exe);

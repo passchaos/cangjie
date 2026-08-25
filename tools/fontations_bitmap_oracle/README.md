@@ -50,6 +50,10 @@ Axis and named-instance enumeration uses `variations 0 ITERATIONS SAMPLES`.
 Color-palette enumeration uses `palettes 0 ITERATIONS SAMPLES`.
 Bitmap-strike enumeration uses `strikes 0 ITERATIONS SAMPLES`.
 Preferred color-glyph source lookup uses `color-glyph GLYPH_ID ITERATIONS SAMPLES`.
+For a compact semantic and timing summary across all of these boundaries, run
+`zig build fontations-matrix -Doptimize=ReleaseFast`; optional
+`-- --iterations N --samples N` arguments control the repeated measurements.
+The matrix compares deterministic semantic checksums before reporting timings.
 The matching fixtures can be generated in an explicit scratch directory with
 `zig build glyph-name-fixtures -- /tmp/cangjie-fontations-fixtures`; omitting
 the argument retains the legacy current-directory behavior. It writes

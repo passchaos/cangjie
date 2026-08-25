@@ -26,6 +26,7 @@ fn main() {
     match mode.as_str() {
         "bitmap" => bitmap(&font, glyph_id, &mut args),
         "bitmap-bench" => bitmap_bench(&font, glyph_id, &mut args),
+        "bitmap-summary" => bitmap_summary(&font, glyph_id, &mut args),
         "outline" => outline(&font, glyph_id, &mut args),
         "metrics" => metrics(&font, glyph_id, &mut args),
         "bounds" => bounds(&font, glyph_id, &mut args),
@@ -400,6 +401,42 @@ fn bitmap_bench(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item
     println!("engine=skrifa\tmode=bitmap-bench\titerations={iterations}\tsamples={samples}\tmedian_ns_per_iter={:.3}\tchecksum={checksum:016x}", values[values.len()/2]);
 }
 
+fn bitmap_summary(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {
+    let size: f32 = args
+        .next()
+        .unwrap_or_else(|| fail("missing size"))
+        .parse()
+        .unwrap_or_else(|_| fail("invalid size"));
+    let (iterations, samples) = repeated_args(args);
+    let strikes = font.bitmap_strikes();
+    let gid = GlyphId::new(glyph_id);
+    let mut values = Vec::with_capacity(samples);
+    let mut checksum = 0_u64;
+    for _ in 0..samples {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let glyph = strikes
+                .glyph_for_size(Size::new(size), gid)
+                .unwrap_or_else(|| fail("missing bitmap glyph"));
+            let len = match &glyph.data {
+                BitmapData::Bgra(data) | BitmapData::Png(data) => data.len(),
+                BitmapData::Mask(mask) => mask.data.len(),
+            };
+            checksum = checksum
+                .wrapping_add(u64::from(glyph.width))
+                .wrapping_add(u64::from(glyph.height))
+                .wrapping_add(len as u64);
+            black_box(glyph.data);
+        }
+        values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
+    }
+    values.sort_by(f64::total_cmp);
+    println!(
+        "engine=skrifa\tmode=bitmap-summary\titerations={iterations}\tsamples={samples}\tmedian_ns_per_iter={:.3}\tchecksum={checksum:016x}",
+        values[values.len() / 2],
+    );
+}
+
 fn repeated_args(args: &mut impl Iterator<Item = String>) -> (usize, usize) {
     let iterations = args
         .next()
@@ -426,7 +463,12 @@ fn metrics(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = St
         for _ in 0..iterations {
             let advance = metrics.advance_width(gid).unwrap_or_default();
             let lsb = metrics.left_side_bearing(gid).unwrap_or_default();
-            checksum = checksum.wrapping_add(u64::from(advance.to_bits() ^ lsb.to_bits()));
+            // Match glyph-bench's integer unscaled-metrics digest so the
+            // matrix can compare behavior rather than merely recording two
+            // unrelated benchmark consumers. OpenType design metrics are
+            // integral even though Skrifa exposes them as f32.
+            checksum = checksum
+                .wrapping_add(((advance as u16 as u64) << 16) | u64::from(lsb as i16 as u16));
         }
         values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
         black_box(checksum);

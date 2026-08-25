@@ -187,6 +187,19 @@ gate, not proof of per-table semantic parity or superiority; those stronger
 claims require reference differential tests and same-host performance
 measurements.
 
+`zig build fontations-matrix -Doptimize=ReleaseFast` now makes the maintained
+high-level differential reproducible instead of leaving it as a collection of
+manual commands. It builds the pinned local Skrifa oracle, generates all test
+fonts into build-owned scratch storage, and compares deterministic semantic
+checksums for attributes, axes/instances, palettes, bitmap strikes and glyph
+selection, COLRv0/v1 source selection, post/CFF/synthesized glyph names, plus
+Roboto cmap, bounds, and global metrics. Glyph metrics use different digest
+encodings in the two CLIs but retain their focused value-level tests. The gate
+also reports per-engine medians; callers doing performance work should pass a
+substantial `--iterations`/`--samples` pair and pin the process externally.
+This still does not convert the table-inventory manifest into a claim that
+every low-level parser operation has identical semantics.
+
 CFF1 and variable CFF2 outlines now expose reusable PPEM-specific Type2
 hinting instances. The charstring executor retains horizontal/vertical stems,
 hint masks, and counter masks; Private DICT parsing supplies variation-aware

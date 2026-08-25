@@ -4323,3 +4323,13 @@ shaping-performance superiority.
   `2.29%`, and cycles by about `1.52%` and `3.76%`. Eleven-sample wall medians
   improved about `1.9%` and `4.6%`, with unchanged checksums and a passing
   complete ReleaseFast suite.
+- Required-second LigatureSubst prefiltering now checks adjacent first/second
+  candidates directly when LookupFlag is zero and the run proves it has no
+  default ignorables. In that case no glyph may be skipped between the first
+  and second components, so separated candidates cannot form a ligature;
+  filtered and control-bearing runs retain the former permissive whole-run
+  scan. Fixed-CPU-30 A/B/B/A counters over twenty complete `en-words` passes
+  reduced retired instructions by about `1.92%` for Roboto and `1.98%` for
+  Source Serif, branches by `2.04%` and `2.29%`, and cycles by `1.96%` and
+  `3.64%`. Eleven-sample wall medians improved about `1.2%` and `5.0%`, with
+  unchanged checksums and a passing complete ReleaseFast suite.

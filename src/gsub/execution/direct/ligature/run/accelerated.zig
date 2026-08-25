@@ -58,7 +58,15 @@ pub noinline fn applyRequiredSecond(
     @branchHint(.cold);
     const second_components = matching.requiredSecondComponents(ligature);
     if (second_components.len == 0 or
-        !prefilter.hasAnyGlyph(glyphs.items, second_components))
+        !(if (lookup_flag == 0 and
+            run.run_has_default_ignorables == false)
+            hasAdjacentRequiredPair(
+                glyphs.items,
+                ligature.first_component_digest,
+                second_components,
+            )
+        else
+            prefilter.hasAnyGlyph(glyphs.items, second_components)))
     {
         return;
     }
@@ -69,6 +77,39 @@ pub noinline fn applyRequiredSecond(
         lookup_flag,
         run,
     );
+}
+
+fn hasAdjacentRequiredPair(
+    glyphs: []const GlyphId,
+    first_digest: @import("../../../../../glyph_digest.zig").GlyphDigest,
+    sorted_seconds: []const GlyphId,
+) bool {
+    if (glyphs.len < 2) return false;
+    for (glyphs[0 .. glyphs.len - 1], glyphs[1..]) |first, second| {
+        if (!first_digest.mayHave(first)) continue;
+        if (std.sort.binarySearch(
+            GlyphId,
+            sorted_seconds,
+            second,
+            glyphOrder,
+        ) != null) return true;
+    }
+    return false;
+}
+
+fn glyphOrder(target: GlyphId, item: GlyphId) std.math.Order {
+    return std.math.order(target, item);
+}
+
+test "adjacent required pair rejects separated candidates" {
+    var first = @import("../../../../../glyph_digest.zig").GlyphDigest.empty();
+    first.add(5);
+    try std.testing.expect(hasAdjacentRequiredPair(&.{ 5, 7 }, first, &.{7}));
+    try std.testing.expect(!hasAdjacentRequiredPair(
+        &.{ 5, 9, 7 },
+        first,
+        &.{7},
+    ));
 }
 
 fn applyKind(

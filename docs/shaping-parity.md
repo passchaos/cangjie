@@ -4435,3 +4435,14 @@ shaping-performance superiority.
   after symmetric endpoint averaging. Eleven-sample medians improved about
   `2.97%`, `1.80%`, and `6.56%`, respectively, with byte-identical checksums
   and unchanged dirty-pixel counts. The complete ReleaseFast suite passes.
+- A post-change fixed-CPU-30 matrix confirms that the direct-render boundary
+  is now close to FreeType for the simpler Roboto 64 px controls: `A` measured
+  about `4219/4118 ns` and `g` about `4298/4192 ns`, roughly `2.5%` behind.
+  The more complex `é` remained about `7450/6145 ns`, or `21%` behind, so
+  FreeType-relative raster performance is still not complete. The same state
+  passed the 19-case Fontations/Skrifa semantic matrix; Cangjie's caller-owned
+  `glyf` outline row measured about `96.35 ns` versus Skrifa's `99.18 ns`,
+  while the owning row remained about `7.8%` slower. The fixed-CPU-30 Parley
+  matrix also retained all nine Cangjie wins (`1.158x--2.551x`) with matching
+  output counts. These are workload-specific results, not an overall
+  cross-library completion claim.

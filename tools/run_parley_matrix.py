@@ -113,6 +113,28 @@ def main() -> int:
             }
             if len(shapes) != 1:
                 failures.append(f"{case.name}/{style}: output counts={sorted(shapes)}")
+            # Each implementation also hashes its complete native layout. The
+            # hash encodings intentionally differ (Cangjie uses Wyhash over its
+            # public layout records; Parley uses FNV over line/glyph fields),
+            # so cross-engine equality is not meaningful. Requiring stable,
+            # non-zero hashes across both symmetric runs still prevents a count-
+            # equivalent but internally unstable layout from passing this gate.
+            for engine, first, second in (
+                ("cangjie", cangjie_first, cangjie_second),
+                ("parley", parley_first, parley_second),
+            ):
+                first_checksum = first.get("checksum")
+                second_checksum = second.get("checksum")
+                if (
+                    first_checksum is None
+                    or second_checksum is None
+                    or first_checksum == "0000000000000000"
+                    or first_checksum != second_checksum
+                ):
+                    failures.append(
+                        f"{case.name}/{style}: {engine} checksum="
+                        f"{first_checksum!r}/{second_checksum!r}"
+                    )
             cangjie_a = float(cangjie_first["median_ns_per_iter"])
             cangjie_b = float(cangjie_second["median_ns_per_iter"])
             parley_a = float(parley_first["median_ns_per_iter"])

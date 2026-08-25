@@ -2077,7 +2077,11 @@ current controlled Parley matrix, not a universal cross-platform claim.
 `zig build parley-matrix -Doptimize=ReleaseFast` now preserves this comparison
 as one reproducible nine-case gate: default, spacing, and alternating spans on
 Parley's own Latin, Arabic, and Japanese sample paragraphs. It first requires
-equal input-byte, glyph, and line counts before reporting timings. A fixed-CPU-30
+equal input-byte, glyph, and line counts before reporting timings. Each engine's
+complete native-layout checksum must also be non-zero and stable across both
+halves of the symmetric run; the encodings intentionally differ, so the gate
+does not mistake unrelated hashes for cross-engine geometry equivalence. A
+fixed-CPU-30
 500-iteration, nine-sample run measured Cangjie speedups of `2.19x/1.76x/1.74x`
 for Latin, `1.38x/1.49x/1.12x` for Arabic, and `2.43x/1.10x/1.12x` for
 Japanese (default/spacing/alternating). These results are tied to the named

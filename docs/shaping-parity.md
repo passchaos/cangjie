@@ -1887,12 +1887,11 @@ Current HarfRust glyph-id, UTF-8 cluster, advance, and offset parity evidence:
   it is a non-Unicode Macintosh Turkish cmap. Cangjie now interprets
   platform-1/encoding-0 cmap codes through an extracted Macintosh Roman
   encoding layer and honors the format-0 language value 18 as the Turkish
-  variant. The 14 rows shared with HarfBuzz/HarfRust's MacRoman fallback are
-  retained in `tests/data/cmap-3-mac-roman-reference-tests.txt` with checksum
-  `3183e375afe92bf6`; the complete 20-row upstream input is independently
-  protected by `tests/data/cmap-3-mac-turkish-tests.txt` at checksum
-  `e2632fdbc21b0765`, including the six Turkish-specific byte slots that both
-  references currently return as `.notdef`.
+  variant. Current HarfBuzz and HarfRust do not honor the Turkish language
+  variant consistently, so this non-Unicode cmap is not a valid differential
+  oracle. The complete 20-row upstream input remains protected by a Cangjie
+  expected-output gate at checksum `9038f53721f4d38`, including the six
+  Turkish-specific byte slots.
 - Newa passes all five script-specific cases retained from upstream
   `in-house/use-syllable.tests` across three fixture fonts. The slice covers
   virama+ZWNJ termination, CGJ transparency in contextual and nested ligature

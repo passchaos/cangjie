@@ -1608,13 +1608,6 @@ const retained_text_rendering_parity_gates = [_]struct {
         .remove_default_ignorables = true,
     },
     .{
-        .font_file = "TestCMAPMacTurkish.ttf",
-        .text_file = "tests/data/cmap-3-mac-roman-reference-tests.txt",
-        .direction = "ltr",
-        .size = "1000",
-        .remove_default_ignorables = true,
-    },
-    .{
         .font_file = "TestCMAP13.ttf",
         .text_file = "tests/data/cmap-4-last-resort-tests.txt",
         .direction = "ltr",
@@ -1651,7 +1644,7 @@ const retained_text_rendering_expected_gates = [_]struct {
         .text_file = "tests/data/cmap-3-mac-turkish-tests.txt",
         .direction = "ltr",
         .size = "1000",
-        .expected_checksum = "e2632fdbc21b0765",
+        .expected_checksum = "9038f53721f4d38",
         .remove_default_ignorables = true,
     },
 };

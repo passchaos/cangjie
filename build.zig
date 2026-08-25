@@ -1670,6 +1670,29 @@ const retained_inline_text_rendering_parity_gates = [_]struct {
     },
 };
 
+const retained_vertical_text_rendering_parity_gates = [_]struct {
+    font_file: []const u8,
+    text: []const u8,
+    size: ?[]const u8 = null,
+    variation: ?[]const u8 = null,
+    harfrust: bool = true,
+}{
+    .{ .font_file = "NotoSansCJK-VF.abc.otf", .text = "AB" },
+    .{ .font_file = "NotoSansCJK-VF.abc.otf", .text = "AB", .variation = "wght=700" },
+    .{ .font_file = "NotoSansCJK-VF.abc.ttf", .text = "AB" },
+    .{ .font_file = "NotoSerifHK-subset.ttf", .text = "AB" },
+    .{ .font_file = "NotoSansCJK-VF.abc.ttf", .text = "AB", .variation = "wght=700" },
+    .{ .font_file = "NotoSerifHK-subset.ttf", .text = "AB", .variation = "wght=700" },
+    .{ .font_file = "4cbbc461be066fccc611dcc634af6e8cb2705537.ttf", .text = "\u{ff38}" },
+    .{ .font_file = "191826b9643e3f124d865d617ae609db6a2ce203.ttf", .text = "\u{300c}" },
+    .{ .font_file = "f9b1dd4dcb515e757789a22cb4241107746fd3d0.ttf", .text = "AB" },
+    .{ .font_file = "NotoSans-VF.abc.ttf", .text = "bc", .size = "2000" },
+    .{ .font_file = "NotoSans-VF.abc.ttf", .text = "ab" },
+    // HarfRust's fontations backend intentionally differs from the OpenType
+    // and FreeType references for varied glyf fallback without vmtx.
+    .{ .font_file = "NotoSans-VF.abc.ttf", .text = "ab", .variation = "wght=700", .harfrust = false },
+};
+
 const retained_variable_text_rendering_parity_gates = [_]struct {
     font_file: []const u8,
     text: []const u8,
@@ -3356,6 +3379,39 @@ pub fn build(b: *std.Build) void {
                 expected_cmd.addArgs(&.{ "--font-bold", font_bold });
             }
             shaping_corpus_parity_smoke_step.dependOn(&expected_cmd.step);
+        }
+        for (retained_vertical_text_rendering_parity_gates) |gate| {
+            const font_path = b.fmt(
+                "{s}/{s}",
+                .{ harfbuzz_in_house_fonts, gate.font_file },
+            );
+            const engines = [_][]const u8{
+                "compare-harfbuzz",
+                "compare-harfrust",
+            };
+            const engine_count: usize = if (gate.harfrust) 2 else 1;
+            for (engines[0..engine_count]) |engine| {
+                const vertical_parity_cmd =
+                    b.addRunArtifact(shape_bench_exe);
+                vertical_parity_cmd.addArgs(&.{
+                    "--engine",    engine,
+                    "--font",      font_path,
+                    "--text",      gate.text,
+                    "--direction", "ttb",
+                });
+                if (gate.size) |size| {
+                    vertical_parity_cmd.addArgs(&.{ "--size", size });
+                }
+                if (gate.variation) |variation| {
+                    vertical_parity_cmd.addArgs(&.{
+                        "--variation",
+                        variation,
+                    });
+                }
+                shaping_corpus_parity_smoke_step.dependOn(
+                    &vertical_parity_cmd.step,
+                );
+            }
         }
         for (retained_harfrust_text_parity_gates) |gate| {
             const text_harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);

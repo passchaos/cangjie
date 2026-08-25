@@ -4260,3 +4260,12 @@ shaping-performance superiority.
   `11.85%`, and cycles by about `3.83%` and `2.24%`. Eleven-sample wall medians
   improved about `3.4%` and `2.2%`, respectively, with unchanged checksums and
   a passing complete ReleaseFast suite.
+- Validated PairPos lookups now enter their exact first-glyph candidate map
+  without first building a whole-run glyph digest and scanning the same
+  coverage groups. Other GPOS kinds keep the lazy digest/group prefilter, and
+  coverage-only chaining retains its single exact walk. Fixed-CPU-30 A/B/B/A
+  counters over twenty complete `en-words` passes reduced retired instructions
+  by about `1.34%` for Roboto and `1.30%` for Source Serif, branches by `1.32%`
+  and `1.15%`, and cycles by about `2.90%` and `5.33%`. Eleven-sample wall
+  medians improved about `2.5%` and `4.2%`, with unchanged checksums and a
+  passing complete ReleaseFast suite.

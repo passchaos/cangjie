@@ -70,29 +70,36 @@ pub noinline fn collect(
     else
         runtime_dispatch.acceleratorWithCoverage(lookup_index, run);
     if (lookup_accelerator) |active_accelerator| {
-        const run_digest = if (run_digest_cache) |cache|
-            cache.get(glyphs, lookup_flag, run)
-        else
-            prefilter.runDigest(glyphs, lookup_flag, run);
-        if (run_digest.isEmpty() or
-            !active_accelerator.coverage_digest.mayIntersect(run_digest))
-        {
-            return;
-        }
-        // Coverage-only chaining already performs this exact group lookup for
-        // every glyph. A whole-run preflight would duplicate its first scan.
-        if (!active_accelerator.chaining_coverage_only and
-            active_accelerator.coverage_groups.len != 0 and
-            !prefilter.groupsMayMatchRun(
-                active_accelerator.coverage_groups,
-                active_accelerator.coverage_group_slots,
-                active_accelerator.coverage_group_direct,
-                glyphs,
-                lookup_flag,
-                run,
-            ))
-        {
-            return;
+        const pair_lookup = lookup_type == 2 or
+            (lookup_type == 9 and
+                active_accelerator.extension_lookup_type == 2);
+        if (!pair_lookup) {
+            const run_digest = if (run_digest_cache) |cache|
+                cache.get(glyphs, lookup_flag, run)
+            else
+                prefilter.runDigest(glyphs, lookup_flag, run);
+            if (run_digest.isEmpty() or
+                !active_accelerator.coverage_digest.mayIntersect(run_digest))
+            {
+                return;
+            }
+            // Coverage-only chaining already performs this exact group lookup
+            // for every glyph. A whole-run preflight would duplicate its first
+            // scan. PairPos likewise probes the exact first-glyph candidate map
+            // while walking adjacent pairs, so it bypasses this entire block.
+            if (!active_accelerator.chaining_coverage_only and
+                active_accelerator.coverage_groups.len != 0 and
+                !prefilter.groupsMayMatchRun(
+                    active_accelerator.coverage_groups,
+                    active_accelerator.coverage_group_slots,
+                    active_accelerator.coverage_group_direct,
+                    glyphs,
+                    lookup_flag,
+                    run,
+                ))
+            {
+                return;
+            }
         }
     }
 

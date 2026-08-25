@@ -125,7 +125,6 @@ fn collectImpl(
     const lookup_list = try requiredLookupList(view);
     const lookup_count = try view.readU16(lookup_list);
     var digest_cache = lookup_dispatcher.DigestCache.init();
-    digest_cache.primeUnfiltered(glyphs);
     if (selected.len != 0) {
         for (selected) |lookup_index| {
             if (lookup_index >= lookup_count) continue;

@@ -94,11 +94,14 @@ This is a retained correctness-corpus result, not a completion signal for the
 broader performance and cross-script coverage objectives below.
 The `shaping-performance-matrix` command runs five representative corpora in
 symmetric Cangjie/HarfBuzz/HarfRust/HarfRust/HarfBuzz/Cangjie order and reports
-the geometric-mean speedup against the faster reference. A fresh fixed-CPU-30
-run measured Cangjie ahead on both Amiri corpora and Noto Sans Devanagari, but
-behind HarfRust on Roboto (`0.74x`) and Source Serif Variable (`0.64x`). This
-is direct current evidence that broad shaping-performance superiority remains
-unproven.
+the geometric-mean speedup against the faster reference. The runner normalizes
+the Zig engines' aggregate `iterations * samples` glyph count to the HarfRust
+oracle's one-corpus count before checking output cardinality. A fixed-CPU-30
+`5 * 11` run after the broad PairPos format 1 optimization measured speedups
+of `0.778x` on Roboto, `0.663x` on Source Serif Variable, `1.018x` on Amiri
+words, `1.115x` on long Amiri text, and `0.996x` on Noto Sans Devanagari
+against the faster reference. This is direct current evidence that broad
+shaping-performance superiority remains unproven.
 
 Use `--profile` for defensive-path targeting only. It records glyph windows
 around every GSUB lookup and therefore intentionally uses the generic lookup

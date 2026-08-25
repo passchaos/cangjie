@@ -45,7 +45,9 @@ def run(command: list[str], cpu: int | None) -> dict[str, str]:
     for token in re.split(r"[\t\n ]", completed.stdout):
         if "=" in token:
             key, value = token.split("=", 1)
-            fields[key] = value
+            # shape-bench prints aggregate fields before per-sample records,
+            # whose repeated glyph/checksum keys must not replace the totals.
+            fields.setdefault(key, value)
     return fields
 
 
@@ -67,7 +69,34 @@ def median(record: dict[str, str]) -> float:
     return float(record["median_ns_per_glyph"])
 
 
+def glyphs_per_iteration(
+    record: dict[str, str], iterations: int, samples: int, aggregate: bool
+) -> int:
+    glyphs = int(record["glyphs"])
+    if not aggregate:
+        return glyphs
+    measured_runs = iterations * samples
+    if glyphs % measured_runs != 0:
+        raise RuntimeError(
+            f"aggregate glyph count {glyphs} is not divisible by "
+            f"iterations*samples ({measured_runs})"
+        )
+    return glyphs // measured_runs
+
+
+def test_glyph_count_normalization() -> None:
+    assert glyphs_per_iteration({"glyphs": "120"}, 3, 4, True) == 10
+    assert glyphs_per_iteration({"glyphs": "10"}, 3, 4, False) == 10
+    try:
+        glyphs_per_iteration({"glyphs": "121"}, 3, 4, True)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("non-integral aggregate must be rejected")
+
+
 def main() -> int:
+    test_glyph_count_normalization()
     parser = argparse.ArgumentParser()
     parser.add_argument("--cangjie", required=True, type=Path)
     parser.add_argument("--harfbuzz", required=True, type=Path)
@@ -109,7 +138,15 @@ def main() -> int:
         harfbuzz_b = run(harfbuzz_cmd, args.cpu)
         cangjie_b = run(cangjie_cmd, args.cpu)
         records = (cangjie_a, harfbuzz_a, harfrust_a, harfrust_b, harfbuzz_b, cangjie_b)
-        glyph_counts = {record.get("glyphs") for record in records}
+        # shape-bench reports the aggregate over every measured iteration and
+        # sample, while the library-level HarfRust oracle reports one complete
+        # corpus pass. Normalize both contracts before comparing semantics.
+        glyph_counts = {
+            glyphs_per_iteration(
+                record, args.iterations, args.samples, index != 2 and index != 3
+            )
+            for index, record in enumerate(records)
+        }
         if len(glyph_counts) != 1:
             raise RuntimeError(
                 f"{case.name}: unstable/cross-engine glyph counts {glyph_counts}"
@@ -126,7 +163,7 @@ def main() -> int:
             f"harfbuzz={values[1][0]:.3f}/{values[1][1]:.3f} "
             f"harfrust={values[2][0]:.3f}/{values[2][1]:.3f} "
             f"speedup_vs_best={strongest / means[0]:.3f}x "
-            f"glyphs={cangjie_a['glyphs']}"
+            f"glyphs={glyphs_per_iteration(cangjie_a, args.iterations, args.samples, True)}"
         )
     print(
         f"Cangjie/HarfBuzz/HarfRust shaping matrix completed: {len(CASES)} corpora"

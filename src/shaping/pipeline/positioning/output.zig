@@ -98,14 +98,21 @@ pub fn emit(input: Input) !Result {
                 glyph_id = fallback_glyph;
             }
         }
-        const glyph_class = input.gdef_metadata.glyphClass(glyph_id);
+        const glyph_class = if (input.run_may_have_mark_attachments or
+            input.kerx_lookup != null)
+            input.gdef_metadata.glyphClass(glyph_id)
+        else
+            @import("../../../font.zig").GlyphClass.unclassified;
         const kerx_adjustment = if (index < input.kerx_adjustments.len)
             input.kerx_adjustments[index]
         else
             aat_kerx.Adjustment{};
         var kern_x_advance: f32 = 0;
         var kern_x_offset: f32 = 0;
-        const was_substituted =
+        const needs_substitution_state = input.kerx_lookup != null or
+            input.has_default_ignorable or
+            input.options.not_found_variation_selector_glyph != null;
+        const was_substituted = needs_substitution_state and
             index < input.scratch.glyph_substituted.items.len and
             input.scratch.glyph_substituted.items[index];
         const kerx_skips_glyph =
@@ -187,7 +194,7 @@ pub fn emit(input: Input) !Result {
             unicode.isVariationSelector(source_codepoint) and
             !was_substituted and
             !synthetic_base;
-        const hide_default_ignorable =
+        const hide_default_ignorable = input.has_default_ignorable and
             unicode.isDefaultIgnorableForShaping(source_codepoint) and
             !was_substituted and
             !synthetic_base and

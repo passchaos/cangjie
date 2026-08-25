@@ -534,6 +534,13 @@ pub fn run(input: Input) !void {
 
     const gpos_adjustments = &scratch.gpos_adjustments;
     const gpos_start = shape_profile_mod.now(shape_profile, profile_io);
+    const run_may_have_mark_attachments =
+        position_policy.runMayHaveMarkAttachments(
+            glyph_ids.items,
+            codepoints.items,
+            glyph_source_indices.items,
+            gdef_metadata.*,
+        );
     const position_collection = try position_collect.run(.{
         .allocator = buffer.allocator,
         .font = font,
@@ -549,12 +556,7 @@ pub fn run(input: Input) !void {
         .gpos_script_tag = gpos_script_tag,
         .options = lookup_options,
         .has_default_ignorable = has_default_ignorable,
-        .run_may_have_mark_attachments = position_policy.runMayHaveMarkAttachments(
-            glyph_ids.items,
-            codepoints.items,
-            glyph_source_indices.items,
-            gdef_metadata.*,
-        ),
+        .run_may_have_mark_attachments = run_may_have_mark_attachments,
         .adjustments = gpos_adjustments,
         .profile = shape_profile,
         .profile_io = profile_io,
@@ -644,6 +646,8 @@ pub fn run(input: Input) !void {
         .has_gpos_attachments = has_gpos_attachments,
         .has_kerx_state_attachments = position_engine_plan.has_state_attachments,
         .has_gpos_positioning = position_engine_plan.has_gpos_positioning,
+        .run_may_have_mark_attachments = run_may_have_mark_attachments,
+        .has_default_ignorable = has_default_ignorable,
         .early_zero_mark_shape = early_zero_mark_shape,
         .fallback_mark_enabled = position_engine_plan.fallback_mark_enabled,
         .invisible_glyph_id = invisible_glyph_id,

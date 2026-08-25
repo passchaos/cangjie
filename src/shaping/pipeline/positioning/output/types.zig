@@ -34,6 +34,8 @@ pub const Input = struct {
     has_gpos_attachments: bool,
     has_kerx_state_attachments: bool,
     has_gpos_positioning: bool,
+    run_may_have_mark_attachments: bool,
+    has_default_ignorable: bool,
     early_zero_mark_shape: bool,
     fallback_mark_enabled: bool,
     invisible_glyph_id: GlyphId,

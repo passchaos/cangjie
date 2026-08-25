@@ -4252,3 +4252,12 @@ shaping-performance superiority.
   `2.96%`. Eleven-sample wall medians improved about `5.2%` and `2.4%`, with
   unchanged checksums; the complete ReleaseFast suite, including mark-
   attachment coverage, passes.
+- Final output now reuses the post-GSUB run proofs already computed for GPOS:
+  mark-free runs skip per-glyph GDEF class lookup, and runs without default
+  ignorables, kerx, or visible variation selectors skip the substituted-state
+  sidecar and Unicode default-ignorable test. Fixed-CPU-30 A/B/B/A counters
+  over twenty complete `en-words` passes reduced retired instructions by about
+  `6.96%` for Roboto and `7.12%` for Source Serif, branches by `11.79%` and
+  `11.85%`, and cycles by about `3.83%` and `2.24%`. Eleven-sample wall medians
+  improved about `3.4%` and `2.2%`, respectively, with unchanged checksums and
+  a passing complete ReleaseFast suite.

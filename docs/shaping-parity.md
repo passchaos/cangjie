@@ -4366,3 +4366,13 @@ shaping-performance superiority.
   cycles by about `1.47%` and `1.19%`. Eleven-sample wall medians improved by
   about `1.9%` and `0.9%`, respectively, with unchanged checksums and a
   passing complete ReleaseFast suite.
+- The direct horizontal-metrics cache now indexes its small exact front cache
+  by glyph id. Glyph ids are already dense font-table indexes and dominate
+  locality inside one run; full font and variation identity remains in each
+  entry and is still compared before every hit. Against the preceding exact
+  binaries, fixed-CPU-30 A/B/B/A counters over twenty complete `en-words`
+  passes reduced retired instructions by about `0.56%` for Roboto and `0.55%`
+  for Source Serif, with neutral branches and cycle reductions of about `2.65%`
+  and `3.69%`. Eleven-sample wall medians improved about `3.4%` and `4.0%`,
+  respectively, with unchanged checksums and a passing complete ReleaseFast
+  suite.

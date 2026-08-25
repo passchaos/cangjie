@@ -116,15 +116,11 @@ pub const GlyphMetricsCache = struct {
 };
 
 fn directMetricsIndex(key: GlyphMetricsKey) usize {
-    // Glyph id is the strongest locality signal: shaping repeatedly requests
-    // the same small alphabet from one face and variation instance. Mix the
-    // complete identity so fallback fonts and variable instances can coexist;
-    // exact key comparison still resolves all collisions before returning.
-    var mixed: u64 = @intCast(key.font_addr);
-    mixed = (mixed >> 4) ^ key.variation_hash;
-    mixed ^= @as(u64, key.glyph_id) *% 0x9e37_79b9_7f4a_7c15;
-    mixed ^= mixed >> 32;
-    return @intCast(mixed & (GlyphMetricsCache.direct_capacity - 1));
+    // Glyph ids are already dense table indexes and dominate locality within
+    // one shaping run. Index by the id directly; the complete key comparison
+    // still makes collisions between faces or variation instances exact.
+    return @as(usize, key.glyph_id) &
+        (GlyphMetricsCache.direct_capacity - 1);
 }
 
 fn glyphMetricsKeysEqual(a: GlyphMetricsKey, b: GlyphMetricsKey) bool {

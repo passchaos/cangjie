@@ -105,7 +105,10 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
         try allocator.alloc(PreparedFillLine, prepared_lines.len);
     defer if (prepared_lines.len > inline_active_lines.len) allocator.free(active_storage);
 
-    if (prepared_lines.len < 32) {
+    // A 32-edge outline still fits every local work buffer. Measurements on
+    // curve-heavy Latin composites show that maintaining sorted activation is
+    // cheaper at this exact boundary than building the bucket link arrays.
+    if (prepared_lines.len <= 32) {
         sortPreparedFillLinesByYMin(prepared_lines);
         var next_line: usize = 0;
         var active_count: usize = 0;

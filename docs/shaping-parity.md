@@ -4446,3 +4446,12 @@ shaping-performance superiority.
   matrix also retained all nine Cangjie wins (`1.158x--2.551x`) with matching
   output counts. These are workload-specific results, not an overall
   cross-library completion claim.
+- The direct scanline sorter now keeps exactly 32 prepared edges on its
+  stack-local sorted-activation path; bucketing begins at 33 edges. All scratch
+  arrays already hold 128 entries, and the former threshold made this one
+  boundary pay bucket construction despite retaining no allocation benefit.
+  Fixed-CPU-30 A/B/B/A counters over 200,000 Roboto 64 px `é` draws reduced
+  cycles by about `6.6%`; a 15-sample A/B/B/A run improved the median from an
+  average `6890.6` to `6448.9 ns` (about `6.4%`). `A` and `g` remained on
+  their existing paths with stable checksums. This narrows but does not close
+  the remaining FreeType deficit for complex direct rasterization.

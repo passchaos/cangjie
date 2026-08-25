@@ -201,8 +201,8 @@ fixed-CPU-30 A/B/B/A run with 500,000 iterations and 31 samples measured
 Cangjie at `126.38/122.83 ns` versus Skrifa using its documented caller memory
 at `127.26/130.33 ns`, a `1.03x` geometric-mean Cangjie lead. The production
 Roboto and Noto Serif glyf outline rows documented below also favor Cangjie.
-The reuse
-result does not silently replace the owning result: `GlyphSession.outlineInto`
+The reuse result does not silently replace the owning result:
+`GlyphSession.outlineInto`
 borrows an `OutlineBuffer` whose command capacity and compound-point scratch
 survive between calls, whereas the existing `GlyphOutline` API still returns
 an independent owner. Fixed-CPU-30 A/B/B/A counters over five million

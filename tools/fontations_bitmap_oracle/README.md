@@ -50,8 +50,10 @@ Axis and named-instance enumeration uses `variations 0 ITERATIONS SAMPLES`.
 Color-palette enumeration uses `palettes 0 ITERATIONS SAMPLES`.
 Bitmap-strike enumeration uses `strikes 0 ITERATIONS SAMPLES`.
 Preferred color-glyph source lookup uses `color-glyph GLYPH_ID ITERATIONS SAMPLES`.
-The matching fixtures can be generated in the current directory with
-`zig build glyph-name-fixtures`; it writes `post.ttf`, `cff.otf`, and
+The matching fixtures can be generated in an explicit scratch directory with
+`zig build glyph-name-fixtures -- /tmp/cangjie-fontations-fixtures`; omitting
+the argument retains the legacy current-directory behavior. It writes
+`post.ttf`, `cff.otf`, and
 `synthesized.ttf`, each with the comparable glyph at id 1, plus complete
 `attributes-head.ttf` and `attributes-os2.ttf` wrappers around the exact
 Fontations reference tables, plus a complete two-axis/two-instance

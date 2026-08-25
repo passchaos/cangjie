@@ -3913,6 +3913,9 @@ pub fn build(b: *std.Build) void {
         "Write post/CFF/synthesized glyph-name reference fixtures",
     );
     const glyph_name_fixtures_cmd = b.addRunArtifact(glyph_name_fixtures_exe);
+    if (b.args) |args| {
+        glyph_name_fixtures_cmd.addArgs(args);
+    }
     glyph_name_fixtures_step.dependOn(&glyph_name_fixtures_cmd.step);
 
     const bench_smoke_step = b.step("bench-smoke", "Run quick TSV smoke checks for benchmark tools");

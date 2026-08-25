@@ -309,6 +309,70 @@ inline fn fillStableFourEdgeRow(
     return true;
 }
 
+test "stable four-edge row matches generic four-sample output" {
+    const target_template = Target{
+        .width = 12,
+        .height = 1,
+        .pixels = undefined,
+    };
+    const lines = [_]PreparedFillLine{
+        .{ .x_at_y_min = 0.8, .y_min = -1, .y_max = 2, .slope = 0.2, .delta = 1 },
+        .{ .x_at_y_min = 3.2, .y_min = -1, .y_max = 2, .slope = -0.1, .delta = -1 },
+        .{ .x_at_y_min = 6.0, .y_min = -1, .y_max = 2, .slope = 0.1, .delta = 1 },
+        .{ .x_at_y_min = 9.4, .y_min = -1, .y_max = 2, .slope = -0.2, .delta = -1 },
+    };
+    const lut = coverageLutForSampleCount(16).?;
+    var expected = [_]u8{0} ** 12;
+    var actual = [_]u8{0} ** 12;
+    var expected_target = target_template;
+    expected_target.pixels = &expected;
+    var actual_target = target_template;
+    actual_target.pixels = &actual;
+    var expected_counts: [512]u8 = undefined;
+    var expected_differences: [513]i16 = undefined;
+    var expected_accumulator = try RowAccumulator.init(
+        std.testing.allocator,
+        expected.len,
+        true,
+        &expected_counts,
+        &expected_differences,
+    );
+    defer expected_accumulator.deinit(std.testing.allocator);
+    var actual_counts: [512]u8 = undefined;
+    var actual_differences: [513]i16 = undefined;
+    var actual_accumulator = try RowAccumulator.init(
+        std.testing.allocator,
+        actual.len,
+        true,
+        &actual_counts,
+        &actual_differences,
+    );
+    defer actual_accumulator.deinit(std.testing.allocator);
+    var intersections: [4]WindingIntersection = undefined;
+    fillPreparedRow(
+        expected_target,
+        &lines,
+        &intersections,
+        0,
+        11,
+        0,
+        .non_zero,
+        &sample_offsets_4,
+        lut,
+        &expected_accumulator,
+    );
+    try std.testing.expect(fillStableFourEdgeRow(
+        actual_target,
+        &lines,
+        0,
+        11,
+        0,
+        lut,
+        &actual_accumulator,
+    ));
+    try std.testing.expectEqualSlices(u8, &expected, &actual);
+}
+
 inline fn sortFourRowLines(lines: *[4]OrderedRowLine) void {
     compareSwapRowLines(&lines[0], &lines[2]);
     compareSwapRowLines(&lines[1], &lines[3]);

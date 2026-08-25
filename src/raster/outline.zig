@@ -62,7 +62,13 @@ pub fn flatten(
     x: f32,
     baseline_y: f32,
 ) void {
-    flattenOriented(lines, outline, scale, x, baseline_y, .upright);
+    flattenCommandsUpright(
+        lines,
+        outline.commands.items,
+        scale,
+        x,
+        baseline_y,
+    );
 }
 
 pub fn flattenOriented(
@@ -73,6 +79,15 @@ pub fn flattenOriented(
     baseline_y: f32,
     orientation: Orientation,
 ) void {
+    if (orientation == .upright) {
+        return flattenCommandsUpright(
+            lines,
+            outline.commands.items,
+            scale,
+            x,
+            baseline_y,
+        );
+    }
     flattenCommandsTransformed(
         lines,
         outline.commands.items,
@@ -82,6 +97,105 @@ pub fn flattenOriented(
         baseline_y,
         orientation,
     );
+}
+
+/// Flatten the dominant identity-transform/upright font outline without
+/// carrying an affine matrix and orientation switch through every command.
+fn flattenCommandsUpright(
+    lines: *std.ArrayList(Line),
+    commands: []const glyph_mod.PathCommand,
+    scale: f32,
+    x: f32,
+    baseline_y: f32,
+) void {
+    var start: ?Point = null;
+    var current: ?Point = null;
+    for (commands) |command| {
+        switch (command) {
+            .move_to => |point| {
+                const pixel = fontToPixelUpright(point, scale, x, baseline_y);
+                start = pixel;
+                current = pixel;
+            },
+            .line_to => |point| {
+                const a = current orelse continue;
+                const b = fontToPixelUpright(point, scale, x, baseline_y);
+                lines.appendAssumeCapacity(.{ .a = a, .b = b });
+                current = b;
+            },
+            .quad_to => |quad| {
+                const a = current orelse continue;
+                const control = fontToPixelUpright(
+                    quad.control,
+                    scale,
+                    x,
+                    baseline_y,
+                );
+                const end = fontToPixelUpright(
+                    quad.end,
+                    scale,
+                    x,
+                    baseline_y,
+                );
+                curves.appendQuadLines(
+                    lines,
+                    a,
+                    control,
+                    end,
+                    curves.quadSegmentCount(a, control, end),
+                );
+                current = end;
+            },
+            .cubic_to => |cubic| {
+                const a = current orelse continue;
+                const c0 = fontToPixelUpright(
+                    cubic.c0,
+                    scale,
+                    x,
+                    baseline_y,
+                );
+                const c1 = fontToPixelUpright(
+                    cubic.c1,
+                    scale,
+                    x,
+                    baseline_y,
+                );
+                const end = fontToPixelUpright(
+                    cubic.end,
+                    scale,
+                    x,
+                    baseline_y,
+                );
+                curves.appendCubicLines(
+                    lines,
+                    a,
+                    c0,
+                    c1,
+                    end,
+                    curves.cubicSegmentCount(a, c0, c1, end),
+                );
+                current = end;
+            },
+            .close => {
+                if (current) |a| {
+                    if (start) |b| lines.appendAssumeCapacity(.{ .a = a, .b = b });
+                }
+                current = start;
+            },
+        }
+    }
+}
+
+inline fn fontToPixelUpright(
+    point: Point,
+    scale: f32,
+    x: f32,
+    baseline_y: f32,
+) Point {
+    return .{
+        .x = x + point.x * scale,
+        .y = baseline_y - point.y * scale,
+    };
 }
 
 /// Flatten commands whose coordinates are already pixels.

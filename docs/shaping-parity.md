@@ -4426,3 +4426,12 @@ shaping-performance superiority.
   run. Eleven-sample medians improved from an average `133.317` to
   `130.314 ns/glyph` (about `2.25%`), with identical checksums. The complete
   ReleaseFast suite and retained HarfBuzz/HarfRust corpus parity pass.
+- Upright identity-transform outline flattening now has a dedicated path
+  instead of carrying the general color affine and orientation switch through
+  every point. Sideways and transformed rendering retain the generic path.
+  Fixed-CPU-30 A/B/B/A `perf stat` over 200,000 Roboto 64 px dirty direct
+  renders reduced retired instructions by about `0.99%` for `A`, `0.82%` for
+  `g`, and `0.41%` for `é`; cycles improved about `2.1%`, `2.1%`, and `0.8%`
+  after symmetric endpoint averaging. Eleven-sample medians improved about
+  `2.97%`, `1.80%`, and `6.56%`, respectively, with byte-identical checksums
+  and unchanged dirty-pixel counts. The complete ReleaseFast suite passes.

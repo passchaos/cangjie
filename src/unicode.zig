@@ -805,6 +805,9 @@ pub fn inferOpenTypeScript(text: []const u8) Script {
 /// Hiragana is Japanese). Keeping both decisions in one state machine avoids
 /// decoding and classifying the same leading scalar twice during shaping.
 pub fn inferOpenTypeProperties(text: []const u8) InferredOpenTypeProperties {
+    if (asciiScript(text)) |script| {
+        return .{ .script = script, .language = .dflt, .all_ascii = true };
+    }
     var text_script: Script = .common;
     var saw_han = false;
     var all_ascii = true;
@@ -849,6 +852,17 @@ pub fn inferOpenTypeProperties(text: []const u8) InferredOpenTypeProperties {
         .language = if (saw_han) .zhs else .dflt,
         .all_ascii = all_ascii,
     };
+}
+
+fn asciiScript(text: []const u8) ?Script {
+    var script: Script = .common;
+    for (text) |byte| {
+        if (byte >= 0x80) return null;
+        if (script != .common) continue;
+        const candidate = scriptForCodepoint(byte);
+        if (isStrongInferredScript(candidate)) script = candidate;
+    }
+    return script;
 }
 
 fn isStrongInferredScript(script: Script) bool {

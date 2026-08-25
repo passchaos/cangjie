@@ -4278,3 +4278,12 @@ shaping-performance superiority.
   `2.53%` and `2.56%`, and cycles by `2.66%` and `2.91%`. Eleven-sample wall
   medians improved about `2.6%` and `3.0%`, respectively, with unchanged
   checksums and a passing complete ReleaseFast suite.
+- OpenType property inference now runs a compact ASCII-only scan first. It
+  determines the same first strong script and proves default language without
+  decoding or querying Unicode script tables byte by byte; non-ASCII input
+  falls through to the full multilingual inference state machine. Fixed-CPU-30
+  A/B/B/A counters over twenty complete `en-words` passes reduced retired
+  instructions by about `2.69%` for Roboto and `2.73%` for Source Serif,
+  branches by `2.53%` and `2.56%`, and cycles by about `3.53%` and `4.39%`.
+  Eleven-sample wall medians improved about `4.1%` and `4.9%`, respectively,
+  with unchanged checksums and a passing complete ReleaseFast suite.

@@ -63,8 +63,18 @@ pub fn populate(
     if (all_ascii and options.direction == .ltr) {
         // The caller already validated and classified this run. One byte is one
         // source scalar and no variation/default-ignorable handling is needed.
+        if (glyph_index_cache) |cache| {
+            return populateAsciiCached(
+                cache,
+                font,
+                scratch,
+                text,
+                cluster_base,
+                track_rtl_numeric_guard,
+            );
+        }
         for (text, 0..) |byte, cluster| {
-            const glyph_id = try support.glyphIndex(font, glyph_index_cache, byte);
+            const glyph_id = try font.glyphIndex(byte);
             if (track_rtl_numeric_guard) {
                 result.run_has_decimal_number =
                     result.run_has_decimal_number or
@@ -294,6 +304,34 @@ pub fn populate(
                 ]
             else
                 glyph_cluster_indices.items.len,
+        );
+    }
+    return result;
+}
+
+noinline fn populateAsciiCached(
+    cache: *GlyphIndexCache,
+    font: *const Font,
+    scratch: *scratch_mod.ShapeScratch,
+    text: []const u8,
+    cluster_base: usize,
+    track_rtl_numeric_guard: bool,
+) !Result {
+    var result = Result{};
+    for (text, 0..) |byte, cluster| {
+        const glyph_id = try cache.glyphIndex(font, byte);
+        if (track_rtl_numeric_guard) {
+            result.run_has_decimal_number =
+                result.run_has_decimal_number or support.isDecimalNumber(byte);
+            result.run_has_letter =
+                result.run_has_letter or support.isLetter(byte);
+        }
+        source_buffer.appendIdentity(
+            scratch,
+            glyph_id,
+            byte,
+            cluster_base + cluster,
+            cluster_base + cluster + 1,
         );
     }
     return result;

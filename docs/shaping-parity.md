@@ -4287,3 +4287,12 @@ shaping-performance superiority.
   branches by `2.53%` and `2.56%`, and cycles by about `3.53%` and `4.39%`.
   Eleven-sample wall medians improved about `4.1%` and `4.9%`, respectively,
   with unchanged checksums and a passing complete ReleaseFast suite.
+- Cached ASCII source population now lives in a dedicated out-of-line loop.
+  The hot caller resolves its cache mode once instead of re-unwrapping the
+  optional glyph-index cache for every byte, while the uncached API retains a
+  direct font lookup loop. Fixed-CPU-30 A/B/B/A counters over twenty complete
+  `en-words` passes reduced retired instructions by about `2.96%` for Roboto
+  and `2.97%` for Source Serif, branches by `3.13%` and `3.34%`, and cycles by
+  about `6.44%` and `4.40%`. Eleven-sample wall medians improved about `6.8%`
+  and `5.5%`, respectively, with unchanged checksums and a passing complete
+  ReleaseFast suite.

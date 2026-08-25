@@ -4402,3 +4402,16 @@ shaping-performance superiority.
   medians improved from an average `136.197` to `135.106 ns/glyph` (about
   `0.80%`), with identical checksums. The complete ReleaseFast suite and the
   retained HarfBuzz/HarfRust corpus parity umbrella pass.
+- ASCII source-span recovery now uses the same proof to bypass generic
+  saturation, optional-span, and per-component min/max work. Ordinary glyphs
+  read their already-parallel source end directly; for a ligature, the
+  monotone provenance list makes its last retained component the maximal end,
+  while the mutated cluster-owner sidecar remains authoritative for the public
+  start. Against exact `5f612dfc` parent and candidate binaries, fixed-CPU-30
+  A/B/B/A counters over twenty Source Serif Variable `en-words` passes reduced
+  retired instructions by about `3.26%`, branches by about `4.34%`, and branch
+  misses by about `2.82%`; cycles improved about `0.77%` in the frequency-
+  normalized perf result. Eleven-sample medians improved from an average
+  `134.600` to `133.467 ns/glyph` (about `0.84%`), with identical checksums.
+  Roboto controls showed the same instruction/branch reduction, and the full
+  ReleaseFast suite plus retained HarfBuzz/HarfRust corpus parity pass.

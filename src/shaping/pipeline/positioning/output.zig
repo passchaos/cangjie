@@ -76,17 +76,27 @@ pub fn emit(input: Input) !Result {
             )
         else
             source_index;
-        const span = source_span.forGlyph(
-            index,
-            source_index,
-            cluster_index,
-            input.scratch.clusters.items,
-            input.scratch.source_ends.items,
-            &input.scratch.ligature_components,
-        ) orelse source_span.Span{
-            .start = input.cluster_base,
-            .end = input.cluster_base,
-        };
+        const span = if (input.ascii_source)
+            source_span.forAsciiGlyph(
+                index,
+                source_index,
+                cluster_index,
+                input.scratch.clusters.items,
+                input.scratch.source_ends.items,
+                &input.scratch.ligature_components,
+            )
+        else
+            source_span.forGlyph(
+                index,
+                source_index,
+                cluster_index,
+                input.scratch.clusters.items,
+                input.scratch.source_ends.items,
+                &input.scratch.ligature_components,
+            ) orelse source_span.Span{
+                .start = input.cluster_base,
+                .end = input.cluster_base,
+            };
         const source_codepoint =
             if (input.scratch.codepoints.items.len == 0) 0 else input.scratch.codepoints.items[source_index];
         var glyph_id = input_glyph_id;

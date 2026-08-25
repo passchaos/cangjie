@@ -125,9 +125,12 @@ pub fn prepare(input: Input) !Result {
         !input.options.writing_mode.isVertical() and
         shouldApplyLegacyKernFallback(input.options.script_tag) and
         kerning_enabled)
-        try font_shaping.kernLookupForShaping(
+        font_shaping.kernLookupForShaping(
             input.font,
-        )
+        ) catch |err| switch (err) {
+            error.MissingTable => null,
+            else => return err,
+        }
     else
         null;
     return .{

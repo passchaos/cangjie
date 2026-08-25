@@ -4269,3 +4269,12 @@ shaping-performance superiority.
   and `1.15%`, and cycles by about `2.90%` and `5.33%`. Eleven-sample wall
   medians improved about `2.5%` and `4.2%`, with unchanged checksums and a
   passing complete ReleaseFast suite.
+- Legacy-kern planning now returns no lookup for fonts that do not contain a
+  `kern` table, instead of installing a non-null wrapper whose every pair query
+  returns zero. This lets the final positioning loop compile and execute the
+  actual no-legacy-kern path for modern GPOS fonts. Fixed-CPU-30 A/B/B/A
+  counters over twenty complete `en-words` passes reduced retired instructions
+  by about `2.52%` for Roboto and `2.56%` for Source Serif, branches by about
+  `2.53%` and `2.56%`, and cycles by `2.66%` and `2.91%`. Eleven-sample wall
+  medians improved about `2.6%` and `3.0%`, respectively, with unchanged
+  checksums and a passing complete ReleaseFast suite.

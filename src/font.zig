@@ -3219,8 +3219,8 @@ pub const Font = struct {
     }
 
     fn kernLookupForShaping(self: *const Font) FontError!KernLookupForShaping {
-        const kern = self.kern;
-        if (kern) |kern_table| try sfnt.checksum.validate(self.data, kern_table);
+        const kern = self.kern orelse return error.MissingTable;
+        try sfnt.checksum.validate(self.data, kern);
         return .{ .font = self, .kern = kern };
     }
 

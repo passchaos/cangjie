@@ -318,21 +318,34 @@ noinline fn populateAsciiCached(
     track_rtl_numeric_guard: bool,
 ) !Result {
     var result = Result{};
-    for (text, 0..) |byte, cluster| {
-        const glyph_id = try cache.asciiGlyphIndex(font, @intCast(byte));
+    // `populate` reserved every parallel list for the complete ASCII run.
+    // Publish their lengths once so this loop writes the records directly
+    // rather than updating eight ArrayList lengths for every source byte.
+    scratch.glyph_ids.items.len = text.len;
+    scratch.codepoints.items.len = text.len;
+    scratch.clusters.items.len = text.len;
+    scratch.source_ends.items.len = text.len;
+    scratch.glyph_source_indices.items.len = text.len;
+    scratch.glyph_cluster_indices.items.len = text.len;
+    scratch.glyph_substituted.items.len = text.len;
+    scratch.ligature_components.infos.items.len = text.len;
+
+    for (text, 0..) |byte, source| {
+        scratch.glyph_ids.items[source] =
+            try cache.asciiGlyphIndex(font, @intCast(byte));
+        scratch.codepoints.items[source] = byte;
+        scratch.clusters.items[source] = cluster_base + source;
+        scratch.source_ends.items[source] = cluster_base + source + 1;
+        scratch.glyph_source_indices.items[source] = source;
+        scratch.glyph_cluster_indices.items[source] = source;
+        scratch.glyph_substituted.items[source] = false;
+        scratch.ligature_components.infos.items[source] = .{};
         if (track_rtl_numeric_guard) {
             result.run_has_decimal_number =
                 result.run_has_decimal_number or support.isDecimalNumber(byte);
             result.run_has_letter =
                 result.run_has_letter or support.isLetter(byte);
         }
-        source_buffer.appendIdentity(
-            scratch,
-            glyph_id,
-            byte,
-            cluster_base + cluster,
-            cluster_base + cluster + 1,
-        );
     }
     return result;
 }

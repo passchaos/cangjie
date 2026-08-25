@@ -4343,3 +4343,16 @@ shaping-performance superiority.
   about `1.98%`, `2.29%`, and `1.93%` in instructions, branches, and cycles.
   Eleven-sample wall medians improved about `5.4%` and `5.0%`, respectively,
   with unchanged checksums and a passing complete ReleaseFast suite.
+- Cached ASCII source population now publishes the already-reserved parallel
+  array lengths once and initializes each glyph record by index. This removes
+  eight independent `ArrayList` length updates per byte without changing the
+  source, cluster, substitution, or ligature-provenance values. Against the
+  exact `c98f7917` parent binaries, fixed-CPU-30 A/B/B/A counters over twenty
+  complete `en-words` passes reduced retired instructions by about `1.73%` for
+  Roboto and `1.70%` for Source Serif, while branches stayed neutral; cycles
+  improved about `3.12%` and `4.28%`. Eleven-sample wall medians improved about
+  `3.6%` and `4.8%`, respectively, with unchanged checksums. The complete
+  ReleaseFast suite passes. The full external corpus smoke encountered the
+  repository's pre-existing `MissingTable` failures for the AOTS
+  `gsub3_1_simple_f1.otf` and `gsub3_1_lookupflag_f1.otf` feature-range cases;
+  direct runs at the parent revision reproduce the same missing-table result.

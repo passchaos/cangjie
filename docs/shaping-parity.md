@@ -4379,3 +4379,14 @@ shaping-performance superiority.
   the AOTS `gsub3_1_simple_f1.otf` and `gsub3_1_lookupflag_f1.otf` feature-range
   rows. The complete `shaping-corpus-parity-smoke` umbrella now passes,
   including both rows against HarfBuzz and HarfRust.
+- Direct scan conversion no longer clears the complete per-edge link array
+  before bucketing complex outlines. Every retained edge receives its link
+  exactly once during the same construction pass, so the blanket initialization
+  was redundant. Fixed-CPU-30 A/B/B/A counters over 200,000 Roboto 64 px dirty
+  renders reduced retired instructions by about `0.85%` for `g` and `0.90%`
+  for `é`, branches by about `0.56%` and `0.60%`, and cycles by about `1.24%`
+  and `1.73%`; the straight-sided `A` control stayed instruction/branch neutral
+  and improved about `2.14%` in cycles. Fifteen-sample wall medians improved
+  about `1.1%` for `g` and `2.1%` for `é`, while `A` stayed within noise. All
+  target checksums and dirty-pixel counts remained unchanged, and the complete
+  ReleaseFast suite passes.

@@ -600,7 +600,6 @@ fn bucketFillLinesByFirstRow(
     std.debug.assert(next_lines.len >= lines.len);
     std.debug.assert(row_heads.len == @as(usize, @intCast(max_y - min_y + 1)));
     @memset(row_heads, no_fill_line);
-    @memset(next_lines, no_fill_line);
     const min_y_f: f32 = @floatFromInt(min_y);
     const max_y_f = @as(f32, @floatFromInt(max_y)) + 1.0;
     for (lines, 0..) |line, line_index| {

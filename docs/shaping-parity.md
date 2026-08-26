@@ -4563,3 +4563,19 @@ shaping-performance superiority.
   explicit semantic/algorithmic test bed for a
   future sparse fixed-point implementation; the FreeType-relative direct-raster
   objective remains open.
+- The repeated-direct cache now retains target-clipped, y-sorted prepared
+  edges alongside its flattened lines. A cache hit still validates the complete
+  caller-owned command stream and still performs scan conversion and target
+  blending on every draw, but it no longer rebuilds slopes/bounds or sorts the
+  same immutable geometry. Target width and height are part of the cache key,
+  and a differential test checks the prepared-edge scanner against ordinary
+  direct fill for non-zero and even-odd rules. Independent baseline/candidate
+  binaries matched checksums for Roboto `A`, `g`, and `é` at 1x1 through 4x4
+  sampling. Fixed-P-core-14 A/B/B/A counters over 300,000 64 px dirty draws
+  reduced `g` instructions from about `25.37B` to `22.56B` (`11.1%`), branches
+  from `3.892B` to `3.509B` (`9.8%`), and cycles from `7.419B` to `6.387B`
+  (`13.9%`). For `é`, instructions fell from `18.96B` to `16.72B` (`11.8%`),
+  branches from `3.026B` to `2.712B` (`10.4%`), and cycles from `5.649B` to
+  `4.744B` (`16.0%`). `A` remains below the cache-admission threshold; its
+  retired work stayed neutral, with cycle readings dominated by a frequency
+  outlier in the first baseline sample.

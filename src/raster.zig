@@ -893,6 +893,8 @@ pub const Rasterizer = struct {
             hint_size,
             units_per_em,
             orientation,
+            target.width,
+            target.height,
         ) else undefined;
         const flatten_cache = if (use_flatten_cache)
             direct_flatten_cache.local()
@@ -903,7 +905,15 @@ pub const Rasterizer = struct {
                 cache_key,
                 outline.commands.items,
             )) |cached_lines| {
-                try self.fillLines(target, cached_lines, .non_zero);
+                const prepared = flatten_cache.prepared();
+                try scanline.fillPreparedSorted(
+                    self.allocator,
+                    scanlineTarget(target),
+                    prepared.lines,
+                    prepared.bounds,
+                    .non_zero,
+                    self.samples_per_axis,
+                );
                 if (self.embolden_small_glyphs and hint_size <= 20.0) {
                     try self.emboldenSmallGlyph(target, cached_lines, hint_size);
                 }

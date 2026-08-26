@@ -201,6 +201,151 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
     }
 }
 
+/// Scan target-clipped edges that are already prepared and sorted by `y_min`.
+///
+/// Repeated direct-outline rendering uses this entry point after proving that
+/// the command stream and complete geometry key still match its one-entry
+/// cache. Preparation and sorting are geometry-only work; row accumulation and
+/// target blending remain per draw. The caller must include target dimensions
+/// in that proof because `bounds` is already clipped.
+pub noinline fn fillPreparedSorted(
+    allocator: std.mem.Allocator,
+    target: Target,
+    prepared_lines: []const PreparedFillLine,
+    bounds: ?Bounds,
+    fill_rule: FillRule,
+    samples_per_axis: u8,
+) !void {
+    if (prepared_lines.len < 2) return;
+    const clipped_bounds = bounds orelse return;
+    const sample_axis: i32 = @max(1, @as(i32, samples_per_axis));
+    const sample_count = sample_axis * sample_axis;
+    var dynamic_coverage_lut: [256]u8 = undefined;
+    const coverage_lut = coverageLutForSampleCount(sample_count) orelse blk: {
+        fillCoverageLut(&dynamic_coverage_lut, sample_count);
+        break :blk dynamic_coverage_lut[0..];
+    };
+    const sample_axis_usize: usize = @intCast(sample_axis);
+    var dynamic_sample_offsets: []f32 = &.{};
+    const sample_offsets: []const f32 = sampleOffsetsForAxis(sample_axis) orelse blk: {
+        dynamic_sample_offsets = try allocator.alloc(f32, sample_axis_usize);
+        for (dynamic_sample_offsets, 0..) |*offset, sample_index| {
+            offset.* = (@as(f32, @floatFromInt(sample_index)) + 0.5) /
+                @as(f32, @floatFromInt(sample_axis));
+        }
+        break :blk dynamic_sample_offsets;
+    };
+    defer if (dynamic_sample_offsets.len != 0)
+        allocator.free(dynamic_sample_offsets);
+
+    const min_x = clipped_bounds.min_x;
+    const max_x = clipped_bounds.max_x;
+    const row_width_i32 = max_x - min_x + 1;
+    if (row_width_i32 <= 0) return;
+    const row_width: usize = @intCast(row_width_i32);
+    var inline_coverage_counts: [512]u8 = undefined;
+    var inline_coverage_differences: [129]i16 = undefined;
+    var row_accumulator = try RowAccumulator.init(
+        allocator,
+        row_width,
+        sample_axis == 4,
+        &inline_coverage_counts,
+        &inline_coverage_differences,
+    );
+    defer row_accumulator.deinit(allocator);
+    var inline_intersections: [128]WindingIntersection = undefined;
+    const intersection_storage = if (prepared_lines.len <= inline_intersections.len)
+        inline_intersections[0..prepared_lines.len]
+    else
+        try allocator.alloc(WindingIntersection, prepared_lines.len);
+    defer if (prepared_lines.len > inline_intersections.len)
+        allocator.free(intersection_storage);
+    var inline_active_lines: [128]PreparedFillLine = undefined;
+    const active_storage = if (prepared_lines.len <= inline_active_lines.len)
+        inline_active_lines[0..prepared_lines.len]
+    else
+        try allocator.alloc(PreparedFillLine, prepared_lines.len);
+    defer if (prepared_lines.len > inline_active_lines.len)
+        allocator.free(active_storage);
+
+    var next_line: usize = 0;
+    var active_count: usize = 0;
+    var y = clipped_bounds.min_y;
+    while (y <= clipped_bounds.max_y) : (y += 1) {
+        const row_lines = updateActiveFillLines(
+            active_storage,
+            &active_count,
+            prepared_lines,
+            &next_line,
+            y,
+        );
+        if (fill_rule == .non_zero and
+            sample_axis == 4 and
+            row_lines.len == 4 and
+            fillStableFourEdgeRow(
+                target,
+                row_lines,
+                min_x,
+                max_x,
+                y,
+                coverage_lut,
+                &row_accumulator,
+            ))
+        {
+            continue;
+        }
+        fillPreparedRow(
+            target,
+            row_lines,
+            intersection_storage,
+            min_x,
+            max_x,
+            y,
+            fill_rule,
+            sample_offsets,
+            coverage_lut,
+            &row_accumulator,
+        );
+    }
+}
+
+test "prepared sorted direct fill matches ordinary fill" {
+    const source = [_]Line{
+        .{ .a = .{ .x = 1.25, .y = 1.25 }, .b = .{ .x = 7.75, .y = 1.25 } },
+        .{ .a = .{ .x = 7.75, .y = 1.25 }, .b = .{ .x = 7.75, .y = 7.75 } },
+        .{ .a = .{ .x = 7.75, .y = 7.75 }, .b = .{ .x = 1.25, .y = 7.75 } },
+        .{ .a = .{ .x = 1.25, .y = 7.75 }, .b = .{ .x = 1.25, .y = 1.25 } },
+        .{ .a = .{ .x = 3.0, .y = 3.0 }, .b = .{ .x = 3.0, .y = 6.0 } },
+        .{ .a = .{ .x = 3.0, .y = 6.0 }, .b = .{ .x = 6.0, .y = 6.0 } },
+        .{ .a = .{ .x = 6.0, .y = 6.0 }, .b = .{ .x = 6.0, .y = 3.0 } },
+        .{ .a = .{ .x = 6.0, .y = 3.0 }, .b = .{ .x = 3.0, .y = 3.0 } },
+    };
+    var prepared_storage: [source.len]PreparedFillLine = undefined;
+    const prepared = prepareFillLines(&prepared_storage, &source);
+    sortPreparedFillLinesByYMin(prepared);
+    const target_template = Target{ .width = 10, .height = 10, .pixels = undefined };
+    const bounds = boundsForTarget(target_template, &source);
+
+    inline for (.{ FillRule.non_zero, FillRule.even_odd }) |fill_rule| {
+        var expected = [_]u8{0} ** 100;
+        var actual = [_]u8{0} ** 100;
+        var expected_target = target_template;
+        expected_target.pixels = &expected;
+        var actual_target = target_template;
+        actual_target.pixels = &actual;
+        try fill(std.testing.allocator, expected_target, &source, fill_rule, 4);
+        try fillPreparedSorted(
+            std.testing.allocator,
+            actual_target,
+            prepared,
+            bounds,
+            fill_rule,
+            4,
+        );
+        try std.testing.expectEqualSlices(u8, &expected, &actual);
+    }
+}
+
 const OrderedRowLine = struct {
     line: PreparedFillLine,
     first_x: f32,

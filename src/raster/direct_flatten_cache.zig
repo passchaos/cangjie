@@ -7,7 +7,8 @@
 const std = @import("std");
 const glyph = @import("../glyph.zig");
 const outline_raster = @import("outline.zig");
-const Line = @import("scanline.zig").Line;
+const scanline = @import("scanline.zig");
+const Line = scanline.Line;
 
 pub const max_commands = 64;
 pub const max_lines = 128;
@@ -22,6 +23,8 @@ pub const Key = struct {
     hint_size_bits: u32,
     units_per_em: u16,
     orientation: outline_raster.Orientation,
+    target_width: u32,
+    target_height: u32,
 
     pub fn init(
         outline: *const glyph.GlyphOutline,
@@ -31,6 +34,8 @@ pub const Key = struct {
         hint_size: f32,
         units_per_em: u16,
         orientation: outline_raster.Orientation,
+        target_width: u32,
+        target_height: u32,
     ) Key {
         return .{
             .glyph_id = outline.glyph_id,
@@ -41,8 +46,15 @@ pub const Key = struct {
             .hint_size_bits = @bitCast(hint_size),
             .units_per_em = units_per_em,
             .orientation = orientation,
+            .target_width = target_width,
+            .target_height = target_height,
         };
     }
+};
+
+pub const PreparedGeometry = struct {
+    lines: []const scanline.PreparedFillLine,
+    bounds: ?scanline.Bounds,
 };
 
 pub const Cache = struct {
@@ -51,9 +63,12 @@ pub const Cache = struct {
     key: Key = undefined,
     command_count: usize = 0,
     line_count: usize = 0,
+    prepared_line_count: usize = 0,
+    prepared_bounds: ?scanline.Bounds = null,
     fingerprint: [fingerprint_probe_count]u32 = .{0} ** fingerprint_probe_count,
     commands: [max_commands]glyph.PathCommand = undefined,
     lines: [max_lines]Line = undefined,
+    prepared_lines: [max_lines]scanline.PreparedFillLine = undefined,
 
     pub fn lookup(
         self: *Cache,
@@ -72,6 +87,13 @@ pub const Cache = struct {
             return null;
         }
         return self.lines[0..self.line_count];
+    }
+
+    pub fn prepared(self: *const Cache) PreparedGeometry {
+        return .{
+            .lines = self.prepared_lines[0..self.prepared_line_count],
+            .bounds = self.prepared_bounds,
+        };
     }
 
     /// Admit only the second consecutive observation. Ordinary text runs do
@@ -106,6 +128,18 @@ pub const Cache = struct {
         self.command_count = commands.len;
         self.line_count = lines.len;
         self.fingerprint = commandFingerprint(commands);
+        self.prepared_bounds = scanline.boundsForTarget(.{
+            .width = key.target_width,
+            .height = key.target_height,
+            .pixels = &.{},
+        }, lines);
+        self.prepared_line_count = scanline.prepareFillLines(
+            self.prepared_lines[0..lines.len],
+            lines,
+        ).len;
+        scanline.sortPreparedFillLinesByYMin(
+            self.prepared_lines[0..self.prepared_line_count],
+        );
         self.valid = true;
     }
 };
@@ -209,6 +243,8 @@ test "direct flatten cache requires two observations and rejects mutation" {
         .hint_size_bits = 0,
         .units_per_em = 1000,
         .orientation = .upright,
+        .target_width = 64,
+        .target_height = 64,
     };
     try std.testing.expect(!cache.shouldInstall(key));
     try std.testing.expect(cache.shouldInstall(key));
@@ -238,9 +274,15 @@ test "direct flatten cache invalidates on geometry changes" {
         .hint_size_bits = 0,
         .units_per_em = 1000,
         .orientation = .upright,
+        .target_width = 64,
+        .target_height = 64,
     };
     cache.install(key, &commands, &lines);
     key.baseline_y_bits = @bitCast(@as(f32, 1));
     try std.testing.expect(cache.lookup(key, &commands) == null);
     try std.testing.expect(!cache.valid);
+
+    cache.install(key, &commands, &lines);
+    key.target_width += 1;
+    try std.testing.expect(cache.lookup(key, &commands) == null);
 }

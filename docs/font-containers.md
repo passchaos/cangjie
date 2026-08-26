@@ -130,6 +130,18 @@ engine, and the existing CFF/FreeType correctness gates remain authoritative
 for geometry parity. These are three unscaled outline workloads, not an
 overall Fontations performance claim.
 
+Static TrueType outline materialization now resolves the top-level `loca`/`glyf`
+slice once and reuses it for both header bounds and compressed point decoding.
+This mirrors Skrifa's practice of retaining one parsed glyph description across
+the draw and avoids a second pair of `loca` reads without weakening compound
+component validation. Fixed-CPU-30 A/B/B/A counters over one million owning
+synthetic-glyf draws reduced retired instructions by about `7.49%`, branches by
+about `8.86%`, and cycles by about `6.4%`; fifteen-sample medians improved from
+about `140.0` to `132.6 ns`. A fresh Cangjie/Skrifa/Skrifa/Cangjie run measured
+Cangjie at `137.8/129.5 ns` and Skrifa at `138.4/138.6 ns`, so this maintained
+row is now at least at parity on the tested machine while the broader matrix
+remains the authoritative cross-library gate.
+
 The oracle also covers repeated unscaled glyph metrics and nominal charmap
 lookups. On the same CPU, Roboto glyph metrics measured `8.88 ns` for Cangjie
 versus `26.62 ns` for Skrifa. Public `Face` views now explicitly reuse their

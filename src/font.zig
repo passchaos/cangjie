@@ -6425,9 +6425,17 @@ pub const Font = struct {
         glyph_id: glyph_mod.GlyphId,
         read_mode: OutlineReadMode,
     ) FontError!void {
+        // A static TrueType outline needs both the header bounds and the
+        // compressed point stream. Resolve its `loca` range once and retain
+        // that exact slice through top-level decoding; compound recursion still
+        // resolves each component independently.
+        const truetype_data = if (self.format == .truetype)
+            try self.glyphData(glyph_id)
+        else
+            null;
         const metrics = try self.horizontalMetricsForReadMode(glyph_id, read_mode);
         const bounds = if (self.format == .truetype)
-            try self.glyphBoundsFromParsedTables(glyph_id)
+            try glyphBoundsFromData(truetype_data.?)
         else
             glyph_mod.Bounds{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 };
         glyph_mod.configureOutline(
@@ -6452,8 +6460,8 @@ pub const Font = struct {
             }
         }
         if (self.format == .truetype) {
+            const data = truetype_data.?;
             if (reusable_compound_points) |points| {
-                const data = try self.glyphData(glyph_id);
                 if (data.len != 0) {
                     const contour_count = try bin.readI16At(data, 0);
                     if (contour_count >= 0) {
@@ -6480,7 +6488,11 @@ pub const Font = struct {
                     }
                 }
             } else {
-                try self.appendGlyphOutline(outline, null, glyph_id, Transform.identity(), 0);
+                try self.appendTopLevelGlyphOutline(
+                    outline,
+                    data,
+                    Transform.identity(),
+                );
             }
         } else if (self.cff2) |cff2| {
             if (read_mode.shouldRevalidate()) {
@@ -6734,6 +6746,10 @@ pub const Font = struct {
 
     fn glyphBoundsFromParsedTables(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!glyph_mod.Bounds {
         const slice = try self.glyphData(glyph_id);
+        return glyphBoundsFromData(slice);
+    }
+
+    fn glyphBoundsFromData(slice: []const u8) FontError!glyph_mod.Bounds {
         if (slice.len == 0) return .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 };
         return .{
             .x_min = try bin.readI16At(slice, 2),
@@ -6741,6 +6757,36 @@ pub const Font = struct {
             .x_max = try bin.readI16At(slice, 6),
             .y_max = try bin.readI16At(slice, 8),
         };
+    }
+
+    fn appendTopLevelGlyphOutline(
+        self: *const Font,
+        outline: *glyph_mod.GlyphOutline,
+        data: []const u8,
+        transform: Transform,
+    ) FontError!void {
+        if (data.len == 0) return;
+        const contour_count = try bin.readI16At(data, 0);
+        if (contour_count >= 0) {
+            _ = try truetype_outline.simple.append(
+                outline,
+                null,
+                data,
+                @intCast(contour_count),
+                transform,
+                null,
+            );
+            return;
+        }
+        var compound_points = std.ArrayList(glyph_mod.Point).empty;
+        defer compound_points.deinit(outline.allocator);
+        try self.appendCompoundGlyph(
+            outline,
+            &compound_points,
+            data,
+            transform,
+            1,
+        );
     }
 
     fn glyphData(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError![]const u8 {

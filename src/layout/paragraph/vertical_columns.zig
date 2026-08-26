@@ -17,6 +17,7 @@ const hyphen_insertions =
     @import("../line_break/reflow/hyphen_insertions.zig");
 const truncation = @import("../line_break/reflow/truncation.zig");
 const paragraph_options = @import("options.zig");
+const paragraph_types = @import("../types/paragraph.zig");
 const segmentation = @import("../../text/segmentation/root.zig");
 const vertical_advances = @import("vertical_advances.zig");
 const vertical_block_metrics = @import("vertical_block_metrics.zig");
@@ -276,6 +277,42 @@ pub fn build(
         ranges[0..visible_count],
         options,
     );
+    alignPhysicalBlockEdges(buffer.lines.items, options);
+}
+
+/// Translate the complete vertical column set within a caller-supplied
+/// physical block container. Left/right are deliberately independent from
+/// inline direction and RL/LR source-column progression. Caller-authored
+/// regions and exclusion coordinates are already absolute, so they retain
+/// authority and bypass this final natural-column translation.
+fn alignPhysicalBlockEdges(lines: anytype, options: paragraph_options.Options) void {
+    if (lines.len == 0) return;
+    if (options.line_regions.len != 0 or options.exclusions.len != 0) return;
+    const container_width = options.max_block_size orelse return;
+    const alignment = switch (options.alignment) {
+        .left => paragraph_types.TextAlign.left,
+        .right => paragraph_types.TextAlign.right,
+        else => return,
+    };
+    var min_x = lines[0].x;
+    var max_x = lines[0].x + lines[0].width;
+    for (lines[1..]) |line| {
+        min_x = @min(min_x, line.x);
+        max_x = @max(max_x, line.x + line.width);
+    }
+    const content_width = max_x - min_x;
+    const target_left = switch (alignment) {
+        .left => 0,
+        // Like inline alignment, an overfull block remains at physical start
+        // instead of acquiring a negative origin outside the container.
+        .right => @max(0, container_width - content_width),
+        else => unreachable,
+    };
+    const translation = target_left - min_x;
+    for (lines) |*line| {
+        line.x += translation;
+        line.region_x += translation;
+    }
 }
 
 pub fn contentWidths(

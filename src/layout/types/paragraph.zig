@@ -11,11 +11,13 @@ const CascadeRun = run_types.CascadeRun;
 const unicode = @import("../../unicode.zig");
 
 pub const TextAlign = enum {
-    /// Physical left edge, independent of paragraph direction.
+    /// Physical left edge, independent of paragraph direction. In vertical
+    /// writing this aligns the complete column set within `max_block_size`.
     left,
     /// Center along the current writing mode's inline axis.
     center,
-    /// Physical right edge, independent of paragraph direction.
+    /// Physical right edge, independent of paragraph direction. In vertical
+    /// writing this aligns the complete column set within `max_block_size`.
     right,
     /// Fill each non-terminal soft-wrapped line by expanding its breakable
     /// inter-word spaces. Arabic-family runs first consume retained safe

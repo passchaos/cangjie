@@ -242,6 +242,8 @@ pub const ParagraphStyle = struct {
     writing_mode: pipeline_types.WritingMode = .horizontal_tb,
     text_orientation: pipeline_types.TextOrientation = .mixed,
     text_align: paragraph_types.TextAlign = .start,
+    /// Vertical physical left/right alignment container width.
+    max_block_size: ?f32 = null,
     line_height: ?f32 = null,
     max_lines: ?usize = null,
     ellipsis: bool = false,
@@ -287,6 +289,7 @@ pub const ParagraphStyle = struct {
             .direction = self.direction,
             .writing_mode = self.writing_mode,
             .text_orientation = self.text_orientation,
+            .max_block_size = self.max_block_size,
             .max_lines = self.max_lines,
             .ellipsis = self.ellipsis or self.overflow_mode == .ellipsis,
             .tab_width = self.tab_width,

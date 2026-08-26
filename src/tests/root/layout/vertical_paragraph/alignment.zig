@@ -10,7 +10,7 @@ const LayoutBuffer = policy_support.LayoutBuffer;
 const TextShaper = policy_support.TextShaper;
 const layout = policy_support.layout;
 
-test "vertical start center and end align along the y axis" {
+test "vertical logical and physical alignments use the y axis" {
     const allocator = std.testing.allocator;
     const bytes = try @import("../../../../test_font.zig")
         .buildVerticalMetricsTtf(allocator);
@@ -49,6 +49,127 @@ test "vertical start center and end align along the y axis" {
             result.height,
             0.001,
         );
+    }
+}
+
+test "vertical physical alignment translates a complete multi-column set" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("../../../../test_font.zig")
+        .buildVerticalMetricsTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const right = try layout(&font, &buffer, "AAA", .{
+        .max_width = 40,
+        .alignment = .right,
+        .writing_mode = .vertical_rl,
+        .text_orientation = .upright,
+        .max_block_size = 100,
+    });
+    try std.testing.expectEqual(@as(usize, 2), right.lines.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 80), right.lines[0].x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 60), right.lines[1].x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), right.width, 0.001);
+
+    const left = try layout(&font, &buffer, "AAA", .{
+        .max_width = 40,
+        .alignment = .left,
+        .writing_mode = .vertical_lr,
+        .text_orientation = .upright,
+        .max_block_size = 100,
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 0), left.lines[0].x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), left.lines[1].x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 40), left.width, 0.001);
+
+    const intrinsic = try layout(&font, &buffer, "A", .{
+        .max_width = 40,
+        .wrap_mode = .no_wrap,
+        .alignment = .right,
+        .writing_mode = .vertical_lr,
+        .text_orientation = .upright,
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 0), intrinsic.lines[0].x, 0.001);
+
+    const overfull = try layout(&font, &buffer, "AAA", .{
+        .max_width = 40,
+        .alignment = .right,
+        .writing_mode = .vertical_lr,
+        .text_orientation = .upright,
+        .max_block_size = 30,
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 0), overfull.lines[0].x, 0.001);
+}
+
+test "vertical physical alignment preserves explicit block geometry" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("../../../../test_font.zig")
+        .buildVerticalMetricsTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const result = try layout(&font, &buffer, "A", .{
+        .max_width = 100,
+        .wrap_mode = .no_wrap,
+        .alignment = .right,
+        .line_regions = &.{.{ .x = 17, .y = 5, .width = 40 }},
+        .writing_mode = .vertical_rl,
+        .text_orientation = .upright,
+        .max_block_size = 100,
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 17), result.lines[0].x, 0.001);
+}
+
+test "vertical physical left and right align the column set" {
+    const allocator = std.testing.allocator;
+    const bytes = try @import("../../../../test_font.zig")
+        .buildVerticalMetricsTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    for ([_]struct {
+        alignment: paragraph.Align,
+        expected_x: f32,
+    }{
+        .{ .alignment = .left, .expected_x = 0 },
+        .{ .alignment = .right, .expected_x = 80 },
+    }) |case| {
+        inline for ([_]support.TextDirection{ .ltr, .rtl }) |direction| {
+            const result = try layout(&font, &buffer, "A", .{
+                .max_width = 100,
+                .wrap_mode = .no_wrap,
+                .alignment = case.alignment,
+                .direction = direction,
+                .writing_mode = .vertical_lr,
+                .text_orientation = .upright,
+                .max_block_size = 100,
+            });
+            try std.testing.expectApproxEqAbs(
+                case.expected_x,
+                result.lines[0].x,
+                0.001,
+            );
+            // Block-axis physical alignment never changes inline direction or
+            // its top/bottom logical-start placement.
+            try std.testing.expectApproxEqAbs(
+                if (direction == .ltr) @as(f32, 0) else 80,
+                result.lines[0].y,
+                0.001,
+            );
+            try std.testing.expectEqual(
+                @as(?paragraph.Align, case.alignment),
+                result.lines[0].resolved_alignment,
+            );
+        }
     }
 }
 

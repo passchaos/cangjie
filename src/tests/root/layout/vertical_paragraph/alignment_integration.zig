@@ -182,7 +182,7 @@ test "vertical alignment is reflected by geometry and draw output" {
     );
 }
 
-test "vertical alignment rejects physical block-axis requests" {
+test "retained vertical physical alignment preserves the shape key" {
     const allocator = std.testing.allocator;
     const bytes = try @import("../../../../test_font.zig")
         .buildVerticalMetricsTtf(allocator);
@@ -191,15 +191,64 @@ test "vertical alignment rejects physical block-axis requests" {
     defer font.deinit();
     var buffer = LayoutBuffer.init(allocator);
     defer buffer.deinit();
-    for ([_]paragraph.Align{ .left, .right }) |alignment| {
-        try std.testing.expectError(
-            error.UnsupportedVerticalParagraphOptions,
-            layout(&font, &buffer, "A", .{
-                .max_width = 100,
-                .alignment = alignment,
-                .writing_mode = .vertical_rl,
-                .text_orientation = .upright,
-            }),
-        );
-    }
+    var shaped = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        FontCascade.init(&.{&font}),
+        &buffer,
+        "A",
+        20,
+        .{
+            .max_width = 100,
+            .writing_mode = .vertical_rl,
+            .text_orientation = .upright,
+        },
+    );
+    defer shaped.deinit();
+    var reflow = support.ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const left = try shaped.layout(&reflow, .{
+        .max_width = 100,
+        .alignment = .left,
+        .writing_mode = .vertical_rl,
+        .text_orientation = .upright,
+        .max_block_size = 100,
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 0), left.lines[0].x, 0.001);
+    const right = try shaped.layout(&reflow, .{
+        .max_width = 100,
+        .alignment = .right,
+        .writing_mode = .vertical_lr,
+        .text_orientation = .upright,
+        .max_block_size = 100,
+    });
+    try std.testing.expectApproxEqAbs(@as(f32, 80), right.lines[0].x, 0.001);
+
+    const spans = [_]support.StyledParagraphSpan{.{
+        .byte_start = 0,
+        .byte_len = 1,
+        .style_index = 9,
+        .font_size = 20,
+    }};
+    var styled = support.StyledParagraphBuffer.init(allocator);
+    defer styled.deinit();
+    const styled_right = try TextShaper.layoutStyledParagraphUtf8(
+        FontCascade.init(&.{&font}),
+        &buffer,
+        &styled,
+        "A",
+        20,
+        &spans,
+        .{
+            .max_width = 100,
+            .alignment = .right,
+            .writing_mode = .vertical_rl,
+            .text_orientation = .upright,
+            .max_block_size = 100,
+        },
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 80),
+        styled_right.lines[0].x,
+        0.001,
+    );
 }

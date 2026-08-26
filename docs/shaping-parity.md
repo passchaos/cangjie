@@ -2528,9 +2528,12 @@ shaping-performance superiority.
   presentation-only geometry directly and through placement-only concrete
   resolver replay; retained/styled layout, intrinsic sizing, draw output, and
   line-limit visibility keep those bounds outside flow metrics. Bottom-to-top
-  inline progression and physical left/right alignment are rejected explicitly
-  until they are migrated to the shared
-  inline/block-axis model; this is not yet full vertical paragraph parity.
+  inline progression now participates in the shared model, and physical
+  left/right alignment targets direction-independent physical block edges when
+  a finite vertical `max_block_size` container is supplied.
+  Styled vertical inline-box alignment and placement-coupled resolver
+  exclusions remain explicit gaps, so this is not yet full vertical paragraph
+  parity.
 - Expand the new Indic shaper slice beyond the current Devanagari `nukt`,
   `akhn`, `rphf`, `rkrf`, `half`, `cjct`, `pres`, `abvs`, `blws`, and `psts`
   stages; the current `hi-words.txt` gate only covers the active Devanagari

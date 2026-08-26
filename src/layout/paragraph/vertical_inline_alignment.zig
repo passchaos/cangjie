@@ -38,6 +38,8 @@ pub fn originInRegion(
         .start, .justify => if (direction == .ltr) 0 else slack,
         .center => slack / 2,
         .end => if (direction == .ltr) slack else 0,
-        .left, .right => unreachable,
+        // Physical left/right are applied after complete column placement on
+        // the block axis. Inline origins therefore remain at logical start.
+        .left, .right => if (direction == .ltr) 0 else slack,
     };
 }

@@ -623,8 +623,14 @@ start/end to bottom/top. Every soft column resolves independently; hard-break
 segments reset indentation before alignment. Overfull and unbounded columns
 remain at logical start rather than moving backward. Columns containing active
 absolute tab rulers are pinned to `.start`, matching horizontal tab-ruler
-behavior. Physical `.left` / `.right` remain explicitly unsupported for
-vertical paragraphs because they require separate block-axis semantics.
+behavior. Physical `.left` / `.right` are direction-independent block-edge
+requests. When `max_block_size` supplies a finite physical container width,
+they translate the complete vertical column set to its left/right edge without
+changing RL/LR column progression or top-to-bottom/bottom-to-top inline flow.
+An overfull column set remains at physical left instead of receiving a
+negative x origin.
+Explicit column regions and exclusions retain their caller-authored absolute
+block coordinates and therefore bypass this final translation.
 `.justify` is supported independently as inline-axis expansion along
 positive-down y.
 
@@ -664,17 +670,17 @@ objects removed by `max_lines` neither render nor request placement. Optional
 resolver exclusions participate in vertical LR/RL reflow through the same static
 rectangle pipeline as caller-authored exclusions.
 
-This is intentionally not described as full vertical reflow. Bottom-to-top
-`direction = rtl` is supported as the UAX #9 base direction and logical
-inline-start/end policy while final glyphs remain in physical top-to-bottom
-order. Physical left/right paragraph alignment remains rejected because it
-names block-axis geometry rather than inline alignment.
+Bottom-to-top `direction = rtl` is supported as the UAX #9 base direction and
+logical inline-start/end policy while final glyphs remain in physical
+top-to-bottom order. Direction-independent `.left`/`.right` block alignment
+uses `max_block_size` across one-shot, retained, styled, geometry, and
+rendering consumers; without a block container, intrinsic RL/LR placement is
+unchanged.
 Retained whole-paragraph layout and intrinsic inline-size measurement are
 supported and restore the pristine vertical shaping snapshot between calls.
-Returning a concrete
-`UnsupportedVerticalParagraphOptions` error is part of this boundary: an
-unsupported request must never fall through the horizontal x-axis machinery
-and produce plausible but false geometry.
+Other unsupported styled vertical requests still return a concrete
+`UnsupportedVerticalParagraphOptions` error rather than falling through the
+horizontal x-axis machinery and producing plausible but false geometry.
 
 Vertical Unicode-space fallback follows the library's public positive-down
 `y_advance` convention, including synthesized U+2000..U+200A/U+202F/U+205F/

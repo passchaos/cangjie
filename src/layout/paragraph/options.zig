@@ -128,7 +128,9 @@ pub const Options = struct {
     ///
     /// Vertical paragraphs support direction-aware `.start` and `.end`,
     /// `.center`, and `.justify` for generic inline-axis space/CJK expansion.
-    /// Physical `.left`/`.right` remain horizontal-only.
+    /// Physical `.left`/`.right` map to the block-axis container edges when
+    /// `max_block_size` is finite. Without one, they retain natural RL/LR
+    /// column placement because there is no external block edge to target.
     alignment: paragraph_types.TextAlign = .start,
     line_height: ?f32 = null,
     /// Paragraph base/inline direction.
@@ -150,6 +152,10 @@ pub const Options = struct {
     /// physical column progression.
     writing_mode: pipeline_types.WritingMode = .horizontal_tb,
     text_orientation: pipeline_types.TextOrientation = .mixed,
+    /// Optional block-axis container size used by vertical physical
+    /// `.left`/`.right` alignment. It maps to physical width vertically and
+    /// is ignored by horizontal inline alignment. Null keeps intrinsic width.
+    max_block_size: ?f32 = null,
     /// Maximum visible lines/columns in source order. Null is unlimited.
     max_lines: ?usize = null,
     /// Append "..." only when `max_lines` removes content.
@@ -250,6 +256,11 @@ pub fn validate(options: Options) !void {
     {
         return error.InvalidParagraphOptions;
     }
+    if (options.max_block_size) |size| {
+        if (!std.math.isFinite(size) or size < 0) {
+            return error.InvalidParagraphOptions;
+        }
+    }
     try line_break_policy.validate(options.line_break_policy_ranges);
     try exclusions.validate(options.exclusions);
     try line_regions.validate(options.line_regions);
@@ -285,9 +296,6 @@ pub fn validateForText(text: []const u8, options: Options) !void {
         text,
         options.line_break_policy_ranges,
     );
-    if (options.writing_mode.isVertical()) {
-        try validateVerticalForText(text, options);
-    }
 }
 
 pub fn defaultLineBreakPolicy(options: Options) line_break_policy.Policy {
@@ -317,25 +325,6 @@ pub fn shapeOptions(options: Options) shaping_plan.ShapeOptions {
         .language_tag = options.language_tag,
         .features = options.features,
         .normalized_variation_coords = options.normalized_variation_coords,
-    };
-}
-
-/// Guard the intentionally small first vertical-paragraph surface.
-///
-/// Every rejected feature currently owns horizontal-only geometry somewhere
-/// after shaping. Keeping this list explicit makes new support an auditable
-/// axis-conversion task instead of allowing a newly added paragraph option to
-/// become an accidental vertical no-op.
-fn validateVerticalForText(_: []const u8, options: Options) !void {
-    if (!verticalAlignmentSupported(options.alignment)) {
-        return error.UnsupportedVerticalParagraphOptions;
-    }
-}
-
-fn verticalAlignmentSupported(alignment: paragraph_types.TextAlign) bool {
-    return switch (alignment) {
-        .start, .center, .end, .justify => true,
-        .left, .right => false,
     };
 }
 
@@ -394,6 +383,17 @@ test "punctuation compression fraction stays normalized" {
         .max_width = 100,
         .punctuation = .{ .max_compression_fraction = 1 },
     });
+}
+
+test "vertical block container size must be finite and nonnegative" {
+    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |value| {
+        try std.testing.expectError(
+            error.InvalidParagraphOptions,
+            validate(.{ .max_width = 100, .max_block_size = value }),
+        );
+    }
+    try validate(.{ .max_width = 100, .max_block_size = 0 });
+    try validate(.{ .max_width = 100, .max_block_size = 200 });
 }
 
 test "paragraph exclusions require finite nonnegative rectangles" {

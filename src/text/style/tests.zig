@@ -251,6 +251,7 @@ test "paragraph style projects vertical shaping controls" {
         .writing_mode = .vertical_rl,
         .text_orientation = .upright,
         .wrap_mode = .no_wrap,
+        .max_block_size = 120,
     }).paragraphOptions(80);
     try std.testing.expectEqual(
         pipeline_types.WritingMode.vertical_rl,
@@ -260,4 +261,5 @@ test "paragraph style projects vertical shaping controls" {
         pipeline_types.TextOrientation.upright,
         options.text_orientation,
     );
+    try std.testing.expectEqual(@as(?f32, 120), options.max_block_size);
 }

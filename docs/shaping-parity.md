@@ -4465,3 +4465,11 @@ shaping-performance superiority.
   about `21.6%` and cycles about `8.8%`. Fifteen-sample medians improved about
   `0.6%`, `0.5%`, and `8.5%`, respectively, with byte-identical checksums and
   unchanged dirty rectangles.
+- Bucket-activated complex outlines now use the same proven-stable four-edge
+  row path instead of reserving it for the sorted-activation branch. This is
+  particularly effective for the actual Roboto lowercase `g` (glyph 76):
+  fixed-CPU-30 A/B/B/A counters over 200,000 dirty draws reduced retired
+  instructions by about `2.57%`, branches by about `3.67%`, and cycles by
+  about `4.60%`; 15-sample medians improved from an average `6726.6` to
+  `6351.8 ns` (about `5.57%`). The `A` and `é` controls remained within noise
+  with byte-identical checksums and unchanged dirty rectangles.

@@ -167,6 +167,21 @@ pub fn fill(allocator: std.mem.Allocator, target: Target, lines: []const Line, f
             row_heads[@intCast(y - min_y)],
             y,
         );
+        if (fill_rule == .non_zero and
+            sample_axis == 4 and
+            row_lines.len == 4 and
+            fillStableFourEdgeRow(
+                target,
+                row_lines,
+                min_x,
+                max_x,
+                y,
+                coverage_lut,
+                &row_accumulator,
+            ))
+        {
+            continue;
+        }
         fillPreparedRow(
             target,
             row_lines,

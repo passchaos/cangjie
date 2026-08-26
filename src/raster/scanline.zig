@@ -36,6 +36,10 @@ pub const PreparedFillLine = struct {
     delta: i8,
 };
 
+comptime {
+    std.debug.assert(@sizeOf(PreparedFillLine) == 20);
+}
+
 /// Fill flattened outline edges into an 8-bit alpha target.
 ///
 /// The target is intentionally structural rather than tied to raster.zig's

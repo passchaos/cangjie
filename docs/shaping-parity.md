@@ -4533,3 +4533,17 @@ shaping-performance superiority.
   Amiri words, `1.105x` for long Amiri text, and `0.988x` for Devanagari words.
   The former Latin PairPos blocker is closed for the retained matrix;
   Devanagari remains an explicit shaping-performance blocker.
+- Repeated direct outline drawing now retains one exact flattened-line entry
+  in thread-local inline storage. Admission requires two consecutive
+  observations, so ordinary mixed-glyph runs do not copy each outline; hits
+  compare the full semantic command stream and exact placement, size, and
+  orientation key before reusing geometry, while every draw still runs the
+  ordinary scan converter. This follows FreeType's persistent face/slot reuse
+  boundary without turning the direct API into the separately exposed prepared-
+  coverage API. Against exact `2d684f8b` parent and candidate binaries, fixed-
+  CPU-30 A/B/B/A counters over 500,000 Roboto 64 px dirty draws reduced retired
+  instructions about `3.75%` for `g` and `4.21%` for `é`, branches about
+  `1.81%` and `2.00%`, and cycles about `5.1%` and `5.6%`; byte checksums and
+  dirty rectangles were unchanged. The simple `A` control is below the 16-
+  command admission threshold and keeps the prior direct path. The complete
+  ReleaseFast suite passes.

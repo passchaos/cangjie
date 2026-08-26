@@ -9,6 +9,7 @@ const run_types = @import("layout/types/runs.zig");
 const bitmap_raster = @import("raster/bitmap.zig");
 const composite_mod = @import("raster/composite.zig");
 const curves = @import("raster/curves.zig");
+const direct_flatten_cache = @import("raster/direct_flatten_cache.zig");
 const outline_raster = @import("raster/outline.zig");
 const prepared_mod = @import("raster/prepared.zig");
 const run_geometry = @import("render/run_geometry.zig");
@@ -877,6 +878,33 @@ pub const Rasterizer = struct {
         units_per_em: u16,
         orientation: outline_raster.Orientation,
     ) !void {
+        const use_flatten_cache = outline.commands.items.len >= 16;
+        const hint_size = self.hint_size_px orelse font_size;
+        const cache_key = if (use_flatten_cache) direct_flatten_cache.Key.init(
+            outline,
+            x,
+            baseline_y,
+            font_size,
+            hint_size,
+            units_per_em,
+            orientation,
+        ) else undefined;
+        const flatten_cache = if (use_flatten_cache)
+            direct_flatten_cache.local()
+        else
+            undefined;
+        if (use_flatten_cache) {
+            if (flatten_cache.lookup(
+                cache_key,
+                outline.commands.items,
+            )) |cached_lines| {
+                try self.fillLines(target, cached_lines, .non_zero);
+                if (self.embolden_small_glyphs and hint_size <= 20.0) {
+                    try self.emboldenSmallGlyph(target, cached_lines, hint_size);
+                }
+                return;
+            }
+        }
         const flattened_capacity =
             outline_raster.lineCapacity(outline.commands.items);
         var inline_flattened: [128]Line = undefined;
@@ -894,7 +922,6 @@ pub const Rasterizer = struct {
             baseline_y,
             orientation,
         );
-        const hint_size = self.hint_size_px orelse font_size;
         if (orientation == .upright) {
             outline_raster.alignSmallGlyphToPixelGrid(
                 flattened.items,
@@ -905,6 +932,13 @@ pub const Rasterizer = struct {
             );
         }
         try self.fillLines(target, flattened.items, .non_zero);
+        if (use_flatten_cache and flatten_cache.shouldInstall(cache_key)) {
+            flatten_cache.install(
+                cache_key,
+                outline.commands.items,
+                flattened.items,
+            );
+        }
         if (self.embolden_small_glyphs and hint_size <= 20.0) {
             try self.emboldenSmallGlyph(target, flattened.items, hint_size);
         }

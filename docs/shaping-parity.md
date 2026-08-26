@@ -4502,8 +4502,17 @@ shaping-performance superiority.
   A/B/B/A counters over one million owning `glyf` decodes reduced retired
   instructions by about `8.0%`, branches by `4.7%`, cycles by `6.3%`, and wall
   time by `6.7%`, with identical per-decode geometry checksums. The 19-case
-  Fontations/Skrifa semantic matrix passes; in a 21-sample, one-million-
-  iteration matrix the owning row measured Cangjie `118.510/114.095 ns` versus
-  Skrifa `103.695/115.038 ns` (`0.939x`). The caller-owned reuse row remained
-  a Cangjie win at `1.650x`; owning decode is closer but still an explicit
-  overall-performance blocker.
+  Fontations/Skrifa semantic matrix passes. The earlier reported `0.939x`
+  owning result was not a valid decoder comparison: Cangjie additionally
+  hashed glyph metadata and the raw command-union representation with Wyhash,
+  while Skrifa's pen hashed only normalized command geometry with FNV. Both
+  runners now execute the same tagged, little-endian FNV command-stream
+  consumer, and the three outline rows require equal cross-engine checksums;
+  metadata remains covered by independent matrix rows. In the corrected
+  21-sample, one-million-iteration matrix, owning `glyf` measured Cangjie
+  `73.029/72.927 ns` versus Skrifa `110.366/104.415 ns` (`1.471x`), caller-
+  owned reuse measured `22.048/11.353 ns` versus `104.770/99.581 ns`
+  (`6.456x`), and CFF measured `28.867/26.096 ns` versus
+  `132.215/127.744 ns` (`4.735x`). All 19 semantic rows passed. These results
+  remove the benchmark-induced owning-outline blocker, but do not establish an
+  overall cross-library completion claim.

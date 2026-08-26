@@ -425,7 +425,7 @@ fn runOutlineSessionIterations(allocator: std.mem.Allocator, font: *const cangji
             try session.outline(allocator, glyph_id)
         else
             try session.outlineAt(allocator, glyph_id, coords);
-        checksum.* = updateChecksum(checksum.*, outlineChecksum(outline));
+        checksum.* +%= outlineChecksum(outline);
         outline.deinit();
     }
 }
@@ -438,7 +438,7 @@ fn runOutlineReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         const outline = try session.outlineInto(&buffer, glyph_id);
-        checksum.* = updateChecksum(checksum.*, outlineChecksum(outline.*));
+        checksum.* +%= outlineChecksum(outline.*);
     }
 }
 
@@ -450,7 +450,7 @@ fn runOutlineIterations(allocator: std.mem.Allocator, font: *const cangjie.font.
             try font.glyphs().outline(allocator, glyph_id)
         else
             try font.glyphs().outlineAt(allocator, glyph_id, coords);
-        checksum.* = updateChecksum(checksum.*, outlineChecksum(outline));
+        checksum.* +%= outlineChecksum(outline);
         outline.deinit();
     }
 }
@@ -566,15 +566,41 @@ fn runRasterPreparedIterations(allocator: std.mem.Allocator, font: *const cangji
 }
 
 fn outlineChecksum(outline: cangjie.font.Outline) u64 {
-    var hasher = std.hash.Wyhash.init(0);
-    hasher.update(std.mem.asBytes(&outline.glyph_id));
-    hasher.update(std.mem.asBytes(&outline.bounds));
-    hasher.update(std.mem.asBytes(&outline.advance_width));
-    hasher.update(std.mem.asBytes(&outline.left_side_bearing));
+    // Match the reference pen's command-stream consumer exactly. Metadata is
+    // queried by independent matrix rows; charging it only on Cangjie's side
+    // made the outline row compare different downstream work.
+    var hash: u64 = 0;
     for (outline.commands.items) |command| {
-        hasher.update(std.mem.asBytes(&command));
+        switch (command) {
+            .move_to => |point| hashOutlineCommand(&hash, 1, &.{ point.x, point.y }),
+            .line_to => |point| hashOutlineCommand(&hash, 2, &.{ point.x, point.y }),
+            .quad_to => |curve| hashOutlineCommand(
+                &hash,
+                3,
+                &.{ curve.control.x, curve.control.y, curve.end.x, curve.end.y },
+            ),
+            .cubic_to => |curve| hashOutlineCommand(
+                &hash,
+                4,
+                &.{ curve.c0.x, curve.c0.y, curve.c1.x, curve.c1.y, curve.end.x, curve.end.y },
+            ),
+            .close => hashOutlineCommand(&hash, 5, &.{}),
+        }
     }
-    return hasher.final();
+    return hash;
+}
+
+fn hashOutlineCommand(hash: *u64, tag: u8, values: []const f32) void {
+    const prime: u64 = 0x100000001b3;
+    hash.* ^= tag;
+    hash.* *%= prime;
+    for (values) |value| {
+        const bits: [4]u8 = @bitCast(value);
+        for (bits) |byte| {
+            hash.* ^= byte;
+            hash.* *%= prime;
+        }
+    }
 }
 
 fn bytesChecksum(bytes: []const u8) u64 {

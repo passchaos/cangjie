@@ -40,15 +40,15 @@ CASES = (
     Case("glyph-name-cff", "glyph-name", "cff.otf", 1),
     Case("glyph-name-synthetic", "glyph-name", "synthesized.ttf", 1),
     Case("bitmap", "bitmap", "strikes.ttf", 1, True, "16"),
-    # Command-stream hashes intentionally differ because the public outline
-    # records include engine-specific metadata. Their geometry parity is
-    # covered by dedicated HarfBuzz/FreeType differential tests.
-    Case("outline-glyf", "outline-session", "synthesized.ttf", 1, False),
+    # Both outline CLIs now run the same FNV command-stream consumer. Metadata
+    # lives in dedicated matrix rows so decode timing does not charge work to
+    # only one engine.
+    Case("outline-glyf", "outline-session", "synthesized.ttf", 1),
     # Skrifa's public draw takes a caller pen and reuses its parsed glyph; this
     # row compares that lifecycle with Cangjie's explicit caller-owned output.
     # Keep the owning outline row above so reuse cannot silently redefine it.
-    Case("outline-glyf-reuse", "outline-reuse", "synthesized.ttf", 1, False),
-    Case("outline-cff", "outline-session", "cff.otf", 1, False),
+    Case("outline-glyf-reuse", "outline-reuse", "synthesized.ttf", 1),
+    Case("outline-cff", "outline-session", "cff.otf", 1),
 )
 
 

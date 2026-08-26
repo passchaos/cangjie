@@ -4476,3 +4476,13 @@ shaping-performance superiority.
   about `4.60%`; 15-sample medians improved from an average `6726.6` to
   `6351.8 ns` (about `5.57%`). The `A` and `é` controls remained within noise
   with byte-identical checksums and unchanged dirty rectangles.
+- Native PairPos collection now reserves its proved one-record-per-first-glyph
+  upper bound once when it owns an empty adjustment stream, then uses
+  capacity-proved appends in the adjacent-pair loop. This follows the same
+  single-pass apply structure used by HarfBuzz/Harfrust while retaining
+  ordered-subtable and zero-adjustment precedence. Against exact parent and
+  candidate binaries, fixed-CPU-30 A/B/B/A counters over twenty Source Serif
+  Variable `en-words` passes reduced retired instructions by about `1.00%`,
+  branches by about `0.95%`, branch misses by about `2.0%`, and cycles by about
+  `3.7%`; wall time improved about `4.4%`. The complete ReleaseFast suite and
+  retained HarfBuzz/HarfRust corpus parity gate pass.

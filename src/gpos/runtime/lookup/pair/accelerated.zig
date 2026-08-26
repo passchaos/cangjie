@@ -80,6 +80,12 @@ fn collectLookupImpl(
 ) (Error || std.mem.Allocator.Error)!void {
     if (glyphs.len < 2) return;
     const append_pairs_directly = adjustments.items.len == 0;
+    if (append_pairs_directly and adjustments.capacity < glyphs.len - 1) {
+        // Native PairPos can emit at most one record for each first glyph.
+        // Reserve the complete upper bound once so the tight adjacent-pair
+        // walk does not repeat ArrayList capacity checks for every match.
+        try adjustments.ensureTotalCapacity(allocator, glyphs.len - 1);
+    }
     var first_index: usize = 0;
     while (first_index + 1 < glyphs.len) {
         if (!adjacent_pairs and matching.lookupIgnoresGlyph(
@@ -373,7 +379,7 @@ fn appendXAdvance(
     append_directly: bool,
 ) std.mem.Allocator.Error!void {
     if (append_directly) {
-        try adjustments.append(allocator, .{
+        adjustments.appendAssumeCapacity(.{
             .index = first_index,
             .x_advance = x_advance,
             .pair_positioned = true,

@@ -45,6 +45,8 @@ pub const Input = struct {
     /// post-GSUB source/cluster maps because substitutions may merge them, but
     /// can skip their generic bounds clamps and empty-input fallbacks.
     ascii_source: bool,
+    /// Source decoding proved that every scalar is in U+0900..U+097F.
+    primary_devanagari_source: bool,
     font_size: f32,
     scale: f32,
     options: pipeline_types.LookupOptions,

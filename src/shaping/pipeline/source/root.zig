@@ -24,6 +24,7 @@ pub const Result = struct {
     /// scalar can trigger bidi visual reordering so the top-level shaper does
     /// not decode and classify the same non-ASCII run a second time.
     may_need_bidi_reorder: bool = false,
+    primary_devanagari_block: bool = false,
     default_ignorable_invisible_glyph_id: ?GlyphId = null,
 };
 
@@ -103,6 +104,7 @@ pub fn populate(
         // bidi controls. Its default cluster policy is one source per scalar,
         // so populate the already-reserved parallel arrays directly instead
         // of evaluating every generic-script predicate for every character.
+        result.primary_devanagari_block = true;
         var byte_index: usize = 0;
         while (byte_index < text.len) : (byte_index += 3) {
             const codepoint: u21 = (@as(u21, text[byte_index] & 0x0f) << 12) |

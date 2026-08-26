@@ -472,7 +472,8 @@ fn canEmitSimpleDevanagariHorizontal(input: Input) bool {
     // and vertical metrics once the surrounding pipeline proves those modes
     // inactive. The `stch` feature is Arabic-only, so no action sidecar needs
     // to be materialized here.
-    return input.options.script_tag == .dev2 and
+    return input.primary_devanagari_source and
+        input.options.script_tag == .dev2 and
         input.options.direction == .ltr and
         !input.options.writing_mode.isVertical() and
         input.arabic_joining_features == null and

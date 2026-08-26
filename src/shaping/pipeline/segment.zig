@@ -650,6 +650,7 @@ pub fn run(input: Input) !void {
         .arabic_joining_features = arabic_joining_features,
         .cluster_base = cluster_base,
         .ascii_source = resolved_lookup_options.all_ascii,
+        .primary_devanagari_source = source_result.primary_devanagari_block,
         .font_size = font_size,
         .scale = scale,
         .options = lookup_options,

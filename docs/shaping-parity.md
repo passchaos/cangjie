@@ -4486,3 +4486,9 @@ shaping-performance superiority.
   branches by about `0.95%`, branch misses by about `2.0%`, and cycles by about
   `3.7%`; wall time improved about `4.4%`. The complete ReleaseFast suite and
   retained HarfBuzz/HarfRust corpus parity gate pass.
+- A fresh fixed-CPU-30 five-corpus matrix after the PairPos reservation change
+  measured speedups versus the faster reference of `1.099x` for Roboto words,
+  `0.936x` for Source Serif Variable words, `1.012x` for Amiri words, `1.104x`
+  for long Amiri text, and `0.994x` for Devanagari words. The Source Serif and
+  Devanagari rows therefore remain explicit blockers for an overall shaping-
+  performance claim despite improvements in the former's retired work.

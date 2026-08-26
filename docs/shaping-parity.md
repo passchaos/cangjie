@@ -4608,3 +4608,12 @@ shaping-performance superiority.
   `1.300x` (Roboto), `1.082x` (Source Serif), `1.014x` (Amiri words), `1.105x`
   (long Amiri), and `0.974x` (Devanagari). Devanagari therefore remains the
   explicit performance blocker for an overall shaping claim.
+- Additional repeated-direct probes broadened the FreeType check beyond the
+  original Roboto controls. At 64 px on fixed CPU 30, Cangjie/FreeType medians
+  were about `6.48/8.93` microseconds for Noto Kufi Arabic `س`, `3.35/5.26`
+  for `م`, `11.98/15.46` for Noto Sans CJK `漢`, and `6.54/14.97` for `あ`.
+  CFF1 STIX `A/g/é` measured about `3.58/7.31`, `3.20/10.30`, and `2.56/7.34`
+  microseconds, while the Cantarell CFF2 `A` control measured `4.11/7.20`.
+  These reinforce the retained repeated-direct result across glyf, CFF1, and
+  CFF2, but do not yet constitute an exhaustive FreeType claim over all sizes,
+  hinting targets, bitmap/color formats, and one-shot lifecycles.

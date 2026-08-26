@@ -10,6 +10,33 @@ const numeric = @import("../numeric.zig");
 
 const Transform = geometry.Transform;
 
+/// Internal sink for the capacity-proved simple-glyph command stream.
+const ReservedOutlineBuilder = struct {
+    commands: *std.ArrayList(glyph.PathCommand),
+
+    inline fn moveTo(self: *ReservedOutlineBuilder, point: glyph.Point) void {
+        self.commands.appendAssumeCapacity(.{ .move_to = point });
+    }
+
+    inline fn lineTo(self: *ReservedOutlineBuilder, point: glyph.Point) void {
+        self.commands.appendAssumeCapacity(.{ .line_to = point });
+    }
+
+    inline fn quadTo(
+        self: *ReservedOutlineBuilder,
+        control: glyph.Point,
+        end: glyph.Point,
+    ) void {
+        self.commands.appendAssumeCapacity(.{
+            .quad_to = .{ .control = control, .end = end },
+        });
+    }
+
+    inline fn close(self: *ReservedOutlineBuilder) void {
+        self.commands.appendAssumeCapacity(.close);
+    }
+};
+
 pub const Error = error{
     BadSfnt,
     InvalidGlyph,
@@ -88,7 +115,10 @@ pub fn append(
     try reader.skip(instruction_length);
     try outline.commands.ensureUnusedCapacity(
         outline.allocator,
-        total_points + @as(usize, contour_count),
+        // Every contour emits move/close in addition to at most one command
+        // per point. Usually its explicit start consumes one point, but the
+        // legal all-off-curve case needs both extra slots.
+        total_points + @as(usize, contour_count) * 2,
     );
 
     // X and Y values use separate delta streams. Expand flag RLE directly into
@@ -195,11 +225,21 @@ pub fn append(
     }
 
     var start: usize = 0;
-    var builder = glyph.OutlineBuilder{ .outline = outline };
-    for (end_points) |end_point| {
-        const end: usize = end_point;
-        try appendContour(&builder, points[start .. end + 1], transform);
-        start = end + 1;
+    // A contour emits at most one path command per source point plus move and
+    // close. Capacity for that exact upper bound was reserved above.
+    var builder = ReservedOutlineBuilder{ .commands = &outline.commands };
+    if (transform.isIdentity()) {
+        for (end_points) |end_point| {
+            const end: usize = end_point;
+            appendContour(&builder, points[start .. end + 1], transform, true);
+            start = end + 1;
+        }
+    } else {
+        for (end_points) |end_point| {
+            const end: usize = end_point;
+            appendContour(&builder, points[start .. end + 1], transform, false);
+            start = end + 1;
+        }
     }
     return phantom_deltas;
 }
@@ -255,10 +295,11 @@ const FlaggedPoint = struct {
 };
 
 fn appendContour(
-    builder: *glyph.OutlineBuilder,
+    builder: *ReservedOutlineBuilder,
     contour: []const FlaggedPoint,
     transform: Transform,
-) Error!void {
+    comptime identity_transform: bool,
+) void {
     if (contour.len == 0) return;
     const first = contour[0];
     const last = contour[contour.len - 1];
@@ -274,13 +315,13 @@ fn appendContour(
     } else {
         current = glyph.midpoint(last.point(), first.point());
     }
-    try builder.moveTo(transform.apply(current));
+    builder.moveTo(if (identity_transform) current else transform.apply(current));
 
     while (index < contour.len) {
         const point = contour[index];
         if (point.onCurve()) {
             current = point.point();
-            try builder.lineTo(transform.apply(current));
+            builder.lineTo(if (identity_transform) current else transform.apply(current));
             index += 1;
         } else {
             // Consecutive controls imply an on-curve midpoint, preserving
@@ -292,13 +333,13 @@ fn appendContour(
                 next.point()
             else
                 glyph.midpoint(control, next.point());
-            try builder.quadTo(
-                transform.apply(control),
-                transform.apply(end),
+            builder.quadTo(
+                if (identity_transform) control else transform.apply(control),
+                if (identity_transform) end else transform.apply(end),
             );
             current = end;
             index += if (next.onCurve() and next_index != 0) 2 else 1;
         }
     }
-    try builder.close();
+    builder.close();
 }

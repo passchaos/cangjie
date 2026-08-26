@@ -4492,3 +4492,18 @@ shaping-performance superiority.
   for long Amiri text, and `0.994x` for Devanagari words. The Source Serif and
   Devanagari rows therefore remain explicit blockers for an overall shaping-
   performance claim despite improvements in the former's retired work.
+- Simple TrueType contour emission now uses a capacity-proved builder after
+  reserving the strict `point_count + 2 * contour_count` upper bound. This
+  follows Skrifa's separation between fallible buffer reservation and its
+  infallible outline-sink writes, while retaining Cangjie's owning command
+  stream. The common top-level identity transform is selected once before the
+  contour walk instead of applying six affine terms to every emitted point;
+  compound and transformed components retain the general path. Fixed-CPU-30
+  A/B/B/A counters over one million owning `glyf` decodes reduced retired
+  instructions by about `8.0%`, branches by `4.7%`, cycles by `6.3%`, and wall
+  time by `6.7%`, with identical per-decode geometry checksums. The 19-case
+  Fontations/Skrifa semantic matrix passes; in a 21-sample, one-million-
+  iteration matrix the owning row measured Cangjie `118.510/114.095 ns` versus
+  Skrifa `103.695/115.038 ns` (`0.939x`). The caller-owned reuse row remained
+  a Cangjie win at `1.650x`; owning decode is closer but still an explicit
+  overall-performance blocker.

@@ -15,6 +15,12 @@ pub const Transform = struct {
         return .{ .xx = 1, .yx = 0, .xy = 0, .yy = 1, .dx = 0, .dy = 0 };
     }
 
+    pub inline fn isIdentity(self: Transform) bool {
+        return self.xx == 1 and self.yx == 0 and
+            self.xy == 0 and self.yy == 1 and
+            self.dx == 0 and self.dy == 0;
+    }
+
     pub fn apply(self: Transform, point: glyph.Point) glyph.Point {
         return .{
             .x = point.x * self.xx + point.y * self.xy + self.dx,

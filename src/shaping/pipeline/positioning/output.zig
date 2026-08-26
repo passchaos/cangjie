@@ -30,6 +30,9 @@ pub const Input = types.Input;
 pub const Result = types.Result;
 
 pub fn emit(input: Input) !Result {
+    if (canEmitSimpleAsciiHorizontal(input)) {
+        return emitSimpleAsciiHorizontal(input);
+    }
     const segment_glyph_start = input.output.items.len;
     try input.output.ensureUnusedCapacity(input.allocator, input.scratch.glyph_ids.items.len);
 
@@ -345,6 +348,111 @@ pub fn emit(input: Input) !Result {
             previous_kern_glyph = glyph_id;
             previous_kern_output_index = input.output.items.len - 1;
         }
+    }
+
+    if (input.profile) |profile| {
+        profile.position_loop_ns += profileElapsed(loop_start, input.profile_io);
+        profile.position_output_glyphs +=
+            input.output.items.len - segment_glyph_start;
+    }
+    return .{ .segment_glyph_start = segment_glyph_start };
+}
+
+/// Emit the common Latin word-run shape without carrying the full AAT,
+/// vertical, default-ignorable, mark, and fallback policy tree through every
+/// glyph. The predicate deliberately names every dormant subsystem; feature
+/// overrides may still produce arbitrary scalar GPOS adjustments, so this
+/// path preserves all four adjustment fields and both break-safety sources.
+fn canEmitSimpleAsciiHorizontal(input: Input) bool {
+    return input.ascii_source and
+        !input.options.writing_mode.isVertical() and
+        input.arabic_joining_features == null and
+        input.kerx_lookup == null and
+        input.kern_lookup == null and
+        !input.has_gpos_attachments and
+        !input.has_kerx_state_attachments and
+        !input.run_may_have_mark_attachments and
+        !input.has_default_ignorable and
+        !input.early_zero_mark_shape and
+        !input.fallback_mark_enabled and
+        input.options.not_found_variation_selector_glyph == null;
+}
+
+fn emitSimpleAsciiHorizontal(input: Input) !Result {
+    const segment_glyph_start = input.output.items.len;
+    try input.output.ensureUnusedCapacity(
+        input.allocator,
+        input.scratch.glyph_ids.items.len,
+    );
+
+    var adjustment_cursor: usize = 0;
+    const loop_start = profileNow(input.profile, input.profile_io);
+    for (input.scratch.glyph_ids.items, 0..) |glyph_id, index| {
+        const source_index = input.scratch.glyph_source_indices.items[index];
+        const cluster_index = input.scratch.glyph_cluster_indices.items[index];
+        const span = source_span.forAsciiGlyph(
+            index,
+            source_index,
+            cluster_index,
+            input.scratch.clusters.items,
+            input.scratch.source_ends.items,
+            &input.scratch.ligature_components,
+        );
+        const adjustment = adjustments.find(
+            input.gpos_adjustments,
+            index,
+            &adjustment_cursor,
+        );
+        const metrics = try policy.horizontalMetrics(
+            input.font,
+            input.metrics_cache,
+            glyph_id,
+            input.options.normalized_variation_coords,
+        );
+        const adjusted_advance = if (adjustment.x_advance_absolute)
+            adjustment.x_advance
+        else
+            @as(i32, metrics.advance_width) + adjustment.x_advance;
+        const positional_boundary_unsafe =
+            input.gpos_unsafe_glyphs.isUnsafeBefore(index) or
+            input.source_boundaries.isUnsafeBeforeByte(span.start);
+        const safe_to_insert_tatweel =
+            !positional_boundary_unsafe and
+            input.source_boundaries.isSafeTatweelBeforeByte(span.start);
+
+        input.output.appendAssumeCapacity(.{
+            .glyph_id = glyph_id,
+            .codepoint = input.scratch.codepoints.items[source_index],
+            .cluster = span.start,
+            .source_byte_len = span.end - span.start,
+            .flags = .{
+                .unsafe_to_break_before = positional_boundary_unsafe or
+                    safe_to_insert_tatweel,
+                .safe_to_insert_tatweel = safe_to_insert_tatweel,
+            },
+            .x_advance = @as(f32, @floatFromInt(adjusted_advance)) *
+                input.scale,
+            .y_advance = @as(f32, @floatFromInt(adjustment.y_advance)) *
+                input.scale,
+            .x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) *
+                input.scale,
+            .y_offset = @as(
+                f32,
+                @floatFromInt(
+                    adjustment.y_placement +
+                        adjustment.attachment_cross_offset,
+                ),
+            ) * input.scale,
+            .orientation = .horizontal,
+        });
+        const provenance =
+            input.scratch.ligature_components.infos.items[index];
+        try stch_feature.appendOutput(
+            input.allocator,
+            &input.scratch.stch_actions,
+            provenance.flags.stch_action,
+            input.output.items.len - segment_glyph_start,
+        );
     }
 
     if (input.profile) |profile| {

@@ -4516,3 +4516,20 @@ shaping-performance superiority.
   `132.215/127.744 ns` (`4.735x`). All 19 semantic rows passed. These results
   remove the benchmark-induced owning-outline blocker, but do not establish an
   overall cross-library completion claim.
+- Final positioning now selects a compact ASCII-horizontal emitter when the
+  run has no vertical, AAT/legacy-kern, attachment, default-ignorable, Arabic-
+  fallback, mark-fallback, or visible-variation-selector work. The specialized
+  loop still applies every scalar GPOS field, preserves ligature source spans,
+  records both break-safety flags, and forwards `stch` provenance, but avoids
+  carrying the dormant general-policy tree per glyph. Fixed-CPU-30 A/B/B/A
+  counters over twenty `en-words` passes reduced Source Serif retired
+  instructions from about `2.968B` to `2.583B` (`13.0%`), branches from
+  `460.4M` to `406.4M` (`11.7%`), and cycles from about `1.059B` to `0.903B`
+  (`14.8%`); Roboto retired instructions fell about `13.3%`, branches `11.8%`,
+  and cycles `14.4%`. Checksums were unchanged. The complete ReleaseFast suite
+  and retained HarfBuzz/HarfRust corpus parity gate pass. A fresh 11-sample
+  shaping matrix measured speedups versus the faster reference of `1.222x`
+  for Roboto words, `1.091x` for Source Serif Variable words, `1.014x` for
+  Amiri words, `1.105x` for long Amiri text, and `0.988x` for Devanagari words.
+  The former Latin PairPos blocker is closed for the retained matrix;
+  Devanagari remains an explicit shaping-performance blocker.

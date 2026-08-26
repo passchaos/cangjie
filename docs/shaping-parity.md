@@ -4600,3 +4600,11 @@ shaping-performance superiority.
   `3.90/5.61`, and `3.01/5.22` microseconds per draw. This closes the retained
   Roboto repeated-direct control set, but it is not by itself an overall
   FreeType raster-performance claim across formats, sizes, and workloads.
+- Post-change cross-library gates retained their broader results. The 19-case
+  Fontations/Skrifa matrix passed with every row faster (`1.449x--8.811x`), and
+  the nine-case Parley matrix passed its output-count/checksum stability gates
+  with Cangjie faster in every row (`1.137x--2.583x`). The five-corpus shaping
+  matrix measured speedups versus the faster of HarfBuzz and HarfRust of
+  `1.300x` (Roboto), `1.082x` (Source Serif), `1.014x` (Amiri words), `1.105x`
+  (long Amiri), and `0.974x` (Devanagari). Devanagari therefore remains the
+  explicit performance blocker for an overall shaping claim.

@@ -7,6 +7,7 @@ const font_mod = @import("font.zig");
 const glyph_mod = @import("glyph.zig");
 const run_types = @import("layout/types/runs.zig");
 const bitmap_raster = @import("raster/bitmap.zig");
+const cell_area_prototype = @import("raster/cell_area_prototype.zig");
 const composite_mod = @import("raster/composite.zig");
 const curves = @import("raster/curves.zig");
 const direct_flatten_cache = @import("raster/direct_flatten_cache.zig");
@@ -16,6 +17,10 @@ const run_geometry = @import("render/run_geometry.zig");
 const scanline = @import("raster/scanline.zig");
 const prepared_scanline = @import("raster/prepared_scanline.zig");
 const targets = @import("raster/targets.zig");
+
+test "cell-area prototype module tests" {
+    _ = cell_area_prototype;
+}
 
 pub const RenderTarget = targets.RenderTarget;
 pub const Rgba = targets.Rgba;

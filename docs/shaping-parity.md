@@ -4547,3 +4547,19 @@ shaping-performance superiority.
   dirty rectangles were unchanged. The simple `A` control is below the 16-
   command admission threshold and keeps the prior direct path. The complete
   ReleaseFast suite passes.
+- A FreeType-style analytic cell-area scanner now exists as an isolated
+  correctness prototype under `src/raster/cell_area_prototype.zig`; production
+  rendering does not dispatch to it. The prototype accumulates signed `cover`
+  and first-moment `area` per cell and sweeps winding into alpha, following the
+  structure of `ftgrays.c`. Unit gates cover pixel-aligned and fractional
+  rectangles plus an oppositely wound non-zero hole. A real Roboto 64 px probe
+  demonstrates why it cannot silently replace the current 4x4 point sampler:
+  analytic output differed at 233 pixels for `A`, 310 for `g`, and 243 for
+  `é`, with maximum alpha deltas of 25, 25, and 27. Independent baseline and
+  candidate benchmark binaries also produced different target checksums for
+  all three glyphs. A temporary direct dispatch was materially slower (`g`
+  about 14.7 microseconds per draw and `A` about 27.4 microseconds in a
+  fixed-CPU smoke probe), so it was removed. The module is retained only as an
+  explicit semantic/algorithmic test bed for a
+  future sparse fixed-point implementation; the FreeType-relative direct-raster
+  objective remains open.

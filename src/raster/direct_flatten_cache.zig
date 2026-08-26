@@ -5,6 +5,7 @@
 //! a rasterizer cannot leave self-referential pointers or allocator ownership.
 
 const std = @import("std");
+const cached_sample_rows = @import("cached_sample_rows.zig");
 const glyph = @import("../glyph.zig");
 const outline_raster = @import("outline.zig");
 const scanline = @import("scanline.zig");
@@ -65,6 +66,7 @@ pub const Cache = struct {
     line_count: usize = 0,
     prepared_line_count: usize = 0,
     prepared_bounds: ?scanline.Bounds = null,
+    sample_rows: cached_sample_rows.Cache = .{},
     fingerprint: [fingerprint_probe_count]u32 = .{0} ** fingerprint_probe_count,
     commands: [max_commands]glyph.PathCommand = undefined,
     lines: [max_lines]Line = undefined,
@@ -94,6 +96,20 @@ pub const Cache = struct {
             .lines = self.prepared_lines[0..self.prepared_line_count],
             .bounds = self.prepared_bounds,
         };
+    }
+
+    pub fn fillCachedSamples(
+        self: *const Cache,
+        allocator: std.mem.Allocator,
+        target: scanline.Target,
+        fill_rule: scanline.FillRule,
+    ) !bool {
+        return self.sample_rows.fill(
+            allocator,
+            target,
+            self.prepared_bounds,
+            fill_rule,
+        );
     }
 
     /// Admit only the second consecutive observation. Ordinary text runs do
@@ -139,6 +155,10 @@ pub const Cache = struct {
         ).len;
         scanline.sortPreparedFillLinesByYMin(
             self.prepared_lines[0..self.prepared_line_count],
+        );
+        self.sample_rows.build(
+            self.prepared_lines[0..self.prepared_line_count],
+            self.prepared_bounds,
         );
         self.valid = true;
     }

@@ -4579,3 +4579,24 @@ shaping-performance superiority.
   `4.744B` (`16.0%`). `A` remains below the cache-admission threshold; its
   retired work stayed neutral, with cycle readings dominated by a frequency
   outlier in the first baseline sample.
+- Repeated 4x4 direct draws now also retain the immutable sorted intersections
+  for each vertical sample lane in fixed thread-local storage. This is not a
+  pixel cache: every draw still resolves winding spans, accumulates horizontal
+  sample coverage, and blends the target. The optional layer declines outlines
+  exceeding 128 pixel rows or 2,048 intersections and falls back to the
+  prepared-edge scanner; other sample densities use that fallback directly.
+  The admission threshold is eight commands so the straight-sided Roboto `A`
+  can use the same path. Differential tests cover non-zero and even-odd holes,
+  while independent binaries matched `A`/`g`/`é` checksums at every 1x1--4x4
+  sampling density. Against exact `baa7962e` baseline and candidate binaries,
+  fixed-P-core-14 A/B/B/A counters over 300,000 draws reduced retired
+  instructions by about `18.3%` for `A`, `29.6%` for `g`, and `27.3%` for `é`;
+  branches fell about `15.2%`, `39.6%`, and `38.8%`. A separate symmetric
+  Cangjie/FreeType/FreeType/Cangjie run on fixed CPU 30 measured Cangjie ahead
+  in both retired work and cycles for all three controls: approximately
+  `14.76B/20.56B` instructions and `4.22B/5.32B` cycles for `A`,
+  `15.88B/26.41B` and `4.72B/6.77B` for `g`, and `12.15B/24.32B` and
+  `3.63B/6.29B` for `é`. Corresponding wall times were about `3.49/4.41`,
+  `3.90/5.61`, and `3.01/5.22` microseconds per draw. This closes the retained
+  Roboto repeated-direct control set, but it is not by itself an overall
+  FreeType raster-performance claim across formats, sizes, and workloads.

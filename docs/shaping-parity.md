@@ -4617,3 +4617,12 @@ shaping-performance superiority.
   These reinforce the retained repeated-direct result across glyf, CFF1, and
   CFF2, but do not yet constitute an exhaustive FreeType claim over all sizes,
   hinting targets, bitmap/color formats, and one-shot lifecycles.
+- A stricter 5-iteration, 11-sample rerun of the five-corpus shaping matrix
+  measured `1.202x` for Roboto, `1.102x` for Source Serif, `1.016x` for Amiri
+  words, `1.105x` for long Amiri, and `0.986x` for Devanagari against the faster
+  reference. The Devanagari row remains narrowly behind HarfRust and therefore
+  keeps the overall shaping claim open. Follow-up candidates for shared staged
+  GSUB state, direct ligature traversal, contextual indexes, source population,
+  attachment remapping, source-span recovery, and a dedicated `dev2` output
+  loop either increased Devanagari retired work/cycles or regressed Latin or
+  Arabic controls; none is retained.

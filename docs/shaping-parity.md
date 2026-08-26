@@ -4626,3 +4626,21 @@ shaping-performance superiority.
   attachment remapping, source-span recovery, and a dedicated `dev2` output
   loop either increased Devanagari retired work/cycles or regressed Latin or
   Arabic controls; none is retained.
+- Final positioning now has a modern-Devanagari horizontal emitter when AAT,
+  legacy kern, attachments, default ignorables, fallback marks, vertical
+  layout, and visible variation selectors are all absent. It retains the
+  generic ligature source-span logic, sparse GPOS adjustment semantics, metrics
+  cache, and break-safety flags while omitting the unrelated per-glyph policy
+  tree; Arabic-only `stch` output is deliberately not materialized. Against
+  the independent `fd6937cc` baseline,
+  fixed-CPU-30 A/B/B/A counters over twenty measured corpus passes reduced
+  Devanagari retired instructions by about `4.7--5.3%`, branches by about
+  `5.5--5.9%`, and cycles by about `3.9--4.5%`; the full-output checksum stayed
+  `b01a5388ce792b49`. The four non-Indic controls do not enter this path. The
+  complete ReleaseFast suite, benchmark smoke gate, and retained HarfBuzz/
+  HarfRust parity umbrellas pass. Two strict 5-iteration, 11-sample matrices
+  measured Devanagari speedups against the faster reference of `1.035x` and
+  `1.030x`, closing the previously retained `0.986x` shaping row. One run made
+  Amiri words statistically tied/slightly behind (`0.997x`), so broader
+  performance closure still requires a stability-margin policy rather than
+  treating a single near-tie as universal superiority.

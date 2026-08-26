@@ -2089,3 +2089,8 @@ local font artifacts and establish the maintained matrix, not universal
 cross-platform superiority. The matrix uses A/B/B/A process ordering and
 reports the geometric-mean ratio of the two per-engine medians so frequency
 drift is not silently attributed to either implementation.
+The gate additionally rejects a zero or changing native-layout checksum for
+either implementation. A fixed-CPU-30 200-iteration, 11-sample rerun passed
+that stronger condition and measured Cangjie speedups of
+`2.551x/2.007x/2.000x` for Latin, `1.418x/1.593x/1.179x` for Arabic, and
+`2.534x/1.169x/1.158x` for Japanese.

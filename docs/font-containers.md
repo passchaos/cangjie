@@ -242,6 +242,13 @@ checksums and a passing complete ReleaseFast suite. This makes the retained
 reuse lifecycle materially faster than Skrifa's caller-memory row; owning
 outline construction remains a separate comparison.
 
+A fresh fixed-CPU-30 500,000-iteration, 15-sample matrix after enabling that
+cache measured the `glyf` reuse row at `59.05/61.62 ns` for Cangjie versus
+`104.23/98.69 ns` for Skrifa, a `1.68x` geometric-mean lead. All 19 semantic
+rows passed. The owning synthetic `glyf` row still measured `122.42/122.22 ns`
+versus `109.64/104.50 ns`, about `12.5%` behind, so this remains a distinct
+non-reuse performance gap rather than being hidden by the cached API.
+
 CFF1 and variable CFF2 outlines now expose reusable PPEM-specific Type2
 hinting instances. The charstring executor retains horizontal/vertical stems,
 hint masks, and counter masks; Private DICT parsing supplies variation-aware

@@ -4626,13 +4626,13 @@ shaping-performance superiority.
   attachment remapping, source-span recovery, and a dedicated `dev2` output
   loop either increased Devanagari retired work/cycles or regressed Latin or
   Arabic controls; none is retained.
-- Final positioning now has a primary-Devanagari horizontal emitter for the
-  source-decoder-proved U+0900..U+097F path when AAT, legacy kern, attachments,
-  default ignorables, fallback marks, vertical layout, and visible variation
-  selectors are all absent. It retains the generic ligature source-span logic,
-  sparse GPOS adjustment semantics, metrics cache, and break-safety flags while
-  omitting the unrelated per-glyph policy tree; Arabic-only `stch` output is
-  deliberately not materialized. Against the independent `fd6937cc` baseline,
+- Final positioning now has a modern-Devanagari horizontal emitter when AAT,
+  legacy kern, attachments, default ignorables, fallback marks, vertical
+  layout, and visible variation selectors are all absent. It retains the
+  generic ligature source-span logic, sparse GPOS adjustment semantics, metrics
+  cache, and break-safety flags while omitting the unrelated per-glyph policy
+  tree; Arabic-only `stch` output is deliberately not materialized. Against
+  the independent `fd6937cc` baseline,
   fixed-CPU-30 A/B/B/A counters over twenty measured corpus passes reduced
   Devanagari retired instructions by about `4.7--5.3%`, branches by about
   `5.5--5.9%`, and cycles by about `3.9--4.5%`; the full-output checksum stayed

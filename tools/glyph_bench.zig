@@ -28,6 +28,40 @@ pub fn main(init: std.process.Init) !void {
 
     const font_bytes = try runner.loadFontBytes(init.io, allocator, options);
     defer allocator.free(font_bytes);
+    if (options.mode == .face_parse) {
+        if (options.engine == .compare_freetype) {
+            var cangjie_options = options;
+            cangjie_options.engine = .cangjie;
+            const cangjie_result = try runner.runColdParse(
+                init.io,
+                allocator,
+                font_bytes,
+                cangjie_options,
+            );
+            defer allocator.free(cangjie_result.samples);
+            report.print(cangjie_options, cangjie_result);
+
+            var freetype_options = options;
+            freetype_options.engine = .freetype;
+            const freetype_result = try freetype.runColdParse(
+                init.io,
+                allocator,
+                font_bytes,
+                freetype_options,
+            );
+            defer allocator.free(freetype_result.samples);
+            report.print(freetype_options, freetype_result);
+            report.printComparison(options, cangjie_result, freetype_result);
+            return;
+        }
+        const result = if (options.engine == .freetype)
+            try freetype.runColdParse(init.io, allocator, font_bytes, options)
+        else
+            try runner.runColdParse(init.io, allocator, font_bytes, options);
+        defer allocator.free(result.samples);
+        report.print(options, result);
+        return;
+    }
     if (options.engine == .freetype) {
         const result = try freetype.run(init.io, allocator, font_bytes, options);
         defer allocator.free(result.samples);

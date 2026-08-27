@@ -58,6 +58,77 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.F
     };
 }
 
+/// Measure complete face construction and destruction from resident bytes.
+/// File I/O and source ownership are deliberately outside the timed interval.
+pub fn runColdParse(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    font_bytes: []const u8,
+    options: options_mod.Options,
+) !report.Result {
+    if (options.mode != .face_parse) return error.InvalidArguments;
+    if (options.warmup != 0) {
+        var ignored: u64 = 0;
+        try runColdParseIterations(
+            allocator,
+            font_bytes,
+            options.warmup,
+            &ignored,
+        );
+    }
+
+    var samples = std.ArrayList(report.Sample).empty;
+    errdefer samples.deinit(allocator);
+    var elapsed: i128 = 0;
+    var checksum: u64 = 0;
+    for (0..options.samples) |sample_index| {
+        var sample_checksum: u64 = 0;
+        const start = std.Io.Clock.now(.awake, io).nanoseconds;
+        try runColdParseIterations(
+            allocator,
+            font_bytes,
+            options.iterations,
+            &sample_checksum,
+        );
+        const duration = std.Io.Clock.now(.awake, io).nanoseconds - start;
+        elapsed += duration;
+        checksum = updateChecksum(checksum, sample_checksum);
+        try samples.append(allocator, .{
+            .index = sample_index,
+            .elapsed_ns = duration,
+            .iterations = options.iterations,
+            .checksum = sample_checksum,
+        });
+    }
+    return .{
+        .elapsed_ns = elapsed,
+        .checksum = checksum,
+        .samples = try samples.toOwnedSlice(allocator),
+    };
+}
+
+fn runColdParseIterations(
+    allocator: std.mem.Allocator,
+    font_bytes: []const u8,
+    iterations: usize,
+    checksum: *u64,
+) !void {
+    for (0..iterations) |_| {
+        var face = try cangjie.font.Face.parseIndex(
+            allocator,
+            font_bytes,
+            0,
+        );
+        const properties = face.properties();
+        checksum.* = updateChecksum(
+            checksum.*,
+            (@as(u64, properties.units_per_em) << 32) |
+                properties.glyph_count,
+        );
+        face.deinit();
+    }
+}
+
 fn runRasterReuseDirty(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options) !report.Result {
     const coords = options.normalizedVariationCoords();
     const session = font.glyphs().session();
@@ -168,6 +239,7 @@ fn resolveGlyphId(font: *const cangjie.font.Face, options: options_mod.Options) 
 
 fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
     switch (options.mode) {
+        .face_parse => unreachable,
         .charmap => try runCharmapIterations(font, options, iterations, checksum),
         .metrics => try runMetricsIterations(font, glyph_id, iterations, checksum),
         .bounds => try runBoundsIterations(font, glyph_id, iterations, checksum),

@@ -85,6 +85,49 @@ def main() -> int:
     failures: list[str] = []
     row_count = 0
     for case in cases:
+        # Parsing is independent of glyph and size. Run one resident-byte
+        # cold-face lifecycle per representative format before raster rows.
+        cangjie_cmd = command(
+            args.glyph_bench, case, "cangjie", "face-parse", 16,
+            args.iterations, args.samples, args.minimum_target_size,
+        )
+        freetype_cmd = command(
+            args.glyph_bench, case, "freetype", "face-parse", 16,
+            args.iterations, args.samples, args.minimum_target_size,
+        )
+        cangjie_a = run(cangjie_cmd, args.cpu)
+        freetype_a = run(freetype_cmd, args.cpu)
+        freetype_b = run(freetype_cmd, args.cpu)
+        cangjie_b = run(cangjie_cmd, args.cpu)
+        for engine, first, second in (
+            ("cangjie", cangjie_a, cangjie_b),
+            ("freetype", freetype_a, freetype_b),
+        ):
+            if first.get("checksum") != second.get("checksum"):
+                failures.append(
+                    f"{case.name}/face-parse: {engine} checksum "
+                    f"{first.get('checksum')}/{second.get('checksum')}"
+                )
+        if cangjie_a.get("checksum") != freetype_a.get("checksum"):
+            failures.append(
+                f"{case.name}/face-parse: cross-engine properties "
+                f"{cangjie_a.get('checksum')}/{freetype_a.get('checksum')}"
+            )
+        cangjie_ns = math.sqrt(
+            float(cangjie_a["sample_median_ns_per_iter"])
+            * float(cangjie_b["sample_median_ns_per_iter"])
+        )
+        freetype_ns = math.sqrt(
+            float(freetype_a["sample_median_ns_per_iter"])
+            * float(freetype_b["sample_median_ns_per_iter"])
+        )
+        speedup = math.inf if cangjie_ns == 0 else freetype_ns / cangjie_ns
+        print(
+            f"{case.name}/face-parse: "
+            f"cangjie={cangjie_ns:.3f}ns freetype={freetype_ns:.3f}ns "
+            f"speedup={speedup:.3f}x"
+        )
+        row_count += 1
         for mode in ("raster", "raster-owning", "raster-reuse"):
             for size in sizes:
                 # Size the surface to the glyph instead of letting a fixed

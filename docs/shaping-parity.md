@@ -4678,6 +4678,18 @@ shaping-performance superiority.
   `4.104x/4.522x/2.989x/2.094x/1.404x`. This closes the maintained grayscale
   glyf/CFF1/CJK raster matrix, not the broader FreeType audit for CFF2, color/
   bitmap formats, hinting targets, cold parsing, or additional platforms.
+- `glyph-bench --mode face-parse` now measures the previously missing cold
+  in-memory face lifecycle. Both engines receive the same already-resident
+  bytes, construct face zero, consume `units_per_em` plus glyph count using the
+  same hash, and destroy the face on every timed iteration; FreeType keeps its
+  process-level library object outside the loop because Cangjie has no matching
+  global-library lifecycle. The five-format `freetype-matrix` runs this row
+  once per font in addition to the size-dependent raster rows. A CPU-30 smoke
+  measurement found Cangjie substantially slower on real fonts (about `0.005x`
+  for Roboto, `0.167x` for STIX CFF1, `0.948x` for Cantarell CFF2, `0.013x` for
+  Noto Kufi Arabic, and `0.032x` for Noto CJK). This turns the former unmeasured
+  cold-parse requirement into a concrete optimization blocker rather than
+  implying closure from the raster-only matrix.
 - The glyph harness now names the fresh owning-outline boundary explicitly as
   `raster-owning`; `raster` uses the public caller-owned `OutlineBuffer` and
   therefore measures the cached session plus direct draw, while

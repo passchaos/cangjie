@@ -94,6 +94,86 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
     };
 }
 
+/// Measure cold in-memory face construction while retaining one initialized
+/// FreeType library. File I/O and source ownership remain outside timing.
+pub fn runColdParse(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    font_bytes: []const u8,
+    options: options_mod.Options,
+) !report.Result {
+    if (options.mode != .face_parse or
+        font_bytes.len > std.math.maxInt(c_long))
+    {
+        return error.InvalidArguments;
+    }
+    var library: ft.FT_Library = null;
+    if (ft.FT_Init_FreeType(&library) != 0) return error.FreeTypeFailed;
+    defer _ = ft.FT_Done_FreeType(library);
+
+    if (options.warmup != 0) {
+        var ignored: u64 = 0;
+        try runColdParseIterations(
+            library,
+            font_bytes,
+            options.warmup,
+            &ignored,
+        );
+    }
+    var samples = std.ArrayList(report.Sample).empty;
+    errdefer samples.deinit(allocator);
+    var elapsed: i128 = 0;
+    var checksum: u64 = 0;
+    for (0..options.samples) |sample_index| {
+        var sample_checksum: u64 = 0;
+        const start = std.Io.Clock.now(.awake, io).nanoseconds;
+        try runColdParseIterations(
+            library,
+            font_bytes,
+            options.iterations,
+            &sample_checksum,
+        );
+        const duration = std.Io.Clock.now(.awake, io).nanoseconds - start;
+        elapsed += duration;
+        checksum = updateChecksum(checksum, sample_checksum);
+        try samples.append(allocator, .{
+            .index = sample_index,
+            .elapsed_ns = duration,
+            .iterations = options.iterations,
+            .checksum = sample_checksum,
+        });
+    }
+    return .{
+        .elapsed_ns = elapsed,
+        .checksum = checksum,
+        .samples = try samples.toOwnedSlice(allocator),
+    };
+}
+
+fn runColdParseIterations(
+    library: ft.FT_Library,
+    font_bytes: []const u8,
+    iterations: usize,
+    checksum: *u64,
+) !void {
+    for (0..iterations) |_| {
+        var face: ft.FT_Face = null;
+        if (ft.FT_New_Memory_Face(
+            library,
+            @ptrCast(font_bytes.ptr),
+            @intCast(font_bytes.len),
+            0,
+            &face,
+        ) != 0) return error.FreeTypeFailed;
+        checksum.* = updateChecksum(
+            checksum.*,
+            (@as(u64, face.*.units_per_EM) << 32) |
+                @as(u32, @intCast(face.*.num_glyphs)),
+        );
+        if (ft.FT_Done_Face(face) != 0) return error.FreeTypeFailed;
+    }
+}
+
 fn runDirty(io: std.Io, allocator: std.mem.Allocator, ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_mod.Options) !report.Result {
     const face = ft_face.face;
     const pixels = try allocator.alloc(u8, @as(usize, options.target_size) * options.target_size);
@@ -210,7 +290,7 @@ fn runIterations(ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_m
         return;
     }
     const load_flags: ft.FT_Int32 = switch (options.mode) {
-        .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .bitmap => unreachable,
+        .face_parse, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .bitmap => unreachable,
         .outline => ft.FT_LOAD_NO_SCALE | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
         .outline_session, .outline_reuse => unreachable,
         .raster, .raster_owning => ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
@@ -221,7 +301,7 @@ fn runIterations(ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_m
     while (i < iterations) : (i += 1) {
         if (ft.FT_Load_Glyph(face, glyph_id, load_flags) != 0) return error.FreeTypeFailed;
         checksum.* = updateChecksum(checksum.*, switch (options.mode) {
-            .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .bitmap => unreachable,
+            .face_parse, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .bitmap => unreachable,
             .outline => outlineChecksum(face.*.glyph),
             .raster, .raster_owning, .raster_reuse => rasterTargetChecksum(face.*.glyph, options, target_pixels),
             .outline_session, .outline_reuse, .raster_prepare, .raster_prepared => unreachable,

@@ -24,6 +24,7 @@ pub const Engine = enum {
 };
 
 pub const Mode = enum {
+    face_parse,
     charmap,
     metrics,
     bounds,
@@ -46,6 +47,7 @@ pub const Mode = enum {
     raster_prepared,
 
     pub fn fromName(name: []const u8) ?Mode {
+        if (std.mem.eql(u8, name, "face-parse")) return .face_parse;
         if (std.mem.eql(u8, name, "charmap")) return .charmap;
         if (std.mem.eql(u8, name, "metrics")) return .metrics;
         if (std.mem.eql(u8, name, "bounds")) return .bounds;
@@ -71,6 +73,7 @@ pub const Mode = enum {
 
     pub fn label(self: Mode) []const u8 {
         return switch (self) {
+            .face_parse => "face-parse",
             .charmap => "charmap",
             .metrics => "metrics",
             .bounds => "bounds",
@@ -281,11 +284,11 @@ fn parseVariationCoords(options: *Options, text: []const u8) !void {
 pub fn printUsage(args: []const []const u8) void {
     const exe = if (args.len > 0) args[0] else "glyph-bench";
     std.debug.print(
-        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode charmap|metrics|bounds|global-metrics|family-name|glyph-name|attributes|bitmap|outline|outline-session|outline-reuse|raster|raster-owning|raster-reuse|raster-prepare|raster-prepared] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation|cbdt-bgra] [--glyph-id n|--codepoint U+XXXX]
+        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode face-parse|charmap|metrics|bounds|global-metrics|family-name|glyph-name|attributes|bitmap|outline|outline-session|outline-reuse|raster|raster-owning|raster-reuse|raster-prepare|raster-prepared] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation|cbdt-bgra] [--glyph-id n|--codepoint U+XXXX]
         \\
         \\options:
         \\  --engine NAME        cangjie, freetype, or compare-freetype; default cangjie
-        \\  --mode NAME          charmap, metrics, bounds, global-metrics, family-name, glyph-name, attributes, bitmap, outline, outline-session, outline-reuse, raster, raster-owning, raster-reuse, raster-prepare, or raster-prepared; default outline
+        \\  --mode NAME          face-parse, charmap, metrics, bounds, global-metrics, family-name, glyph-name, attributes, bitmap, outline, outline-session, outline-reuse, raster, raster-owning, raster-reuse, raster-prepare, or raster-prepared; default outline
         \\  --format text|tsv    output format, default text
         \\  --font PATH          use a real font
         \\  --builtin NAME       use an in-repo fixture, default gvar-compound
@@ -336,6 +339,12 @@ test "parse accepts raster preparation benchmark mode" {
     const options = try parse(&.{ "glyph-bench", "--mode", "raster-prepare" });
     try std.testing.expectEqual(Mode.raster_prepare, options.mode);
     try std.testing.expectEqualStrings("raster-prepare", options.mode.label());
+}
+
+test "parse accepts cold face construction benchmark mode" {
+    const options = try parse(&.{ "glyph-bench", "--mode", "face-parse" });
+    try std.testing.expectEqual(Mode.face_parse, options.mode);
+    try std.testing.expectEqualStrings("face-parse", options.mode.label());
 }
 
 test "raster preparation has no FreeType comparison mode" {

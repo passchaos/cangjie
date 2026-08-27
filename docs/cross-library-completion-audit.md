@@ -103,7 +103,7 @@ Cangjie is already ahead in the maintained 25-case Fontations/Skrifa matrix
 and complete maintained 75-row FreeType grayscale lifecycle matrix, plus most
 of the five-corpus shaping matrix. The corrected Parley timing matrix now leads
 17/18 rows, including all six retained-reflow rows, but the remaining row
-still make Parley an explicit performance blocker. This
+still makes Parley an explicit performance blocker. This
 evidence is substantial but does not satisfy the stronger overall claim. In particular,
 the latest shaping runs still place Amiri words near parity; Devanagari now
 leads the retained row by about `1.03x`, but that is only one font/corpus. The

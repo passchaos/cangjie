@@ -76,6 +76,7 @@ pub fn merged(
     run: Options,
     prove_metadata: bool,
 ) Error!void {
+    if (plan.lookups.len == 0) return;
     if (prove_metadata) {
         try metadata.validateMergedLookupPlan(run, glyphs.items.len, plan);
     }

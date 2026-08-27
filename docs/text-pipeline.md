@@ -2230,3 +2230,9 @@ Arabic spacing layouts reduced retired instructions from about `40.0B` to
 `11.84B`, with both checksums unchanged. Arabic alternating and Japanese
 spacing/alternating remain slower; the new API does not claim those gaps are
 closed.
+
+The same one-object pure-RTL proof now covers uniform one-shot construction.
+Arabic inline-object layout leads by `1.185x`, raising the corrected matrix to
+15/18. A 100,000-layout A/B/B/A run reduced retired instructions from about
+`44.42B` to `35.67B`, branches from `7.46B` to `6.01B`, and cycles from about
+`14.11B` to `11.51B`, again with both checksums unchanged.

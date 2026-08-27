@@ -278,6 +278,16 @@ pub fn tryApplyPureRtlLines(buffer: anytype, text: []const u8) bool {
     return applyPureRtlLinesAfterProof(buffer);
 }
 
+/// Apply the single in-flow-object variant after proving the source is pure
+/// RTL. This is the one-shot counterpart of the retained presentation path.
+pub fn tryApplyPureRtlLinesWithObject(
+    buffer: anytype,
+    text: []const u8,
+) !bool {
+    if (bidi.visualOrderInputKind(text, true) != .pure_rtl) return false;
+    return applyPureRtlLinesWithObjectAfterProof(buffer);
+}
+
 /// Apply pure-RTL line order after the caller retained the text-level proof.
 /// Structural conditions are still checked before the first mutation.
 pub fn applyPureRtlLinesAfterProof(buffer: anytype) bool {

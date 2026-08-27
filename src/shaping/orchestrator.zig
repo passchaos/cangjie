@@ -746,7 +746,11 @@ fn applyParagraphLineBidiVisualOrder(
     direction: TextDirection,
 ) !void {
     if (direction == .rtl and
-        bidi_reorder.tryApplyPureRtlLines(buffer, text)) return;
+        (bidi_reorder.tryApplyPureRtlLines(buffer, text) or
+            try bidi_reorder.tryApplyPureRtlLinesWithObject(buffer, text)))
+    {
+        return;
+    }
     return try bidi_reorder.applyLines(buffer, text, direction == .rtl);
 }
 

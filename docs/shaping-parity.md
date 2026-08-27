@@ -4736,3 +4736,9 @@ shaping-performance superiority.
   A strict five-corpus matrix then measured `1.006x` for Amiri words and
   `1.040x` for Devanagari against the faster reference, but these near-parity
   rows still require a larger repeatable margin before any broad claim.
+- The maintained Fontations/Skrifa matrix was rerun after the raster and
+  paragraph harness changes with 100,000 iterations and seven samples. All
+  19 semantic checks passed and every row led (`1.495x--7.796x`); owning glyf
+  was `1.495x`, CFF outline `5.207x`, and bitmap summary `2.024x`. This retains
+  the pinned high-level matrix but does not substitute for broader differential
+  coverage of all 41 inventoried table families.

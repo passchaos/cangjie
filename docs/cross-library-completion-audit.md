@@ -30,7 +30,7 @@ The following checks were rerun from a clean worktree at commits through
   48 public modules, and eight high-level capability groups mapped.
 - `zig build fontations-matrix -Doptimize=ReleaseFast -- --iterations 100000
   --samples 7`: 19/19 semantic rows passed; every measured row favored
-  Cangjie (`1.533x--7.576x` in this run).
+  Cangjie (`1.495x--7.796x` in the latest run).
 - `zig build parley-matrix -Doptimize=ReleaseFast -- --iterations 100 --samples
   5 --cpu 30`: 18/18 count/stability rows passed; every measured row favored
   Cangjie (`1.140x--4.907x` in this run), including construction and retained

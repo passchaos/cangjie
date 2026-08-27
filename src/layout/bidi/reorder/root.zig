@@ -272,6 +272,97 @@ pub fn tryApplyPureRtlLinesWithParallel(
     return true;
 }
 
+/// Pure-RTL permutation for several adjacent style/font runs. Glyphs and their
+/// metadata reverse together; a bounded ownership map then rebuilds visual run
+/// fragments without invoking the general Unicode bidi transaction.
+pub fn tryApplyPureRtlLinesWithParallelRuns(
+    buffer: anytype,
+    text: []const u8,
+    parallel: anytype,
+) !bool {
+    const glyphs = buffer.glyphs.items;
+    const run_count = buffer.runs.items.len;
+    if (parallel.len != glyphs.len or
+        bidi.visualOrderInputKind(text, true) != .pure_rtl or
+        run_count < 2 or run_count > 16 or glyphs.len > 512)
+    {
+        return false;
+    }
+    var old_runs: [16]run_types.CascadeRun = undefined;
+    @memcpy(old_runs[0..run_count], buffer.runs.items);
+    var ownership: [512]usize = undefined;
+    @memset(ownership[0..glyphs.len], runs.no_run);
+    for (old_runs[0..run_count], 0..) |run, run_index| {
+        const end = std.math.add(usize, run.glyph_start, run.glyph_len) catch
+            return false;
+        if (end > glyphs.len) return false;
+        @memset(ownership[run.glyph_start..end], run_index);
+    }
+    var previous_end: usize = 0;
+    for (buffer.lines.items) |line| {
+        const line_end = std.math.add(usize, line.glyph_start, line.glyph_len) catch
+            return false;
+        if (line.glyph_start < previous_end or line_end > glyphs.len) return false;
+        previous_end = line_end;
+    }
+
+    var visual_start: usize = 0;
+    for (buffer.lines.items) |*line| {
+        const logical_start = line.glyph_start;
+        const logical_end = logical_start + line.glyph_len;
+        const gap_len = logical_start - visual_start;
+        if (gap_len != 0 and line.glyph_len != 0) {
+            rotateRecords(
+                @TypeOf(glyphs[0]),
+                glyphs[visual_start..logical_end],
+                gap_len,
+            );
+            rotateRecords(
+                @TypeOf(parallel[0]),
+                parallel[visual_start..logical_end],
+                gap_len,
+            );
+            rotateRecords(
+                usize,
+                ownership[visual_start..logical_end],
+                gap_len,
+            );
+        }
+        const visual_end = visual_start + line.glyph_len;
+        bidi.reverseRecords(@TypeOf(glyphs[0]), glyphs[visual_start..visual_end]);
+        bidi.reverseRecords(@TypeOf(parallel[0]), parallel[visual_start..visual_end]);
+        bidi.reverseRecords(usize, ownership[visual_start..visual_end]);
+        for (glyphs[visual_start..visual_end], ownership[visual_start..visual_end]) |
+            *glyph,
+            run_index,
+        | {
+            if (run_index == runs.no_run) continue;
+            const mirrored = unicode.mirroredCodepoint(glyph.codepoint);
+            if (mirrored == glyph.codepoint) continue;
+            const font = run_types.fontForBackend(old_runs[run_index]);
+            const mirrored_glyph = font.glyphIndex(mirrored) catch continue;
+            if (mirrored_glyph == 0) continue;
+            glyph.codepoint = mirrored;
+            glyph.glyph_id = mirrored_glyph;
+        }
+        line.glyph_start = visual_start;
+        visual_start = visual_end;
+    }
+
+    try runs.rebuild(buffer, old_runs[0..run_count], ownership[0..glyphs.len]);
+    for (buffer.lines.items) |*line| {
+        const range = runs.range(
+            buffer.runs.items,
+            line.glyph_start,
+            line.glyph_start + line.glyph_len,
+        );
+        line.run_start = range.start;
+        line.run_len = range.len;
+    }
+    runs.recomputeOffsets(buffer);
+    return true;
+}
+
 /// Apply the same pure-RTL proof without an attributed sidecar.
 pub fn tryApplyPureRtlLines(buffer: anytype, text: []const u8) bool {
     if (bidi.visualOrderInputKind(text, true) != .pure_rtl) return false;

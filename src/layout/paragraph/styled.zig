@@ -514,11 +514,15 @@ const Driver = struct {
     ) !void {
         if (options.direction == .rtl and
             !options.writing_mode.isVertical() and
-            bidi_reorder.tryApplyPureRtlLinesWithParallel(
+            (bidi_reorder.tryApplyPureRtlLinesWithParallel(
                 self.buffer,
                 self.text,
                 self.styled.metadata.items,
-            ))
+            ) or try bidi_reorder.tryApplyPureRtlLinesWithParallelRuns(
+                self.buffer,
+                self.text,
+                self.styled.metadata.items,
+            )))
         {
             return;
         }

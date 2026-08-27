@@ -2210,6 +2210,13 @@ changing either checksum. Geometry equivalence remains 9/18 because the known
 inline-object and Japanese structural differences are intentionally not
 normalized away.
 
+Attributed pure-RTL paragraphs with a bounded set of adjacent font/style runs
+now reverse glyphs and metadata together and rebuild visual run fragments from
+a stack ownership map. This cuts the Arabic alternating row's 100,000-layout
+A/B/B/A counters from about `48.97B` to `42.79B` instructions, `8.18B` to
+`7.07B` branches, and `15.89B` to `13.85B` cycles without changing checksums.
+It narrows the row to `0.968x` versus Parley but does not yet establish a lead.
+
 Uniform one-shot pure-RTL construction now reuses the same allocation-free
 line reversal before falling back to general UAX #9. On CPU 30 this moves the
 Arabic default construction row from `0.93x` behind Parley to `1.174x` ahead.

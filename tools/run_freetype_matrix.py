@@ -57,6 +57,7 @@ def main() -> int:
     parser.add_argument("--glyph-bench", required=True, type=Path)
     parser.add_argument("--roboto", required=True, type=Path)
     parser.add_argument("--cff", required=True, type=Path)
+    parser.add_argument("--cff2", required=True, type=Path)
     parser.add_argument("--arabic", required=True, type=Path)
     parser.add_argument("--cjk", required=True, type=Path)
     parser.add_argument("--iterations", type=int, default=1000)
@@ -77,13 +78,14 @@ def main() -> int:
     cases = (
         Case("glyf-latin", args.roboto, "U+00E9"),
         Case("cff1-latin", args.cff, "U+00E9"),
+        Case("cff2-latin", args.cff2, "U+0041"),
         Case("glyf-arabic", args.arabic, "U+0633"),
         Case("cff-cjk", args.cjk, "U+6F22"),
     )
     failures: list[str] = []
     row_count = 0
     for case in cases:
-        for mode in ("raster", "raster-reuse"):
+        for mode in ("raster", "raster-owning", "raster-reuse"):
             for size in sizes:
                 # Size the surface to the glyph instead of letting a fixed
                 # 256x256 clear/hash hide scan conversion at small ppem.

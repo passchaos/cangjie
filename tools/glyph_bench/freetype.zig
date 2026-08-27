@@ -18,7 +18,7 @@ const FreeTypeFace = struct {
         var face: ft.FT_Face = null;
         if (ft.FT_New_Memory_Face(library, @ptrCast(font_bytes.ptr), @intCast(font_bytes.len), 0, &face) != 0) return error.FreeTypeFailed;
         errdefer _ = ft.FT_Done_Face(face);
-        if (options.mode == .raster or options.mode == .raster_reuse) {
+        if (options.mode == .raster or options.mode == .raster_owning or options.mode == .raster_reuse) {
             if (ft.FT_Set_Pixel_Sizes(face, 0, @intFromFloat(@round(options.font_size))) != 0) return error.FreeTypeFailed;
         }
 
@@ -53,11 +53,12 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
     }
     var empty_target_pixels: [0]u8 = .{};
     const target_pixels: []u8 = if (options.mode == .raster or
+        options.mode == .raster_owning or
         options.mode == .raster_reuse)
         try allocator.alloc(u8, @as(usize, options.target_size) * options.target_size)
     else
         empty_target_pixels[0..];
-    defer if (options.mode == .raster or options.mode == .raster_reuse)
+    defer if (options.mode == .raster or options.mode == .raster_owning or options.mode == .raster_reuse)
         allocator.free(target_pixels);
 
     if (options.warmup != 0) {
@@ -212,7 +213,7 @@ fn runIterations(ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_m
         .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .bitmap => unreachable,
         .outline => ft.FT_LOAD_NO_SCALE | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
         .outline_session, .outline_reuse => unreachable,
-        .raster => ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
+        .raster, .raster_owning => ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
         .raster_reuse => unreachable,
         .raster_prepare, .raster_prepared => unreachable,
     };
@@ -222,7 +223,7 @@ fn runIterations(ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_m
         checksum.* = updateChecksum(checksum.*, switch (options.mode) {
             .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .bitmap => unreachable,
             .outline => outlineChecksum(face.*.glyph),
-            .raster, .raster_reuse => rasterTargetChecksum(face.*.glyph, options, target_pixels),
+            .raster, .raster_owning, .raster_reuse => rasterTargetChecksum(face.*.glyph, options, target_pixels),
             .outline_session, .outline_reuse, .raster_prepare, .raster_prepared => unreachable,
         });
     }

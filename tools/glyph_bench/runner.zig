@@ -184,6 +184,7 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, g
         .outline_session => try runOutlineSessionIterations(allocator, font, glyph_id, options, iterations, checksum),
         .outline_reuse => try runOutlineReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster => try runRasterIterations(allocator, font, glyph_id, options, iterations, checksum),
+        .raster_owning => try runRasterOwningIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_reuse => try runRasterReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_prepare => try runRasterPrepareIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_prepared => try runRasterPreparedIterations(allocator, font, glyph_id, options, iterations, checksum),
@@ -464,18 +465,45 @@ fn runRasterIterations(allocator: std.mem.Allocator, font: *const cangjie.font.F
     rasterizer.setSampling(options.samples_per_axis);
     const units_per_em = font.properties().units_per_em;
     const coords = options.normalizedVariationCoords();
+    const session = font.glyphs().session();
+    var outline_buffer = cangjie.font.OutlineBuffer.init(allocator);
+    defer outline_buffer.deinit();
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         target.clear(0);
-        {
-            const session = font.glyphs().session();
-            var outline = if (coords.len == 0)
-                try session.outline(allocator, glyph_id)
-            else
-                try session.outlineAt(allocator, glyph_id, coords);
+        if (coords.len == 0) {
+            // The public caller-owned session API is the matched persistent-
+            // face lifecycle. It retains decoded geometry for repeated ids
+            // while direct rasterization and target clearing remain measured.
+            const outline = try session.outlineInto(&outline_buffer, glyph_id);
+            try rasterizer.drawOutline(&target, outline, 0, options.font_size, options.font_size, units_per_em);
+        } else {
+            var outline = try session.outlineAt(allocator, glyph_id, coords);
             defer outline.deinit();
             try rasterizer.drawOutline(&target, &outline, 0, options.font_size, options.font_size, units_per_em);
         }
+        checksum.* = updateChecksum(checksum.*, bytesChecksum(target.pixels));
+    }
+}
+
+fn runRasterOwningIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
+    var target = try cangjie.render.GrayTarget.init(allocator, options.target_size, options.target_size);
+    defer target.deinit();
+    var rasterizer = cangjie.render.Rasterizer.init(allocator);
+    defer rasterizer.deinit();
+    rasterizer.setHintSize(options.font_size);
+    rasterizer.setSampling(options.samples_per_axis);
+    const units_per_em = font.properties().units_per_em;
+    const coords = options.normalizedVariationCoords();
+    const session = font.glyphs().session();
+    for (0..iterations) |_| {
+        target.clear(0);
+        var outline = if (coords.len == 0)
+            try session.outline(allocator, glyph_id)
+        else
+            try session.outlineAt(allocator, glyph_id, coords);
+        defer outline.deinit();
+        try rasterizer.drawOutline(&target, &outline, 0, options.font_size, options.font_size, units_per_em);
         checksum.* = updateChecksum(checksum.*, bytesChecksum(target.pixels));
     }
 }

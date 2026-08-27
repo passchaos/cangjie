@@ -3959,6 +3959,8 @@ pub fn build(b: *std.Build) void {
         b.fmt("{s}/harfrust/harfrust/benches/fonts/Roboto-Regular.ttf", .{parity_work_root orelse ""}),
         "--cff",
         "/usr/share/fonts/opentype/stix/STIXGeneral-Regular.otf",
+        "--cff2",
+        b.fmt("{s}/harfbuzz/test/subset/data/fonts/Cantarell-VF-ABC.otf", .{parity_work_root orelse ""}),
         "--arabic",
         "/usr/share/fonts/truetype/noto/NotoKufiArabic-Regular.ttf",
         "--cjk",

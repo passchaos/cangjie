@@ -4672,6 +4672,15 @@ shaping-performance superiority.
   `4.104x/4.522x/2.989x/2.094x/1.404x`. This closes the maintained grayscale
   glyf/CFF1/CJK raster matrix, not the broader FreeType audit for CFF2, color/
   bitmap formats, hinting targets, cold parsing, or additional platforms.
+- The glyph harness now names the fresh owning-outline boundary explicitly as
+  `raster-owning`; `raster` uses the public caller-owned `OutlineBuffer` and
+  therefore measures the cached session plus direct draw, while
+  `raster-reuse` starts with an already materialized outline. The FreeType
+  owning row remains `FT_Load_Glyph(FT_LOAD_RENDER)` because its slot owns the
+  freshly loaded result. The lifecycle matrix also includes Cantarell variable
+  CFF2, bringing the default five-font/two-lifecycle grid to 75 rows. A focused
+  8 px smoke run completed all 15 corresponding rows; CFF2 owning was a
+  `1.002x` tie, correctly leaving the broader margin audit open.
 - A stricter 5-iteration, 11-sample rerun of the five-corpus shaping matrix
   measured `1.202x` for Roboto, `1.102x` for Source Serif, `1.016x` for Amiri
   words, `1.105x` for long Amiri, and `0.986x` for Devanagari against the faster

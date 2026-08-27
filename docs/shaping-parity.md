@@ -4665,6 +4665,13 @@ shaping-performance superiority.
   16 px rows ahead, including Arabic reused raster at `3.307x` and CJK reused
   raster at `4.551x`; the full 40-row rerun is still required before closing
   the complete raster matrix.
+- The complete fixed-CPU-30 `500 * 11` matrix after retained emboldening passed
+  all 40 rows with Cangjie speedups from `1.177x` to `4.522x`. Arabic reused
+  raster measured `3.339x/3.283x/2.337x/1.651x/1.177x` at
+  8/16/32/64/128 px, and CJK reused raster measured
+  `4.104x/4.522x/2.989x/2.094x/1.404x`. This closes the maintained grayscale
+  glyf/CFF1/CJK raster matrix, not the broader FreeType audit for CFF2, color/
+  bitmap formats, hinting targets, cold parsing, or additional platforms.
 - A stricter 5-iteration, 11-sample rerun of the five-corpus shaping matrix
   measured `1.202x` for Roboto, `1.102x` for Source Serif, `1.016x` for Amiri
   words, `1.105x` for long Amiri, and `0.986x` for Devanagari against the faster

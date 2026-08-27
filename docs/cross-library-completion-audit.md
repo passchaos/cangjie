@@ -12,7 +12,7 @@ one benchmark. The claim remains **open** until every row below is closed.
 | HarfBuzz | Exact glyph IDs, clusters, advances, offsets, and relevant flags across retained upstream and production-font corpora | `shaping-parity-smoke`, `shaping-corpus-parity-smoke`, `tests/data/`, `docs/shaping-parity.md` | Strong retained coverage, not exhaustive |
 | HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: `react-dom.txt` is now covered and leads by more than `1.50x`, while Amiri words remains a near tie and therefore does not establish superiority |
 | Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; broader semantic differentials and owning-outline stability remain open |
-| FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: the 40-row raster matrix now exposes small-size glyf and direct reused Arabic/CJK deficits; bitmap/color and cold parse lifecycles remain incomplete |
+| FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 40 maintained grayscale raster rows now lead, but CFF2, bitmap/color, hinting-target, and cold parse lifecycles remain incomplete |
 | Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the matrix now covers three scripts, three construction styles, and matched retained reflow, but cross-engine checksum semantics and vertical/fallback/inline-object modes are not equivalent/comparable |
 | Robustness | Malformed supported inputs fail atomically under safety checks and sustained coverage-guided fuzzing | `font-fuzz-smoke`, `font-fuzz`, regression fixtures | Open: the retained 100K campaign is useful evidence, not exhaustive format coverage |
 | Platform scope | Results reproduced on each supported target or the performance claim explicitly scoped to named hardware/OS/toolchain versions | benchmark documentation | Open: current performance evidence is primarily one Linux x86-64 host |
@@ -47,7 +47,8 @@ The following checks were rerun from a clean worktree at commits through
   geometry cache: Arabic reused-outline raster ranged from `0.599x` to
   `0.886x`, while CJK reused-outline raster ranged from `0.425x` to `0.734x`
   versus FreeType. The retained cache enlargement removed the dominant CJK
-  deficit at 32/64 px, but Arabic and 16 px CJK rows remain behind.
+  deficit, and retained coverage/emboldening then closed every row. A strict
+  post-change `500 * 11` run measured all 40 rows ahead (`1.177x--4.522x`).
 
 The latest strict shaping run at `077cb97e` measured speedups of `1.213x`
 (Roboto), `1.042x` (Source Serif), `0.994x` (Amiri words), `1.083x` (Amiri

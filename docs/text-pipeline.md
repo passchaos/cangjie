@@ -2101,6 +2101,18 @@ that stronger condition and measured Cangjie speedups of
 `2.551x/2.007x/2.000x` for Latin, `1.418x/1.593x/1.179x` for Arabic, and
 `2.534x/1.169x/1.158x` for Japanese.
 
+A focused cross-engine geometry dump demonstrates why those native checksums
+must not yet be treated as equivalence. On the same Roboto Latin paragraph,
+the first line covers bytes `0..22` in both engines and the first 21 glyphs
+have matching ids, positions, and advances to the expected 1/64-unit rounding.
+Parley additionally keeps the trailing-space glyph on that line and reports
+advance `167.179688`, while Cangjie discards that boundary space from visible
+line glyphs and reports `163.210940`. Baselines also follow different public
+metric conventions (`14.0` versus `14.84375` on line zero). This is concrete
+evidence that count parity is not geometry parity; the maintained timing rows
+remain valid equal-cardinality workloads, but the broader Parley functionality
+claim stays open until whitespace and metric policies are normalized.
+
 The matrix now also includes a default-style retained-reflow row for each
 script. Cangjie prepares a `ShapedParagraph` once; Parley builds one `Layout`
 once and uses its documented repeatable `break_all_lines` plus `align` path.

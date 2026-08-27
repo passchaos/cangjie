@@ -2243,3 +2243,12 @@ Arabic inline-object layout leads by `1.185x`, raising the corrected matrix to
 15/18. A 100,000-layout A/B/B/A run reduced retired instructions from about
 `44.42B` to `35.67B`, branches from `7.46B` to `6.01B`, and cycles from about
 `14.11B` to `11.51B`, again with both checksums unchanged.
+
+A strict styled fast builder now reuses retained line selection when output
+proves one ordered glyph per source atom and no source-transforming policy is
+active. It still enforces every shaping-unsafe boundary during candidate and
+emergency selection, so the known Japanese geometry difference is unchanged.
+This moves Arabic alternating construction to `1.011x` ahead and the matrix to
+16/18. A 100,000-layout A/B/B/A run reduced instructions from about `42.79B`
+to `40.44B`, branches from `7.07B` to `6.81B`, and cycles from `13.83B` to
+`13.27B`, with both checksums unchanged.

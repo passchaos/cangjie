@@ -254,12 +254,19 @@ const Driver = struct {
             self.buffer.glyphs.items,
             self.options.writing_mode,
         );
+        const simple_layout = !self.compute_content_widths and
+            policy_ranges.len == 0 and
+            simpleStyledShape(
+                self.buffer.glyphs.items,
+                self.styled.metadata.items,
+                self.text.len,
+            );
         var intrinsic_graphemes: ?[]unicode.GraphemeCluster = null;
         defer if (intrinsic_graphemes) |items|
             self.buffer.allocator.free(items);
         var intrinsic_breaks: ?[]@import("../line_break/opportunity.zig").Opportunity = null;
         defer if (intrinsic_breaks) |items| self.buffer.allocator.free(items);
-        if (self.compute_content_widths) {
+        if (self.compute_content_widths or simple_layout) {
             intrinsic_graphemes = try unicode.itemizeGraphemeClusters(
                 self.buffer.allocator,
                 self.text,
@@ -326,25 +333,39 @@ const Driver = struct {
             .spans = spans,
             .options = resolved_options,
         };
-        try paragraph_reflow.buildWithJstfShrinkage(
-            self.buffer,
-            self.text,
-            line_options,
-            paragraph_reflow.defaultBaselineMetrics(
-                self.cascade.fonts[0],
-                self.default_font_size,
-            ),
-            // Intrinsic widths and line selection consume the same
-            // width-independent UAX #29/#14 analysis. Passing it through
-            // avoids decoding the paragraph and rebuilding opportunities a
-            // second time; reflow still tailors this neutral base for any
-            // paragraph- or span-level wrapping policy below.
-            intrinsic_graphemes,
-            intrinsic_breaks,
-            self.options.word_break_dictionary,
-            self.options.hyphenation.dictionary,
-            recipe,
-        );
+        if (!simple_layout or
+            !try paragraph_reflow.tryBuildSimpleRetained(
+                self.buffer,
+                self.text,
+                line_options,
+                paragraph_reflow.defaultBaselineMetrics(
+                    self.cascade.fonts[0],
+                    self.default_font_size,
+                ),
+                intrinsic_graphemes,
+                intrinsic_breaks,
+            ))
+        {
+            try paragraph_reflow.buildWithJstfShrinkage(
+                self.buffer,
+                self.text,
+                line_options,
+                paragraph_reflow.defaultBaselineMetrics(
+                    self.cascade.fonts[0],
+                    self.default_font_size,
+                ),
+                // Intrinsic widths and line selection consume the same
+                // width-independent UAX #29/#14 analysis. Passing it through
+                // avoids decoding the paragraph and rebuilding opportunities a
+                // second time; reflow still tailors this neutral base for any
+                // paragraph- or span-level wrapping policy below.
+                intrinsic_graphemes,
+                intrinsic_breaks,
+                self.options.word_break_dictionary,
+                self.options.hyphenation.dictionary,
+                recipe,
+            );
+        }
         if (resolved_options.writing_mode.isVertical()) {
             const content_omitted =
                 vertical_columns.visiblePrefixOmitsSource(
@@ -563,6 +584,34 @@ const Driver = struct {
         }
     }
 };
+
+fn simpleStyledShape(
+    glyphs: []const @import("../glyph_position.zig").GlyphPosition,
+    metadata: []const styled_buffer.Metadata,
+    text_len: usize,
+) bool {
+    if (glyphs.len == 0 or metadata.len != glyphs.len) return false;
+    var expected_byte_start: usize = 0;
+    for (glyphs, metadata) |glyph, item| {
+        if (glyph.cluster != expected_byte_start or
+            glyph.source_byte_len == 0 or
+            glyph.codepoint == 0x00ad or
+            glyph.isInlineObject() or
+            glyph.isTab() or
+            glyph.isDiscretionaryHyphen() or
+            glyph.isAutomaticHyphen() or
+            glyph.codepoint == '\n' or glyph.codepoint == '\r' or
+            glyph.codepoint == 0x0085 or glyph.codepoint == 0x2028 or
+            glyph.codepoint == 0x2029 or
+            item.minimum_line_height != null or
+            item.vertical_align != .baseline)
+        {
+            return false;
+        }
+        expected_byte_start = glyph.sourceByteEnd();
+    }
+    return expected_byte_start == text_len;
+}
 
 const SegmentContext = struct {
     buffer: *context_output.Buffer,

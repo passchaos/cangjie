@@ -694,9 +694,9 @@ test "applies letter and word spacing during paragraph layout" {
 
     try std.testing.expectEqual(@as(usize, 3), word_spaced.glyphs.len);
     try std.testing.expectApproxEqAbs(@as(f32, 18.0), word_spaced.glyphs[0].x_advance, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 15.0), word_spaced.glyphs[1].x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 17.0), word_spaced.glyphs[1].x_advance, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 18.0), word_spaced.glyphs[2].x_advance, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 51.0), word_spaced.lines[0].width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 53.0), word_spaced.lines[0].width, 0.001);
 
     const wrapped = try TextShaper.layoutParagraphUtf8(cascade, &layout_buffer, "A A", 20, .{
         .max_width = 45,

@@ -2120,6 +2120,15 @@ explicitly reports `geometry_equal=false` for the other currently divergent
 policies; those rows remain performance-only. A later small `10 * 3` audit
 also found Japanese alternating equal under this normalization, while 15/18
 rows still differ.
+The styled-spacing audit then exposed a concrete semantic bug rather than a
+normalization artifact: Cangjie replaced letter spacing with word spacing at
+U+0020, while Parley and CSS Text apply word spacing in addition to the normal
+letter-spacing contribution. Paragraph, styled, reshaped-line, and vertical
+spacing paths now share the additive rule. A strict fixed-CPU-30 `100 * 5`
+matrix keeps all 18 performance rows ahead (`1.414x--14.669x`) and raises the
+normalized geometry matches from 3/18 to 5/18 by closing Latin spacing and
+Latin alternating construction. The remaining 13 rows are still explicitly
+performance-only.
 
 The matrix now also includes a default-style retained-reflow row for each
 script. Cangjie prepares a `ShapedParagraph` once; Parley builds one `Layout`

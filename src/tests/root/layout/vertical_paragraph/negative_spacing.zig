@@ -42,7 +42,7 @@ test "vertical negative letter and word spacing shrink positive advances" {
         0.001,
     );
     try std.testing.expectApproxEqAbs(
-        natural_word - 6,
+        natural_word - 10,
         compressed.glyphs[1].y_advance,
         0.001,
     );

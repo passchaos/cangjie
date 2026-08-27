@@ -44,7 +44,10 @@ test "pure RTL styled lines keep glyph metadata parallel" {
     for (layout.glyphs, styled.glyphMetadata()) |glyph, metadata| {
         try std.testing.expectEqual(@as(u32, 7), metadata.style_index);
         try std.testing.expectEqual(
-            @as(f32, if (glyph.codepoint == ' ') 3 else 1),
+            // CSS/Parley word spacing is additive to letter spacing. A space
+            // therefore receives both values rather than replacing the
+            // ordinary inter-character contribution.
+            @as(f32, if (glyph.codepoint == ' ') 4 else 1),
             metadata.layout_spacing,
         );
     }

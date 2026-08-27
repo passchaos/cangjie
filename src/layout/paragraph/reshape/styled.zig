@@ -585,7 +585,7 @@ pub const Recipe = struct {
             else if (glyph.isTab())
                 0
             else if (glyph.codepoint == ' ')
-                span.word_spacing
+                span.letter_spacing + span.word_spacing
             else
                 span.letter_spacing;
             self.candidate_metadata.appendAssumeCapacity(.{

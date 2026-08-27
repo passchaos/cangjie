@@ -111,12 +111,12 @@ test "styled vertical negative spacing validates final advances" {
         },
     );
     try std.testing.expectApproxEqAbs(@as(f32, 15), result.glyphs[0].y_advance, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 11), result.glyphs[1].y_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 6), result.glyphs[1].y_advance, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 15), result.glyphs[2].y_advance, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 41), result.height, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 36), result.height, 0.001);
     try std.testing.expectEqual(result.glyphs.len, styled.glyphMetadata().len);
     const content_widths = styled.contentWidths().?;
-    try std.testing.expectApproxEqAbs(@as(f32, 41), content_widths.max, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 36), content_widths.max, 0.001);
 
     const invalid_spans = [_]support.StyledParagraphSpan{.{
         .byte_start = 0,

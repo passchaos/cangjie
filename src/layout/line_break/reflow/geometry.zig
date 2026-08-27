@@ -215,7 +215,10 @@ pub fn defaultSpaceAdvance(glyphs: []const GlyphPosition) f32 {
 pub fn spacingForGlyph(codepoint: u21, options: anytype) f32 {
     if (codepoint == '\n') return 0;
     if (codepoint == discretionary_hyphen.soft_hyphen) return 0;
-    if (codepoint == ' ') return options.word_spacing;
+    // Word spacing supplements letter spacing at a space; it does not replace
+    // the inter-character contribution. This matches CSS text spacing and the
+    // layout model used by Parley.
+    if (codepoint == ' ') return options.letter_spacing + options.word_spacing;
     return options.letter_spacing;
 }
 

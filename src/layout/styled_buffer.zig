@@ -62,7 +62,7 @@ pub fn rebuild(
             else if (glyph.isTab())
                 0
             else if (isWordSpacingCodepoint(glyph.codepoint))
-                span.word_spacing
+                span.letter_spacing + span.word_spacing
             else if (!isMandatoryLineBreak(glyph.codepoint))
                 span.letter_spacing
             else

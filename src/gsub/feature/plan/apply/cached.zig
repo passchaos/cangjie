@@ -77,6 +77,26 @@ pub fn merged(
     prove_metadata: bool,
 ) Error!void {
     if (plan.lookups.len == 0) return;
+    return mergedNonEmpty(
+        Executor,
+        view,
+        plan,
+        glyphs,
+        allocator,
+        run,
+        prove_metadata,
+    );
+}
+
+noinline fn mergedNonEmpty(
+    comptime Executor: type,
+    view: View,
+    plan: model.MergedLookupPlan,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    run: Options,
+    prove_metadata: bool,
+) Error!void {
     if (prove_metadata) {
         try metadata.validateMergedLookupPlan(run, glyphs.items.len, plan);
     }

@@ -174,6 +174,29 @@ pub fn indexesMatch(indexes: []const usize, objects: []const Object) bool {
     return true;
 }
 
+/// Validate mutable retained-reflow object geometry after preparation already
+/// proved every UTF-8 marker and stable byte anchor. This avoids rescanning the
+/// immutable paragraph text on each layout while preserving all numeric and
+/// ordering checks for caller-supplied geometry.
+pub fn validateRetained(indexes: []const usize, objects: []const Object) !void {
+    if (indexes.len != objects.len) return error.InvalidInlineObjects;
+    for (indexes, objects, 0..) |index, object, object_index| {
+        if (object.byte_index != index or
+            (object_index != 0 and object.byte_index <= objects[object_index - 1].byte_index) or
+            !std.math.isFinite(object.width) or object.width < 0 or
+            !std.math.isFinite(object.height) or object.height < 0)
+        {
+            return error.InvalidInlineObjects;
+        }
+        const baseline = object.resolvedBaseline();
+        if (!std.math.isFinite(baseline) or baseline < 0 or
+            baseline > object.height)
+        {
+            return error.InvalidInlineObjects;
+        }
+    }
+}
+
 pub fn validatePlacements(
     objects: []const Object,
     placements: []const Placement,

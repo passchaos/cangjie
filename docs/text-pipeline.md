@@ -2264,3 +2264,9 @@ Japanese spacing row moves to `1.811x` ahead, taking the matrix to 17/18. A
 equivalent floating advances in a different order; the cross-engine logical
 geometry checksum is unchanged. Japanese alternating remains the sole timing
 gap.
+
+Retained object reflow now validates mutable geometry against byte anchors
+proved at preparation instead of rescanning immutable UTF-8 markers. For
+200,000 Arabic inline-object reflows this reduces instructions from about
+`5.39B` to `5.05B`, branches from `0.853B` to `0.730B`, and cycles from
+`1.56B` to `1.45B`; both checksums remain unchanged.

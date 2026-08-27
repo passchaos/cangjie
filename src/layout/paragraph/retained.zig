@@ -238,9 +238,10 @@ pub const ShapedParagraph = struct {
         // Preparation already proved that immutable text without markers has
         // an empty object list. Avoid rescanning the full source on the common
         // object-free reflow; non-empty geometry remains fully validated.
-        if (options.inline_objects.len != 0) {
-            try inline_object.validate(self.text, options.inline_objects);
-        }
+        try inline_object.validateRetained(
+            self.inline_object_indexes,
+            options.inline_objects,
+        );
         if (options.word_break_dictionary != self.word_break_dictionary or
             options.hyphenation.dictionary != self.hyphenation_dictionary or
             !inline_object.indexesMatch(

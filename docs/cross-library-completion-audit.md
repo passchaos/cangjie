@@ -40,10 +40,10 @@ x86-64, pinned to CPU 30 where the harness supports it:
   7 --cpu 30`: 18/18 count/stability rows passed. After removing Parley's
   timed O(n) semantic-summary walk to match Cangjie's O(1) timed consumer,
   Cangjie leads 17/18 rows. Default Latin, Arabic, and Japanese retained reflow
-  lead by `1.399x`, `1.026x`, and `1.471x`; their inline-object counterparts
-  lead by `1.157x`, `1.205x`, and `1.187x`. Arabic default, spacing,
-  alternating, and inline-object construction lead by `1.174x`, `1.142x`,
-  `1.007x`, and `1.170x`; Japanese spacing leads by `1.811x`. Japanese alternating
+  lead by `1.390x`, `1.053x`, and `1.432x`; their inline-object counterparts
+  lead by `1.191x`, `1.116x`, and `1.280x`. Arabic default, spacing,
+  alternating, and inline-object construction lead by `1.167x`, `1.184x`,
+  `1.009x`, and `1.183x`; Japanese spacing leads by `1.796x`. Japanese alternating
   construction rows remain performance gaps. Logical-line geometry agrees
   on 9/18 rows after preserving source ranges, advances, and relative cluster
   placement while discarding only a per-line translation and sub-1/1024 px

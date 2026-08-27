@@ -4644,3 +4644,14 @@ shaping-performance superiority.
   Amiri words statistically tied/slightly behind (`0.997x`), so broader
   performance closure still requires a stability-margin policy rather than
   treating a single near-tie as universal superiority.
+- Empty cached merged GSUB plans now return before table/version parsing and
+  run-state preparation. This is a semantic no-op because the plan contains no
+  lookup to execute; non-empty and untrusted plans keep their existing checks.
+  Against the independently built pre-change binary on fixed CPU 30, twenty
+  interleaved A/B/B/A corpus passes reduced retired instructions by about
+  `1.0%` for Amiri words and `0.98%` for long Amiri, and branches by about
+  `1.0%` and `1.07%`; Latin and Devanagari retired work stayed within `0.03%`.
+  Checksums were unchanged. The full ReleaseFast suite passes, and a strict
+  5-iteration, 11-sample matrix measured `1.006x` for Amiri words and `1.040x`
+  for Devanagari against the faster reference. These margins remain too small
+  for a universal shaping-performance claim without repeated stability runs.

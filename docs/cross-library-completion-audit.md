@@ -10,7 +10,7 @@ one benchmark. The claim remains **open** until every row below is closed.
 | Reference | Concrete completion criterion | Current artifact/evidence | Status |
 | --- | --- | --- | --- |
 | HarfBuzz | Exact glyph IDs, clusters, advances, offsets, and relevant flags across retained upstream and production-font corpora | `shaping-parity-smoke`, `shaping-corpus-parity-smoke`, `tests/data/`, `docs/shaping-parity.md` | Strong retained coverage, not exhaustive |
-| HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: the new Devanagari output specialization moves the retained row to about `1.03x`, but Amiri words remains a near tie and `react-dom.txt` is not yet in this performance matrix |
+| HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: `react-dom.txt` is now covered and leads by more than `1.50x`, while Amiri words remains a near tie and therefore does not establish superiority |
 | Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; broader semantic differentials and owning-outline stability remain open |
 | FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `glyph-bench`, raster evidence in `docs/shaping-parity.md` | Open: current evidence is strongest for repeated direct grayscale raster; full lifecycle/format matrix is incomplete |
 | Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: current matrix covers three scripts and three style modes, but cross-engine checksum semantics and several layout modes are not equivalent/comparable |
@@ -43,6 +43,11 @@ long), and `1.001x` (Devanagari). An empty cached merged-stage optimization
 then reduced Amiri-word retired instructions/branches/cycles by about
 `1.23%`/`1.26%`/`1.43%`; a subsequent strict run measured `1.006x`, but this
 remains inside the audit's noise margin rather than a proven stable lead.
+The separate long mixed-code suite now measures both retained `react-dom.txt`
+font rows. Consecutive fixed-CPU-30 symmetric `1 * 7` and `1 * 11` runs
+measured `1.500x`/`1.522x` for Roboto and `1.525x`/`1.531x` for Source Serif
+against the faster of HarfBuzz and HarfRust. This closes the missing-workload
+instrumentation gap, but does not change the near-tie status of Amiri words.
 
 ## Audit rules
 

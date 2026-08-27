@@ -20,13 +20,37 @@ class Case:
     direction: str
 
 
-CASES = (
+CORE_CASES = (
     Case("roboto-words", "Roboto-Regular.ttf", "en-words.txt", "ltr"),
     Case("source-serif-words", "SourceSerifVariable-Roman.ttf", "en-words.txt", "ltr"),
     Case("amiri-words", "Amiri-Regular.ttf", "fa-words.txt", "rtl"),
     Case("amiri-long", "Amiri-Regular.ttf", "fa-thelittleprince.txt", "rtl"),
     Case("devanagari-words", "NotoSansDevanagari-Regular.ttf", "hi-words.txt", "ltr"),
 )
+
+# The mixed source-code corpus is deliberately a separate suite. A single pass
+# shapes about one million glyphs, so silently adding it to the core matrix
+# would make the commonly used 5-iteration/11-sample command prohibitively
+# expensive and could encourage users to reduce the core suite's rigor.
+REACT_DOM_CASES = (
+    Case("roboto-react-dom", "Roboto-Regular.ttf", "react-dom.txt", "ltr"),
+    Case(
+        "source-serif-react-dom",
+        "SourceSerifVariable-Roman.ttf",
+        "react-dom.txt",
+        "ltr",
+    ),
+)
+
+
+def cases_for_suite(suite: str) -> tuple[Case, ...]:
+    if suite == "core":
+        return CORE_CASES
+    if suite == "react-dom":
+        return REACT_DOM_CASES
+    if suite == "all":
+        return CORE_CASES + REACT_DOM_CASES
+    raise ValueError(f"unknown suite: {suite}")
 
 
 def run(command: list[str], cpu: int | None) -> dict[str, str]:
@@ -95,8 +119,21 @@ def test_glyph_count_normalization() -> None:
         raise AssertionError("non-integral aggregate must be rejected")
 
 
+def test_case_selection() -> None:
+    assert cases_for_suite("core") == CORE_CASES
+    assert cases_for_suite("react-dom") == REACT_DOM_CASES
+    assert cases_for_suite("all") == CORE_CASES + REACT_DOM_CASES
+    try:
+        cases_for_suite("unknown")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unknown suites must be rejected")
+
+
 def main() -> int:
     test_glyph_count_normalization()
+    test_case_selection()
     parser = argparse.ArgumentParser()
     parser.add_argument("--cangjie", required=True, type=Path)
     parser.add_argument("--harfbuzz", required=True, type=Path)
@@ -105,6 +142,13 @@ def main() -> int:
     parser.add_argument("--iterations", type=int, default=1)
     parser.add_argument("--samples", type=int, default=1)
     parser.add_argument("--cpu", type=int)
+    parser.add_argument(
+        "--suite", choices=("core", "react-dom", "all"), default="core",
+        help=(
+            "corpus suite to run; react-dom is separate because each pass "
+            "shapes about one million glyphs"
+        ),
+    )
     args = parser.parse_args()
     if args.iterations <= 0 or args.samples <= 0:
         parser.error("iterations and samples must be positive")
@@ -115,7 +159,8 @@ def main() -> int:
         check=True,
     )
     harfrust = args.harfrust_manifest.parent / "target/release/harfrust-shape-oracle"
-    for case in CASES:
+    cases = cases_for_suite(args.suite)
+    for case in cases:
         font = args.corpus_root / "fonts" / case.font
         text = args.corpus_root / "texts" / case.text
         cangjie_cmd = cangjie_command(
@@ -166,7 +211,7 @@ def main() -> int:
             f"glyphs={glyphs_per_iteration(cangjie_a, args.iterations, args.samples, True)}"
         )
     print(
-        f"Cangjie/HarfBuzz/HarfRust shaping matrix completed: {len(CASES)} corpora"
+        f"Cangjie/HarfBuzz/HarfRust shaping matrix completed: {len(cases)} corpora"
     )
     return 0
 

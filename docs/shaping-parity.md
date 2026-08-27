@@ -50,6 +50,7 @@ zig build shape-bench -Doptimize=ReleaseFast -- --font ~/Work/harfrust/harfrust/
 zig build shape-bench -Doptimize=ReleaseFast -- --engine coretext --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/fa-thelittleprince.txt --direction rtl --iterations 1 --warmup 2 --samples 5
 zig build shape-bench -Doptimize=ReleaseFast -- --engine harfbuzz --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/fa-thelittleprince.txt --direction rtl --iterations 1 --warmup 2 --samples 5
 zig build shaping-performance-matrix -Doptimize=ReleaseFast -Denable-harfbuzz=true -Dharfbuzz-prefix=~/.cache/cangjie-next/harfbuzz-prefix -- --iterations 5 --samples 11 --cpu 30
+zig build shaping-performance-matrix -Doptimize=ReleaseFast -Denable-harfbuzz=true -Dharfbuzz-prefix=~/.cache/cangjie-next/harfbuzz-prefix -- --suite react-dom --iterations 1 --samples 11 --cpu 30
 ```
 
 HarfBuzz reference runs require `-Denable-harfbuzz=true`. If the local
@@ -71,15 +72,17 @@ Bengali HarfBuzz in-house shaping
 subset that omits `hhea`/`hmtx` and `glyf`, exercising shape-only font parsing
 with HarfBuzz-compatible fallback advances, plus Arabic modifier-mark ordering
 fixtures with and without CGJ.
-The 24,709-line `react-dom.txt` source corpus is retained against both
+The 29,869-line `react-dom.txt` source corpus is retained against both
 references as a distinct long mixed-code workload. Roboto produces 1,043,900
 glyphs with checksum `eafe0f780e6696cb`; SourceSerifVariable produces
-1,042,546 glyphs with checksum `3a6d8292bce55621`. A fixed-CPU-30 serial
-Cangjie/HarfBuzz/HarfBuzz/Cangjie timing matrix remained frequency-skewed but
-consistently exposed a deficit: Roboto measured `601.73/438.21` versus
-`363.76/332.51 ns/glyph`, and SourceSerif measured `438.97/618.12` versus
-`332.75/344.36 ns/glyph`. This code-shaped corpus is therefore an active
-HarfBuzz-relative performance target, not a Cangjie speed claim.
+1,042,546 glyphs with checksum `3a6d8292bce55621`. It is available as the
+separate `--suite react-dom` performance matrix because each process shapes
+roughly one million glyphs per iteration. Two consecutive fixed-CPU-30
+symmetric runs (`1 * 7` and `1 * 11`) measured Cangjie at `1.500x`/`1.522x`
+against the faster reference for Roboto and `1.525x`/`1.531x` for Source
+Serif. The strict `1 * 11` run reported Cangjie/HarfBuzz/HarfRust geometric
+means from paired passes of approximately `69.27/124.71/105.40 ns/glyph` and
+`66.79/123.81/102.27 ns/glyph`, respectively.
 It also retains focused Indic in-house rows including Bengali contextual `pres`
 at syllable boundaries.
 
@@ -92,7 +95,9 @@ zig build shaping-corpus-parity-smoke -Doptimize=ReleaseFast -Denable-harfbuzz=t
 
 This is a retained correctness-corpus result, not a completion signal for the
 broader performance and cross-script coverage objectives below.
-The `shaping-performance-matrix` command runs five representative corpora in
+The `shaping-performance-matrix` command runs five representative corpora by
+default and two long mixed-code corpora with `--suite react-dom` (or all seven
+with `--suite all`) in
 symmetric Cangjie/HarfBuzz/HarfRust/HarfRust/HarfBuzz/Cangjie order and reports
 the geometric-mean speedup against the faster reference. The runner normalizes
 the Zig engines' aggregate `iterations * samples` glyph count to the HarfRust

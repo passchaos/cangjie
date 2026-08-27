@@ -104,8 +104,13 @@ pub const Cache = struct {
         allocator: std.mem.Allocator,
         target: scanline.Target,
         fill_rule: scanline.FillRule,
+        emboldened: bool,
     ) !bool {
-        if (self.sample_rows.fillCoverage(target, self.prepared_bounds)) {
+        if (self.sample_rows.fillCoverage(
+            target,
+            self.prepared_bounds,
+            emboldened,
+        )) {
             return true;
         }
         return self.sample_rows.fill(
@@ -114,6 +119,10 @@ pub const Cache = struct {
             self.prepared_bounds,
             fill_rule,
         );
+    }
+
+    pub fn hasCachedCoverage(self: *const Cache) bool {
+        return self.sample_rows.hasCoverage();
     }
 
     /// Admit only the second consecutive observation. Ordinary text runs do

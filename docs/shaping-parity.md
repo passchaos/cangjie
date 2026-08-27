@@ -4659,6 +4659,12 @@ shaping-performance superiority.
   `é` by `33.1%`/`54.3%`/`28.7%`; checksums were unchanged. This materially
   improves the direct repeated API, although the separately exposed prepared
   API remains the fastest Cangjie lifecycle for caller-managed reuse.
+  Small-glyph emboldening is also retained beside the base coverage, so 16 px
+  hits avoid allocating and filtering another temporary rectangle. A strict
+  1,000-iteration, 11-sample CPU-30 FreeType matrix then measured all eight
+  16 px rows ahead, including Arabic reused raster at `3.307x` and CJK reused
+  raster at `4.551x`; the full 40-row rerun is still required before closing
+  the complete raster matrix.
 - A stricter 5-iteration, 11-sample rerun of the five-corpus shaping matrix
   measured `1.202x` for Roboto, `1.102x` for Source Serif, `1.016x` for Amiri
   words, `1.105x` for long Amiri, and `0.986x` for Devanagari against the faster

@@ -910,6 +910,7 @@ pub const Rasterizer = struct {
                         self.allocator,
                         scanlineTarget(target),
                         .non_zero,
+                        self.embolden_small_glyphs and hint_size <= 16.0,
                     ))
                 {
                     const prepared = flatten_cache.prepared();
@@ -922,7 +923,9 @@ pub const Rasterizer = struct {
                         self.samples_per_axis,
                     );
                 }
-                if (self.embolden_small_glyphs and hint_size <= 20.0) {
+                if (self.embolden_small_glyphs and hint_size <= 20.0 and
+                    !flatten_cache.hasCachedCoverage())
+                {
                     try self.emboldenSmallGlyph(target, cached_lines, hint_size);
                 }
                 return;

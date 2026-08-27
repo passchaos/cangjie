@@ -30,6 +30,7 @@ pub const Cache = struct {
     rows: [max_sample_rows]Row = undefined,
     intersections: [max_intersections]scanline.WindingIntersection = undefined,
     coverage: [max_coverage_pixels]u8 = undefined,
+    emboldened_coverage: [max_coverage_pixels]u8 = undefined,
 
     /// Build sorted intersections for the default four vertical sample lanes.
     /// Capacity overflow simply disables this optional layer; the caller still
@@ -118,6 +119,16 @@ pub const Cache = struct {
         self.coverage_width = target_width;
         self.coverage_height = target_height;
         self.coverage_valid = true;
+        buildEmboldenedCoverage(
+            self.coverage[0..target_len],
+            self.emboldened_coverage[0..target_len],
+            target_width,
+            clipped,
+        );
+    }
+
+    pub fn hasCoverage(self: *const Cache) bool {
+        return self.coverage_valid;
     }
 
     /// Blend retained 4x4 non-zero coverage into a matching target.
@@ -125,6 +136,7 @@ pub const Cache = struct {
         self: *const Cache,
         target: scanline.Target,
         bounds: ?scanline.Bounds,
+        emboldened: bool,
     ) bool {
         if (!self.coverage_valid or
             target.width != self.coverage_width or
@@ -135,8 +147,12 @@ pub const Cache = struct {
             const start = @as(usize, @intCast(y)) * target.width +
                 @as(usize, @intCast(clipped.min_x));
             const len: usize = @intCast(clipped.max_x - clipped.min_x + 1);
+            const source = if (emboldened)
+                self.emboldened_coverage[start .. start + len]
+            else
+                self.coverage[start .. start + len];
             for (
-                self.coverage[start .. start + len],
+                source,
                 target.pixels[start .. start + len],
             ) |coverage, *pixel| {
                 pixel.* = @max(pixel.*, coverage);
@@ -259,8 +275,73 @@ test "cached sample rows match prepared-edge scan" {
         ));
         try std.testing.expectEqualSlices(u8, &expected, &actual);
         @memset(actual[0..], 0);
-        try std.testing.expect(cache.fillCoverage(actual_target, bounds));
+        try std.testing.expect(cache.fillCoverage(
+            actual_target,
+            bounds,
+            false,
+        ));
         try std.testing.expectEqualSlices(u8, &expected, &actual);
+    }
+}
+
+test "cached emboldening matches the direct small-glyph filter" {
+    var source = [_]u8{0} ** 25;
+    source[2 * 5 + 2] = 100;
+    var actual = [_]u8{0} ** 25;
+    buildEmboldenedCoverage(
+        &source,
+        &actual,
+        5,
+        .{ .min_x = 1, .min_y = 1, .max_x = 3, .max_y = 3 },
+    );
+    try std.testing.expectEqual(@as(u8, 124), actual[2 * 5 + 2]);
+    try std.testing.expectEqual(@as(u8, 60), actual[2 * 5 + 1]);
+    try std.testing.expectEqual(@as(u8, 60), actual[2 * 5 + 3]);
+    try std.testing.expectEqual(@as(u8, 66), actual[1 * 5 + 2]);
+    try std.testing.expectEqual(@as(u8, 66), actual[3 * 5 + 2]);
+}
+
+fn buildEmboldenedCoverage(
+    source: []const u8,
+    output: []u8,
+    width: u32,
+    bounds: scanline.Bounds,
+) void {
+    @memcpy(output, source);
+    var y = bounds.min_y;
+    while (y <= bounds.max_y) : (y += 1) {
+        var x = bounds.min_x;
+        while (x <= bounds.max_x) : (x += 1) {
+            const index = @as(usize, @intCast(y)) * width +
+                @as(usize, @intCast(x));
+            const coverage = source[index];
+            if (coverage == 0) continue;
+            const expanded: u8 = @intCast(@min(
+                @as(u16, 255),
+                @as(u16, coverage) + 24,
+            ));
+            const side: u8 = @intCast(@min(
+                @as(u16, 255),
+                @as(u16, coverage) * 3 / 5,
+            ));
+            const vertical: u8 = @intCast(@min(
+                @as(u16, 255),
+                @as(u16, coverage) * 2 / 3,
+            ));
+            output[index] = @max(output[index], expanded);
+            if (x > bounds.min_x) {
+                output[index - 1] = @max(output[index - 1], side);
+            }
+            if (x < bounds.max_x) {
+                output[index + 1] = @max(output[index + 1], side);
+            }
+            if (y > bounds.min_y) {
+                output[index - width] = @max(output[index - width], vertical);
+            }
+            if (y < bounds.max_y) {
+                output[index + width] = @max(output[index + width], vertical);
+            }
+        }
     }
 }
 

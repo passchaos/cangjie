@@ -62,12 +62,62 @@ pub const Info = struct {
     fd_select: ?FdSelectInfo = null,
 };
 
+/// Retained CFF2 execution metadata for an immutable, already-validated table.
+///
+/// `Info` contains all top-level INDEX bounds, while `font_dicts` owns the
+/// decoded Font DICT/Private DICT records. In particular, each private record
+/// retains its default-coordinate hint parameters and Local Subrs INDEX. This
+/// avoids reparsing the same DICT graph for every glyph in a raster session.
+/// The slices inside both fields continue to borrow `data`; callers must keep
+/// those bytes alive and unchanged until `deinit`.
+pub const Parsed = struct {
+    info: Info,
+    font_dicts: []const FontDictInfo = &.{},
+    allocator: ?std.mem.Allocator = null,
+
+    pub fn deinit(self: *Parsed) void {
+        if (self.allocator) |allocator| allocator.free(self.font_dicts);
+        self.* = undefined;
+    }
+};
+
 pub fn validate(data: []const u8, offset: usize, length: usize) Error!void {
     _ = try infoView(data, offset, length);
 }
 
 pub fn info(data: []const u8, offset: usize, length: usize) Error!Info {
     return try infoView(data, offset, length);
+}
+
+/// Parse and retain the metadata needed by repeated CFF2 charstring execution.
+pub fn parse(allocator: std.mem.Allocator, data: []const u8, offset: usize, length: usize) Error!Parsed {
+    if (offset > data.len or length > data.len - offset) return error.BadSfnt;
+    const table = data[offset .. offset + length];
+    const parsed_info = try infoView(data, offset, length);
+    const fd_array = parsed_info.fd_array_index orelse return .{ .info = parsed_info };
+    // FDSelect format 4 stores a u16 FD index, so every possible value can
+    // address one of at most 65,536 entries.
+    if (fd_array.count == 0 or fd_array.count > @as(u32, std.math.maxInt(u16)) + 1) return error.BadSfnt;
+
+    const font_dicts = try allocator.alloc(FontDictInfo, fd_array.count);
+    errdefer allocator.free(font_dicts);
+    for (font_dicts, 0..) |*slot, fd_index| {
+        slot.* = try parseFontDict(table, fd_array, fd_index);
+        // Private DICT `blend` carries operands across operator boundaries, so
+        // the generic structural parser cannot derive final blue-zone values.
+        // Resolve the overwhelmingly common default-coordinate case once.
+        slot.private_dict.hint_params = try parsePrivateHintParamsAtCoords(
+            table,
+            slot.private_dict.data,
+            parsed_info.top_dict.vstore_offset,
+            &.{},
+        );
+    }
+    return .{
+        .info = parsed_info,
+        .font_dicts = font_dicts,
+        .allocator = allocator,
+    };
 }
 
 pub fn fontDictIndex(data: []const u8, offset: usize, length: usize, glyph_id: usize, glyph_count: usize) Error!?u16 {
@@ -169,6 +219,17 @@ pub fn appendGlyphOutlineAtCoords(allocator: std.mem.Allocator, data: []const u8
     return try charstring_mod.appendOutline(CharStringScanContext, &execution.context, allocator, execution.charstring, outline);
 }
 
+/// Append an outline using metadata retained by `parse`. The table slice must
+/// be the same immutable CFF2 bytes used to produce `parsed`.
+pub fn appendGlyphOutlinePrepared(allocator: std.mem.Allocator, table: []const u8, parsed: Parsed, glyph_id: usize, glyph_count: usize, outline: *glyph_mod.GlyphOutline) Error!?CharStringBoundsInfo {
+    return appendGlyphOutlineAtCoordsPrepared(allocator, table, parsed, glyph_id, glyph_count, &.{}, outline);
+}
+
+pub fn appendGlyphOutlineAtCoordsPrepared(allocator: std.mem.Allocator, table: []const u8, parsed: Parsed, glyph_id: usize, glyph_count: usize, normalized_coords: []const f32, outline: *glyph_mod.GlyphOutline) Error!?CharStringBoundsInfo {
+    var execution = (try charStringExecutionContextPrepared(table, parsed, glyph_id, glyph_count, normalized_coords)) orelse return null;
+    return try charstring_mod.appendOutline(CharStringScanContext, &execution.context, allocator, execution.charstring, outline);
+}
+
 pub fn appendGlyphOutlineAtCoordsWithHints(
     allocator: std.mem.Allocator,
     data: []const u8,
@@ -246,6 +307,52 @@ fn charStringExecutionContext(data: []const u8, offset: usize, length: usize, gl
             .hint_params = if (private_dict) |private| private.hint_params else .{},
         },
     };
+}
+
+fn charStringExecutionContextPrepared(table: []const u8, parsed: Parsed, glyph_id: usize, glyph_count: usize, normalized_coords: []const f32) Error!?CharStringExecutionContext {
+    if (glyph_id >= glyph_count) return error.BadSfnt;
+    const index = parsed.info.charstrings_index orelse return null;
+    if (glyph_id >= index.count) return null;
+    const charstring = try indexObject(table, index, glyph_id);
+
+    const selected_fd = (try selectedFontDictIndex(table, parsed.info, glyph_id, glyph_count)) orelse 0;
+    var private_dict: ?PrivateDictInfo = if (parsed.info.fd_array_index != null) blk: {
+        if (selected_fd >= parsed.font_dicts.len) return error.BadSfnt;
+        break :blk parsed.font_dicts[selected_fd].private_dict;
+    } else null;
+    if (private_dict) |*private| {
+        // The cached parameters represent the default design-space location.
+        // Non-default coordinates still need to evaluate Private DICT blends,
+        // but retain all structural INDEX and Font DICT work.
+        if (!coordinatesAreDefault(normalized_coords)) {
+            private.hint_params = try parsePrivateHintParamsAtCoords(
+                table,
+                private.data,
+                parsed.info.top_dict.vstore_offset,
+                normalized_coords,
+            );
+        }
+    }
+
+    return .{
+        .charstring = charstring,
+        .context = .{
+            .table = table,
+            .vstore_offset = parsed.info.top_dict.vstore_offset,
+            .default_vs_index = if (private_dict) |private| private.variation_store_index else null,
+            .normalized_coords = normalized_coords,
+            .global_subrs_index = parsed.info.global_subrs_index,
+            .local_subrs_index = if (private_dict) |private| private.local_subrs_index else null,
+            .hint_params = if (private_dict) |private| private.hint_params else .{},
+        },
+    };
+}
+
+fn coordinatesAreDefault(normalized_coords: []const f32) bool {
+    for (normalized_coords) |coord| {
+        if (coord != 0) return false;
+    }
+    return true;
 }
 
 fn parsePrivateHintParamsAtCoords(
@@ -858,6 +965,123 @@ test "CFF2 execution uses Private DICT default vsindex" {
     const font_dict = (try fontDictInfo(&bytes, 0, bytes.len, 0)).?;
     try std.testing.expectEqual(@as(?u16, 0), font_dict.private_dict.variation_store_index);
     try std.testing.expect((try charStringBoundsInfo(&bytes, 0, bytes.len, 0, 2)) != null);
+}
+
+test "CFF2 prepared execution matches reparsed execution" {
+    const bytes = testCff2Table();
+    var parsed = try parse(std.testing.allocator, &bytes, 0, bytes.len);
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 1), parsed.font_dicts.len);
+
+    var expected = glyph_mod.GlyphOutline.init(
+        std.testing.allocator,
+        0,
+        .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 },
+        0,
+        0,
+    );
+    defer expected.deinit();
+    const expected_bounds = (try appendGlyphOutline(
+        std.testing.allocator,
+        &bytes,
+        0,
+        bytes.len,
+        0,
+        2,
+        &expected,
+    )).?;
+
+    var actual = glyph_mod.GlyphOutline.init(
+        std.testing.allocator,
+        0,
+        .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 },
+        0,
+        0,
+    );
+    defer actual.deinit();
+    const actual_bounds = (try appendGlyphOutlinePrepared(
+        std.testing.allocator,
+        &bytes,
+        parsed,
+        0,
+        2,
+        &actual,
+    )).?;
+
+    try std.testing.expectEqualDeep(expected_bounds, actual_bounds);
+    try std.testing.expectEqualDeep(expected.commands.items, actual.commands.items);
+}
+
+test "CFF2 prepared execution reevaluates non-default Private DICT blends" {
+    const bytes = testCff2BlendTable();
+    var parsed = try parse(std.testing.allocator, &bytes, 0, bytes.len);
+    defer parsed.deinit();
+
+    var expected = glyph_mod.GlyphOutline.init(
+        std.testing.allocator,
+        0,
+        .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 },
+        0,
+        0,
+    );
+    defer expected.deinit();
+    const expected_bounds = (try appendGlyphOutlineAtCoords(
+        std.testing.allocator,
+        &bytes,
+        0,
+        bytes.len,
+        0,
+        1,
+        &.{0.5},
+        &expected,
+    )).?;
+
+    var actual = glyph_mod.GlyphOutline.init(
+        std.testing.allocator,
+        0,
+        .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 },
+        0,
+        0,
+    );
+    defer actual.deinit();
+    const actual_bounds = (try appendGlyphOutlineAtCoordsPrepared(
+        std.testing.allocator,
+        &bytes,
+        parsed,
+        0,
+        1,
+        &.{0.5},
+        &actual,
+    )).?;
+
+    try std.testing.expectEqualDeep(expected_bounds, actual_bounds);
+    try std.testing.expectEqualDeep(expected.commands.items, actual.commands.items);
+}
+
+test "CFF2 prepared execution treats explicit zero coordinates as default" {
+    const bytes = testCff2BlendTable();
+    var parsed = try parse(std.testing.allocator, &bytes, 0, bytes.len);
+    defer parsed.deinit();
+
+    var outline = glyph_mod.GlyphOutline.init(
+        std.testing.allocator,
+        0,
+        .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 },
+        0,
+        0,
+    );
+    defer outline.deinit();
+    const bounds = (try appendGlyphOutlineAtCoordsPrepared(
+        std.testing.allocator,
+        &bytes,
+        parsed,
+        0,
+        1,
+        &.{0},
+        &outline,
+    )).?;
+    try std.testing.expectEqual(@as(f32, 50), bounds.x_min);
+    try std.testing.expectEqual(@as(f32, 60), bounds.x_max);
 }
 
 test "CFF2 exposes Font DICT private metadata and local subrs" {

@@ -12,7 +12,7 @@ one benchmark. The claim remains **open** until every row below is closed.
 | HarfBuzz | Exact glyph IDs, clusters, advances, offsets, and relevant flags across retained upstream and production-font corpora | `shaping-parity-smoke`, `shaping-corpus-parity-smoke`, `tests/data/`, `docs/shaping-parity.md` | Strong retained coverage, not exhaustive |
 | HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: `react-dom.txt` is now covered and leads by more than `1.50x`, while Amiri words remains a near tie and therefore does not establish superiority |
 | Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; broader semantic differentials and owning-outline stability remain open |
-| FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: the matrix now distinguishes cached-session, fresh owning-outline, and reused-outline boundaries and includes CFF2; CFF2 owning is near parity, while bitmap/color, hinting-target, and cold parse lifecycles remain incomplete |
+| FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 75 maintained grayscale glyf/CFF1/CFF2 lifecycle rows now lead, while bitmap/color, hinting-target, cold parse, broader glyph coverage, and additional platforms remain incomplete |
 | Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the 18-row matrix covers three scripts, three construction styles, retained reflow, and matched in-flow inline objects; normalized geometry currently agrees on 3/18 rows, while vertical, fallback, and out-of-flow modes are not comparable |
 | Robustness | Malformed supported inputs fail atomically under safety checks and sustained coverage-guided fuzzing | `font-fuzz-smoke`, `font-fuzz`, regression fixtures | Open: the retained 100K campaign is useful evidence, not exhaustive format coverage |
 | Platform scope | Results reproduced on each supported target or the performance claim explicitly scoped to named hardware/OS/toolchain versions | benchmark documentation | Open: current performance evidence is primarily one Linux x86-64 host |
@@ -52,8 +52,10 @@ The following checks were rerun from a clean worktree at commits through
   versus FreeType. The retained cache enlargement removed the dominant CJK
   deficit, and retained coverage/emboldening then closed every row. A strict
   post-change `500 * 11` run measured all 40 rows ahead (`1.177x--4.522x`).
-  The expanded 75-row run including CFF2 and fresh owning outlines completed;
-  74 rows led, while CFF2 owning at 8 px measured `0.989x` and remains open.
+  CFF2 now retains its parsed top-level and per-FD Private DICT execution
+  metadata. The expanded post-change 75-row run including CFF2 and fresh
+  owning outlines completed with every row ahead (`1.177x--17.000x`); the
+  former CFF2 owning 8 px blocker moved from `0.989x` to `1.328x`.
 
 The latest strict shaping run at `077cb97e` measured speedups of `1.213x`
 (Roboto), `1.042x` (Source Serif), `0.994x` (Amiri words), `1.083x` (Amiri
@@ -84,9 +86,10 @@ instrumentation gap, but does not change the near-tie status of Amiri words.
 ## Current conclusion
 
 Cangjie is already ahead in the maintained 19-case Fontations/Skrifa matrix,
-the 18-case Parley timing matrix, the retained FreeType repeated-direct
-grayscale probes, and most of the five-corpus shaping matrix. That evidence is
-substantial but does not satisfy the stronger overall claim. In particular,
+the 18-case Parley timing matrix, the complete maintained 75-row FreeType
+grayscale lifecycle matrix, and most of the five-corpus shaping matrix. That
+evidence is substantial but does not satisfy the stronger overall claim. In particular,
 the latest shaping runs still place Amiri words near parity; Devanagari now
 leads the retained row by about `1.03x`, but that is only one font/corpus. The
-broader FreeType/Parley lifecycle and semantic matrices remain incomplete.
+broader FreeType bitmap/color/hinting/cold-parse coverage and Parley semantic
+matrices remain incomplete.

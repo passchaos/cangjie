@@ -147,6 +147,7 @@ pub const Cff2Info = cff2_mod.Info;
 pub const Cff2FontDictInfo = cff2_mod.FontDictInfo;
 pub const Cff2PrivateDictInfo = cff2_mod.PrivateDictInfo;
 const CffParsedInfo = cff_mod.Parsed;
+const Cff2ParsedInfo = cff2_mod.Parsed;
 pub const Cff2CharStringScanInfo = cff2_mod.CharStringScanInfo;
 pub const Cff2CharStringBoundsInfo = cff2_mod.CharStringBoundsInfo;
 pub const GvarInfo = gvar_mod.Info;
@@ -785,6 +786,7 @@ pub const Font = struct {
     cff: ?TableRecord,
     cff_parsed: ?CffParsedInfo,
     cff2: ?TableRecord,
+    cff2_parsed: ?Cff2ParsedInfo,
     cmap_subtables: []CmapSubtable,
     selected_cmap_subtable: ?CmapSubtable,
     selected_cmap_groups: []cmap_mod.SequentialGroup,
@@ -1068,7 +1070,16 @@ pub const Font = struct {
         // remaining cross-table and checksum validation below. Transfer that
         // ownership only when the complete Font is returned.
         errdefer if (cff_parsed) |*parsed| parsed.deinit();
-        if (format == .opentype_cff and cff2 != null) try validateCff2Table(data, cff2.?);
+        var cff2_parsed: ?Cff2ParsedInfo = if (format == .opentype_cff and cff2 != null) blk: {
+            const cff2_table = cff2.?;
+            break :blk try cff2_mod.parse(
+                allocator,
+                data,
+                cff2_table.offset,
+                cff2_table.length,
+            );
+        } else null;
+        errdefer if (cff2_parsed) |*parsed| parsed.deinit();
         if (format == .truetype and has_glyf_outlines) {
             const limits = try maxp_info.trueTypeLimits();
             try loca_mod.validate(
@@ -1264,6 +1275,7 @@ pub const Font = struct {
             .cff = cff,
             .cff_parsed = cff_parsed,
             .cff2 = cff2,
+            .cff2_parsed = cff2_parsed,
             .cmap_subtables = cmap_subtables,
             .selected_cmap_subtable = selected_cmap_subtable,
             .selected_cmap_groups = selected_cmap_groups,
@@ -1276,6 +1288,7 @@ pub const Font = struct {
 
     pub fn deinit(self: *Font) void {
         if (self.cff_parsed) |*parsed| parsed.deinit();
+        if (self.cff2_parsed) |*parsed| parsed.deinit();
         self.allocator.free(self.selected_cmap_groups);
         self.allocator.free(self.selected_cmap_group_buckets);
         self.allocator.free(self.cmap_subtables);
@@ -1509,8 +1522,20 @@ pub const Font = struct {
         const metrics = try self.horizontalMetricsForReadMode(glyph_id, read_mode);
         var outline = glyph_mod.GlyphOutline.init(allocator, glyph_id, .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 }, metrics.advance_width, metrics.left_side_bearing);
         errdefer outline.deinit();
-        if (try cff2_mod.appendGlyphOutlineAtCoords(allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, normalized_coords, &outline)) |bounds_info| {
-            outline.bounds = cff_outline.boundsFromCff2(bounds_info);
+        const bounds_info = if (read_mode.shouldRevalidate())
+            try cff2_mod.appendGlyphOutlineAtCoords(allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, normalized_coords, &outline)
+        else
+            try cff2_mod.appendGlyphOutlineAtCoordsPrepared(
+                allocator,
+                self.data[cff2.offset .. cff2.offset + cff2.length],
+                self.cff2_parsed orelse return error.BadSfnt,
+                glyph_id,
+                self.glyph_count,
+                normalized_coords,
+                &outline,
+            );
+        if (bounds_info) |value| {
+            outline.bounds = cff_outline.boundsFromCff2(value);
             return outline;
         }
         outline.deinit();
@@ -6499,8 +6524,19 @@ pub const Font = struct {
                 try sfnt.checksum.validate(self.data, cff2);
                 try validateCff2Table(self.data, cff2);
             }
-            if (try cff2_mod.appendGlyphOutline(outline.allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, outline)) |bounds_info| {
-                outline.bounds = cff_outline.boundsFromCff2(bounds_info);
+            const bounds_info = if (read_mode.shouldRevalidate())
+                try cff2_mod.appendGlyphOutline(outline.allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, outline)
+            else
+                try cff2_mod.appendGlyphOutlinePrepared(
+                    outline.allocator,
+                    self.data[cff2.offset .. cff2.offset + cff2.length],
+                    self.cff2_parsed orelse return error.BadSfnt,
+                    glyph_id,
+                    self.glyph_count,
+                    outline,
+                );
+            if (bounds_info) |value| {
+                outline.bounds = cff_outline.boundsFromCff2(value);
             }
         } else {
             const cff = self.cff orelse return error.MissingTable;
@@ -6696,10 +6732,22 @@ pub const Font = struct {
                 try sfnt.checksum.validate(self.data, cff2);
                 try validateCff2Table(self.data, cff2);
             }
-            if (normalizedVariationCoordinatesAreDefault(normalized_coords)) {
-                _ = try cff2_mod.appendGlyphOutline(outline.allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, outline);
+            if (read_mode.shouldRevalidate()) {
+                if (normalizedVariationCoordinatesAreDefault(normalized_coords)) {
+                    _ = try cff2_mod.appendGlyphOutline(outline.allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, outline);
+                } else {
+                    _ = try cff2_mod.appendGlyphOutlineAtCoords(outline.allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, normalized_coords, outline);
+                }
             } else {
-                _ = try cff2_mod.appendGlyphOutlineAtCoords(outline.allocator, self.data, cff2.offset, cff2.length, glyph_id, self.glyph_count, normalized_coords, outline);
+                _ = try cff2_mod.appendGlyphOutlineAtCoordsPrepared(
+                    outline.allocator,
+                    self.data[cff2.offset .. cff2.offset + cff2.length],
+                    self.cff2_parsed orelse return error.BadSfnt,
+                    glyph_id,
+                    self.glyph_count,
+                    normalized_coords,
+                    outline,
+                );
             }
         } else {
             const cff = self.cff orelse return error.MissingTable;

@@ -4691,6 +4691,24 @@ shaping-performance superiority.
   row except CFF2 owning at 8 px led; that remaining row measured `0.989x`
   (`2894.6` versus `2862.5 ns`) and is therefore an explicit near-parity
   blocker rather than a claimed win.
+- CFF2 face parsing now retains the validated Top DICT/INDEX graph and every
+  decoded Font DICT/Private DICT record, including Local Subrs and default-
+  coordinate Type2 hint parameters. Immutable glyph sessions use this prepared
+  state; public mutation-aware APIs retain their checksum and structural
+  revalidation. Non-default variation coordinates reuse structural metadata
+  but reevaluate Private DICT blends. Against the exact `05998367` baseline, a
+  fixed-CPU-30 A/B/B/A `raster-owning` probe over 200,000 Cantarell CFF2 `A`
+  renders reduced retired instructions from about `8.418B` to `5.779B`
+  (`31.3%`), branches from `1.490B` to `929.6M` (`37.6%`), and cycles from
+  about `2.573B` to `1.896B` (`26.3%`); checksums were unchanged. A symmetric
+  Cangjie/FreeType/FreeType/Cangjie counter run measured about
+  `5.779B/6.605B` instructions, `929.6M/1.176B` branches, and
+  `1.832B/2.500B` cycles for Cangjie/FreeType. The complete post-change
+  fixed-CPU-30 `500 * 11` lifecycle matrix passed all 75 rows, ranging from
+  `1.177x` to `17.000x`; CFF2 owning at 8 px measured `2160.3/2868.6 ns`, or
+  `1.328x`, closing the sole maintained grayscale matrix deficit. This does
+  not close the broader FreeType audit for bitmap/color formats, alternative
+  hinting targets, cold parsing, more glyphs, or additional platforms.
 - A stricter 5-iteration, 11-sample rerun of the five-corpus shaping matrix
   measured `1.202x` for Roboto, `1.102x` for Source Serif, `1.016x` for Amiri
   words, `1.105x` for long Amiri, and `0.986x` for Devanagari against the faster

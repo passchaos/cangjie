@@ -27,6 +27,7 @@ class Case:
     compare_checksum: bool = True
     font_size: str | None = None
     fixture: bool = True
+    variation: str | None = None
 
 
 CASES = (
@@ -60,6 +61,14 @@ CASES = (
     Case(
         "outline-cff2-reuse", "outline-reuse", "Cantarell-VF-ABC.otf",
         1, fixture=False,
+    ),
+    Case(
+        "outline-cff2-var-max", "outline-session",
+        "Cantarell-VF-ABC.otf", 1, fixture=False, variation="1",
+    ),
+    Case(
+        "outline-cff2-var-min", "outline-session",
+        "Cantarell-VF-ABC.otf", 1, fixture=False, variation="-1",
     ),
 )
 
@@ -113,6 +122,8 @@ def cangjie_command(
     ]
     if case.font_size is not None:
         command.extend(("--font-size", case.font_size))
+    if case.variation is not None:
+        command.extend(("--variation", case.variation))
     return command
 
 
@@ -128,9 +139,13 @@ def skrifa_command(
         "outline-session": "outline",
         "outline-reuse": "outline-reuse",
     }.get(case.mode, case.mode)
+    if case.variation is not None and mode == "outline":
+        mode = "outline-at"
     command = [str(executable), str(font), mode, str(case.operand)]
     if case.font_size is not None:
         command.append(case.font_size)
+    if case.variation is not None:
+        command.append(case.variation)
     command.extend((str(iterations), str(samples)))
     return command
 

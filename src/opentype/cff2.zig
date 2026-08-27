@@ -316,24 +316,10 @@ fn charStringExecutionContextPrepared(table: []const u8, parsed: Parsed, glyph_i
     const charstring = try indexObject(table, index, glyph_id);
 
     const selected_fd = (try selectedFontDictIndex(table, parsed.info, glyph_id, glyph_count)) orelse 0;
-    var private_dict: ?PrivateDictInfo = if (parsed.info.fd_array_index != null) blk: {
+    const private_dict: ?PrivateDictInfo = if (parsed.info.fd_array_index != null) blk: {
         if (selected_fd >= parsed.font_dicts.len) return error.BadSfnt;
         break :blk parsed.font_dicts[selected_fd].private_dict;
     } else null;
-    if (private_dict) |*private| {
-        // The cached parameters represent the default design-space location.
-        // Non-default coordinates still need to evaluate Private DICT blends,
-        // but retain all structural INDEX and Font DICT work.
-        if (!coordinatesAreDefault(normalized_coords)) {
-            private.hint_params = try parsePrivateHintParamsAtCoords(
-                table,
-                private.data,
-                parsed.info.top_dict.vstore_offset,
-                normalized_coords,
-            );
-        }
-    }
-
     return .{
         .charstring = charstring,
         .context = .{
@@ -343,16 +329,12 @@ fn charStringExecutionContextPrepared(table: []const u8, parsed: Parsed, glyph_i
             .normalized_coords = normalized_coords,
             .global_subrs_index = parsed.info.global_subrs_index,
             .local_subrs_index = if (private_dict) |private| private.local_subrs_index else null,
-            .hint_params = if (private_dict) |private| private.hint_params else .{},
+            // Prepared execution is currently used only by unhinted outline
+            // paths. Hinted CFF2 decoding enters through the validating helper
+            // above and evaluates location-dependent Private DICT hints there.
+            .hint_params = .{},
         },
     };
-}
-
-fn coordinatesAreDefault(normalized_coords: []const f32) bool {
-    for (normalized_coords) |coord| {
-        if (coord != 0) return false;
-    }
-    return true;
 }
 
 fn parsePrivateHintParamsAtCoords(

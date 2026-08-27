@@ -4789,3 +4789,16 @@ shaping-performance superiority.
   (`13.377x`). The complete 75-row FreeType grayscale lifecycle matrix remains
   ahead (`1.168x--17.377x`). These additions close the maintained CFF2 outline
   lifecycle gap, not the broader 41-family semantic differential audit.
+- Normalized-location support in the Skrifa oracle adds two more Cantarell
+  CFF2 owning rows at the `wght` axis endpoints. The endpoint coordinates keep
+  raw command geometry bit-exact: intermediate locations intentionally are not
+  claimed as raw-bit equivalent because Cangjie preserves fractional font-unit
+  coordinates while Skrifa's FreeType-compatible unscaled sink truncates its
+  16.16 results to integer font units. Prepared, unhinted CFF2 execution no
+  longer evaluates location-dependent Private DICT blue-zone parameters, which
+  are consumed only by the separate hinted-outline path. A fixed-CPU-30
+  `100000 * 7` run passes all 23 semantic rows and leads every timing row
+  (`1.233x--13.677x`); normalized `+1` and `-1` owning outlines measure
+  `1516.042/1535.066 ns` versus `1983.412/1996.211 ns` (`1.304x`) and
+  `1605.816/1619.439 ns` versus `1990.255/1986.499 ns` (`1.233x`),
+  respectively.

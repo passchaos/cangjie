@@ -27,6 +27,15 @@ cargo run --release --manifest-path tools/fontations_bitmap_oracle/Cargo.toml --
   /path/to/font.ttf outline GLYPH_ID 10000 31
 ```
 
+Variable outlines accept comma-separated normalized coordinates through the
+`outline-at` mode. Coordinates are converted to Skrifa's F2Dot14 location
+representation before drawing:
+
+```sh
+cargo run --release --manifest-path tools/fontations_bitmap_oracle/Cargo.toml -- \
+  /path/to/variable-font.otf outline-at GLYPH_ID 1,-0.5 10000 31
+```
+
 Repeated unscaled glyph metrics and Unicode charmap lookups use the same final
 two arguments (`ITERATIONS SAMPLES`). `bounds` compares the complete unscaled
 glyph bounding box, including outline-derived CFF and variable-font bounds:
@@ -52,7 +61,8 @@ Bitmap-strike enumeration uses `strikes 0 ITERATIONS SAMPLES`.
 Preferred color-glyph source lookup uses `color-glyph GLYPH_ID ITERATIONS SAMPLES`.
 For a compact semantic and timing summary across all of these boundaries, run
 `zig build fontations-matrix -Doptimize=ReleaseFast`; optional
-`-- --iterations N --samples N` arguments control the repeated measurements.
+`-- --iterations N --samples N --cpu CPU` arguments control the repeated
+measurements and optional process affinity.
 The matrix compares deterministic semantic checksums before reporting timings.
 The matching fixtures can be generated in an explicit scratch directory with
 `zig build glyph-name-fixtures -- /tmp/cangjie-fontations-fixtures`; omitting

@@ -1,7 +1,7 @@
 use skrifa::{
     bitmap::BitmapData,
     outline::{DrawSettings, Hinting, OutlinePen},
-    prelude::{LocationRef, Size},
+    prelude::{LocationRef, NormalizedCoord, Size},
     string::StringId,
     FontRef, GlyphId, MetadataProvider,
 };
@@ -28,6 +28,7 @@ fn main() {
         "bitmap-bench" => bitmap_bench(&font, glyph_id, &mut args),
         "bitmap-summary" => bitmap_summary(&font, glyph_id, &mut args),
         "outline" => outline(&font, glyph_id, &mut args),
+        "outline-at" => outline_at(&font, glyph_id, &mut args),
         "outline-reuse" => outline_reuse(&font, glyph_id, &mut args),
         "metrics" => metrics(&font, glyph_id, &mut args),
         "bounds" => bounds(&font, glyph_id, &mut args),
@@ -453,6 +454,29 @@ fn repeated_args(args: &mut impl Iterator<Item = String>) -> (usize, usize) {
     (iterations, samples)
 }
 
+fn varied_repeated_args(
+    args: &mut impl Iterator<Item = String>,
+) -> (Vec<NormalizedCoord>, usize, usize) {
+    let raw_coords = args
+        .next()
+        .unwrap_or_else(|| fail("missing normalized coordinates"));
+    let coords = raw_coords
+        .split(',')
+        .map(|raw| {
+            let value: f32 = raw
+                .trim()
+                .parse()
+                .unwrap_or_else(|_| fail("invalid normalized coordinate"));
+            if !value.is_finite() || !(-1.0..=1.0).contains(&value) {
+                fail("normalized coordinate outside [-1, 1]");
+            }
+            NormalizedCoord::from_f32(value)
+        })
+        .collect();
+    let (iterations, samples) = repeated_args(args);
+    (coords, iterations, samples)
+}
+
 fn metrics(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {
     let (iterations, samples) = repeated_args(args);
     let metrics = font.glyph_metrics(Size::unscaled(), LocationRef::default());
@@ -570,6 +594,21 @@ fn bitmap(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = Str
 
 fn outline(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {
     let (iterations, samples) = repeated_args(args);
+    outline_at_location(font, glyph_id, &[], iterations, samples);
+}
+
+fn outline_at(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {
+    let (coords, iterations, samples) = varied_repeated_args(args);
+    outline_at_location(font, glyph_id, &coords, iterations, samples);
+}
+
+fn outline_at_location(
+    font: &FontRef<'_>,
+    glyph_id: u32,
+    coords: &[NormalizedCoord],
+    iterations: usize,
+    samples: usize,
+) {
     let glyph = font
         .outline_glyphs()
         .get(GlyphId::new(glyph_id))
@@ -581,7 +620,7 @@ fn outline(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = St
         for _ in 0..3 {
             let mut pen = HashPen::default();
             glyph
-                .draw(unscaled_settings(), &mut pen)
+                .draw(unscaled_settings(coords), &mut pen)
                 .unwrap_or_else(|_| fail("cannot draw outline"));
             checksum = pen.hash;
             commands = pen.commands;
@@ -591,7 +630,7 @@ fn outline(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = St
         for _ in 0..iterations {
             let mut pen = HashPen::default();
             glyph
-                .draw(unscaled_settings(), &mut pen)
+                .draw(unscaled_settings(coords), &mut pen)
                 .unwrap_or_else(|_| fail("cannot draw outline"));
             batch_hash = batch_hash.wrapping_add(pen.hash);
         }
@@ -646,8 +685,8 @@ fn outline_reuse(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Ite
     );
 }
 
-fn unscaled_settings() -> DrawSettings<'static> {
-    DrawSettings::unhinted(Size::unscaled(), LocationRef::default())
+fn unscaled_settings(coords: &[NormalizedCoord]) -> DrawSettings<'_> {
+    DrawSettings::unhinted(Size::unscaled(), LocationRef::new(coords))
 }
 
 fn unscaled_settings_with_memory(memory: &mut [u8]) -> DrawSettings<'_> {

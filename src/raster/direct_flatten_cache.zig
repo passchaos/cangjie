@@ -1,8 +1,9 @@
 //! Inline one-entry cache for repeated direct outline flattening.
 //!
-//! The cache retains only line geometry, not pixels, so every hit still runs
-//! the public direct scan converter. All storage is inline: moving or dropping
-//! a rasterizer cannot leave self-referential pointers or allocator ownership.
+//! The cache retains line geometry plus bounded default-sampling coverage. A
+//! hit still validates the complete command stream and blends into the current
+//! target. All storage is inline: moving or dropping a rasterizer cannot leave
+//! self-referential pointers or allocator ownership.
 
 const std = @import("std");
 const cached_sample_rows = @import("cached_sample_rows.zig");
@@ -104,6 +105,9 @@ pub const Cache = struct {
         target: scanline.Target,
         fill_rule: scanline.FillRule,
     ) !bool {
+        if (self.sample_rows.fillCoverage(target, self.prepared_bounds)) {
+            return true;
+        }
         return self.sample_rows.fill(
             allocator,
             target,
@@ -159,6 +163,8 @@ pub const Cache = struct {
         self.sample_rows.build(
             self.prepared_lines[0..self.prepared_line_count],
             self.prepared_bounds,
+            key.target_width,
+            key.target_height,
         );
         self.valid = true;
     }

@@ -1,9 +1,9 @@
 //! Fixed-storage sample intersections for the repeated direct-outline cache.
 //!
-//! Unlike prepared glyph coverage, this cache retains geometry only. Every
-//! draw still rebuilds horizontal spans, applies the fill rule, accumulates
-//! coverage, and blends the target. The fixed limits make construction
-//! infallible and let unusual outlines fall back to prepared-edge scanning.
+//! The cache retains sorted sample geometry and, for bounded targets, the
+//! resulting non-zero coverage. Exact command/geometry validation is owned by
+//! `direct_flatten_cache`; every hit still blends into the current target. The
+//! fixed limits make retained storage allocation-free.
 const std = @import("std");
 const RowAccumulator = @import("row_accumulator.zig").RowAccumulator;
 const scanline = @import("scanline.zig");
@@ -12,6 +12,7 @@ const sample_offsets_4 = [_]f32{ 0.125, 0.375, 0.625, 0.875 };
 const max_pixel_rows = 256;
 const max_sample_rows = max_pixel_rows * sample_offsets_4.len;
 const max_intersections = 16384;
+const max_coverage_pixels = 256 * 256;
 
 const Row = struct {
     start: u16,
@@ -23,8 +24,12 @@ pub const Cache = struct {
     min_y: i32 = 0,
     row_count: usize = 0,
     intersection_count: usize = 0,
+    coverage_valid: bool = false,
+    coverage_width: u32 = 0,
+    coverage_height: u32 = 0,
     rows: [max_sample_rows]Row = undefined,
     intersections: [max_intersections]scanline.WindingIntersection = undefined,
+    coverage: [max_coverage_pixels]u8 = undefined,
 
     /// Build sorted intersections for the default four vertical sample lanes.
     /// Capacity overflow simply disables this optional layer; the caller still
@@ -33,8 +38,11 @@ pub const Cache = struct {
         self: *Cache,
         prepared_lines: []const scanline.PreparedFillLine,
         bounds: ?scanline.Bounds,
+        target_width: u32,
+        target_height: u32,
     ) void {
         self.valid = false;
+        self.coverage_valid = false;
         const clipped = bounds orelse return;
         if (prepared_lines.len < 2 or prepared_lines.len > 512) return;
         const pixel_row_count_i64 = @as(i64, clipped.max_y) - clipped.min_y + 1;
@@ -90,6 +98,51 @@ pub const Cache = struct {
         self.row_count = pixel_row_count * 4;
         self.intersection_count = output_count;
         self.valid = true;
+        const target_len = std.math.mul(
+            usize,
+            target_width,
+            target_height,
+        ) catch return;
+        if (target_len > self.coverage.len) return;
+        @memset(self.coverage[0..target_len], 0);
+        _ = self.fill(
+            std.heap.page_allocator,
+            .{
+                .width = target_width,
+                .height = target_height,
+                .pixels = self.coverage[0..target_len],
+            },
+            bounds,
+            .non_zero,
+        ) catch return;
+        self.coverage_width = target_width;
+        self.coverage_height = target_height;
+        self.coverage_valid = true;
+    }
+
+    /// Blend retained 4x4 non-zero coverage into a matching target.
+    pub fn fillCoverage(
+        self: *const Cache,
+        target: scanline.Target,
+        bounds: ?scanline.Bounds,
+    ) bool {
+        if (!self.coverage_valid or
+            target.width != self.coverage_width or
+            target.height != self.coverage_height) return false;
+        const clipped = bounds orelse return true;
+        var y = clipped.min_y;
+        while (y <= clipped.max_y) : (y += 1) {
+            const start = @as(usize, @intCast(y)) * target.width +
+                @as(usize, @intCast(clipped.min_x));
+            const len: usize = @intCast(clipped.max_x - clipped.min_x + 1);
+            for (
+                self.coverage[start .. start + len],
+                target.pixels[start .. start + len],
+            ) |coverage, *pixel| {
+                pixel.* = @max(pixel.*, coverage);
+            }
+        }
+        return true;
     }
 
     /// Fill from immutable sorted intersections. Returns false when this
@@ -113,7 +166,7 @@ pub const Cache = struct {
         if (row_width_i32 <= 0) return true;
         const row_width: usize = @intCast(row_width_i32);
         var inline_counts: [512]u8 = undefined;
-        var inline_differences: [129]i16 = undefined;
+        var inline_differences: [257]i16 = undefined;
         var accumulator = try RowAccumulator.init(
             allocator,
             row_width,
@@ -180,7 +233,7 @@ test "cached sample rows match prepared-edge scan" {
     };
     const bounds = scanline.boundsForTarget(target_template, &source);
     var cache = Cache{};
-    cache.build(prepared, bounds);
+    cache.build(prepared, bounds, 10, 10);
     try std.testing.expect(cache.valid);
 
     inline for (.{ scanline.FillRule.non_zero, scanline.FillRule.even_odd }) |fill_rule| {
@@ -204,6 +257,9 @@ test "cached sample rows match prepared-edge scan" {
             bounds,
             fill_rule,
         ));
+        try std.testing.expectEqualSlices(u8, &expected, &actual);
+        @memset(actual[0..], 0);
+        try std.testing.expect(cache.fillCoverage(actual_target, bounds));
         try std.testing.expectEqualSlices(u8, &expected, &actual);
     }
 }

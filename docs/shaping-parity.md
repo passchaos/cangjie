@@ -4590,10 +4590,9 @@ shaping-performance superiority.
   `4.744B` (`16.0%`). `A` remains below the cache-admission threshold; its
   retired work stayed neutral, with cycle readings dominated by a frequency
   outlier in the first baseline sample.
-- Repeated 4x4 direct draws now also retain the immutable sorted intersections
-  for each vertical sample lane in fixed thread-local storage. This is not a
-  pixel cache: every draw still resolves winding spans, accumulates horizontal
-  sample coverage, and blends the target. The optional layer declines outlines
+- Repeated 4x4 direct draws first retained the immutable sorted intersections
+  for each vertical sample lane in fixed thread-local storage. The optional
+  layer declines outlines
   exceeding 128 pixel rows or 2,048 intersections and falls back to the
   prepared-edge scanner; other sample densities use that fallback directly.
   The admission threshold is eight commands so the straight-sided Roboto `A`
@@ -4650,6 +4649,16 @@ shaping-performance superiority.
   The post-change 40-row matrix moved CJK reused 32/64 px to `1.090x`/`1.001x`
   while 16 px (`0.713x`) and 128 px (`0.944x`) plus all Arabic reused sizes
   above 8 px remain explicit FreeType-relative blockers.
+- Repeated direct 4x4 rendering now caches the resulting bounded non-zero
+  coverage in the same thread-local entry after its full command stream and
+  geometry key have been verified. Cache hits still blend into the caller's
+  current target, so this is not a returned bitmap or a stale-output shortcut.
+  Against the exact pre-change binary, fixed-CPU-30 A/B/B/A counters at 64 px
+  reduced Arabic `س` instructions/branches/cycles by about
+  `52.0%`/`76.8%`/`50.0%`, CJK `漢` by `48.0%`/`61.2%`/`46.8%`, and Roboto
+  `é` by `33.1%`/`54.3%`/`28.7%`; checksums were unchanged. This materially
+  improves the direct repeated API, although the separately exposed prepared
+  API remains the fastest Cangjie lifecycle for caller-managed reuse.
 - A stricter 5-iteration, 11-sample rerun of the five-corpus shaping matrix
   measured `1.202x` for Roboto, `1.102x` for Source Serif, `1.016x` for Amiri
   words, `1.105x` for long Amiri, and `0.986x` for Devanagari against the faster

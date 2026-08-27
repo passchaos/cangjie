@@ -4681,6 +4681,10 @@ shaping-performance superiority.
   CFF2, bringing the default five-font/two-lifecycle grid to 75 rows. A focused
   8 px smoke run completed all 15 corresponding rows; CFF2 owning was a
   `1.002x` tie, correctly leaving the broader margin audit open.
+  The complete fixed-CPU-30 `500 * 11` expansion completed all 75 rows. Every
+  row except CFF2 owning at 8 px led; that remaining row measured `0.989x`
+  (`2894.6` versus `2862.5 ns`) and is therefore an explicit near-parity
+  blocker rather than a claimed win.
 - A stricter 5-iteration, 11-sample rerun of the five-corpus shaping matrix
   measured `1.202x` for Roboto, `1.102x` for Source Serif, `1.016x` for Amiri
   words, `1.105x` for long Amiri, and `0.986x` for Devanagari against the faster

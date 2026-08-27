@@ -49,6 +49,8 @@ The following checks were rerun from a clean worktree at commits through
   versus FreeType. The retained cache enlargement removed the dominant CJK
   deficit, and retained coverage/emboldening then closed every row. A strict
   post-change `500 * 11` run measured all 40 rows ahead (`1.177x--4.522x`).
+  The expanded 75-row run including CFF2 and fresh owning outlines completed;
+  74 rows led, while CFF2 owning at 8 px measured `0.989x` and remains open.
 
 The latest strict shaping run at `077cb97e` measured speedups of `1.213x`
 (Roboto), `1.042x` (Source Serif), `0.994x` (Amiri words), `1.083x` (Amiri

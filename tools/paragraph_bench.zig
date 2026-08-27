@@ -291,8 +291,17 @@ fn normalizedGeometryChecksum(
         .{ .direction = if (direction == .rtl) .rtl else .ltr },
     );
     defer geometry.deinit();
+    const Record = struct {
+        byte_start: usize,
+        byte_len: usize,
+        inline_position: f32,
+        inline_size: f32,
+    };
+    var records = std.ArrayList(Record).empty;
+    defer records.deinit(allocator);
     var hash: u64 = 0xcbf29ce484222325;
     for (geometry.lines) |line| {
+        records.clearRetainingCapacity();
         hash = hashU64(hash, line.byte_start);
         hash = hashU64(hash, line.byte_start + line.byte_len);
         for (line.spans(geometry.spans)) |span| {
@@ -302,20 +311,54 @@ fn normalizedGeometryChecksum(
                     grapheme.byte_start,
                     line.byte_start + line.byte_len,
                 );
-                hash = hashU64(hash, grapheme.byte_start);
-                hash = hashU64(hash, grapheme.byte_len);
-                hash = hashF32(
-                    hash,
-                    span.bounds.x - line.bounds.x + grapheme.inline_position,
-                );
-                hash = hashF32(
-                    hash,
-                    if (trailing) 0 else grapheme.inline_size,
-                );
+                try records.append(allocator, .{
+                    .byte_start = grapheme.byte_start,
+                    .byte_len = grapheme.byte_len,
+                    .inline_position = span.bounds.x - line.bounds.x +
+                        grapheme.inline_position,
+                    .inline_size = if (trailing) 0 else grapheme.inline_size,
+                });
             }
+        }
+        std.mem.sort(Record, records.items, {}, struct {
+            fn lessThan(_: void, a: Record, b: Record) bool {
+                return a.byte_start < b.byte_start;
+            }
+        }.lessThan);
+        const origin = for (records.items) |record| {
+            if (record.inline_size != 0) break record.inline_position;
+        } else 0;
+        for (records.items) |record| {
+            hash = hashU64(hash, record.byte_start);
+            hash = hashU64(hash, record.byte_len);
+            // Logical geometry is translation invariant. Quantizing relative
+            // positions to 1/1024 px removes only floating accumulation noise
+            // while preserving every visible local displacement and raw size.
+            hash = hashI32(
+                hash,
+                if (record.inline_size == 0)
+                    0
+                else
+                    canonicalInlinePosition(record.inline_position - origin),
+            );
+            hash = hashF32(hash, record.inline_size);
         }
     }
     return hash;
+}
+
+fn canonicalInlinePosition(value: f32) i32 {
+    // 1/1024 px remains four orders of magnitude below the matrix's smallest
+    // glyph advance while absorbing the <1.6e-5 px accumulation drift seen
+    // when equivalent RTL positions are summed from opposite physical edges.
+    const scaled = @round(value * 1024.0);
+    if (scaled <= @as(f32, @floatFromInt(std.math.minInt(i32)))) {
+        return std.math.minInt(i32);
+    }
+    if (scaled >= @as(f32, @floatFromInt(std.math.maxInt(i32)))) {
+        return std.math.maxInt(i32);
+    }
+    return @intFromFloat(scaled);
 }
 
 fn trailingAsciiWhitespace(text: []const u8, start: usize, end: usize) bool {
@@ -334,6 +377,10 @@ fn hashU64(initial: u64, value: usize) u64 {
 fn hashF32(initial: u64, value: f32) u64 {
     const bits: u32 = @bitCast(value);
     return bytes(initial, std.mem.asBytes(&bits));
+}
+
+fn hashI32(initial: u64, value: i32) u64 {
+    return bytes(initial, std.mem.asBytes(&value));
 }
 
 fn bytes(initial: u64, value: []const u8) u64 {

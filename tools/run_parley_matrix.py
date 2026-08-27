@@ -121,9 +121,9 @@ def main() -> int:
             if len(shapes) != 1:
                 failures.append(f"{case.name}/{phase}/{style}: output counts={sorted(shapes)}")
             # Native geometry is normalized to logical lines/graphemes by both
-            # oracles. Only default Latin currently has identical semantics;
-            # other rows remain visible audit evidence rather than being
-            # mistaken for parity from counts alone.
+            # oracles. The checksum retains source ranges, visible advances,
+            # and line-relative cluster positions; native physical origins and
+            # visually discarded trailing whitespace are intentionally absent.
             geometry_checksums = {item.get("geometry_checksum") for item in records}
             geometry_equivalent = len(geometry_checksums) == 1 and None not in geometry_checksums
             # Each implementation also hashes its complete native layout. The

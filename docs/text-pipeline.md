@@ -2150,3 +2150,34 @@ Cangjie led inline-object construction/reflow by `2.465x`/`4.907x` on Latin,
 `1.420x`/`1.552x` on Arabic, and `2.463x`/`3.425x` on Japanese. This closes
 the missing in-flow-object timing row, but out-of-flow/custom objects and the
 cross-engine geometry-policy mismatch remain outside the parity claim.
+
+The common geometry digest now expresses logical line geometry rather than a
+physical-origin convention. For each source-sorted line it hashes byte ranges,
+raw visible cluster advances, and cluster positions relative to the first
+visible logical cluster. Relative positions are canonicalized to 1/1024 px;
+this removes at most the measured `1.6e-5 px` RTL accumulation drift while any
+local displacement of 1/1024 px or greater still changes the checksum. Hidden
+trailing whitespace keeps zero position and size. This raises proven geometry
+agreement from 5/18 to 9/18 by closing all four Arabic default/spacing/
+alternating/reflow rows. It does not make any inline-object row equal, and the
+Japanese default/reflow rows still differ from byte 495 onward. Source review
+explains that remaining Japanese split: Parley's shaped-text adapter currently
+sets `safe_to_break_before(false)` unconditionally with an explicit TODO and
+its line breaker ignores the field, while Cangjie honors the HarfBuzz unsafe-
+to-break flag at byte 528 and selects the prior safe UAX #14 opportunity at
+byte 525. Removing that guard merely to match Parley would be a correctness
+regression.
+
+The benchmark timing boundary was also corrected. Parley's timed loop formerly
+called `summarize()`, walking every line, cluster, and positioned glyph, while
+Cangjie computed the equivalent semantic geometry checksum outside timing and
+consumed only O(1) layout fields inside. Parley's timed loop now likewise runs
+build/reflow plus alignment and consumes width, height, and line count; full
+semantic checks stay in the untimed warmup. A fixed-CPU-30 symmetric `100 * 5`
+rerun therefore supersedes every earlier all-row performance claim: Cangjie
+leads 6/18 rows, while all six retained-reflow rows and Arabic/Japanese styled
+construction are currently slower. Representative corrected ratios are
+`1.623x` for Latin default construction, `0.932x` for Arabic default, `1.828x`
+for Japanese default, and `0.421x/0.139x/0.446x` for Latin/Arabic/Japanese
+retained reflow. These are now the authoritative blockers for Parley-relative
+performance work.

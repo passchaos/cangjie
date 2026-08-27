@@ -43,9 +43,11 @@ The following checks were rerun from a clean worktree at commits through
 - `zig build freetype-matrix -Doptimize=ReleaseFast -- --iterations 100
   --samples 5 --sizes 8,16,32,64,128 --cpu 30`: completed 40 symmetric
   A/B/B/A raster rows across Latin glyf, Latin CFF1, Arabic glyf, and CJK CFF.
-  It found real remaining deficits: Arabic reused-outline raster ranged from
-  `0.599x` to `0.886x`, while CJK reused-outline raster ranged from `0.425x`
-  to `0.734x` versus FreeType.
+  It found real remaining deficits before enlarging the bounded repeated-
+  geometry cache: Arabic reused-outline raster ranged from `0.599x` to
+  `0.886x`, while CJK reused-outline raster ranged from `0.425x` to `0.734x`
+  versus FreeType. The retained cache enlargement removed the dominant CJK
+  deficit at 32/64 px, but Arabic and 16 px CJK rows remain behind.
 
 The latest strict shaping run at `077cb97e` measured speedups of `1.213x`
 (Roboto), `1.042x` (Source Serif), `0.994x` (Amiri words), `1.083x` (Amiri

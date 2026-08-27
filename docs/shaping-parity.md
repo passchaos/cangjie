@@ -4640,6 +4640,16 @@ shaping-performance superiority.
   reused rows led, while several small glyf rows were ties or deficits. These
   results replace the earlier lifecycle-mismatched repeated-render evidence as
   the authoritative FreeType performance gap.
+- The fixed repeated-direct cache now admits up to 256 outline commands, 512
+  flattened edges, 256 pixel rows, and 16,384 sampled intersections. These
+  remain hard allocation-free bounds, but include the retained CJK ideograph
+  that previously fell back to rebuilding and sorting its scanline state.
+  Against the exact pre-change binary, fixed-CPU-30 A/B/B/A counters for Noto
+  Sans CJK `漢` at 64 px reduced instructions by `26.8%`, branches by `33.1%`,
+  and cycles by `27.2%`; Roboto `é` and STIX CFF1 `é` controls were neutral.
+  The post-change 40-row matrix moved CJK reused 32/64 px to `1.090x`/`1.001x`
+  while 16 px (`0.713x`) and 128 px (`0.944x`) plus all Arabic reused sizes
+  above 8 px remain explicit FreeType-relative blockers.
 - A stricter 5-iteration, 11-sample rerun of the five-corpus shaping matrix
   measured `1.202x` for Roboto, `1.102x` for Source Serif, `1.016x` for Amiri
   words, `1.105x` for long Amiri, and `0.986x` for Devanagari against the faster

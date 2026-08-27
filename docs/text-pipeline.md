@@ -2100,3 +2100,15 @@ either implementation. A fixed-CPU-30 200-iteration, 11-sample rerun passed
 that stronger condition and measured Cangjie speedups of
 `2.551x/2.007x/2.000x` for Latin, `1.418x/1.593x/1.179x` for Arabic, and
 `2.534x/1.169x/1.158x` for Japanese.
+
+The matrix now also includes a default-style retained-reflow row for each
+script. Cangjie prepares a `ShapedParagraph` once; Parley builds one `Layout`
+once and uses its documented repeatable `break_all_lines` plus `align` path.
+Both sides therefore measure line reconstruction and alignment over retained
+shaping rather than charging either builder. A fixed-CPU-30 100-iteration,
+five-sample run preserved the same glyph/line counts and stable per-engine
+checksums. The symmetric speedups were `5.168x` for Latin, `1.590x` for Arabic,
+and `3.427x` for Japanese. Together with the nine construction/style rows, the
+reproducible gate now contains 12 cases. This closes the missing reflow timing
+row for the three retained scripts; it does not establish vertical, fallback,
+inline-object, or normalized cross-engine geometry equivalence.

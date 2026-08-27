@@ -22,6 +22,8 @@ fn main() {
     assert!(width.is_finite() && width > 0.0);
     let direction = args.next().unwrap_or_else(|| "auto".to_owned());
     let style = args.next().unwrap_or_else(|| "default".to_owned());
+    let phase = args.next().unwrap_or_else(|| "layout".to_owned());
+    assert!(phase == "layout" || phase == "reflow");
     assert!(args.next().is_none(), "unexpected argument");
     let text_file = fs::read_to_string(text_path).unwrap();
     let text = text_file.lines().next().unwrap_or("");
@@ -38,6 +40,21 @@ fn main() {
         source_cache: SourceCache::default(),
     };
     let mut layout_cx = LayoutContext::<Brush>::new();
+    let mut retained = if phase == "reflow" {
+        // Parley keeps shaped clusters in Layout and explicitly supports
+        // line-breaking the same owner again. This matches Cangjie's retained
+        // ShapedParagraph boundary instead of rebuilding through RangedBuilder.
+        Some(build_layout(
+            &mut font_cx,
+            &mut layout_cx,
+            text,
+            &family_name,
+            &direction,
+            &style,
+        ))
+    } else {
+        None
+    };
 
     let mut values = Vec::with_capacity(samples);
     let mut checksum = 0u64;
@@ -53,6 +70,7 @@ fn main() {
                 width,
                 &direction,
                 &style,
+                retained.as_mut(),
             );
             assert!(
                 checksum == 0 || checksum == result.0,
@@ -71,6 +89,7 @@ fn main() {
                 width,
                 &direction,
                 &style,
+                retained.as_mut(),
             );
             assert_eq!(
                 (result.1, result.2),
@@ -86,7 +105,7 @@ fn main() {
     values.sort_by(f64::total_cmp);
     let median = values[values.len() / 2];
     println!(
-        "engine=parley\tdirection={direction}\tstyle={style}\ttext_bytes={}\twidth={width:.3}\titerations={}\tsamples={}\tmedian_ns_per_iter={median:.3}\tglyphs={glyphs}\tlines={lines}\tchecksum={checksum:016x}",
+        "engine=parley\tphase={phase}\tdirection={direction}\tstyle={style}\ttext_bytes={}\twidth={width:.3}\titerations={}\tsamples={}\tmedian_ns_per_iter={median:.3}\tglyphs={glyphs}\tlines={lines}\tchecksum={checksum:016x}",
         text.len(),
         iterations,
         samples
@@ -101,7 +120,30 @@ fn run_once(
     width: f32,
     direction: &str,
     style: &str,
+    retained: Option<&mut Layout<Brush>>,
 ) -> (u64, usize, usize) {
+    let mut owned;
+    let layout = if let Some(layout) = retained {
+        layout.break_all_lines(Some(width));
+        layout.align(Alignment::Start, AlignmentOptions::default());
+        layout
+    } else {
+        owned = build_layout(font_cx, layout_cx, text, family_name, direction, style);
+        owned.break_all_lines(Some(width));
+        owned.align(Alignment::Start, AlignmentOptions::default());
+        &mut owned
+    };
+    summarize(layout)
+}
+
+fn build_layout(
+    font_cx: &mut FontContext,
+    layout_cx: &mut LayoutContext<Brush>,
+    text: &str,
+    family_name: &str,
+    direction: &str,
+    style: &str,
+) -> Layout<Brush> {
     let mut builder = layout_cx.ranged_builder(font_cx, text, 1.0, true);
     builder.push_default(FontFamily::named(family_name));
     builder.push_default(StyleProperty::FontSize(16.0));
@@ -125,10 +167,10 @@ fn run_once(
         "rtl" => BaseDirection::Rtl,
         _ => panic!("direction must be auto, ltr, or rtl"),
     });
-    let mut layout: Layout<Brush> = builder.build(text);
-    layout.break_all_lines(Some(width));
-    layout.align(Alignment::Start, AlignmentOptions::default());
+    builder.build(text)
+}
 
+fn summarize(layout: &Layout<Brush>) -> (u64, usize, usize) {
     let mut hash = 0xcbf29ce484222325u64;
     let mut glyph_count = 0usize;
     let mut line_count = 0usize;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a cross-script Cangjie/Parley paragraph benchmark matrix."""
+"""Run a cross-script Cangjie/Parley layout and reflow matrix."""
 
 from __future__ import annotations
 
@@ -43,20 +43,20 @@ def run(command: list[str], cpu: int | None) -> dict[str, str]:
 
 
 def cangjie_command(
-    executable: Path, case: Case, style: str, iterations: int, samples: int
+    executable: Path, case: Case, style: str, phase: str, iterations: int, samples: int
 ) -> list[str]:
     return [
         str(executable), str(case.font), str(case.text), str(iterations),
-        str(samples), case.width, "layout", "auto", style,
+        str(samples), case.width, phase, "auto", style,
     ]
 
 
 def parley_command(
-    executable: Path, case: Case, style: str, iterations: int, samples: int
+    executable: Path, case: Case, style: str, phase: str, iterations: int, samples: int
 ) -> list[str]:
     return [
         str(executable), str(case.font), str(case.text), str(iterations),
-        str(samples), case.family, case.width, "auto", style,
+        str(samples), case.family, case.width, "auto", style, phase,
     ]
 
 
@@ -89,21 +89,26 @@ def main() -> int:
     )
     failures: list[str] = []
     for case in cases:
-        for style in ("default", "spacing", "alternating"):
+        for phase, style in (
+            ("layout", "default"),
+            ("layout", "spacing"),
+            ("layout", "alternating"),
+            ("reflow", "default"),
+        ):
             cangjie_first = run(
-                cangjie_command(args.cangjie, case, style, args.iterations, args.samples),
+                cangjie_command(args.cangjie, case, style, phase, args.iterations, args.samples),
                 args.cpu,
             )
             parley_first = run(
-                parley_command(parley, case, style, args.iterations, args.samples),
+                parley_command(parley, case, style, phase, args.iterations, args.samples),
                 args.cpu,
             )
             parley_second = run(
-                parley_command(parley, case, style, args.iterations, args.samples),
+                parley_command(parley, case, style, phase, args.iterations, args.samples),
                 args.cpu,
             )
             cangjie_second = run(
-                cangjie_command(args.cangjie, case, style, args.iterations, args.samples),
+                cangjie_command(args.cangjie, case, style, phase, args.iterations, args.samples),
                 args.cpu,
             )
             records = (cangjie_first, parley_first, parley_second, cangjie_second)
@@ -112,7 +117,7 @@ def main() -> int:
                 for item in records
             }
             if len(shapes) != 1:
-                failures.append(f"{case.name}/{style}: output counts={sorted(shapes)}")
+                failures.append(f"{case.name}/{phase}/{style}: output counts={sorted(shapes)}")
             # Each implementation also hashes its complete native layout. The
             # hash encodings intentionally differ (Cangjie uses Wyhash over its
             # public layout records; Parley uses FNV over line/glyph fields),
@@ -132,7 +137,7 @@ def main() -> int:
                     or first_checksum != second_checksum
                 ):
                     failures.append(
-                        f"{case.name}/{style}: {engine} checksum="
+                        f"{case.name}/{phase}/{style}: {engine} checksum="
                         f"{first_checksum!r}/{second_checksum!r}"
                     )
             cangjie_a = float(cangjie_first["median_ns_per_iter"])
@@ -143,7 +148,7 @@ def main() -> int:
             parley_ns = math.sqrt(parley_a * parley_b)
             speedup = math.inf if cangjie_ns == 0 else parley_ns / cangjie_ns
             print(
-                f"{case.name}/{style}: "
+                f"{case.name}/{phase}/{style}: "
                 f"cangjie_ns={cangjie_a:.3f}/{cangjie_b:.3f} "
                 f"parley_ns={parley_a:.3f}/{parley_b:.3f} "
                 f"speedup={speedup:.3f}x glyphs={cangjie_first.get('glyphs')} "
@@ -154,7 +159,7 @@ def main() -> int:
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         return 1
-    print("Cangjie/Parley output-count matrix passed: 9 cases")
+    print("Cangjie/Parley output-count matrix passed: 12 cases")
     return 0
 
 

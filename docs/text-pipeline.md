@@ -2114,9 +2114,12 @@ remain valid equal-cardinality workloads, but the broader Parley functionality
 claim stays open until whitespace and metric policies are normalized.
 The runners now additionally emit a common logical line/grapheme checksum that
 normalizes baselines and treats trailing line whitespace as zero advance. This
-proves the default Latin row equivalent (`c2b0cccb3e4b15a0`) instead of relying
-on count parity. The same gate explicitly reports `geometry_equal=false` for
-the other currently divergent policies; those rows remain performance-only.
+proves the default Latin layout and retained-reflow rows equivalent
+(`c2b0cccb3e4b15a0`) instead of relying on count parity. The same gate
+explicitly reports `geometry_equal=false` for the other currently divergent
+policies; those rows remain performance-only. A later small `10 * 3` audit
+also found Japanese alternating equal under this normalization, while 15/18
+rows still differ.
 
 The matrix now also includes a default-style retained-reflow row for each
 script. Cangjie prepares a `ShapedParagraph` once; Parley builds one `Layout`

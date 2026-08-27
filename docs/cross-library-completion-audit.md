@@ -20,7 +20,7 @@ one benchmark. The claim remains **open** until every row below is closed.
 ## Reproducible audit snapshot
 
 The following checks were rerun from a clean worktree at commits through
-`a942e7b1` on Linux x86-64, pinned to CPU 30 where the harness supports it:
+`890ca4b7` on Linux x86-64, pinned to CPU 30 where the harness supports it:
 
 - `zig build test -j1 -Doptimize=ReleaseFast --summary failures`: pass.
 - `zig build shaping-parity-smoke ... --summary none`: pass against the local
@@ -84,7 +84,7 @@ instrumentation gap, but does not change the near-tie status of Amiri words.
 ## Current conclusion
 
 Cangjie is already ahead in the maintained 19-case Fontations/Skrifa matrix,
-the 12-case Parley timing matrix, the retained FreeType repeated-direct
+the 18-case Parley timing matrix, the retained FreeType repeated-direct
 grayscale probes, and most of the five-corpus shaping matrix. That evidence is
 substantial but does not satisfy the stronger overall claim. In particular,
 the latest shaping runs still place Amiri words near parity; Devanagari now

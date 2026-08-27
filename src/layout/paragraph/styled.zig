@@ -44,6 +44,9 @@ pub const Input = struct {
     default_font_size: f32,
     spans: []const styled_paragraph.Span,
     options: paragraph_options.Options,
+    /// Intrinsic widths require an additional policy-aware pass over the
+    /// shaped paragraph. Layout-only callers can explicitly omit that work.
+    compute_content_widths: bool = true,
 };
 
 pub fn layout(input: Input) !paragraph_types.ParagraphLayout {
@@ -62,6 +65,7 @@ pub fn layout(input: Input) !paragraph_types.ParagraphLayout {
         .text = input.text,
         .default_font_size = input.default_font_size,
         .options = input.options,
+        .compute_content_widths = input.compute_content_widths,
     };
     try styled_paragraph.layout(&driver, input.text, input.spans);
     return input.buffer.paragraphLayout(input.options.writing_mode);
@@ -74,6 +78,7 @@ const Driver = struct {
     text: []const u8,
     default_font_size: f32,
     options: paragraph_options.Options,
+    compute_content_widths: bool,
     pen: fallback_segment.Pen = .{},
 
     pub fn allocator(self: *@This()) std.mem.Allocator {
@@ -249,47 +254,53 @@ const Driver = struct {
             self.buffer.glyphs.items,
             self.options.writing_mode,
         );
-        const intrinsic_graphemes = try unicode.itemizeGraphemeClusters(
-            self.buffer.allocator,
-            self.text,
-        );
-        defer self.buffer.allocator.free(intrinsic_graphemes);
-        const intrinsic_breaks = try line_break_analysis.itemizeWithHyphenation(
-            self.buffer.allocator,
-            self.text,
-            intrinsic_graphemes,
-            self.options.word_break_dictionary,
-            self.options.hyphenation.dictionary,
-            .{
-                .wrap_mode = .word,
-                .word_break = .normal,
-                .overflow_wrap = .break_word,
-            },
-            &.{},
-        );
-        defer self.buffer.allocator.free(intrinsic_breaks);
-        self.styled.content_widths =
-            if (resolved_options.writing_mode.isVertical())
-                try vertical_columns.contentWidths(
-                    self.buffer.allocator,
-                    self.text,
-                    self.buffer.glyphs.items,
-                    self.buffer.runs.items,
-                    self.buffer.variation_coords.items,
-                    intrinsic_graphemes,
-                    intrinsic_breaks,
-                    resolved_options,
-                )
-            else
-                try content_widths.calculate(
-                    self.buffer.allocator,
-                    self.text,
-                    self.buffer.glyphs.items,
-                    self.buffer.runs.items,
-                    intrinsic_graphemes,
-                    intrinsic_breaks,
-                    resolved_options,
-                );
+        var intrinsic_graphemes: ?[]unicode.GraphemeCluster = null;
+        defer if (intrinsic_graphemes) |items|
+            self.buffer.allocator.free(items);
+        var intrinsic_breaks: ?[]@import("../line_break/opportunity.zig").Opportunity = null;
+        defer if (intrinsic_breaks) |items| self.buffer.allocator.free(items);
+        if (self.compute_content_widths) {
+            intrinsic_graphemes = try unicode.itemizeGraphemeClusters(
+                self.buffer.allocator,
+                self.text,
+            );
+            intrinsic_breaks = try line_break_analysis.itemizeWithHyphenation(
+                self.buffer.allocator,
+                self.text,
+                intrinsic_graphemes.?,
+                self.options.word_break_dictionary,
+                self.options.hyphenation.dictionary,
+                .{
+                    .wrap_mode = .word,
+                    .word_break = .normal,
+                    .overflow_wrap = .break_word,
+                },
+                &.{},
+            );
+        }
+        self.styled.content_widths = if (!self.compute_content_widths)
+            null
+        else if (resolved_options.writing_mode.isVertical())
+            try vertical_columns.contentWidths(
+                self.buffer.allocator,
+                self.text,
+                self.buffer.glyphs.items,
+                self.buffer.runs.items,
+                self.buffer.variation_coords.items,
+                intrinsic_graphemes.?,
+                intrinsic_breaks.?,
+                resolved_options,
+            )
+        else
+            try content_widths.calculate(
+                self.buffer.allocator,
+                self.text,
+                self.buffer.glyphs.items,
+                self.buffer.runs.items,
+                intrinsic_graphemes.?,
+                intrinsic_breaks.?,
+                resolved_options,
+            );
 
         var line_options = resolved_options;
         // Build the truncated prefix first. Synthetic dots are appended after

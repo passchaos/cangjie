@@ -2218,3 +2218,15 @@ from about `42.81B` to `34.11B`, branches from `7.21B` to `5.75B`, and cycles
 from about `13.40B` to `10.85B`, with both output checksums unchanged. The
 corrected matrix therefore leads 13/18 rows; Arabic alternating and the two
 Japanese styled rows remain the material construction gaps.
+
+Styled paragraph construction now exposes `layoutStyledWithoutContentWidths`
+for callers that need final lines and glyph metadata but not the independent
+min/max-content pass. The original `layoutStyled` contract is unchanged and
+still returns intrinsic widths. Updating the Parley construction oracle to the
+matched layout-only boundary makes Arabic spacing lead by `1.074x` and raises
+the corrected matrix to 14/18. A fixed-CPU A/B/B/A comparison of 100,000
+Arabic spacing layouts reduced retired instructions from about `40.0B` to
+`37.0B`, branches from `6.67B` to `6.15B`, and cycles from about `12.81B` to
+`11.84B`, with both checksums unchanged. Arabic alternating and Japanese
+spacing/alternating remain slower; the new API does not claim those gaps are
+closed.

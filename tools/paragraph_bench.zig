@@ -204,7 +204,7 @@ fn layoutOnce(
             .letter_spacing = 0.75,
             .word_spacing = 2.0,
         }};
-        return (try engine.layoutStyled(cascade, .{
+        return (try engine.layoutStyledWithoutContentWidths(cascade, .{
             .text = text,
             .default_font_size = 16,
             .spans = &spans,
@@ -222,7 +222,7 @@ fn layoutOnce(
                 .letter_spacing = 0.75,
                 .word_spacing = 2.0,
             }};
-            return (try engine.layoutStyled(cascade, .{
+            return (try engine.layoutStyledWithoutContentWidths(cascade, .{
                 .text = text,
                 .default_font_size = 16,
                 .spans = &spans,
@@ -245,7 +245,7 @@ fn layoutOnce(
                 .word_spacing = 2.0,
             },
         };
-        return (try engine.layoutStyled(cascade, .{
+        return (try engine.layoutStyledWithoutContentWidths(cascade, .{
             .text = text,
             .default_font_size = 16,
             .spans = &spans,

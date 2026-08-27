@@ -46,6 +46,8 @@ pub const TextShaper = struct {
         ordinary.layoutParagraphUtf8WithCaches;
     pub const layoutStyledParagraphUtf8 =
         ordinary.layoutStyledParagraphUtf8;
+    pub const layoutStyledParagraphUtf8WithoutContentWidths =
+        ordinary.layoutStyledParagraphUtf8WithoutContentWidths;
     pub const measureParagraphUtf8 = ordinary.measureParagraphUtf8;
     pub const measureParagraphsUtf8 = ordinary.measureParagraphsUtf8;
 

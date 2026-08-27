@@ -197,6 +197,66 @@ test "engine owns styled metadata and paragraph measurement" {
     try std.testing.expect(metrics.height > 0);
 }
 
+test "styled layout can omit intrinsic widths without changing output" {
+    const test_font = @import("../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    const cascade = face_mod.Cascade.init(face_mod.backend.faces(&.{&font}));
+    const spans = [_]styled_paragraph.Span{.{
+        .byte_start = 0,
+        .byte_len = 3,
+        .style_index = 4,
+        .font_size = 20,
+        .letter_spacing = 0.5,
+    }};
+    var engine = context_mod.Engine.init(std.testing.allocator, .{});
+    defer engine.deinit();
+    const complete = try engine.layoutStyled(cascade, .{
+        .text = "A A",
+        .default_font_size = 20,
+        .spans = &spans,
+        .options = .{ .max_width = 30 },
+    });
+    const Glyph = @import("../../layout/glyph_position.zig").GlyphPosition;
+    const Line = @import("../../layout/types/paragraph.zig").ParagraphLine;
+    const expected_glyphs = try std.testing.allocator.dupe(
+        Glyph,
+        complete.layout.glyphs,
+    );
+    defer std.testing.allocator.free(expected_glyphs);
+    const expected_lines = try std.testing.allocator.dupe(
+        Line,
+        complete.layout.lines,
+    );
+    defer std.testing.allocator.free(expected_lines);
+
+    const layout_only = try engine.layoutStyledWithoutContentWidths(
+        cascade,
+        .{
+            .text = "A A",
+            .default_font_size = 20,
+            .spans = &spans,
+            .options = .{ .max_width = 30 },
+        },
+    );
+    try std.testing.expectEqualSlices(
+        Glyph,
+        expected_glyphs,
+        layout_only.layout.glyphs,
+    );
+    try std.testing.expectEqualSlices(
+        Line,
+        expected_lines,
+        layout_only.layout.lines,
+    );
+    try std.testing.expectEqual(
+        layout_only.layout.glyphs.len,
+        layout_only.glyph_metadata.len,
+    );
+}
+
 test "styled layout reuses face-derived glyph caches" {
     const test_font = @import("../../test_font.zig");
     const bytes = try test_font.buildMinimalTtf(std.testing.allocator);

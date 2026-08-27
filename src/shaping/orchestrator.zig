@@ -446,6 +446,28 @@ pub const TextShaper = struct {
         });
     }
 
+    /// Styled layout without the independent intrinsic-width calculation.
+    pub fn layoutStyledParagraphUtf8WithoutContentWidths(
+        cascade: FontCascade,
+        buffer: *LayoutBuffer,
+        styled: *StyledParagraphBuffer,
+        text: []const u8,
+        default_font_size: f32,
+        spans: []const StyledParagraphSpan,
+        options: ParagraphOptions,
+    ) !ParagraphLayout {
+        return try styled_paragraph_layout.layout(.{
+            .cascade = cascade,
+            .buffer = buffer,
+            .styled = styled,
+            .text = text,
+            .default_font_size = default_font_size,
+            .spans = spans,
+            .options = options,
+            .compute_content_widths = false,
+        });
+    }
+
     pub fn measureParagraphUtf8(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !TextMetrics {
         const paragraph = try layoutParagraphUtf8(cascade, buffer, text, font_size, options);
         return textMetricsFromParagraph(paragraph);

@@ -79,6 +79,10 @@ pub const Engine = struct {
         glyph_metadata: []const styled_buffer.Metadata,
         content_widths: paragraph_types.ContentWidths,
     };
+    pub const StyledLayout = struct {
+        layout: paragraph_types.ParagraphLayout,
+        glyph_metadata: []const styled_buffer.Metadata,
+    };
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -263,6 +267,30 @@ pub const Engine = struct {
             .glyph_metadata = state.styled_output.glyphMetadata(),
             .content_widths = state.styled_output.contentWidths() orelse
                 return error.InvalidParagraphLayout,
+        };
+    }
+
+    /// Shape and lay out attributed text without calculating intrinsic widths.
+    /// Use `layoutStyled` when min/max content widths are also required.
+    pub fn layoutStyledWithoutContentWidths(
+        self: *Engine,
+        cascade: face_mod.Cascade,
+        request: StyledParagraphRequest,
+    ) !StyledLayout {
+        const state = self.getStateForWork();
+        const paragraph = try text_shaper.TextShaper
+            .layoutStyledParagraphUtf8WithoutContentWidths(
+            internalCascade(cascade),
+            &state.output,
+            &state.styled_output,
+            request.text,
+            request.default_font_size,
+            request.spans,
+            request.options,
+        );
+        return .{
+            .layout = paragraph,
+            .glyph_metadata = state.styled_output.glyphMetadata(),
         };
     }
 

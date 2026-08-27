@@ -3944,6 +3944,29 @@ pub fn build(b: *std.Build) void {
         glyph_bench_cmd.addArgs(args);
     }
 
+    const freetype_matrix_step = b.step(
+        "freetype-matrix",
+        "Benchmark Cangjie against FreeType across raster formats, sizes, and lifecycles",
+    );
+    const freetype_matrix_cmd = b.addSystemCommand(&.{
+        "python3",
+        "tools/run_freetype_matrix.py",
+        "--glyph-bench",
+    });
+    freetype_matrix_cmd.addArtifactArg(glyph_bench_exe);
+    freetype_matrix_cmd.addArgs(&.{
+        "--roboto",
+        b.fmt("{s}/harfrust/harfrust/benches/fonts/Roboto-Regular.ttf", .{parity_work_root orelse ""}),
+        "--cff",
+        "/usr/share/fonts/opentype/stix/STIXGeneral-Regular.otf",
+        "--arabic",
+        "/usr/share/fonts/truetype/noto/NotoKufiArabic-Regular.ttf",
+        "--cjk",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    });
+    if (b.args) |args| freetype_matrix_cmd.addArgs(args);
+    freetype_matrix_step.dependOn(&freetype_matrix_cmd.step);
+
     const glyph_name_fixtures_exe = b.addExecutable(.{
         .name = "cangjie-glyph-name-fixtures",
         .root_module = b.createModule(.{

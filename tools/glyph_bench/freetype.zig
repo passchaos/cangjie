@@ -49,7 +49,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
     const glyph_id = resolveGlyphId(ft_face.face, options);
     if (options.dirty_rect) {
         if (options.mode != .raster_reuse) return error.InvalidArguments;
-        return runDirty(io, allocator, ft_face.face, glyph_id, options);
+        return runDirty(io, allocator, ft_face, glyph_id, options);
     }
     var empty_target_pixels: [0]u8 = .{};
     const target_pixels: []u8 = if (options.mode == .raster or
@@ -62,7 +62,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
 
     if (options.warmup != 0) {
         var warmup_checksum: u64 = 0;
-        try runIterations(ft_face.face, glyph_id, options, options.warmup, target_pixels, &warmup_checksum);
+        try runIterations(ft_face, glyph_id, options, options.warmup, target_pixels, &warmup_checksum);
     }
 
     var samples = std.ArrayList(report.Sample).empty;
@@ -73,7 +73,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
     while (sample_index < options.samples) : (sample_index += 1) {
         var sample_checksum: u64 = 0;
         const start = std.Io.Clock.now(.awake, io).nanoseconds;
-        try runIterations(ft_face.face, glyph_id, options, options.iterations, target_pixels, &sample_checksum);
+        try runIterations(ft_face, glyph_id, options, options.iterations, target_pixels, &sample_checksum);
         const sample_elapsed = std.Io.Clock.now(.awake, io).nanoseconds - start;
         elapsed += sample_elapsed;
         checksum = updateChecksum(checksum, sample_checksum);
@@ -93,7 +93,8 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
     };
 }
 
-fn runDirty(io: std.Io, allocator: std.mem.Allocator, face: ft.FT_Face, glyph_id: ft.FT_UInt, options: options_mod.Options) !report.Result {
+fn runDirty(io: std.Io, allocator: std.mem.Allocator, ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_mod.Options) !report.Result {
+    const face = ft_face.face;
     const pixels = try allocator.alloc(u8, @as(usize, options.target_size) * options.target_size);
     defer allocator.free(pixels);
     @memset(pixels, 0);
@@ -104,7 +105,7 @@ fn runDirty(io: std.Io, allocator: std.mem.Allocator, face: ft.FT_Face, glyph_id
     const dirty_pixels = if (bounds) |value| value.pixelCount() else 0;
     if (options.warmup != 0) {
         var ignored: u64 = 0;
-        try runDirtyIterations(face, glyph_id, options, options.warmup, pixels, bounds, &ignored);
+        try runDirtyIterations(ft_face, glyph_id, options, options.warmup, pixels, bounds, &ignored);
     }
     var samples = std.ArrayList(report.Sample).empty;
     errdefer samples.deinit(allocator);
@@ -113,7 +114,7 @@ fn runDirty(io: std.Io, allocator: std.mem.Allocator, face: ft.FT_Face, glyph_id
     for (0..options.samples) |sample_index| {
         var sample_checksum: u64 = 0;
         const start = std.Io.Clock.now(.awake, io).nanoseconds;
-        try runDirtyIterations(face, glyph_id, options, options.iterations, pixels, bounds, &sample_checksum);
+        try runDirtyIterations(ft_face, glyph_id, options, options.iterations, pixels, bounds, &sample_checksum);
         const duration = std.Io.Clock.now(.awake, io).nanoseconds - start;
         elapsed += duration;
         checksum = updateChecksum(checksum, sample_checksum);
@@ -122,7 +123,28 @@ fn runDirty(io: std.Io, allocator: std.mem.Allocator, face: ft.FT_Face, glyph_id
     return .{ .elapsed_ns = elapsed, .checksum = checksum, .samples = try samples.toOwnedSlice(allocator), .dirty_pixels = dirty_pixels };
 }
 
-fn runDirtyIterations(face: ft.FT_Face, glyph_id: ft.FT_UInt, options: options_mod.Options, iterations: usize, pixels: []u8, bounds: ?dirty_rect.Bounds, checksum: *u64) !void {
+fn runDirtyIterations(ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_mod.Options, iterations: usize, pixels: []u8, bounds: ?dirty_rect.Bounds, checksum: *u64) !void {
+    const face = ft_face.face;
+    if (options.mode == .raster_reuse) {
+        if (ft.FT_Load_Glyph(
+            face,
+            glyph_id,
+            ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
+        ) != 0) return error.FreeTypeFailed;
+        if (face.*.glyph.*.format != ft.FT_GLYPH_FORMAT_OUTLINE) {
+            return error.FreeTypeFailed;
+        }
+        translateOutlineToTarget(face.*.glyph, options);
+        for (0..iterations) |_| {
+            dirty_rect.clear(pixels, options.target_size, bounds);
+            try renderLoadedOutline(ft_face, options, pixels);
+            checksum.* = updateChecksum(
+                checksum.*,
+                dirty_rect.checksum(pixels, options.target_size, bounds),
+            );
+        }
+        return;
+    }
     const flags: ft.FT_Int32 = ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP;
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
@@ -164,12 +186,34 @@ fn resolveGlyphId(face: ft.FT_Face, options: options_mod.Options) ft.FT_UInt {
     return ft.FT_Get_Char_Index(face, options.codepoint);
 }
 
-fn runIterations(face: ft.FT_Face, glyph_id: ft.FT_UInt, options: options_mod.Options, iterations: usize, target_pixels: []u8, checksum: *u64) !void {
+fn runIterations(ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_mod.Options, iterations: usize, target_pixels: []u8, checksum: *u64) !void {
+    const face = ft_face.face;
+    if (options.mode == .raster_reuse) {
+        if (ft.FT_Load_Glyph(
+            face,
+            glyph_id,
+            ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
+        ) != 0) return error.FreeTypeFailed;
+        if (face.*.glyph.*.format != ft.FT_GLYPH_FORMAT_OUTLINE) {
+            return error.FreeTypeFailed;
+        }
+        translateOutlineToTarget(face.*.glyph, options);
+        for (0..iterations) |_| {
+            @memset(target_pixels, 0);
+            try renderLoadedOutline(ft_face, options, target_pixels);
+            checksum.* = updateChecksum(
+                checksum.*,
+                std.hash.Wyhash.hash(0, target_pixels),
+            );
+        }
+        return;
+    }
     const load_flags: ft.FT_Int32 = switch (options.mode) {
         .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .bitmap => unreachable,
         .outline => ft.FT_LOAD_NO_SCALE | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
         .outline_session, .outline_reuse => unreachable,
-        .raster, .raster_reuse => ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
+        .raster => ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
+        .raster_reuse => unreachable,
         .raster_prepare, .raster_prepared => unreachable,
     };
     var i: usize = 0;
@@ -182,6 +226,41 @@ fn runIterations(face: ft.FT_Face, glyph_id: ft.FT_UInt, options: options_mod.Op
             .outline_session, .outline_reuse, .raster_prepare, .raster_prepared => unreachable,
         });
     }
+}
+
+fn translateOutlineToTarget(
+    slot: ft.FT_GlyphSlot,
+    options: options_mod.Options,
+) void {
+    // FT_Outline_Render uses a bottom-up Cartesian target. Move the baseline
+    // into the bitmap once, outside the repeated scan-conversion loop.
+    ft.FT_Outline_Translate(
+        &slot.*.outline,
+        0,
+        @intFromFloat(@round(options.font_size * 64.0)),
+    );
+}
+
+fn renderLoadedOutline(
+    ft_face: FreeTypeFace,
+    options: options_mod.Options,
+    pixels: []u8,
+) !void {
+    var bitmap = std.mem.zeroes(ft.FT_Bitmap);
+    bitmap.rows = options.target_size;
+    bitmap.width = options.target_size;
+    bitmap.pitch = @intCast(options.target_size);
+    bitmap.buffer = pixels.ptr;
+    bitmap.num_grays = 256;
+    bitmap.pixel_mode = ft.FT_PIXEL_MODE_GRAY;
+    var params = std.mem.zeroes(ft.FT_Raster_Params);
+    params.target = &bitmap;
+    params.flags = ft.FT_RASTER_FLAG_AA;
+    if (ft.FT_Outline_Render(
+        ft_face.library,
+        &ft_face.face.*.glyph.*.outline,
+        &params,
+    ) != 0) return error.FreeTypeFailed;
 }
 
 fn outlineChecksum(slot: ft.FT_GlyphSlot) u64 {

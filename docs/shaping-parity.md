@@ -4760,6 +4760,21 @@ shaping-performance superiority.
   A strict five-corpus matrix then measured `1.006x` for Amiri words and
   `1.040x` for Devanagari against the faster reference, but these near-parity
   rows still require a larger repeatable margin before any broad claim.
+- Cached Arabic merged GSUB plans now enter an execution boundary that trusts
+  the plan's validated lookup offsets and matching accelerator slice. It still
+  installs the complete GDEF metadata and shared mutation limits, honors JSTF
+  disabled lookups, and preserves the profiled dispatcher, but avoids repeated
+  table/version/plan-shape checks and per-lookup sidecar resolution in normal
+  runs. A fixed-CPU-30 A/B/B/A counter run over twenty complete Amiri-word
+  passes reduced retired instructions from about `11.683B` to `11.371B`
+  (`2.68%`), branches from `1.883B` to `1.766B` (`6.19%`), and cycles from an
+  endpoint mean of about `6.085B` to `5.955B` (`2.1%`), with unchanged output.
+  The full parity smoke and corpus parity gates pass. A strict `10 * 21`
+  five-corpus matrix measured speedups against the faster reference of
+  `1.216x`, `1.084x`, `1.046x`, `1.112x`, and `1.014x` for Roboto, Source
+  Serif, Amiri words, long Amiri, and Devanagari respectively. The two narrow
+  rows remain evidence for the maintained matrix rather than a universal
+  shaping-performance claim.
 - The maintained Fontations/Skrifa matrix was rerun after the raster and
   paragraph harness changes with 100,000 iterations and seven samples. All
   19 semantic checks passed and every row led (`1.495x--7.796x`); owning glyf

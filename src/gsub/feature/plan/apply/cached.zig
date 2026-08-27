@@ -88,6 +88,64 @@ pub fn merged(
     );
 }
 
+/// Apply a cached merged plan whose table identity, metadata, and sidecar
+/// correspondence were proved by the owning shaping context.
+pub fn mergedAfterPlanProof(
+    comptime Executor: type,
+    view: View,
+    plan: model.MergedLookupPlan,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    run: Options,
+) Error!void {
+    if (plan.lookups.len == 0) return;
+    std.debug.assert(plan.lookups.len == plan.lookup_offsets.len);
+    const sidecars = run.lookup_accelerators.?;
+
+    var storage = state.Storage{};
+    const prepared = try state.prepare(run, glyphs.items.len, &storage);
+    var cache = prefilter.Cache.init();
+    for (plan.lookups, plan.lookup_offsets) |lookup, offset| {
+        if (lookup_order.contains(run.disabled_lookups, lookup.lookup)) {
+            continue;
+        }
+        std.debug.assert(lookup.lookup < sidecars.len);
+        const sidecar = &sidecars[lookup.lookup];
+        std.debug.assert(sidecar.lookup_offset == offset);
+        std.debug.assert(sidecar.lookup_type != 0);
+        var selected = prepared;
+        selected.active_source_feature = null;
+        selected.active_source_feature_mask = lookup.source_mask;
+        selected.active_auto_zwnj = lookup.auto_zwnj;
+        selected.active_auto_zwj = lookup.auto_zwj;
+        selected.match_source_syllable = lookup.match_source_syllable;
+        selected.active_feature_value = lookup.value;
+        selected.active_feature_random = lookup.random;
+        if (selected.shape_profile == null) {
+            try Executor.applyLookupUnprofiledAfterPlanProof(
+                view,
+                offset,
+                lookup.lookup,
+                glyphs,
+                allocator,
+                selected,
+                &cache,
+                sidecar,
+            );
+        } else {
+            try Executor.applyLookup(
+                view,
+                offset,
+                lookup.lookup,
+                glyphs,
+                allocator,
+                selected,
+                &cache,
+            );
+        }
+    }
+}
+
 noinline fn mergedNonEmpty(
     comptime Executor: type,
     view: View,

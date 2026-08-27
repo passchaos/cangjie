@@ -3644,6 +3644,20 @@ pub const Font = struct {
         );
     }
 
+    fn applyGsubMergedFeatureLookupPlanAfterRunProof(self: *const Font, plan: gsub_mod.feature.MergedLookupPlan, glyphs: *std.ArrayList(glyph_mod.GlyphId), allocator: std.mem.Allocator, options: gsub_mod.runtime.Options) FontError!void {
+        const gsub = self.gsub orelse return;
+        std.debug.assert(options.assume_validated);
+        try gsub_mod.feature.applyMergedLookupPlanAfterPlanProof(
+            self.data,
+            gsub.offset,
+            gsub.length,
+            plan,
+            glyphs,
+            allocator,
+            options,
+        );
+    }
+
     fn collectGposAdjustments(self: *const Font, glyphs: []const glyph_mod.GlyphId, adjustments: *std.ArrayList(gpos_mod.Adjustment), allocator: std.mem.Allocator) FontError!void {
         return try self.collectGposAdjustmentsWithOptions(glyphs, adjustments, allocator, .{});
     }
@@ -7120,6 +7134,7 @@ pub const shaping = struct {
     pub const applyGsubFeatureLookupPlanAfterRunProof = Font.applyGsubFeatureLookupPlanAfterRunProof;
     pub const applyGsubMergedFeatureLookupPlanUsingGdefAfterProof = Font.applyGsubMergedFeatureLookupPlanUsingGdefAfterProof;
     pub const applyGsubMergedFeatureLookupPlanUsingGdefAfterRunProof = Font.applyGsubMergedFeatureLookupPlanUsingGdefAfterRunProof;
+    pub const applyGsubMergedFeatureLookupPlanAfterRunProof = Font.applyGsubMergedFeatureLookupPlanAfterRunProof;
     pub const collectGposAdjustmentsWithOptionsUsingGdefForShaping = Font.collectGposAdjustmentsWithOptionsUsingGdefForShaping;
     pub const proveGposTableForShaping = Font.proveGposTableForShaping;
     pub const hasGposTableForShaping = Font.hasGposTableForShaping;

@@ -10,7 +10,7 @@ one benchmark. The claim remains **open** until every row below is closed.
 | Reference | Concrete completion criterion | Current artifact/evidence | Status |
 | --- | --- | --- | --- |
 | HarfBuzz | Exact glyph IDs, clusters, advances, offsets, and relevant flags across retained upstream and production-font corpora | `shaping-parity-smoke`, `shaping-corpus-parity-smoke`, `tests/data/`, `docs/shaping-parity.md` | Strong retained coverage, not exhaustive |
-| HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: `react-dom.txt` is now covered and leads by more than `1.50x`, while Amiri words remains a near tie and therefore does not establish superiority |
+| HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: all five maintained core rows now lead (`1.014x--1.216x`) and `react-dom.txt` leads by more than `1.50x`; Amiri words and Devanagari still have narrow margins, and broader font/script coverage remains incomplete |
 | Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; all 25 maintained rows, including variable-CFF2 default/axis-endpoint owning and reuse outlines, lead; broader semantic differentials remain open |
 | FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 75 maintained grayscale glyf/CFF1/CFF2 lifecycle rows now lead, while bitmap/color, hinting-target, cold parse, broader glyph coverage, and additional platforms remain incomplete |
 | Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the maintained 18-row matrix covers three scripts, three construction styles, retained reflow, and matched in-flow inline objects and now leads every performance row; logical-line normalization proves 9/18 geometry rows equivalent, while vertical, fallback, out-of-flow, and the remaining structural geometry differences are not comparable |
@@ -72,12 +72,14 @@ x86-64, pinned to CPU 30 where the harness supports it:
   CFF2 charstring improvements described below, the former owning 8 px blocker
   moved from `0.989x` to `1.698x`.
 
-The latest strict shaping run at `077cb97e` measured speedups of `1.213x`
-(Roboto), `1.042x` (Source Serif), `0.994x` (Amiri words), `1.083x` (Amiri
-long), and `1.001x` (Devanagari). An empty cached merged-stage optimization
-then reduced Amiri-word retired instructions/branches/cycles by about
-`1.23%`/`1.26%`/`1.43%`; a subsequent strict run measured `1.006x`, but this
-remains inside the audit's noise margin rather than a proven stable lead.
+The latest strict `10 * 21` shaping run measured speedups of `1.216x`
+(Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri
+long), and `1.014x` (Devanagari). The Arabic improvement comes from routing a
+cached merged plan directly through its already-proved accelerator sidecars;
+against an independent baseline, Amiri-word retired instructions fell about
+`2.68%`, branches `6.19%`, and cycles about `2.1%`, with unchanged output.
+The smallest margins still warrant more corpus and platform evidence rather
+than a universal shaping-performance claim.
 The separate long mixed-code suite now measures both retained `react-dom.txt`
 font rows. Consecutive fixed-CPU-30 symmetric `1 * 7` and `1 * 11` runs
 measured `1.500x`/`1.522x` for Roboto and `1.525x`/`1.531x` for Source Serif
@@ -105,7 +107,7 @@ and complete maintained 75-row FreeType grayscale lifecycle matrix, plus most
 of the five-corpus shaping matrix. The corrected Parley timing matrix now leads
 all 18 rows, including all six retained-reflow rows. This evidence is
 substantial but does not satisfy the stronger overall claim. In particular,
-the latest shaping runs still place Amiri words near parity; Devanagari now
-leads the retained row by about `1.03x`, but that is only one font/corpus. The
+the latest shaping runs lead all five maintained rows, but Amiri words and
+Devanagari remain narrow single-font/corpus results. The
 broader FreeType bitmap/color/hinting/cold-parse coverage and Parley semantic
 matrices remain incomplete.

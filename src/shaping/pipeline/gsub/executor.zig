@@ -275,6 +275,23 @@ pub fn applyMergedAfterRunProof(
         mutable_plan.deinit(context.allocator);
     };
     if (plan.lookups.len == 0) return;
+    if (context.lookup_selection_cache != null and
+        options.script_tag == .arab)
+    {
+        // Arabic invokes several merged feature stages. Their cached plan and
+        // accelerator slice share one validated font owner, so install GDEF
+        // state here and enter the proved executor without another wrapper.
+        var prepared_options = options;
+        prepared_options.assume_validated = true;
+        gdef_metadata.applyToGsubOptions(&prepared_options);
+        return try font_shaping.applyGsubMergedFeatureLookupPlanAfterRunProof(
+            font,
+            plan,
+            glyph_ids,
+            context.allocator,
+            prepared_options,
+        );
+    }
     return try font_shaping.applyGsubMergedFeatureLookupPlanUsingGdefAfterRunProof(
         font,
         plan,

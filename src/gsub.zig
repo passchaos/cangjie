@@ -64,6 +64,8 @@ pub const feature = struct {
     pub const applyMergedLookupPlan = applyMergedFeatureLookupPlanWithOptions;
     pub const applyMergedLookupPlanAfterMetadataProof =
         applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof;
+    pub const applyMergedLookupPlanAfterPlanProof =
+        applyMergedFeatureLookupPlanWithOptionsAfterPlanProof;
 };
 
 /// Parsed lookup sidecars retained by shaping caches.
@@ -537,6 +539,33 @@ fn applyMergedFeatureLookupPlanWithOptionsAfterMetadataProof(
         allocator,
         options,
         false,
+    );
+}
+
+fn applyMergedFeatureLookupPlanWithOptionsAfterPlanProof(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    plan: feature.MergedLookupPlan,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GsubError || std.mem.Allocator.Error)!void {
+    std.debug.assert(length >= 10);
+    std.debug.assert(offset <= data.len and length <= data.len - offset);
+    const table = Table{
+        .data = data,
+        .offset = offset,
+        .length = length,
+        .assume_validated = true,
+    };
+    return feature_domain.plan.apply.cached.mergedAfterPlanProof(
+        ContextualRecordExecutor,
+        table,
+        plan,
+        glyphs,
+        allocator,
+        options,
     );
 }
 

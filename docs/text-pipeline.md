@@ -2195,3 +2195,17 @@ leads from 6/18 to 9/18. An independent Arabic A/B/B/A `perf stat` run over
 branches from `4.884B` to `0.506B`, and atom-core cycles from about `8.79B` to
 `1.21B`, with the native and normalized geometry checksums unchanged. This
 does not close inline-object reflow or styled Arabic/Japanese construction.
+
+The same proof was then extended to in-flow object markers. Object advances
+and vertical metrics participate directly in the simple line builder, while
+the existing positioning pass still emits public object geometry. Pure-RTL
+paragraphs with one object rebuild at most two font-run fragments around the
+unowned marker instead of invoking the general bidi transaction. The corrected
+`1000 * 7` matrix now leads all six retained rows: inline-object speedups are
+`1.123x` (Latin), `1.212x` (Arabic), and `1.187x` (Japanese), lifting the total
+to 12/18. A fixed-CPU Latin inline-object A/B/B/A run over 200,000 reflows
+reduced retired instructions from about `9.73B` to `3.90B`, branches from
+`1.398B` to `0.589B`, and cycles from about `2.81B` to `1.12B`, without
+changing either checksum. Geometry equivalence remains 9/18 because the known
+inline-object and Japanese structural differences are intentionally not
+normalized away.

@@ -310,6 +310,91 @@ pub fn applyPureRtlLinesAfterProof(buffer: anytype) bool {
     return true;
 }
 
+/// Pure-RTL variant for one unowned in-flow marker embedded in a single font
+/// run. The marker is deliberately outside `runs`, but reversing each complete
+/// line still preserves font ownership as at most two visual run fragments.
+pub fn applyPureRtlLinesWithObjectAfterProof(buffer: anytype) !bool {
+    const glyphs = buffer.glyphs.items;
+    if (buffer.runs.items.len != 2) return false;
+    const leading_run = buffer.runs.items[0];
+    const trailing_run = buffer.runs.items[1];
+    var object_index: ?usize = null;
+    for (glyphs, 0..) |glyph, index| {
+        if (!glyph.isInlineObject()) continue;
+        if (object_index != null) return false;
+        object_index = index;
+    }
+    const logical_object_index = object_index orelse return false;
+    if (leading_run.glyph_start != 0 or
+        leading_run.glyph_len != logical_object_index or
+        trailing_run.glyph_start != logical_object_index + 1 or
+        trailing_run.glyph_start + trailing_run.glyph_len != glyphs.len or
+        leading_run.font != trailing_run.font or
+        leading_run.font_index != trailing_run.font_index or
+        leading_run.font_size != trailing_run.font_size or
+        leading_run.variation_coord_start != trailing_run.variation_coord_start or
+        leading_run.variation_coord_len != trailing_run.variation_coord_len)
+    {
+        return false;
+    }
+
+    var previous_end: usize = 0;
+    for (buffer.lines.items) |line| {
+        const line_end = std.math.add(usize, line.glyph_start, line.glyph_len) catch
+            return false;
+        if (line.glyph_start < previous_end or line_end > glyphs.len) return false;
+        previous_end = line_end;
+    }
+
+    const font = run_types.fontForBackend(leading_run);
+    var visual_start: usize = 0;
+    for (buffer.lines.items) |*line| {
+        const logical_start = line.glyph_start;
+        const logical_end = logical_start + line.glyph_len;
+        const gap_len = logical_start - visual_start;
+        if (gap_len != 0 and line.glyph_len != 0) {
+            const Glyph = @TypeOf(glyphs[0]);
+            rotateRecords(Glyph, glyphs[visual_start..logical_end], gap_len);
+        }
+        bidi.applyPureRtlVisualOrderSlice(
+            glyphs[visual_start .. visual_start + line.glyph_len],
+            font,
+        );
+        line.glyph_start = visual_start;
+        visual_start += line.glyph_len;
+    }
+
+    // The sole logical run covered every non-object glyph. Rebuild only its
+    // one or two ranges around the marker now that line reversals placed it.
+    const visual_object_index = for (glyphs, 0..) |glyph, index| {
+        if (glyph.isInlineObject()) break index;
+    } else return false;
+    buffer.runs.clearRetainingCapacity();
+    try buffer.runs.ensureTotalCapacity(buffer.allocator, 2);
+    if (visual_object_index != 0) {
+        var leading = leading_run;
+        leading.glyph_start = 0;
+        leading.glyph_len = visual_object_index;
+        buffer.runs.appendAssumeCapacity(leading);
+    }
+    if (visual_object_index + 1 < glyphs.len) {
+        var trailing = leading_run;
+        trailing.glyph_start = visual_object_index + 1;
+        trailing.glyph_len = glyphs.len - trailing.glyph_start;
+        buffer.runs.appendAssumeCapacity(trailing);
+    }
+    for (buffer.lines.items) |*line| {
+        const range = runs.range(
+            buffer.runs.items,
+            line.glyph_start,
+            line.glyph_start + line.glyph_len,
+        );
+        line.run_start = range.start;
+        line.run_len = range.len;
+    }
+    return true;
+}
+
 fn rotateRecords(comptime T: type, items: []T, amount: usize) void {
     bidi.reverseRecords(T, items[0..amount]);
     bidi.reverseRecords(T, items[amount..]);

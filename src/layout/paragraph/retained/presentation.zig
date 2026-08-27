@@ -32,7 +32,8 @@ pub fn applySimpleRetained(
 ) !void {
     if (needs_bidi_reorder) {
         if (pure_rtl_lines and
-            bidi_reorder.applyPureRtlLinesAfterProof(buffer))
+            (bidi_reorder.applyPureRtlLinesAfterProof(buffer) or
+                try bidi_reorder.applyPureRtlLinesWithObjectAfterProof(buffer)))
         {} else if (bidi_paragraph) |paragraph|
             try bidi_reorder.applyLinesResolved(buffer, paragraph)
         else
@@ -42,9 +43,15 @@ pub fn applySimpleRetained(
     // visual order. Recompute it after RTL reversal to preserve the exact
     // floating-point output contract of the full presentation pipeline.
     punctuation_hanging.apply(buffer, options);
-    // The proof requires one run covering every glyph. Only its absolute pen
-    // changes after line-local RTL permutation; no run rebuilding is needed.
+    // The proof keeps run ownership fixed. Only absolute pens change after
+    // line-local permutation; no run rebuilding is needed.
     bidi_reorder.recomputeRunOffsets(buffer);
+    try inline_object.position(
+        buffer,
+        options.inline_objects,
+        options.out_of_flow_placements,
+        options.writing_mode,
+    );
 }
 
 pub fn apply(

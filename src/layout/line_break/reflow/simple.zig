@@ -1,11 +1,13 @@
-//! Fast retained reflow for the ordinary single-run paragraph contract.
+//! Fast retained reflow for an ordinary paragraph with fixed run ownership.
 //!
 //! The general greedy state machine supports exclusions, styled policy ranges,
 //! tabs, discretionary hyphens, punctuation fitting, truncation, and resumable
 //! commits. A retained paragraph with none of those policies can select lines
-//! directly from its already-materialized UAX #14 opportunities. Keeping this
-//! path separate makes its narrow proof auditable and leaves every advanced
-//! feature on the general implementation.
+//! directly from its already-materialized UAX #14 opportunities. In-flow
+//! object markers remain supported because their width and line metrics are
+//! explicit, immutable atoms; fallback runs and object positioning still use
+//! the established shared records. Keeping this path separate makes its narrow
+//! proof auditable and leaves every advanced feature on the general path.
 
 const std = @import("std");
 
@@ -34,17 +36,6 @@ pub fn tryBuild(
 
     buffer.lines.clearRetainingCapacity();
     const glyphs = buffer.glyphs.items;
-    const run_info = geometry.resolvedLineInfo(
-        buffer.runs.items,
-        glyphs,
-        &.{},
-        0,
-        glyphs.len,
-        default_metrics,
-        null,
-        null,
-    );
-    const line_height = run_info.metrics.lineHeight();
     var line_start: usize = 0;
     var line_byte_start: usize = 0;
     var y: f32 = 0;
@@ -84,9 +75,9 @@ pub fn tryBuild(
                         line_break.byte_offset < source_end) continue;
                     if (line_break.byte_offset != source_end) continue;
 
-                    // supportsShape proves one ordered output per source atom,
-                    // with discretionary hyphens excluded. Consequently the
-                    // general candidate recorder reduces to choosing either
+                    // Paragraph preparation proved one ordered output per
+                    // source atom, with discretionary hyphens excluded. The
+                    // general candidate recorder therefore reduces to either
                     // the boundary after this atom or, for collapsible break
                     // spaces, the boundary before its invisible line suffix.
                     const candidate = if (geometry.isDiscardableBreak(glyph.codepoint)) index else index + 1;
@@ -114,6 +105,16 @@ pub fn tryBuild(
                 next_line_start,
                 line_byte_start,
             );
+            const run_info = geometry.resolvedLineInfo(
+                buffer.runs.items,
+                glyphs,
+                options.inline_objects,
+                line_start,
+                break_end,
+                default_metrics,
+                null,
+                null,
+            );
             try geometry.appendLine(
                 buffer,
                 line_start,
@@ -127,7 +128,7 @@ pub fn tryBuild(
                 .{ .x = 0, .width = options.max_width, .indent = 0 },
                 null,
             );
-            y += line_height;
+            y += run_info.metrics.lineHeight();
             line_start = next_line_start;
             line_byte_start = line_byte_end;
             committed = true;
@@ -135,6 +136,16 @@ pub fn tryBuild(
         }
         if (committed) continue;
 
+        const run_info = geometry.resolvedLineInfo(
+            buffer.runs.items,
+            glyphs,
+            options.inline_objects,
+            line_start,
+            glyphs.len,
+            default_metrics,
+            null,
+            null,
+        );
         try geometry.appendLine(
             buffer,
             line_start,
@@ -173,7 +184,6 @@ fn supportsOptions(options: paragraph_options.Options) bool {
         options.line_break_policy_ranges.len == 0 and
         options.exclusions.len == 0 and
         options.line_regions.len == 0 and
-        options.inline_objects.len == 0 and
         options.out_of_flow_placements.len == 0 and
         options.tab_stops.len == 0 and
         options.word_break_dictionary == null and

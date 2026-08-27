@@ -259,7 +259,6 @@ pub const TextShaper = struct {
         const simple_reflow = simpleRetainedReflowShape(
             owned_text,
             owned_glyphs,
-            owned_runs,
         );
         const inferred_script_tag = if (shape_options.script_tag == null)
             ShapePlanKey.fromText(text, shape_options).script_tag
@@ -911,19 +910,13 @@ fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
 fn simpleRetainedReflowShape(
     text: []const u8,
     glyphs: []const GlyphPosition,
-    runs: []const CascadeRun,
 ) bool {
-    if (glyphs.len == 0 or runs.len != 1 or
-        runs[0].glyph_start != 0 or runs[0].glyph_len != glyphs.len)
-    {
-        return false;
-    }
+    if (glyphs.len == 0) return false;
     var expected_byte_start: usize = 0;
     for (glyphs) |glyph| {
         if (glyph.cluster != expected_byte_start or
             glyph.source_byte_len == 0 or
             glyph.codepoint == 0x00ad or
-            glyph.isInlineObject() or
             glyph.isTab() or
             glyph.isDiscretionaryHyphen() or
             glyph.isAutomaticHyphen() or

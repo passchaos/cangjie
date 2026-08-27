@@ -17,6 +17,35 @@ const punctuation_compression = @import("../../punctuation/compression.zig");
 const punctuation_hanging = @import("../../punctuation/hanging.zig");
 const vertical_hanging = @import("../vertical_hanging.zig");
 const vertical_justification = @import("../vertical_justification.zig");
+const unicode = @import("../../../unicode.zig");
+
+/// Finish the subset of presentation reachable from the simple retained
+/// reflow proof. All disabled features were checked before line construction,
+/// so this avoids repeatedly entering no-op justification, punctuation, and
+/// object-placement passes.
+pub fn applySimpleRetained(
+    buffer: anytype,
+    options: anytype,
+    needs_bidi_reorder: bool,
+    pure_rtl_lines: bool,
+    bidi_paragraph: ?unicode.BidiParagraph,
+) !void {
+    if (needs_bidi_reorder) {
+        if (pure_rtl_lines and
+            bidi_reorder.applyPureRtlLinesAfterProof(buffer))
+        {} else if (bidi_paragraph) |paragraph|
+            try bidi_reorder.applyLinesResolved(buffer, paragraph)
+        else
+            unreachable;
+    }
+    // Even with hanging disabled, the public line width is the sum in final
+    // visual order. Recompute it after RTL reversal to preserve the exact
+    // floating-point output contract of the full presentation pipeline.
+    punctuation_hanging.apply(buffer, options);
+    // The proof requires one run covering every glyph. Only its absolute pen
+    // changes after line-local RTL permutation; no run rebuilding is needed.
+    bidi_reorder.recomputeRunOffsets(buffer);
+}
 
 pub fn apply(
     buffer: anytype,
@@ -24,6 +53,8 @@ pub fn apply(
     options: anytype,
     recipe: anytype,
     needs_bidi_reorder: bool,
+    pure_rtl_lines: bool,
+    bidi_paragraph: ?unicode.BidiParagraph,
 ) !void {
     if (options.writing_mode.isVertical()) {
         // Vertical column construction has already applied line limits,
@@ -34,11 +65,16 @@ pub fn apply(
         vertical_justification.apply(buffer, options);
         try punctuation_compression.apply(buffer, options);
         if (needs_bidi_reorder) {
-            try bidi_reorder.applyLines(
-                buffer,
-                text,
-                options.direction == .rtl,
-            );
+            if (pure_rtl_lines and
+                bidi_reorder.applyPureRtlLinesAfterProof(buffer))
+            {} else if (bidi_paragraph) |paragraph|
+                try bidi_reorder.applyLinesResolved(buffer, paragraph)
+            else
+                try bidi_reorder.applyLines(
+                    buffer,
+                    text,
+                    options.direction == .rtl,
+                );
         }
         vertical_hanging.apply(buffer, options);
         bidi_reorder.recomputeRunOffsets(buffer);
@@ -57,11 +93,16 @@ pub fn apply(
     paragraph_reflow.applyPendingJustification(buffer);
     try punctuation_compression.apply(buffer, options);
     if (needs_bidi_reorder) {
-        try bidi_reorder.applyLines(
-            buffer,
-            text,
-            options.direction == .rtl,
-        );
+        if (pure_rtl_lines and
+            bidi_reorder.applyPureRtlLinesAfterProof(buffer))
+        {} else if (bidi_paragraph) |paragraph|
+            try bidi_reorder.applyLinesResolved(buffer, paragraph)
+        else
+            try bidi_reorder.applyLines(
+                buffer,
+                text,
+                options.direction == .rtl,
+            );
     }
     punctuation_hanging.apply(buffer, options);
     bidi_reorder.recomputeRunOffsets(buffer);

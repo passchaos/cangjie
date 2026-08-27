@@ -39,7 +39,7 @@ pub const AutomaticHyphen = struct {
 };
 
 pub const Cursor = struct {
-    iterator: unicode.LineBreakIterator,
+    iterator: ?unicode.LineBreakIterator = null,
     analyzed: ?[]const opportunity.Opportunity = null,
     analyzed_index: usize = 0,
     pending: ?unicode.LineBreak = null,
@@ -49,8 +49,40 @@ pub const Cursor = struct {
         analyzed: ?[]const opportunity.Opportunity,
     ) Cursor {
         return .{
-            .iterator = unicode.lineBreaksAssumeValid(text),
+            // Retained paragraphs already own the complete validated UAX #14
+            // opportunity list. Constructing an unused streaming iterator
+            // would repeat a full UTF-8 validation scan on every reflow.
+            .iterator = if (analyzed == null)
+                unicode.lineBreaksAssumeValid(text)
+            else
+                null,
             .analyzed = analyzed,
+        };
+    }
+
+    /// Start a retained-opportunity cursor immediately after `byte_offset`.
+    ///
+    /// A greedy line can overflow after scanning several legal boundaries
+    /// beyond the boundary it ultimately selects. The next line therefore
+    /// needs to revisit that suffix, but it does not need to linearly discard
+    /// the complete paragraph prefix again. Retained opportunities are sorted
+    /// by source offset, so an upper-bound search keeps each restart O(log n).
+    pub fn initRetainedAfter(
+        analyzed: []const opportunity.Opportunity,
+        byte_offset: usize,
+    ) Cursor {
+        var low: usize = 0;
+        var high = analyzed.len;
+        while (low < high) {
+            const middle = low + (high - low) / 2;
+            if (analyzed[middle].byte_offset <= byte_offset)
+                low = middle + 1
+            else
+                high = middle;
+        }
+        return .{
+            .analyzed = analyzed,
+            .analyzed_index = low,
         };
     }
 
@@ -68,7 +100,7 @@ pub const Cursor = struct {
             else
                 return null
         else candidate: {
-            if (self.pending == null) self.pending = self.iterator.next();
+            if (self.pending == null) self.pending = self.iterator.?.next();
             break :candidate opportunity.fromUnicode(
                 self.pending orelse return null,
             );

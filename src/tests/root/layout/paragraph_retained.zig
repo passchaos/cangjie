@@ -465,6 +465,47 @@ test "retained paragraphs own run variation coordinates" {
     );
 }
 
+test "retained paragraph rejects changed shaping slice contents" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+
+    var features = [_]support.FeatureOverride{.{
+        .tag = @import("../../../unicode.zig").tag("kern"),
+        .enabled = false,
+    }};
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        "A A",
+        20,
+        .{ .max_width = 200, .features = &features },
+    );
+    defer paragraph.deinit();
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+
+    _ = try paragraph.layout(&reflow, .{
+        .max_width = 100,
+        .features = &features,
+    });
+    features[0].enabled = true;
+    try std.testing.expectError(
+        error.ParagraphShapingOptionsChanged,
+        paragraph.layout(&reflow, .{
+            .max_width = 100,
+            .features = &features,
+        }),
+    );
+}
+
 test "shaped paragraph reflow restores content after ellipsis truncation" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

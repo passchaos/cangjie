@@ -61,6 +61,7 @@ const LayoutBuffer = context_output.Buffer;
 const FontCascade = font_fallback.Cascade;
 const ShapeOptions = shaping_plan.ShapeOptions;
 const ShapePlanKey = shaping_plan.ShapePlanKey;
+const bidi_order = @import("../text/bidi.zig");
 const GlyphPosition = glyph_position.GlyphPosition;
 const GlyphRun = run_types.GlyphRun;
 const CascadeRun = run_types.CascadeRun;
@@ -249,6 +250,34 @@ pub const TextShaper = struct {
             cascade.fonts,
         );
         errdefer allocator.free(cascade_fonts);
+        const needs_bidi_reorder = plan_bidi.paragraphNeedsReorder(
+            text,
+            options.direction,
+        );
+        const pure_rtl_lines = options.direction == .rtl and
+            bidi_order.visualOrderInputKind(owned_text, true) == .pure_rtl;
+        const simple_reflow = simpleRetainedReflowShape(
+            owned_text,
+            owned_glyphs,
+            owned_runs,
+        );
+        const inferred_script_tag = if (shape_options.script_tag == null)
+            ShapePlanKey.fromText(text, shape_options).script_tag
+        else
+            unicode.openTypeScriptTag(unicode.inferOpenTypeScript(text));
+        const inferred_language_tag = if (shape_options.language_tag == null)
+            ShapePlanKey.fromText(text, shape_options).language_tag
+        else
+            unicode.inferOpenTypeLanguageTag(text);
+        var bidi_paragraph = if (needs_bidi_reorder)
+            try unicode.resolveBidiParagraph(
+                allocator,
+                owned_text,
+                if (options.direction == .rtl) .rtl else .ltr,
+            )
+        else
+            null;
+        errdefer if (bidi_paragraph) |*paragraph| paragraph.deinit();
 
         return .{
             .allocator = allocator,
@@ -263,7 +292,12 @@ pub const TextShaper = struct {
             .hyphenation_dictionary = options.hyphenation.dictionary,
             .default_metrics = defaultBaselineMetrics(cascade.fonts[0], font_size),
             .shape_key = ShapePlanKey.fromText(text, shape_options),
-            .needs_bidi_reorder = plan_bidi.paragraphNeedsReorder(text, options.direction),
+            .inferred_script_tag = inferred_script_tag,
+            .inferred_language_tag = inferred_language_tag,
+            .needs_bidi_reorder = needs_bidi_reorder,
+            .pure_rtl_lines = pure_rtl_lines,
+            .simple_reflow = simple_reflow,
+            .bidi_paragraph = bidi_paragraph,
             .cascade_fonts = cascade_fonts,
             .font_size = font_size,
         };
@@ -868,6 +902,42 @@ fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         next_pen.y += glyph.y_advance;
     }
     return next_pen;
+}
+
+/// Prove the immutable shaped stream accepted by the narrow retained-reflow
+/// loop once, during paragraph preparation. Besides moving an O(glyph-count)
+/// check out of every layout call, keeping the proof next to the owned copy
+/// makes it impossible for one-shot layout to opt into the retained path.
+fn simpleRetainedReflowShape(
+    text: []const u8,
+    glyphs: []const GlyphPosition,
+    runs: []const CascadeRun,
+) bool {
+    if (glyphs.len == 0 or runs.len != 1 or
+        runs[0].glyph_start != 0 or runs[0].glyph_len != glyphs.len)
+    {
+        return false;
+    }
+    var expected_byte_start: usize = 0;
+    for (glyphs) |glyph| {
+        if (glyph.cluster != expected_byte_start or
+            glyph.source_byte_len == 0 or
+            glyph.codepoint == 0x00ad or
+            glyph.isInlineObject() or
+            glyph.isTab() or
+            glyph.isDiscretionaryHyphen() or
+            glyph.isAutomaticHyphen() or
+            glyph.codepoint == '\n' or
+            glyph.codepoint == '\r' or
+            glyph.codepoint == 0x0085 or
+            glyph.codepoint == 0x2028 or
+            glyph.codepoint == 0x2029)
+        {
+            return false;
+        }
+        expected_byte_start = glyph.sourceByteEnd();
+    }
+    return expected_byte_start == text.len;
 }
 
 const ResolvedLookupOptions = pipeline_types.ResolvedLookupOptions;

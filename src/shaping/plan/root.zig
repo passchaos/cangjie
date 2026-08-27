@@ -171,7 +171,7 @@ pub const ShapePlanCache = struct {
     }
 };
 
-fn featureOverridesHash(features: []const unicode.FeatureOverride) u64 {
+pub fn featureOverridesHash(features: []const unicode.FeatureOverride) u64 {
     // Reserve zero for the overwhelmingly common no-override plan and avoid
     // constructing/finalizing Wyhash per run. Non-empty plans retain their
     // established hash representation for cache compatibility.
@@ -185,7 +185,7 @@ fn featureOverridesHash(features: []const unicode.FeatureOverride) u64 {
     return hasher.final();
 }
 
-fn normalizedVariationCoordsHash(coords: []const f32) u64 {
+pub fn normalizedVariationCoordsHash(coords: []const f32) u64 {
     // Match GlyphMetricsCache's established default-instance key. No axis
     // coordinates means there are no bytes to distinguish, so hashing the
     // empty length only adds work to every default shaping plan.

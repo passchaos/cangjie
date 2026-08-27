@@ -62,6 +62,7 @@ pub fn main(init: std.process.Init) !void {
     const cascade = cangjie.font.Cascade.init(&faces);
     var engine = cangjie.shaping.Engine.init(allocator, .{});
     defer engine.deinit();
+    const paragraph_direction = try resolvedDirection(direction, text);
     const inline_objects = if (style == .inline_object)
         &[_]cangjie.paragraph.InlineObject{.{
             .id = 1,
@@ -76,7 +77,7 @@ pub fn main(init: std.process.Init) !void {
         try engine.prepareParagraph(cascade, .{
             .text = text,
             .font_size = 16,
-            .options = .{ .max_width = width, .direction = try resolvedDirection(direction, text), .inline_objects = inline_objects },
+            .options = .{ .max_width = width, .direction = paragraph_direction, .inline_objects = inline_objects },
         })
     else
         null;
@@ -98,7 +99,7 @@ pub fn main(init: std.process.Init) !void {
                 cascade,
                 text,
                 width,
-                direction,
+                paragraph_direction,
                 style,
                 inline_objects,
                 if (retained) |*paragraph| paragraph else null,
@@ -111,7 +112,7 @@ pub fn main(init: std.process.Init) !void {
                 allocator,
                 text,
                 layout,
-                try resolvedDirection(direction, text),
+                paragraph_direction,
             );
             glyph_count = layout.glyphs.len;
             line_count = layout.lines.len;
@@ -125,7 +126,7 @@ pub fn main(init: std.process.Init) !void {
                 cascade,
                 text,
                 width,
-                direction,
+                paragraph_direction,
                 style,
                 inline_objects,
                 if (retained) |*paragraph| paragraph else null,
@@ -161,7 +162,7 @@ fn benchmarkOnce(
     cascade: cangjie.font.Cascade,
     text: []const u8,
     width: f32,
-    direction: Direction,
+    paragraph_direction: cangjie.shaping.Direction,
     style: Style,
     inline_objects: []const cangjie.paragraph.InlineObject,
     retained: ?*const cangjie.paragraph.Shaped,
@@ -173,13 +174,13 @@ fn benchmarkOnce(
             cascade,
             text,
             width,
-            try resolvedDirection(direction, text),
+            paragraph_direction,
             style,
             inline_objects,
         ),
         .reflow => retained.?.layout(reflow, .{
             .max_width = width,
-            .direction = try resolvedDirection(direction, text),
+            .direction = paragraph_direction,
             .inline_objects = inline_objects,
         }),
     };

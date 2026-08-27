@@ -13,7 +13,7 @@ one benchmark. The claim remains **open** until every row below is closed.
 | HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: `react-dom.txt` is now covered and leads by more than `1.50x`, while Amiri words remains a near tie and therefore does not establish superiority |
 | Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; all 25 maintained rows, including variable-CFF2 default/axis-endpoint owning and reuse outlines, lead; broader semantic differentials remain open |
 | FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 75 maintained grayscale glyf/CFF1/CFF2 lifecycle rows now lead, while bitmap/color, hinting-target, cold parse, broader glyph coverage, and additional platforms remain incomplete |
-| Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the 18-row matrix covers three scripts, three construction styles, retained reflow, and matched in-flow inline objects; logical-line normalization proves 9/18 geometry rows equivalent, but the corrected timing consumer leaves only 6/18 performance rows ahead; vertical, fallback, and out-of-flow modes are not comparable |
+| Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the 18-row matrix covers three scripts, three construction styles, retained reflow, and matched in-flow inline objects; logical-line normalization proves 9/18 geometry rows equivalent; retained paragraph state and a narrowly proved simple-reflow path raise the corrected timing matrix to 9/18 performance rows ahead, while inline-object reflow and several styled construction rows remain gaps; vertical, fallback, and out-of-flow modes are not comparable |
 | Robustness | Malformed supported inputs fail atomically under safety checks and sustained coverage-guided fuzzing | `font-fuzz-smoke`, `font-fuzz`, regression fixtures | Open: the retained 100K campaign is useful evidence, not exhaustive format coverage |
 | Platform scope | Results reproduced on each supported target or the performance claim explicitly scoped to named hardware/OS/toolchain versions | benchmark documentation | Open: current performance evidence is primarily one Linux x86-64 host |
 
@@ -36,11 +36,12 @@ x86-64, pinned to CPU 30 where the harness supports it:
   and owning output at normalized `wght` endpoints `+1`/`-1`
   (`1.317x`/`1.336x`). Caller-owned reuse at those endpoints leads by
   `13.865x`/`13.763x`.
-- `zig build parley-matrix -Doptimize=ReleaseFast -- --iterations 100 --samples
-  5 --cpu 30`: 18/18 count/stability rows passed. After removing Parley's
+- `zig build parley-matrix -Doptimize=ReleaseFast -- --iterations 1000 --samples
+  7 --cpu 30`: 18/18 count/stability rows passed. After removing Parley's
   timed O(n) semantic-summary walk to match Cangjie's O(1) timed consumer,
-  Cangjie leads 6/18 rows; all six retained-reflow rows and Arabic/Japanese
-  styled construction remain performance gaps. Logical-line geometry agrees
+  Cangjie leads 9/18 rows. Default Latin, Arabic, and Japanese retained reflow
+  now lead by `1.375x`, `1.036x`, and `1.489x`; inline-object reflow and
+  Arabic/Japanese styled construction remain performance gaps. Logical-line geometry agrees
   on 9/18 rows after preserving source ranges, advances, and relative cluster
   placement while discarding only a per-line translation and sub-1/1024 px
   accumulation noise.
@@ -97,8 +98,9 @@ instrumentation gap, but does not change the near-tie status of Amiri words.
 
 Cangjie is already ahead in the maintained 25-case Fontations/Skrifa matrix
 and complete maintained 75-row FreeType grayscale lifecycle matrix, plus most
-of the five-corpus shaping matrix. The corrected Parley timing matrix leads
-only 6/18 rows, so it remains an explicit performance blocker. This
+of the five-corpus shaping matrix. The corrected Parley timing matrix now leads
+9/18 rows, including all three default retained-reflow rows, but the remaining
+nine rows still make Parley an explicit performance blocker. This
 evidence is substantial but does not satisfy the stronger overall claim. In particular,
 the latest shaping runs still place Amiri words near parity; Devanagari now
 leads the retained row by about `1.03x`, but that is only one font/corpus. The

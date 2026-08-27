@@ -2181,3 +2181,17 @@ construction are currently slower. Representative corrected ratios are
 for Japanese default, and `0.421x/0.139x/0.446x` for Latin/Arabic/Japanese
 retained reflow. These are now the authoritative blockers for Parley-relative
 performance work.
+
+A subsequent retained-reflow optimization keeps width-independent UAX #9 state
+in `ShapedParagraph`, skips construction of an unused streaming UAX #14 cursor,
+and routes strictly proved single-run/default-policy paragraphs through a small
+greedy loop. Pure RTL lines use the already-proved reversal path; mixed bidi
+still applies the retained resolved paragraph, and every unsupported policy
+falls back to the general breaker. On the same CPU-30 corrected matrix with
+`1000 * 7` sampling, the default retained rows now lead Parley by `1.375x`
+(Latin), `1.036x` (Arabic), and `1.489x` (Japanese), raising total performance
+leads from 6/18 to 9/18. An independent Arabic A/B/B/A `perf stat` run over
+200,000 reflows reduced retired instructions from about `29.78B` to `4.07B`,
+branches from `4.884B` to `0.506B`, and atom-core cycles from about `8.79B` to
+`1.21B`, with the native and normalized geometry checksums unchanged. This
+does not close inline-object reflow or styled Arabic/Japanese construction.

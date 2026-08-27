@@ -104,6 +104,8 @@ pub const Init = struct {
     word_break_dictionary: ?*const segmentation.WordBreakDictionary,
     hyphenation_dictionary: ?*const hyphenation.Dictionary,
     needs_bidi_reorder: bool,
+    pure_rtl_lines: bool,
+    bidi_paragraph: ?unicode.BidiParagraph,
     cascade_fonts: []const *const font_mod.Font,
     font_size: f32,
 };
@@ -122,6 +124,8 @@ pub const Breaker = struct {
     word_break_dictionary: ?*const segmentation.WordBreakDictionary,
     hyphenation_dictionary: ?*const hyphenation.Dictionary,
     needs_bidi_reorder: bool,
+    pure_rtl_lines: bool,
+    bidi_paragraph: ?unicode.BidiParagraph,
     cascade_fonts: []const *const font_mod.Font,
     font_size: f32,
     regions: std.ArrayList(line_regions.Region) = .empty,
@@ -151,6 +155,8 @@ pub const Breaker = struct {
             .word_break_dictionary = init.word_break_dictionary,
             .hyphenation_dictionary = init.hyphenation_dictionary,
             .needs_bidi_reorder = init.needs_bidi_reorder,
+            .pure_rtl_lines = init.pure_rtl_lines,
+            .bidi_paragraph = init.bidi_paragraph,
             .cascade_fonts = init.cascade_fonts,
             .font_size = init.font_size,
             .greedy = paragraph_reflow.GreedyState.init(init.allocator),
@@ -431,6 +437,8 @@ pub const Breaker = struct {
             self.options,
             reshape_recipe,
             self.needs_bidi_reorder,
+            self.pure_rtl_lines,
+            self.bidi_paragraph,
         ) catch |err| {
             // Presentation mutates glyph/run arrays in several ordered stages.
             // Restore the complete logical break result so callers can inspect

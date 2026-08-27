@@ -6,6 +6,7 @@
 
 const greedy = @import("greedy.zig");
 const orchestration = @import("orchestration.zig");
+const simple = @import("simple.zig");
 
 pub const BaselineMetrics = greedy.BaselineMetrics;
 pub const alignedLineX = greedy.alignedLineX;
@@ -20,3 +21,4 @@ pub const GreedyState = greedy.State;
 pub const refreshGreedyRegion = greedy.refreshRegion;
 pub const resolvedAlignment = greedy.resolvedAlignment;
 pub const runRangeForGlyphs = greedy.runRangeForGlyphs;
+pub const tryBuildSimpleRetained = simple.tryBuild;

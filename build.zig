@@ -3986,7 +3986,7 @@ pub fn build(b: *std.Build) void {
     });
     const glyph_name_fixtures_step = b.step(
         "glyph-name-fixtures",
-        "Write post/CFF/synthesized glyph-name reference fixtures",
+        "Write generated Fontations metadata and outline fixtures",
     );
     const glyph_name_fixtures_cmd = b.addRunArtifact(glyph_name_fixtures_exe);
     const generated_fontations_fixtures =
@@ -4013,6 +4013,11 @@ pub fn build(b: *std.Build) void {
         "--roboto",
         b.fmt(
             "{s}/harfrust/harfrust/benches/fonts/Roboto-Regular.ttf",
+            .{parity_work_root orelse ""},
+        ),
+        "--cff2",
+        b.fmt(
+            "{s}/harfbuzz/test/subset/data/fonts/Cantarell-VF-ABC.otf",
             .{parity_work_root orelse ""},
         ),
     });

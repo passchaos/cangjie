@@ -4766,3 +4766,26 @@ shaping-performance superiority.
   was `1.495x`, CFF outline `5.207x`, and bitmap summary `2.024x`. This retains
   the pinned high-level matrix but does not substitute for broader differential
   coverage of all 41 inventoried table families.
+- The Fontations/Skrifa matrix now includes real Cantarell variable-CFF2
+  outline rows for both owning output and retained caller storage. Both engines
+  consume the same 14-command unscaled path and must produce the same tagged,
+  little-endian FNV command checksum. Source review showed that Skrifa retains
+  a bounded prefix of variation-region scalars inside each `BlendState`, while
+  Cangjie previously reparsed the VariationStore and recomputed the same scalar
+  for every target in every `blend`. Cangjie now lazily retains up to 16 scalar
+  values per active `vsindex` for one charstring execution; no state crosses a
+  glyph or coordinate location. The executor also reserves a small command
+  prefix only when the first contour is emitted and computes exact cubic bounds
+  per axis instead of evaluating both coordinates at the union of derivative
+  roots. Against the independent `e24798ab` binary, fixed-CPU-30 A/B/B/A over
+  500,000 owning decodes reduced retired instructions from about `11.789B` to
+  `8.152B` (`30.8%`), branches from `1.960B` to `1.269B` (`35.2%`), and cycles
+  from about `3.967B` to `3.092B` (`22.1%`). An 11-sample A/B/B/A wall run
+  improved the geometric endpoint mean from `2008.5` to `1518.7 ns` (`24.4%`)
+  with identical checksums. The final `100000 * 7`, CPU-30 matrix passes all
+  21 semantic rows and leads every row (`1.245x--13.377x`): CFF2 owning is
+  `1496.665/1590.732 ns` versus Skrifa `1905.776/1937.141 ns` (`1.245x`),
+  while CFF2 reuse is `141.265/141.302 ns` versus `1877.322/1902.683 ns`
+  (`13.377x`). The complete 75-row FreeType grayscale lifecycle matrix remains
+  ahead (`1.168x--17.377x`). These additions close the maintained CFF2 outline
+  lifecycle gap, not the broader 41-family semantic differential audit.

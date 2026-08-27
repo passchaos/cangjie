@@ -7,6 +7,10 @@ pub const Error = error{BadSfnt} || std.mem.Allocator.Error;
 const max_stack = 96;
 const max_nesting_depth = 16;
 const max_operations = 1_000_000;
+// Most text glyphs emit fewer commands than this. Reserving on the first real
+// command avoids the allocator's small geometric-growth sequence without
+// making empty CFF2 glyphs allocate or imposing a large per-outline floor.
+const initial_outline_command_capacity = 16;
 
 pub const Info = struct {
     charstring_count: usize = 0,
@@ -744,15 +748,80 @@ fn BoundsExecutor(comptime Context: type) type {
         }
 
         fn includeCubicExtrema(self: *Self, p0_x: f32, p0_y: f32, p1_x: f32, p1_y: f32, p2_x: f32, p2_y: f32, p3_x: f32, p3_y: f32) void {
-            var roots: [4]f32 = undefined;
-            var root_count: usize = 0;
-            appendCubicDerivativeRoots(&roots, &root_count, p0_x, p1_x, p2_x, p3_x);
-            appendCubicDerivativeRoots(&roots, &root_count, p0_y, p1_y, p2_y, p3_y);
-            for (roots[0..root_count]) |t| {
-                self.includePoint(
-                    cubicAt(p0_x, p1_x, p2_x, p3_x, t),
-                    cubicAt(p0_y, p1_y, p2_y, p3_y, t),
-                );
+            // A root of dx/dt can only enlarge the x range, and likewise for
+            // y. Evaluating both coordinates at the combined roots doubled
+            // the cubic work without tightening either axis. The endpoints
+            // are included by the caller, so each helper only considers roots
+            // strictly inside the curve.
+            self.includeCubicAxisExtrema(.x, p0_x, p1_x, p2_x, p3_x);
+            self.includeCubicAxisExtrema(.y, p0_y, p1_y, p2_y, p3_y);
+        }
+
+        const BoundsAxis = enum { x, y };
+
+        fn includeCubicAxisExtrema(
+            self: *Self,
+            comptime axis: BoundsAxis,
+            p0: f32,
+            p1: f32,
+            p2: f32,
+            p3: f32,
+        ) void {
+            const a = -p0 + 3.0 * p1 - 3.0 * p2 + p3;
+            const b = 2.0 * (p0 - 2.0 * p1 + p2);
+            const c = p1 - p0;
+            const epsilon = 0.000001;
+            if (@abs(a) <= epsilon) {
+                if (@abs(b) > epsilon) {
+                    self.includeCubicAxisRoot(axis, p0, p1, p2, p3, -c / b);
+                }
+                return;
+            }
+            const discriminant = b * b - 4.0 * a * c;
+            if (discriminant < 0) return;
+            if (discriminant <= epsilon) {
+                self.includeCubicAxisRoot(axis, p0, p1, p2, p3, -b / (2.0 * a));
+                return;
+            }
+            const sqrt_discriminant = @sqrt(discriminant);
+            self.includeCubicAxisRoot(
+                axis,
+                p0,
+                p1,
+                p2,
+                p3,
+                (-b + sqrt_discriminant) / (2.0 * a),
+            );
+            self.includeCubicAxisRoot(
+                axis,
+                p0,
+                p1,
+                p2,
+                p3,
+                (-b - sqrt_discriminant) / (2.0 * a),
+            );
+        }
+
+        fn includeCubicAxisRoot(
+            self: *Self,
+            comptime axis: BoundsAxis,
+            p0: f32,
+            p1: f32,
+            p2: f32,
+            p3: f32,
+            t: f32,
+        ) void {
+            if (t <= 0 or t >= 1) return;
+            const value = cubicAt(p0, p1, p2, p3, t);
+            switch (axis) {
+                .x => {
+                    self.bounds_info.x_min = @min(self.bounds_info.x_min, value);
+                    self.bounds_info.x_max = @max(self.bounds_info.x_max, value);
+                },
+                .y => {
+                    self.bounds_info.y_min = @min(self.bounds_info.y_min, value);
+                    self.bounds_info.y_max = @max(self.bounds_info.y_max, value);
+                },
             }
         }
 
@@ -775,7 +844,15 @@ fn BoundsExecutor(comptime Context: type) type {
             self.bounds_info.move_count += 1;
             self.contour_open = true;
             if (self.outline) |outline| {
-                try outline.commands.append(self.allocator.?, .{ .move_to = .{ .x = self.x, .y = self.y } });
+                if (outline.commands.capacity == 0) {
+                    try outline.commands.ensureTotalCapacity(
+                        self.allocator.?,
+                        initial_outline_command_capacity,
+                    );
+                }
+                try outline.commands.append(self.allocator.?, .{
+                    .move_to = .{ .x = self.x, .y = self.y },
+                });
             }
         }
 
@@ -876,36 +953,6 @@ fn applyBlend(comptime Context: type, context: *Context, stack: *[max_stack]Valu
         stack[start + target_index] = .{ .number = value, .integer = false };
     }
     stack_len.* = start + target_count;
-}
-
-fn appendCubicDerivativeRoots(roots: *[4]f32, root_count: *usize, p0: f32, p1: f32, p2: f32, p3: f32) void {
-    const a = -p0 + 3.0 * p1 - 3.0 * p2 + p3;
-    const b = 2.0 * (p0 - 2.0 * p1 + p2);
-    const c = p1 - p0;
-    const epsilon = 0.000001;
-    if (@abs(a) <= epsilon) {
-        if (@abs(b) <= epsilon) return;
-        appendUnitRoot(roots, root_count, -c / b);
-        return;
-    }
-    const discriminant = b * b - 4.0 * a * c;
-    if (discriminant < 0) return;
-    if (discriminant <= epsilon) {
-        appendUnitRoot(roots, root_count, -b / (2.0 * a));
-        return;
-    }
-    const sqrt_discriminant = @sqrt(discriminant);
-    appendUnitRoot(roots, root_count, (-b + sqrt_discriminant) / (2.0 * a));
-    appendUnitRoot(roots, root_count, (-b - sqrt_discriminant) / (2.0 * a));
-}
-
-fn appendUnitRoot(roots: *[4]f32, root_count: *usize, t: f32) void {
-    if (t <= 0 or t >= 1) return;
-    for (roots[0..root_count.*]) |existing| {
-        if (@abs(existing - t) <= 0.000001) return;
-    }
-    roots[root_count.*] = t;
-    root_count.* += 1;
 }
 
 fn cubicAt(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) f32 {

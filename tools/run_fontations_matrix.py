@@ -26,6 +26,7 @@ class Case:
     operand: int
     compare_checksum: bool = True
     font_size: str | None = None
+    fixture: bool = True
 
 
 CASES = (
@@ -49,6 +50,17 @@ CASES = (
     # Keep the owning outline row above so reuse cannot silently redefine it.
     Case("outline-glyf-reuse", "outline-reuse", "synthesized.ttf", 1),
     Case("outline-cff", "outline-session", "cff.otf", 1),
+    # CFF2 has a distinct INDEX/DICT/variation-aware execution model. The
+    # retained upstream Cantarell subset also exercises real variable-CFF2
+    # data that both engines accept, unlike Cangjie's parser-only fixtures.
+    Case(
+        "outline-cff2", "outline-session", "Cantarell-VF-ABC.otf",
+        1, fixture=False,
+    ),
+    Case(
+        "outline-cff2-reuse", "outline-reuse", "Cantarell-VF-ABC.otf",
+        1, fixture=False,
+    ),
 )
 
 
@@ -69,7 +81,9 @@ def parse_fields(output: str) -> dict[str, str]:
     return result
 
 
-def run(command: list[str]) -> dict[str, str]:
+def run(command: list[str], cpu: int | None) -> dict[str, str]:
+    if cpu is not None:
+        command = ["taskset", "-c", str(cpu), *command]
     completed = subprocess.run(
         command,
         check=False,
@@ -127,8 +141,10 @@ def main() -> int:
     parser.add_argument("--skrifa-manifest", required=True, type=Path)
     parser.add_argument("--fixture-dir", required=True, type=Path)
     parser.add_argument("--roboto", required=True, type=Path)
+    parser.add_argument("--cff2", required=True, type=Path)
     parser.add_argument("--iterations", type=int, default=1)
     parser.add_argument("--samples", type=int, default=1)
+    parser.add_argument("--cpu", type=int)
     args = parser.parse_args()
     if args.iterations <= 0 or args.samples <= 0:
         parser.error("iterations and samples must be positive")
@@ -142,25 +158,25 @@ def main() -> int:
     failures: list[str] = []
     measured: list[tuple[str, float, float, float, float]] = []
     for case in CASES:
-        font = args.fixture_dir / case.font
-        cangjie_semantic = run(cangjie_command(args.cangjie, case, font, 1, 1))
-        reference_semantic = run(skrifa_command(skrifa, case, font, 1, 1))
+        font = args.fixture_dir / case.font if case.fixture else args.cff2
+        cangjie_semantic = run(cangjie_command(args.cangjie, case, font, 1, 1), args.cpu)
+        reference_semantic = run(skrifa_command(skrifa, case, font, 1, 1), args.cpu)
         if case.compare_checksum and int(cangjie_semantic.get("checksum", "-1"), 16) != int(reference_semantic.get("checksum", "-2"), 16):
             failures.append(
                 f"{case.name}: checksum: Cangjie={cangjie_semantic.get('checksum')!r}, "
                 f"Skrifa={reference_semantic.get('checksum')!r}"
             )
         cangjie_first = cangjie_semantic if args.iterations == 1 and args.samples == 1 else run(
-            cangjie_command(args.cangjie, case, font, args.iterations, args.samples)
+            cangjie_command(args.cangjie, case, font, args.iterations, args.samples), args.cpu
         )
         reference_first = reference_semantic if args.iterations == 1 and args.samples == 1 else run(
-            skrifa_command(skrifa, case, font, args.iterations, args.samples)
+            skrifa_command(skrifa, case, font, args.iterations, args.samples), args.cpu
         )
         reference_second = run(
-            skrifa_command(skrifa, case, font, args.iterations, args.samples)
+            skrifa_command(skrifa, case, font, args.iterations, args.samples), args.cpu
         )
         cangjie_second = run(
-            cangjie_command(args.cangjie, case, font, args.iterations, args.samples)
+            cangjie_command(args.cangjie, case, font, args.iterations, args.samples), args.cpu
         )
         measured.append((case.name,
             float(cangjie_first["sample_median_ns_per_iter"]),
@@ -178,24 +194,24 @@ def main() -> int:
         Case("bounds", "bounds", roboto.name, 38),
         Case("global-metrics", "global-metrics", roboto.name, 0),
     ):
-        cangjie_semantic = run(cangjie_command(args.cangjie, case, roboto, 1, 1))
-        reference_semantic = run(skrifa_command(skrifa, case, roboto, 1, 1))
+        cangjie_semantic = run(cangjie_command(args.cangjie, case, roboto, 1, 1), args.cpu)
+        reference_semantic = run(skrifa_command(skrifa, case, roboto, 1, 1), args.cpu)
         if case.compare_checksum and int(cangjie_semantic.get("checksum", "-1"), 16) != int(reference_semantic.get("checksum", "-2"), 16):
             failures.append(
                 f"{case.name}: checksum: Cangjie={cangjie_semantic.get('checksum')!r}, "
                 f"Skrifa={reference_semantic.get('checksum')!r}"
             )
         cangjie_first = cangjie_semantic if args.iterations == 1 and args.samples == 1 else run(
-            cangjie_command(args.cangjie, case, roboto, args.iterations, args.samples)
+            cangjie_command(args.cangjie, case, roboto, args.iterations, args.samples), args.cpu
         )
         reference_first = reference_semantic if args.iterations == 1 and args.samples == 1 else run(
-            skrifa_command(skrifa, case, roboto, args.iterations, args.samples)
+            skrifa_command(skrifa, case, roboto, args.iterations, args.samples), args.cpu
         )
         reference_second = run(
-            skrifa_command(skrifa, case, roboto, args.iterations, args.samples)
+            skrifa_command(skrifa, case, roboto, args.iterations, args.samples), args.cpu
         )
         cangjie_second = run(
-            cangjie_command(args.cangjie, case, roboto, args.iterations, args.samples)
+            cangjie_command(args.cangjie, case, roboto, args.iterations, args.samples), args.cpu
         )
         measured.append((case.name,
             float(cangjie_first["sample_median_ns_per_iter"]),

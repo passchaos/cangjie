@@ -426,6 +426,8 @@ fn selectedFontDictIndex(table: []const u8, parsed: Info, glyph_id: usize, glyph
 }
 
 const CharStringScanContext = struct {
+    const max_cached_blend_scalars = 16;
+
     table: []const u8,
     vstore_offset: ?usize = null,
     default_vs_index: ?u16 = null,
@@ -433,18 +435,49 @@ const CharStringScanContext = struct {
     global_subrs_index: IndexInfo,
     local_subrs_index: ?IndexInfo = null,
     hint_params: type2_hint.Params = .{},
+    // CFF2 charstrings commonly apply one region vector to many operands and
+    // several blend operators. Scalars depend only on the active vsindex and
+    // this execution's coordinates, so retain a small bounded prefix for the
+    // duration of one glyph. Switching vsindex replaces the prefix; regions
+    // beyond it retain the fully validated on-demand path.
+    blend_scalar_vs_index: ?u16 = null,
+    blend_region_count: usize = 0,
+    blend_scalar_mask: u16 = 0,
+    blend_scalars: [max_cached_blend_scalars]f32 = undefined,
 
     pub fn initialVariationStoreIndex(self: *CharStringScanContext) Error!u16 {
         return self.default_vs_index orelse 0;
     }
 
     pub fn blendRegionCount(self: *CharStringScanContext, vs_index: u16) Error!usize {
+        if (self.blend_scalar_vs_index == vs_index) return self.blend_region_count;
         const offset = self.vstore_offset orelse return error.BadSfnt;
-        return try variation_mod.regionCount(self.table, offset, vs_index);
+        self.blend_region_count = try variation_mod.regionCount(
+            self.table,
+            offset,
+            vs_index,
+        );
+        self.blend_scalar_vs_index = vs_index;
+        self.blend_scalar_mask = 0;
+        return self.blend_region_count;
     }
 
     pub fn blendScalar(self: *CharStringScanContext, vs_index: u16, region_index: usize) Error!f32 {
         const offset = self.vstore_offset orelse return error.BadSfnt;
+        if (self.blend_scalar_vs_index == vs_index and region_index < self.blend_scalars.len) {
+            const bit = @as(u16, 1) << @intCast(region_index);
+            if (self.blend_scalar_mask & bit != 0) return self.blend_scalars[region_index];
+            const scalar = try variation_mod.scalar(
+                self.table,
+                offset,
+                vs_index,
+                region_index,
+                self.normalized_coords,
+            );
+            self.blend_scalars[region_index] = scalar;
+            self.blend_scalar_mask |= bit;
+            return scalar;
+        }
         return try variation_mod.scalar(self.table, offset, vs_index, region_index, self.normalized_coords);
     }
 

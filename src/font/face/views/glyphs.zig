@@ -266,6 +266,25 @@ pub const Session = struct {
         );
     }
 
+    /// Decode a variation instance into caller-owned reusable storage.
+    ///
+    /// The cached key contains both the glyph id and an owned copy of the full
+    /// normalized coordinate slice, so mutating or reusing the caller's slice
+    /// cannot cause a false cache hit.
+    pub fn outlineAtInto(
+        self: Session,
+        buffer: *glyph_mod.GlyphOutlineBuffer,
+        glyph_id: glyph_mod.GlyphId,
+        normalized_coords: []const f32,
+    ) font_mod.FontError!*const glyph_mod.GlyphOutline {
+        return font_mod.raster_backend.glyphOutlineAtCoordsInto(
+            self.implementation,
+            buffer,
+            glyph_id,
+            normalized_coords,
+        );
+    }
+
     pub fn extents(
         self: Session,
         glyph_id: glyph_mod.GlyphId,

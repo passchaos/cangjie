@@ -228,6 +228,13 @@ Skrifa on this tiny glyph but finishes in fewer cycles (`2.50B/2.48B` versus
 API matrix; it does not assert that every raw table accessor has an equivalent
 workload.
 
+`GlyphSession.outlineAtInto` provides the same caller-owned lifetime for a
+normalized variation location. `OutlineBuffer` copies the coordinate sequence
+into its own storage and includes it in the cache key; callers may therefore
+reuse or mutate their input slice after the call without creating a false hit.
+Changing glyph id or coordinates, or issuing an invalid request, invalidates
+the borrowed result while retaining reusable allocations.
+
 `zig build fontations-matrix -Doptimize=ReleaseFast` now makes the maintained
 high-level differential reproducible instead of leaving it as a collection of
 manual commands. It builds the pinned local Skrifa oracle, generates all test

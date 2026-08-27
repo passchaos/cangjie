@@ -307,6 +307,7 @@ test "public facade uses domain names without legacy aliases" {
         try std.testing.expect(@typeInfo(View) == .@"struct");
     }
     try std.testing.expect(@hasDecl(cangjie.font.GlyphSession, "outlineInto"));
+    try std.testing.expect(@hasDecl(cangjie.font.GlyphSession, "outlineAtInto"));
     inline for (.{
         cangjie.font.metadata.variations.Axis,
         cangjie.font.metadata.variations.Coordinate,
@@ -413,6 +414,52 @@ test "font instance binds normalized coordinates across views" {
     var outline = try instance.glyphs().outline(allocator, 1);
     defer outline.deinit();
     try std.testing.expect(outline.commands.items.len != 0);
+}
+
+test "glyph session reuses outlines only at the same variation location" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCff2VariationOtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+
+    const session = face.glyphs().session();
+    var buffer = cangjie.font.OutlineBuffer.init(allocator);
+    defer buffer.deinit();
+    var coords = [_]f32{0.5};
+
+    var expected_positive = try session.outlineAt(allocator, 0, &coords);
+    defer expected_positive.deinit();
+    const positive = try session.outlineAtInto(&buffer, 0, &coords);
+    try std.testing.expectEqualSlices(
+        cangjie.font.OutlineCommand,
+        expected_positive.commands.items,
+        positive.commands.items,
+    );
+
+    // The buffer owns the coordinate key, so changing the caller's slice does
+    // not reinterpret the cached positive-location outline as a negative one.
+    coords[0] = -0.5;
+    var expected_negative = try session.outlineAt(allocator, 0, &coords);
+    defer expected_negative.deinit();
+    const negative = try session.outlineAtInto(&buffer, 0, &coords);
+    try std.testing.expectEqualSlices(
+        cangjie.font.OutlineCommand,
+        expected_negative.commands.items,
+        negative.commands.items,
+    );
+    try std.testing.expect(!std.meta.eql(
+        expected_positive.commands.items,
+        expected_negative.commands.items,
+    ));
+
+    const repeated = try session.outlineAtInto(&buffer, 0, &coords);
+    try std.testing.expectEqual(negative, repeated);
+    try std.testing.expectError(
+        error.BadSfnt,
+        session.outlineAtInto(&buffer, 0, &.{std.math.nan(f32)}),
+    );
+    try std.testing.expectEqual(@as(usize, 0), buffer.current().commands.items.len);
 }
 
 test "concrete face views cover the normal application workflow" {

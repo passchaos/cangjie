@@ -36,6 +36,9 @@ cargo run --release --manifest-path tools/fontations_bitmap_oracle/Cargo.toml --
   /path/to/variable-font.otf outline-at GLYPH_ID 1,-0.5 10000 31
 ```
 
+Use `outline-reuse-at` with the same arguments to supply Skrifa's documented
+caller-owned draw memory for the varied outline lifecycle.
+
 Repeated unscaled glyph metrics and Unicode charmap lookups use the same final
 two arguments (`ITERATIONS SAMPLES`). `bounds` compares the complete unscaled
 glyph bounding box, including outline-derived CFF and variable-font bounds:

@@ -30,6 +30,7 @@ fn main() {
         "outline" => outline(&font, glyph_id, &mut args),
         "outline-at" => outline_at(&font, glyph_id, &mut args),
         "outline-reuse" => outline_reuse(&font, glyph_id, &mut args),
+        "outline-reuse-at" => outline_reuse_at(&font, glyph_id, &mut args),
         "metrics" => metrics(&font, glyph_id, &mut args),
         "bounds" => bounds(&font, glyph_id, &mut args),
         "global-metrics" => global_metrics(&font, &mut args),
@@ -646,6 +647,21 @@ fn outline_at_location(
 
 fn outline_reuse(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {
     let (iterations, samples) = repeated_args(args);
+    outline_reuse_at_location(font, glyph_id, &[], iterations, samples);
+}
+
+fn outline_reuse_at(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {
+    let (coords, iterations, samples) = varied_repeated_args(args);
+    outline_reuse_at_location(font, glyph_id, &coords, iterations, samples);
+}
+
+fn outline_reuse_at_location(
+    font: &FontRef<'_>,
+    glyph_id: u32,
+    coords: &[NormalizedCoord],
+    iterations: usize,
+    samples: usize,
+) {
     let glyph = font
         .outline_glyphs()
         .get(GlyphId::new(glyph_id))
@@ -661,7 +677,7 @@ fn outline_reuse(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Ite
         for _ in 0..3 {
             let mut pen = HashPen::default();
             glyph
-                .draw(unscaled_settings_with_memory(&mut memory), &mut pen)
+                .draw(unscaled_settings_with_memory(coords, &mut memory), &mut pen)
                 .unwrap_or_else(|_| fail("cannot draw outline"));
             checksum = pen.hash;
             commands = pen.commands;
@@ -671,7 +687,7 @@ fn outline_reuse(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Ite
         for _ in 0..iterations {
             let mut pen = HashPen::default();
             glyph
-                .draw(unscaled_settings_with_memory(&mut memory), &mut pen)
+                .draw(unscaled_settings_with_memory(coords, &mut memory), &mut pen)
                 .unwrap_or_else(|_| fail("cannot draw outline"));
             batch_hash = batch_hash.wrapping_add(pen.hash);
         }
@@ -689,8 +705,11 @@ fn unscaled_settings(coords: &[NormalizedCoord]) -> DrawSettings<'_> {
     DrawSettings::unhinted(Size::unscaled(), LocationRef::new(coords))
 }
 
-fn unscaled_settings_with_memory(memory: &mut [u8]) -> DrawSettings<'_> {
-    DrawSettings::unhinted(Size::unscaled(), LocationRef::default()).with_memory(Some(memory))
+fn unscaled_settings_with_memory<'a>(
+    coords: &'a [NormalizedCoord],
+    memory: &'a mut [u8],
+) -> DrawSettings<'a> {
+    DrawSettings::unhinted(Size::unscaled(), LocationRef::new(coords)).with_memory(Some(memory))
 }
 
 #[derive(Default)]

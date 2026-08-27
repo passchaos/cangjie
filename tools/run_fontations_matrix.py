@@ -70,6 +70,14 @@ CASES = (
         "outline-cff2-var-min", "outline-session",
         "Cantarell-VF-ABC.otf", 1, fixture=False, variation="-1",
     ),
+    Case(
+        "outline-cff2-var-max-reuse", "outline-reuse",
+        "Cantarell-VF-ABC.otf", 1, fixture=False, variation="1",
+    ),
+    Case(
+        "outline-cff2-var-min-reuse", "outline-reuse",
+        "Cantarell-VF-ABC.otf", 1, fixture=False, variation="-1",
+    ),
 )
 
 
@@ -141,6 +149,8 @@ def skrifa_command(
     }.get(case.mode, case.mode)
     if case.variation is not None and mode == "outline":
         mode = "outline-at"
+    elif case.variation is not None and mode == "outline-reuse":
+        mode = "outline-reuse-at"
     command = [str(executable), str(font), mode, str(case.operand)]
     if case.font_size is not None:
         command.append(case.font_size)

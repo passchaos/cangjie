@@ -4802,3 +4802,13 @@ shaping-performance superiority.
   `1516.042/1535.066 ns` versus `1983.412/1996.211 ns` (`1.304x`) and
   `1605.816/1619.439 ns` versus `1990.255/1986.499 ns` (`1.233x`),
   respectively.
+- `GlyphSession.outlineAtInto` extends caller-owned outline reuse to variable
+  instances. Its buffer owns the complete normalized-coordinate cache key, so
+  caller mutation, coordinate changes, and invalid locations cannot return a
+  stale outline. The corresponding Cantarell `wght` endpoint rows bring the
+  maintained matrix to 25 semantic cases. A fixed-CPU-30 `100000 * 7` run
+  measured `+1` reuse at `147.176/147.043 ns` versus Skrifa
+  `1992.677/2087.919 ns` (`13.865x`) and `-1` reuse at
+  `147.267/147.185 ns` versus `2077.656/1976.212 ns` (`13.763x`), with exact
+  command checksums. Including these reuse rows, the full 25-case matrix leads
+  from `1.252x` through `13.865x`.

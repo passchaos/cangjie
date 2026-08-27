@@ -132,6 +132,67 @@ test "glyph outline session reuses caller-owned command and compound scratch" {
     try std.testing.expectEqual(command_storage, recovered.commands.items.ptr);
 }
 
+test "glyph outline session keys reusable outlines by variation coordinates" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildGvarCompoundTtf(allocator);
+    defer allocator.free(bytes);
+
+    var face = try Face.parse(allocator, bytes);
+    defer face.deinit();
+    const session = face.glyphs().session();
+    var buffer = @import("../../../glyph.zig").GlyphOutlineBuffer.init(allocator);
+    defer buffer.deinit();
+
+    var positive_coords = [_]f32{1};
+    var expected_positive = try session.outlineAt(allocator, 2, &positive_coords);
+    defer expected_positive.deinit();
+    const positive = try session.outlineAtInto(&buffer, 2, &positive_coords);
+    try expectSameOutline(expected_positive, positive.*);
+
+    // The buffer owns its cache key. Mutating the caller's slice must select
+    // and cache a newly decoded instance rather than returning the old path.
+    positive_coords[0] = -1;
+    var expected_negative = try session.outlineAt(allocator, 2, &positive_coords);
+    defer expected_negative.deinit();
+    const negative = try session.outlineAtInto(&buffer, 2, &positive_coords);
+    try expectSameOutline(expected_negative, negative.*);
+    try std.testing.expect(!std.meta.eql(
+        expected_positive.commands.items,
+        expected_negative.commands.items,
+    ));
+
+    const repeated = try session.outlineAtInto(&buffer, 2, &positive_coords);
+    try std.testing.expectEqual(negative, repeated);
+    try std.testing.expectError(
+        error.BadSfnt,
+        session.outlineAtInto(&buffer, 2, &.{std.math.nan(f32)}),
+    );
+    try std.testing.expectEqual(@as(usize, 0), buffer.current().commands.items.len);
+}
+
+test "glyph outline buffer does not reuse cached ids across faces" {
+    const allocator = std.testing.allocator;
+    const first_bytes = try test_font.buildCff2Otf(allocator);
+    defer allocator.free(first_bytes);
+    const second_bytes = try test_font.buildCff2VariationOtf(allocator);
+    defer allocator.free(second_bytes);
+
+    var first_face = try Face.parse(allocator, first_bytes);
+    defer first_face.deinit();
+    var second_face = try Face.parse(allocator, second_bytes);
+    defer second_face.deinit();
+    var buffer = @import("../../../glyph.zig").GlyphOutlineBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const first = try first_face.glyphs().session().outlineInto(&buffer, 0);
+    const first_bounds = first.bounds;
+    var expected_second = try second_face.glyphs().session().outline(allocator, 0);
+    defer expected_second.deinit();
+    const second = try second_face.glyphs().session().outlineInto(&buffer, 0);
+    try expectSameOutline(expected_second, second.*);
+    try std.testing.expect(!std.meta.eql(first_bounds, second.bounds));
+}
+
 fn expectSameOutline(
     expected: @import("../../../glyph.zig").GlyphOutline,
     actual: @import("../../../glyph.zig").GlyphOutline,

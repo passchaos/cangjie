@@ -432,13 +432,16 @@ fn runOutlineSessionIterations(allocator: std.mem.Allocator, font: *const cangji
 }
 
 fn runOutlineReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
-    if (options.normalizedVariationCoords().len != 0) return error.InvalidArguments;
+    const coords = options.normalizedVariationCoords();
     const session = font.glyphs().session();
     var buffer = cangjie.font.OutlineBuffer.init(allocator);
     defer buffer.deinit();
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
-        const outline = try session.outlineInto(&buffer, glyph_id);
+        const outline = if (coords.len == 0)
+            try session.outlineInto(&buffer, glyph_id)
+        else
+            try session.outlineAtInto(&buffer, glyph_id, coords);
         checksum.* +%= outlineChecksum(outline.*);
     }
 }

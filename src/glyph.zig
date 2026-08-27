@@ -75,12 +75,15 @@ pub const GlyphOutline = struct {
 /// raw point storage needed by compound `glyf` placement survive between
 /// calls. A borrowed outline returned by `GlyphSession.outlineInto` remains
 /// valid until a different/failed decode on this buffer or `deinit`; repeating
-/// the same glyph id returns the retained decoded outline.
+/// the same glyph id and variation location from the same parsed face returns
+/// the retained decoded outline.
 pub const GlyphOutlineBuffer = struct {
     // These fields are implementation storage shared with the font decoder.
     // Public users should consume `current`; their layout is not a stable API.
     outline_storage: GlyphOutline,
     compound_points: std.ArrayList(Point) = .empty,
+    cached_normalized_coords: std.ArrayList(f32) = .empty,
+    cached_source: ?*const anyopaque = null,
     cached_glyph_id: ?GlyphId = null,
 
     pub fn init(allocator: std.mem.Allocator) GlyphOutlineBuffer {
@@ -99,6 +102,7 @@ pub const GlyphOutlineBuffer = struct {
         const allocator = self.outline_storage.allocator;
         self.outline_storage.deinit();
         self.compound_points.deinit(allocator);
+        self.cached_normalized_coords.deinit(allocator);
         self.* = undefined;
     }
 
@@ -120,6 +124,8 @@ pub const GlyphOutlineBuffer = struct {
 /// all capacity while the table decoder supplies fresh result metadata.
 pub fn resetOutlineBuffer(buffer: *GlyphOutlineBuffer) void {
     buffer.cached_glyph_id = null;
+    buffer.cached_source = null;
+    buffer.cached_normalized_coords.clearRetainingCapacity();
     buffer.outline_storage.commands.clearRetainingCapacity();
     buffer.compound_points.clearRetainingCapacity();
     configureOutline(
@@ -133,16 +139,51 @@ pub fn resetOutlineBuffer(buffer: *GlyphOutlineBuffer) void {
 
 pub fn cachedOutline(
     buffer: *GlyphOutlineBuffer,
+    source: *const anyopaque,
     glyph_id: GlyphId,
 ) ?*const GlyphOutline {
-    if (buffer.cached_glyph_id == glyph_id) return buffer.current();
+    if (buffer.cached_source == source and
+        buffer.cached_glyph_id == glyph_id and
+        buffer.cached_normalized_coords.items.len == 0) return buffer.current();
+    return null;
+}
+
+pub fn cachedOutlineAt(
+    buffer: *GlyphOutlineBuffer,
+    source: *const anyopaque,
+    glyph_id: GlyphId,
+    normalized_coords: []const f32,
+) ?*const GlyphOutline {
+    if (buffer.cached_source == source and
+        buffer.cached_glyph_id == glyph_id and
+        std.mem.eql(f32, buffer.cached_normalized_coords.items, normalized_coords))
+    {
+        return buffer.current();
+    }
     return null;
 }
 
 pub fn publishOutlineBuffer(
     buffer: *GlyphOutlineBuffer,
+    source: *const anyopaque,
     glyph_id: GlyphId,
 ) *const GlyphOutline {
+    buffer.cached_source = source;
+    buffer.cached_glyph_id = glyph_id;
+    return buffer.current();
+}
+
+pub fn publishOutlineBufferAt(
+    buffer: *GlyphOutlineBuffer,
+    source: *const anyopaque,
+    glyph_id: GlyphId,
+    normalized_coords: []const f32,
+) std.mem.Allocator.Error!*const GlyphOutline {
+    try buffer.cached_normalized_coords.appendSlice(
+        buffer.outline_storage.allocator,
+        normalized_coords,
+    );
+    buffer.cached_source = source;
     buffer.cached_glyph_id = glyph_id;
     return buffer.current();
 }

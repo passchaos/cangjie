@@ -6264,7 +6264,7 @@ pub const Font = struct {
         // The caller-owned buffer may retain a decoded glyph as well as its
         // allocations. Parsed face bytes are immutable for the session, so a
         // repeat of the same id is exactly the same outline.
-        if (glyph_mod.cachedOutline(buffer, glyph_id)) |outline| {
+        if (glyph_mod.cachedOutline(buffer, self, glyph_id)) |outline| {
             return outline;
         }
         // A call invalidates the previous borrowed result even when validation
@@ -6279,7 +6279,46 @@ pub const Font = struct {
             glyph_id,
             .parsed,
         );
-        return glyph_mod.publishOutlineBuffer(buffer, glyph_id);
+        return glyph_mod.publishOutlineBuffer(buffer, self, glyph_id);
+    }
+
+    fn glyphOutlineForRasterAtCoordsInto(
+        self: *const Font,
+        buffer: *glyph_mod.GlyphOutlineBuffer,
+        glyph_id: glyph_mod.GlyphId,
+        normalized_coords: []const f32,
+    ) FontError!*const glyph_mod.GlyphOutline {
+        if (normalizedVariationCoordinatesAreDefault(normalized_coords)) {
+            return self.glyphOutlineForRasterInto(buffer, glyph_id);
+        }
+        validateNormalizedVariationCoordinateSlice(normalized_coords) catch |err| {
+            glyph_mod.resetOutlineBuffer(buffer);
+            return err;
+        };
+        if (glyph_mod.cachedOutlineAt(buffer, self, glyph_id, normalized_coords)) |outline| {
+            return outline;
+        }
+
+        // Coordinate values belong to the cache key and therefore must be
+        // copied into caller-owned storage. Decode before replacing the old
+        // command allocation so an allocation failure leaves no borrowed
+        // coordinate slice in the buffer.
+        glyph_mod.resetOutlineBuffer(buffer);
+        errdefer glyph_mod.resetOutlineBuffer(buffer);
+        var decoded = try self.glyphOutlineForRasterAtCoords(
+            buffer.outline_storage.allocator,
+            glyph_id,
+            normalized_coords,
+        );
+        buffer.outline_storage.commands.deinit(buffer.outline_storage.allocator);
+        buffer.outline_storage = decoded;
+        decoded.commands = .empty;
+        return try glyph_mod.publishOutlineBufferAt(
+            buffer,
+            self,
+            glyph_id,
+            normalized_coords,
+        );
     }
 
     fn glyphOutlineForReadMode(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, read_mode: OutlineReadMode) FontError!glyph_mod.GlyphOutline {
@@ -7108,6 +7147,7 @@ pub const raster_backend = struct {
     pub const glyphOutlineAtCoords = Font.glyphOutlineForRasterAtCoords;
     pub const glyphOutline = Font.glyphOutlineForRaster;
     pub const glyphOutlineInto = Font.glyphOutlineForRasterInto;
+    pub const glyphOutlineAtCoordsInto = Font.glyphOutlineForRasterAtCoordsInto;
 };
 
 /// Backend for public Face views whose owners explicitly guarantee immutable

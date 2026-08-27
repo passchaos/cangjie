@@ -17,6 +17,33 @@ one benchmark. The claim remains **open** until every row below is closed.
 | Robustness | Malformed supported inputs fail atomically under safety checks and sustained coverage-guided fuzzing | `font-fuzz-smoke`, `font-fuzz`, regression fixtures | Open: the retained 100K campaign is useful evidence, not exhaustive format coverage |
 | Platform scope | Results reproduced on each supported target or the performance claim explicitly scoped to named hardware/OS/toolchain versions | benchmark documentation | Open: current performance evidence is primarily one Linux x86-64 host |
 
+## Reproducible audit snapshot
+
+The following checks were rerun from a clean worktree at commits through
+`a942e7b1` on Linux x86-64, pinned to CPU 30 where the harness supports it:
+
+- `zig build test -j1 -Doptimize=ReleaseFast --summary failures`: pass.
+- `zig build shaping-parity-smoke ... --summary none`: pass against the local
+  HarfBuzz 14.3 and HarfRust references.
+- `zig build shaping-corpus-parity-smoke ... --summary none`: pass.
+- `zig build fontations-coverage -Doptimize=ReleaseFast`: 41 table families,
+  48 public modules, and eight high-level capability groups mapped.
+- `zig build fontations-matrix -Doptimize=ReleaseFast -- --iterations 100000
+  --samples 7`: 19/19 semantic rows passed; every measured row favored
+  Cangjie (`1.533x--7.576x` in this run).
+- `zig build parley-matrix -Doptimize=ReleaseFast -- --iterations 3 --samples
+  7 --cpu 30`: 9/9 count/stability rows passed; every measured row favored
+  Cangjie (`1.071x--2.558x` in this run).
+- `zig build font-fuzz-smoke -Doptimize=ReleaseSafe -- ...`: six retained
+  seeds and 2,946 deterministic mutations passed.
+
+The latest strict shaping run at `077cb97e` measured speedups of `1.213x`
+(Roboto), `1.042x` (Source Serif), `0.994x` (Amiri words), `1.083x` (Amiri
+long), and `1.001x` (Devanagari). An empty cached merged-stage optimization
+then reduced Amiri-word retired instructions/branches/cycles by about
+`1.23%`/`1.26%`/`1.43%`; a subsequent strict run measured `1.006x`, but this
+remains inside the audit's noise margin rather than a proven stable lead.
+
 ## Audit rules
 
 1. A semantic manifest proves inventory only; it is not a differential test.

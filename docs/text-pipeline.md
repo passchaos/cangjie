@@ -2209,3 +2209,12 @@ reduced retired instructions from about `9.73B` to `3.90B`, branches from
 changing either checksum. Geometry equivalence remains 9/18 because the known
 inline-object and Japanese structural differences are intentionally not
 normalized away.
+
+Uniform one-shot pure-RTL construction now reuses the same allocation-free
+line reversal before falling back to general UAX #9. On CPU 30 this moves the
+Arabic default construction row from `0.93x` behind Parley to `1.174x` ahead.
+An independent 100,000-layout A/B/B/A comparison reduced retired instructions
+from about `42.81B` to `34.11B`, branches from `7.21B` to `5.75B`, and cycles
+from about `13.40B` to `10.85B`, with both output checksums unchanged. The
+corrected matrix therefore leads 13/18 rows; Arabic alternating and the two
+Japanese styled rows remain the material construction gaps.

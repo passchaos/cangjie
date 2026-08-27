@@ -272,6 +272,12 @@ pub fn tryApplyPureRtlLinesWithParallel(
     return true;
 }
 
+/// Apply the same pure-RTL proof without an attributed sidecar.
+pub fn tryApplyPureRtlLines(buffer: anytype, text: []const u8) bool {
+    if (bidi.visualOrderInputKind(text, true) != .pure_rtl) return false;
+    return applyPureRtlLinesAfterProof(buffer);
+}
+
 /// Apply pure-RTL line order after the caller retained the text-level proof.
 /// Structural conditions are still checked before the first mutation.
 pub fn applyPureRtlLinesAfterProof(buffer: anytype) bool {

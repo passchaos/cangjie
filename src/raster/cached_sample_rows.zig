@@ -9,9 +9,9 @@ const RowAccumulator = @import("row_accumulator.zig").RowAccumulator;
 const scanline = @import("scanline.zig");
 
 const sample_offsets_4 = [_]f32{ 0.125, 0.375, 0.625, 0.875 };
-const max_pixel_rows = 128;
+const max_pixel_rows = 256;
 const max_sample_rows = max_pixel_rows * sample_offsets_4.len;
-const max_intersections = 2048;
+const max_intersections = 16384;
 
 const Row = struct {
     start: u16,
@@ -36,13 +36,13 @@ pub const Cache = struct {
     ) void {
         self.valid = false;
         const clipped = bounds orelse return;
-        if (prepared_lines.len < 2 or prepared_lines.len > 128) return;
+        if (prepared_lines.len < 2 or prepared_lines.len > 512) return;
         const pixel_row_count_i64 = @as(i64, clipped.max_y) - clipped.min_y + 1;
         if (pixel_row_count_i64 <= 0 or pixel_row_count_i64 > max_pixel_rows) return;
         const pixel_row_count: usize = @intCast(pixel_row_count_i64);
 
-        var active: [128]scanline.PreparedFillLine = undefined;
-        var row_intersections: [128]scanline.WindingIntersection = undefined;
+        var active: [512]scanline.PreparedFillLine = undefined;
+        var row_intersections: [512]scanline.WindingIntersection = undefined;
         var next_line: usize = 0;
         var active_count: usize = 0;
         var output_count: usize = 0;

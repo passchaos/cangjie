@@ -11,8 +11,8 @@ const outline_raster = @import("outline.zig");
 const scanline = @import("scanline.zig");
 const Line = scanline.Line;
 
-pub const max_commands = 64;
-pub const max_lines = 128;
+pub const max_commands = 256;
+pub const max_lines = 512;
 const fingerprint_probe_count = 4;
 
 pub const Key = struct {

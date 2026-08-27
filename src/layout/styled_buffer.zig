@@ -1,4 +1,5 @@
 const std = @import("std");
+const analysis_cache = @import("paragraph/analysis_cache.zig");
 const run_types = @import("types/runs.zig");
 const ellipsis_runs = @import("line_break/reflow/ellipsis_runs.zig");
 const reflow_regions = @import("line_break/reflow/regions.zig");
@@ -18,12 +19,19 @@ pub const Buffer = struct {
     allocator: std.mem.Allocator,
     metadata: std.ArrayList(Metadata) = .empty,
     content_widths: ?@import("types/paragraph.zig").ContentWidths = null,
+    /// Text-only UAX analysis survives output resets and is replaced exactly
+    /// when a later styled request supplies different bytes.
+    analysis: analysis_cache.Cache,
 
     pub fn init(allocator: std.mem.Allocator) Buffer {
-        return .{ .allocator = allocator };
+        return .{
+            .allocator = allocator,
+            .analysis = .init(allocator),
+        };
     }
 
     pub fn deinit(self: *Buffer) void {
+        self.analysis.deinit();
         self.metadata.deinit(self.allocator);
         self.* = undefined;
     }
@@ -43,6 +51,22 @@ pub const Buffer = struct {
         return self.content_widths;
     }
 };
+
+test "styled analysis cache reuses exact text and replaces changed text" {
+    var buffer = Buffer.init(std.testing.allocator);
+    defer buffer.deinit();
+
+    const first = try buffer.analysis.get("日本語、かな。");
+    const first_graphemes = first.graphemes.ptr;
+    const first_breaks = first.line_breaks.ptr;
+    const repeated = try buffer.analysis.get("日本語、かな。");
+    try std.testing.expectEqual(first_graphemes, repeated.graphemes.ptr);
+    try std.testing.expectEqual(first_breaks, repeated.line_breaks.ptr);
+
+    const changed = try buffer.analysis.get("Latin words");
+    try std.testing.expect(changed.graphemes.len != 0);
+    try std.testing.expect(changed.line_breaks.len != 0);
+}
 
 pub fn rebuild(
     list: *std.ArrayList(Metadata),

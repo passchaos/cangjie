@@ -49,6 +49,7 @@ pub const ShapedParagraph = struct {
     inferred_language_tag: unicode.OpenTypeLanguageTag,
     needs_bidi_reorder: bool,
     pure_rtl_lines: bool,
+    pure_rtl_may_have_mirroring: bool,
     simple_reflow: bool,
     /// Width-independent UAX #9 paragraph state retained from preparation.
     /// Line-dependent L1/L2 work still runs after each set of breaks, but UTF-8
@@ -159,6 +160,7 @@ pub const ShapedParagraph = struct {
                 options,
                 self.needs_bidi_reorder,
                 self.pure_rtl_lines,
+                self.pure_rtl_may_have_mirroring,
                 self.bidi_paragraph,
             );
             return reflow.buffer.paragraphLayout(options.writing_mode);
@@ -244,10 +246,6 @@ pub const ShapedParagraph = struct {
         );
         if (options.word_break_dictionary != self.word_break_dictionary or
             options.hyphenation.dictionary != self.hyphenation_dictionary or
-            !inline_object.indexesMatch(
-                self.inline_object_indexes,
-                options.inline_objects,
-            ) or
             !self.matchesShapeOptions(options))
         {
             return error.ParagraphShapingOptionsChanged;
@@ -300,7 +298,6 @@ fn simpleOptionsNeedNoDeepValidation(options: paragraph_options.Options) bool {
     return options.line_break_policy_ranges.len == 0 and
         options.exclusions.len == 0 and
         options.line_regions.len == 0 and
-        options.inline_objects.len == 0 and
         options.out_of_flow_placements.len == 0 and
         options.tab_stops.len == 0 and
         options.features.len == 0 and

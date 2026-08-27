@@ -28,10 +28,14 @@ pub fn applySimpleRetained(
     options: anytype,
     needs_bidi_reorder: bool,
     pure_rtl_lines: bool,
+    pure_rtl_may_have_mirroring: bool,
     bidi_paragraph: ?unicode.BidiParagraph,
 ) !void {
     if (needs_bidi_reorder) {
-        if (pure_rtl_lines and
+        if (pure_rtl_lines and !pure_rtl_may_have_mirroring and
+            (bidi_reorder.applyPureRtlLinesWithoutMirroringAfterProof(buffer) or
+                try bidi_reorder.applyPureRtlLinesWithObjectWithoutMirroringAfterProof(buffer)))
+        {} else if (pure_rtl_lines and
             (bidi_reorder.applyPureRtlLinesAfterProof(buffer) or
                 try bidi_reorder.applyPureRtlLinesWithObjectAfterProof(buffer)))
         {} else if (bidi_paragraph) |paragraph|
@@ -39,10 +43,9 @@ pub fn applySimpleRetained(
         else
             unreachable;
     }
-    // Even with hanging disabled, the public line width is the sum in final
-    // visual order. Recompute it after RTL reversal to preserve the exact
-    // floating-point output contract of the full presentation pipeline.
-    punctuation_hanging.apply(buffer, options);
+    // The strict builder already accumulated RTL widths in final visual order.
+    // Hanging is excluded by its option proof, so no post-permutation line
+    // scan is needed here.
     // The proof keeps run ownership fixed. Only absolute pens change after
     // line-local permutation; no run rebuilding is needed.
     bidi_reorder.recomputeRunOffsets(buffer);

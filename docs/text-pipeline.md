@@ -2276,3 +2276,28 @@ proved at preparation instead of rescanning immutable UTF-8 markers. For
 200,000 Arabic inline-object reflows this reduces instructions from about
 `5.39B` to `5.05B`, branches from `0.853B` to `0.730B`, and cycles from
 `1.56B` to `1.45B`; both checksums remain unchanged.
+
+The styled output owner now retains a single exact text-keyed copy of the
+width-independent UAX #29 grapheme and untailored UAX #14 line-break analyses.
+The strict layout-only path has no dictionaries, hyphenation, or policy ranges,
+so repeated construction can safely reuse these immutable boundaries while all
+tailored cases continue through fresh analysis. A fixed-CPU-30 A/B/B/A run of
+100,000 Japanese alternating layouts reduced retired instructions from about
+`109.95B` to `89.65B`, branches from `18.43B` to `15.20B`, and cycles from
+`42.27B` to `37.54B`, while preserving native checksum `c0319acf433b7daf` and
+geometry checksum `410309be5bef4d92`. The strict `1000 * 7` matrix measures
+this row at `92.17/92.22 us` versus Parley's `102.83/102.22 us` (`1.112x`) and
+therefore leads all 18 measured performance rows. This closes the measured
+matrix, not the remaining cross-library semantic and platform coverage listed
+in the completion audit.
+
+Retained pure-RTL paragraphs also record once whether any shaped codepoint can
+require bidi mirroring. When that proof is false, line presentation uses the
+same typed reversal without rechecking every glyph against the mirror ranges.
+The strict builder simultaneously accumulates RTL line widths in their final
+visual order, eliminating a second width scan after reversal. Together with
+removing a duplicate object-anchor equality check, this reduces a 200,000-run
+Arabic inline-object reflow A/B/B/A comparison from about `5.01B` to `4.32B`
+instructions, `0.726B` to `0.583B` branches, and `1.43B` to `1.28B` cycles.
+The native and geometry checksums remain unchanged, and the final matrix moves
+that last noisy retained row to a `1.029x` lead.

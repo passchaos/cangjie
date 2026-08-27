@@ -22,3 +22,4 @@ pub const refreshGreedyRegion = greedy.refreshRegion;
 pub const resolvedAlignment = greedy.resolvedAlignment;
 pub const runRangeForGlyphs = greedy.runRangeForGlyphs;
 pub const tryBuildSimpleRetained = simple.tryBuild;
+pub const supportsSimpleRetained = simple.supports;

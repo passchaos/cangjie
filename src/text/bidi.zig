@@ -85,19 +85,35 @@ pub fn applyPureRtlVisualOrder(glyphs: anytype, font: ?*const Font) void {
     applyPureRtlVisualOrderSlice(glyphs.items, font);
 }
 
+/// Prove once whether pure-RTL presentation can omit mirror lookup entirely.
+///
+/// This predicate is intentionally the same conservative range filter used by
+/// `applyPureRtlVisualOrderSlice`: false means that routine would skip every
+/// glyph, while true does not claim that a mapping necessarily exists.
+pub fn runMayHaveBidiMirroring(glyphs: anytype) bool {
+    for (glyphs) |glyph| {
+        if (mayHaveBidiMirror(glyph.codepoint)) return true;
+    }
+    return false;
+}
+
+/// Reverse an already-proved pure-RTL line whose glyphs cannot be mirrored.
+pub fn applyPureRtlVisualOrderSliceWithoutMirroring(glyphs: anytype) void {
+    if (glyphs.len > 1) reverseRecords(@TypeOf(glyphs[0]), glyphs);
+}
+
 /// Put one already-shaped pure-RTL range in visual order.
 ///
 /// Paragraph layout owns line slices rather than an independent list for each
 /// line. Keeping the slice form here ensures its fast path uses exactly the
 /// same reversal and mirroring semantics as ordinary run shaping.
 pub fn applyPureRtlVisualOrderSlice(glyphs: anytype, font: ?*const Font) void {
-    const Glyph = @TypeOf(glyphs[0]);
     if (glyphs.len > 1) {
         // The general BidiMap path iterates RTL glyph clusters from the end of
         // the run and walks glyphs inside each cluster backwards.  For a
         // paragraph made only of RTL and neutral characters this is equivalent
         // to reversing the already-shaped glyph stream in place.
-        reverseRecords(Glyph, glyphs);
+        reverseRecords(@TypeOf(glyphs[0]), glyphs);
     }
     if (font) |face| {
         // Most Arabic/Hebrew runs contain no mirrored scalar. Avoid a binary
@@ -205,4 +221,18 @@ test "pure RTL slice order limits mutation to one visual line" {
         glyphs[2].glyph_id,
         glyphs[3].glyph_id,
     });
+}
+
+test "pure RTL mirror proof recognizes only candidate ranges" {
+    const DummyGlyph = struct { codepoint: u21 };
+    const plain = [_]DummyGlyph{
+        .{ .codepoint = 0x0633 },
+        .{ .codepoint = 0x0644 },
+    };
+    const bracketed = [_]DummyGlyph{
+        .{ .codepoint = '(' },
+        .{ .codepoint = 0x0633 },
+    };
+    try std.testing.expect(!runMayHaveBidiMirroring(&plain));
+    try std.testing.expect(runMayHaveBidiMirroring(&bracketed));
 }

@@ -382,6 +382,19 @@ pub fn tryApplyPureRtlLinesWithObject(
 /// Apply pure-RTL line order after the caller retained the text-level proof.
 /// Structural conditions are still checked before the first mutation.
 pub fn applyPureRtlLinesAfterProof(buffer: anytype) bool {
+    return applyPureRtlLinesAfterProofImpl(buffer, true);
+}
+
+/// Apply pure-RTL line order after the retained paragraph proved that no
+/// emitted codepoint can require Unicode mirroring.
+pub fn applyPureRtlLinesWithoutMirroringAfterProof(buffer: anytype) bool {
+    return applyPureRtlLinesAfterProofImpl(buffer, false);
+}
+
+fn applyPureRtlLinesAfterProofImpl(
+    buffer: anytype,
+    comptime may_mirror: bool,
+) bool {
     const glyphs = buffer.glyphs.items;
     if (buffer.runs.items.len != 1) return false;
     const run = buffer.runs.items[0];
@@ -405,10 +418,15 @@ pub fn applyPureRtlLinesAfterProof(buffer: anytype) bool {
             const Glyph = @TypeOf(glyphs[0]);
             rotateRecords(Glyph, glyphs[visual_start..logical_end], gap_len);
         }
-        bidi.applyPureRtlVisualOrderSlice(
-            glyphs[visual_start .. visual_start + line.glyph_len],
-            font,
-        );
+        if (may_mirror)
+            bidi.applyPureRtlVisualOrderSlice(
+                glyphs[visual_start .. visual_start + line.glyph_len],
+                font,
+            )
+        else
+            bidi.applyPureRtlVisualOrderSliceWithoutMirroring(
+                glyphs[visual_start .. visual_start + line.glyph_len],
+            );
         line.glyph_start = visual_start;
         line.run_start = 0;
         line.run_len = @intFromBool(line.glyph_len != 0);
@@ -421,6 +439,20 @@ pub fn applyPureRtlLinesAfterProof(buffer: anytype) bool {
 /// run. The marker is deliberately outside `runs`, but reversing each complete
 /// line still preserves font ownership as at most two visual run fragments.
 pub fn applyPureRtlLinesWithObjectAfterProof(buffer: anytype) !bool {
+    return applyPureRtlLinesWithObjectAfterProofImpl(buffer, true);
+}
+
+/// Single-object pure-RTL permutation after a retained no-mirroring proof.
+pub fn applyPureRtlLinesWithObjectWithoutMirroringAfterProof(
+    buffer: anytype,
+) !bool {
+    return applyPureRtlLinesWithObjectAfterProofImpl(buffer, false);
+}
+
+fn applyPureRtlLinesWithObjectAfterProofImpl(
+    buffer: anytype,
+    comptime may_mirror: bool,
+) !bool {
     const glyphs = buffer.glyphs.items;
     if (buffer.runs.items.len != 2) return false;
     const leading_run = buffer.runs.items[0];
@@ -463,10 +495,15 @@ pub fn applyPureRtlLinesWithObjectAfterProof(buffer: anytype) !bool {
             const Glyph = @TypeOf(glyphs[0]);
             rotateRecords(Glyph, glyphs[visual_start..logical_end], gap_len);
         }
-        bidi.applyPureRtlVisualOrderSlice(
-            glyphs[visual_start .. visual_start + line.glyph_len],
-            font,
-        );
+        if (may_mirror)
+            bidi.applyPureRtlVisualOrderSlice(
+                glyphs[visual_start .. visual_start + line.glyph_len],
+                font,
+            )
+        else
+            bidi.applyPureRtlVisualOrderSliceWithoutMirroring(
+                glyphs[visual_start .. visual_start + line.glyph_len],
+            );
         line.glyph_start = visual_start;
         visual_start += line.glyph_len;
     }

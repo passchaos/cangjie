@@ -256,6 +256,8 @@ pub const TextShaper = struct {
         );
         const pure_rtl_lines = options.direction == .rtl and
             bidi_order.visualOrderInputKind(owned_text, true) == .pure_rtl;
+        const pure_rtl_may_have_mirroring = pure_rtl_lines and
+            bidi_order.runMayHaveBidiMirroring(owned_glyphs);
         const simple_reflow = simpleRetainedReflowShape(
             owned_text,
             owned_glyphs,
@@ -295,6 +297,7 @@ pub const TextShaper = struct {
             .inferred_language_tag = inferred_language_tag,
             .needs_bidi_reorder = needs_bidi_reorder,
             .pure_rtl_lines = pure_rtl_lines,
+            .pure_rtl_may_have_mirroring = pure_rtl_may_have_mirroring,
             .simple_reflow = simple_reflow,
             .bidi_paragraph = bidi_paragraph,
             .cascade_fonts = cascade_fonts,

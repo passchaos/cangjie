@@ -256,22 +256,35 @@ const Driver = struct {
         );
         const simple_layout = !self.compute_content_widths and
             policy_ranges.len == 0 and
+            paragraph_reflow.supportsSimpleRetained(resolved_options) and
             simpleStyledShape(
                 self.buffer.glyphs.items,
                 self.styled.metadata.items,
                 self.text.len,
             );
-        var intrinsic_graphemes: ?[]unicode.GraphemeCluster = null;
-        defer if (intrinsic_graphemes) |items|
+        var intrinsic_graphemes: ?[]const unicode.GraphemeCluster = null;
+        var owned_graphemes: ?[]unicode.GraphemeCluster = null;
+        defer if (owned_graphemes) |items|
             self.buffer.allocator.free(items);
-        var intrinsic_breaks: ?[]@import("../line_break/opportunity.zig").Opportunity = null;
-        defer if (intrinsic_breaks) |items| self.buffer.allocator.free(items);
-        if (self.compute_content_widths or simple_layout) {
-            intrinsic_graphemes = try unicode.itemizeGraphemeClusters(
+        const Opportunity = @import("../line_break/opportunity.zig").Opportunity;
+        var intrinsic_breaks: ?[]const Opportunity = null;
+        var owned_breaks: ?[]Opportunity = null;
+        defer if (owned_breaks) |items| self.buffer.allocator.free(items);
+        if (simple_layout) {
+            // This strict path has no dictionary, hyphenation, or policy
+            // ranges. Its UAX analyses therefore depend only on source bytes
+            // and can be shared by repeated styled construction calls. More
+            // advanced policy remains on the uncached path below.
+            const cached = try self.styled.analysis.get(self.text);
+            intrinsic_graphemes = cached.graphemes;
+            intrinsic_breaks = cached.line_breaks;
+        } else if (self.compute_content_widths) {
+            owned_graphemes = try unicode.itemizeGraphemeClusters(
                 self.buffer.allocator,
                 self.text,
             );
-            intrinsic_breaks = try line_break_analysis.itemizeWithHyphenation(
+            intrinsic_graphemes = owned_graphemes.?;
+            owned_breaks = try line_break_analysis.itemizeWithHyphenation(
                 self.buffer.allocator,
                 self.text,
                 intrinsic_graphemes.?,
@@ -284,6 +297,7 @@ const Driver = struct {
                 },
                 &.{},
             );
+            intrinsic_breaks = owned_breaks.?;
         }
         self.styled.content_widths = if (!self.compute_content_widths)
             null

@@ -32,7 +32,7 @@ pub fn tryBuild(
 ) !bool {
     const analyzed_graphemes = graphemes orelse return false;
     const analyzed_breaks = line_breaks orelse return false;
-    if (!supportsOptions(options)) return false;
+    if (!supports(options)) return false;
 
     buffer.lines.clearRetainingCapacity();
     const glyphs = buffer.glyphs.items;
@@ -121,7 +121,10 @@ pub fn tryBuild(
                 break_end,
                 line_byte_start,
                 line_byte_end,
-                geometry.lineWidth(glyphs[line_start..break_end]),
+                finalLineWidth(
+                    glyphs[line_start..break_end],
+                    options.direction,
+                ),
                 run_info,
                 y,
                 alignment,
@@ -151,7 +154,10 @@ pub fn tryBuild(
             glyphs.len,
             line_byte_start,
             text.len,
-            line_width,
+            if (options.direction == .rtl)
+                finalLineWidth(glyphs[line_start..], options.direction)
+            else
+                line_width,
             run_info,
             y,
             alignment,
@@ -160,6 +166,24 @@ pub fn tryBuild(
         break;
     }
     return true;
+}
+
+fn finalLineWidth(
+    glyphs: []const @import("../../glyph_position.zig").GlyphPosition,
+    direction: anytype,
+) f32 {
+    if (direction != .rtl) return geometry.lineWidth(glyphs);
+
+    // Pure-RTL presentation reverses this slice. Accumulate in that eventual
+    // visual order now, preserving the public float bits without a second
+    // whole-line pass after permutation.
+    var width: f32 = 0;
+    var index = glyphs.len;
+    while (index != 0) {
+        index -= 1;
+        width += glyphs[index].x_advance;
+    }
+    return width;
 }
 
 fn appendSimpleLine(
@@ -199,7 +223,10 @@ fn appendSimpleLine(
     });
 }
 
-fn supportsOptions(options: paragraph_options.Options) bool {
+/// Whether the request can use the strict retained line builder. Callers may
+/// use this proof before preparing reusable input that would be incomplete for
+/// dictionary, hyphenation, or range-tailored fallback paths.
+pub fn supports(options: paragraph_options.Options) bool {
     return options.writing_mode == .horizontal_tb and
         options.line_break_strategy == .greedy and
         options.wrap_mode == .word and

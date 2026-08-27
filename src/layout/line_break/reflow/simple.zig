@@ -115,7 +115,7 @@ pub fn tryBuild(
                 null,
                 null,
             );
-            try geometry.appendLine(
+            try appendSimpleLine(
                 buffer,
                 line_start,
                 break_end,
@@ -125,8 +125,7 @@ pub fn tryBuild(
                 run_info,
                 y,
                 alignment,
-                .{ .x = 0, .width = options.max_width, .indent = 0 },
-                null,
+                options.max_width,
             );
             y += run_info.metrics.lineHeight();
             line_start = next_line_start;
@@ -146,7 +145,7 @@ pub fn tryBuild(
             null,
             null,
         );
-        try geometry.appendLine(
+        try appendSimpleLine(
             buffer,
             line_start,
             glyphs.len,
@@ -156,12 +155,48 @@ pub fn tryBuild(
             run_info,
             y,
             alignment,
-            .{ .x = 0, .width = options.max_width, .indent = 0 },
-            null,
+            options.max_width,
         );
         break;
     }
     return true;
+}
+
+fn appendSimpleLine(
+    buffer: anytype,
+    glyph_start: usize,
+    glyph_end: usize,
+    byte_start: usize,
+    byte_end: usize,
+    width: f32,
+    run_info: geometry.LineRunInfo,
+    y: f32,
+    alignment: paragraph_types.TextAlign,
+    max_width: f32,
+) !void {
+    try buffer.lines.append(buffer.allocator, .{
+        .glyph_start = glyph_start,
+        .glyph_len = glyph_end - glyph_start,
+        .run_start = run_info.run_start,
+        .run_len = run_info.run_len,
+        .byte_start = byte_start,
+        .byte_len = byte_end - byte_start,
+        .x = if (alignment == .right) @max(0, max_width - width) else 0,
+        .y = y,
+        .indent = 0,
+        .region_x = 0,
+        .region_width = max_width,
+        .region_inline_start = 0,
+        .region_inline_size = max_width,
+        .resolved_alignment = alignment,
+        .width = width,
+        .justification_target = null,
+        .height = run_info.metrics.lineHeight(),
+        .baseline = run_info.metrics.ascent,
+        .ascent = run_info.metrics.ascent,
+        .descent = run_info.metrics.descent,
+        .leading = run_info.metrics.leading,
+    });
 }
 
 fn supportsOptions(options: paragraph_options.Options) bool {

@@ -2265,6 +2265,12 @@ equivalent floating advances in a different order; the cross-engine logical
 geometry checksum is unchanged. Japanese alternating remains the sole timing
 gap.
 
+The strict retained builder now writes its already-proved default line record
+directly rather than re-entering the generic region/alignment helper. On a
+fixed CPU, 200,000 Latin reflows drop from about `3.05B` to `2.98B` retired
+instructions, `0.378B` to `0.375B` branches, and `0.880B` to `0.855B` cycles,
+with native and normalized checksums unchanged.
+
 Retained object reflow now validates mutable geometry against byte anchors
 proved at preparation instead of rescanning immutable UTF-8 markers. For
 200,000 Arabic inline-object reflows this reduces instructions from about

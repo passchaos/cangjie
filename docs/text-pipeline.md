@@ -2124,3 +2124,12 @@ and `3.427x` for Japanese. Together with the nine construction/style rows, the
 reproducible gate now contains 12 cases. This closes the missing reflow timing
 row for the three retained scripts; it does not establish vertical, fallback,
 inline-object, or normalized cross-engine geometry equivalence.
+
+The matrix now also inserts one matched in-flow inline object at the same UTF-8
+boundary in each retained script. Both runners use a 24x20 object with baseline
+15 and exercise complete construction plus repeated reflow. A fixed-CPU-30
+100-iteration, five-sample symmetric run passed all 18 count/stability rows.
+Cangjie led inline-object construction/reflow by `2.465x`/`4.907x` on Latin,
+`1.420x`/`1.552x` on Arabic, and `2.463x`/`3.425x` on Japanese. This closes
+the missing in-flow-object timing row, but out-of-flow/custom objects and the
+cross-engine geometry-policy mismatch remain outside the parity claim.

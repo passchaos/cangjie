@@ -18,7 +18,9 @@ pub fn main(init: std.process.Init) !void {
     const direction = if (args.next()) |value| try parseDirection(value) else Direction.auto;
     const style = if (args.next()) |value| try parseStyle(value) else Style.default;
     if (args.next() != null) return usage();
-    if (phase == .reflow and style != .default) return error.InvalidArguments;
+    if (phase == .reflow and style != .default and style != .inline_object) {
+        return error.InvalidArguments;
+    }
 
     const font_bytes: []u8 = if (std.mem.eql(u8, font_path, "builtin:minimal"))
         try cangjie.testing.test_font.buildMinimalTtf(allocator)
@@ -40,17 +42,41 @@ pub fn main(init: std.process.Init) !void {
         .limited(64 * 1024 * 1024),
     );
     defer allocator.free(text_bytes);
-    const text = firstLine(text_bytes);
+    const source_text = firstLine(text_bytes);
+    const object_marker = cangjie.paragraph.object_replacement_utf8;
+    const inline_object_index = utf8BoundaryAtOrAfter(
+        source_text,
+        source_text.len / 2,
+    );
+    const text = if (style == .inline_object)
+        try std.mem.concat(
+            allocator,
+            u8,
+            &.{ source_text[0..inline_object_index], object_marker, source_text[inline_object_index..] },
+        )
+    else
+        source_text;
+    defer if (style == .inline_object) allocator.free(text);
     if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
     const faces = [_]*const cangjie.font.Face{&face};
     const cascade = cangjie.font.Cascade.init(&faces);
     var engine = cangjie.shaping.Engine.init(allocator, .{});
     defer engine.deinit();
+    const inline_objects = if (style == .inline_object)
+        &[_]cangjie.paragraph.InlineObject{.{
+            .id = 1,
+            .byte_index = inline_object_index,
+            .width = 24,
+            .height = 20,
+            .baseline = 15,
+        }}
+    else
+        &.{};
     var retained = if (phase == .reflow)
         try engine.prepareParagraph(cascade, .{
             .text = text,
             .font_size = 16,
-            .options = .{ .max_width = width, .direction = try resolvedDirection(direction, text) },
+            .options = .{ .max_width = width, .direction = try resolvedDirection(direction, text), .inline_objects = inline_objects },
         })
     else
         null;
@@ -73,6 +99,7 @@ pub fn main(init: std.process.Init) !void {
                 width,
                 direction,
                 style,
+                inline_objects,
                 if (retained) |*paragraph| paragraph else null,
                 &reflow,
             );
@@ -93,6 +120,7 @@ pub fn main(init: std.process.Init) !void {
                 width,
                 direction,
                 style,
+                inline_objects,
                 if (retained) |*paragraph| paragraph else null,
                 &reflow,
             );
@@ -118,7 +146,7 @@ pub fn main(init: std.process.Init) !void {
 
 const Phase = enum { layout, reflow };
 const Direction = enum { auto, ltr, rtl };
-const Style = enum { default, spacing, alternating };
+const Style = enum { default, spacing, alternating, inline_object };
 
 fn benchmarkOnce(
     phase: Phase,
@@ -128,6 +156,7 @@ fn benchmarkOnce(
     width: f32,
     direction: Direction,
     style: Style,
+    inline_objects: []const cangjie.paragraph.InlineObject,
     retained: ?*const cangjie.paragraph.Shaped,
     reflow: *cangjie.paragraph.ReflowBuffer,
 ) !cangjie.paragraph.Layout {
@@ -139,10 +168,12 @@ fn benchmarkOnce(
             width,
             try resolvedDirection(direction, text),
             style,
+            inline_objects,
         ),
         .reflow => retained.?.layout(reflow, .{
             .max_width = width,
             .direction = try resolvedDirection(direction, text),
+            .inline_objects = inline_objects,
         }),
     };
 }
@@ -154,6 +185,7 @@ fn layoutOnce(
     width: f32,
     direction: cangjie.shaping.Direction,
     style: Style,
+    inline_objects: []const cangjie.paragraph.InlineObject,
 ) !cangjie.paragraph.Layout {
     if (style == .spacing) {
         const spans = [_]cangjie.paragraph.StyledSpan{.{
@@ -215,7 +247,7 @@ fn layoutOnce(
     return engine.layout(cascade, .{
         .text = text,
         .font_size = 16,
-        .options = .{ .max_width = width, .direction = direction },
+        .options = .{ .max_width = width, .direction = direction, .inline_objects = inline_objects },
     });
 }
 
@@ -279,6 +311,7 @@ fn parseStyle(value: []const u8) !Style {
     if (std.mem.eql(u8, value, "default")) return .default;
     if (std.mem.eql(u8, value, "spacing")) return .spacing;
     if (std.mem.eql(u8, value, "alternating")) return .alternating;
+    if (std.mem.eql(u8, value, "inline-object")) return .inline_object;
     return error.InvalidArguments;
 }
 

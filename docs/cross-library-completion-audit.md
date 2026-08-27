@@ -13,7 +13,7 @@ one benchmark. The claim remains **open** until every row below is closed.
 | HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: `react-dom.txt` is now covered and leads by more than `1.50x`, while Amiri words remains a near tie and therefore does not establish superiority |
 | Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; broader semantic differentials and owning-outline stability remain open |
 | FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: the matrix now distinguishes cached-session, fresh owning-outline, and reused-outline boundaries and includes CFF2; CFF2 owning is near parity, while bitmap/color, hinting-target, and cold parse lifecycles remain incomplete |
-| Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the matrix now covers three scripts, three construction styles, and matched retained reflow, but cross-engine checksum semantics and vertical/fallback/inline-object modes are not equivalent/comparable |
+| Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the 18-row matrix covers three scripts, three construction styles, retained reflow, and matched in-flow inline objects, but normalized geometry, vertical, fallback, and out-of-flow modes are not equivalent/comparable |
 | Robustness | Malformed supported inputs fail atomically under safety checks and sustained coverage-guided fuzzing | `font-fuzz-smoke`, `font-fuzz`, regression fixtures | Open: the retained 100K campaign is useful evidence, not exhaustive format coverage |
 | Platform scope | Results reproduced on each supported target or the performance claim explicitly scoped to named hardware/OS/toolchain versions | benchmark documentation | Open: current performance evidence is primarily one Linux x86-64 host |
 
@@ -32,9 +32,9 @@ The following checks were rerun from a clean worktree at commits through
   --samples 7`: 19/19 semantic rows passed; every measured row favored
   Cangjie (`1.533x--7.576x` in this run).
 - `zig build parley-matrix -Doptimize=ReleaseFast -- --iterations 100 --samples
-  5 --cpu 30`: 12/12 count/stability rows passed; every measured row favored
-  Cangjie (`1.123x--5.168x` in this run). The three retained-reflow rows
-  measured `5.168x`, `1.590x`, and `3.427x` for Latin, Arabic, and Japanese.
+  5 --cpu 30`: 18/18 count/stability rows passed; every measured row favored
+  Cangjie (`1.140x--4.907x` in this run), including construction and retained
+  reflow with one matched in-flow inline object for all three scripts.
 - `zig build font-fuzz-smoke -Doptimize=ReleaseSafe -- ...`: six retained
   seeds and 2,946 deterministic mutations passed.
 - `zig build font-fuzz -Doptimize=ReleaseSafe --fuzz=100K`: the selected

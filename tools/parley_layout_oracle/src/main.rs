@@ -1,6 +1,6 @@
 use parley::{
-    Alignment, AlignmentOptions, BaseDirection, FontContext, FontFamily, Layout, LayoutContext,
-    PositionedLayoutItem, StyleProperty,
+    Alignment, AlignmentOptions, BaseDirection, FontContext, FontFamily, InlineBox, InlineBoxKind,
+    Layout, LayoutContext, PositionedLayoutItem, StyleProperty,
     fontique::{Blob, Collection, CollectionOptions, SourceCache},
 };
 use std::{env, fs, hint::black_box, sync::Arc, time::Instant};
@@ -26,7 +26,15 @@ fn main() {
     assert!(phase == "layout" || phase == "reflow");
     assert!(args.next().is_none(), "unexpected argument");
     let text_file = fs::read_to_string(text_path).unwrap();
-    let text = text_file.lines().next().unwrap_or("");
+    let source_text = text_file.lines().next().unwrap_or("");
+    let owned_text;
+    let text = if style == "inline-object" {
+        let split = source_text.ceil_char_boundary(source_text.len() / 2);
+        owned_text = format!("{}\u{fffc}{}", &source_text[..split], &source_text[split..]);
+        owned_text.as_str()
+    } else {
+        source_text
+    };
     let font_data = fs::read(font_path).unwrap();
 
     let mut collection = Collection::new(CollectionOptions {
@@ -159,7 +167,15 @@ fn build_layout(
             builder.push(StyleProperty::LetterSpacing(0.75), split..);
             builder.push(StyleProperty::WordSpacing(2.0), split..);
         }
-        _ => panic!("style must be default, spacing, or alternating"),
+        "inline-object" => builder.push_inline_box(InlineBox {
+            id: 1,
+            kind: InlineBoxKind::InFlow,
+            index: text.ceil_char_boundary(text.len() / 2),
+            width: 24.0,
+            height: 20.0,
+            baseline: Some(15.0),
+        }),
+        _ => panic!("style must be default, spacing, alternating, or inline-object"),
     }
     builder.set_base_direction(match direction {
         "auto" => BaseDirection::Auto,

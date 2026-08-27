@@ -43,8 +43,8 @@ x86-64, pinned to CPU 30 where the harness supports it:
   lead by `1.390x`, `1.053x`, and `1.432x`; their inline-object counterparts
   lead by `1.191x`, `1.116x`, and `1.280x`. Arabic default, spacing,
   alternating, and inline-object construction lead by `1.167x`, `1.184x`,
-  `1.009x`, and `1.183x`; Japanese spacing leads by `1.796x`. Japanese alternating
-  construction rows remain performance gaps. Logical-line geometry agrees
+  `1.009x`, and `1.183x`; Japanese spacing leads by `1.796x`. Japanese
+  alternating construction remains the performance gap. Logical-line geometry agrees
   on 9/18 rows after preserving source ranges, advances, and relative cluster
   placement while discarding only a per-line translation and sub-1/1024 px
   accumulation noise.

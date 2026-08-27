@@ -278,6 +278,31 @@ pub const Engine = struct {
         request: StyledParagraphRequest,
     ) !StyledLayout {
         const state = self.getStateForWork();
+        if (uniformStyledOptions(request)) |options| {
+            state.styled_output.clear();
+            const paragraph = try text_shaper.TextShaper
+                .layoutParagraphUtf8WithCaches(
+                internalCascade(cascade),
+                if (state.cache_font_data) &state.font_fallback else null,
+                if (state.cache_font_data) &state.glyph_metrics else null,
+                if (state.cache_font_data) &state.glyph_indices else null,
+                state.shapedRunCache(),
+                &state.output,
+                request.text,
+                request.default_font_size,
+                options,
+            );
+            try styled_buffer.rebuild(
+                &state.styled_output.metadata,
+                state.styled_output.allocator,
+                paragraph.glyphs,
+                request.spans,
+            );
+            return .{
+                .layout = paragraph,
+                .glyph_metadata = state.styled_output.glyphMetadata(),
+            };
+        }
         const paragraph = try text_shaper.TextShaper
             .layoutStyledParagraphUtf8WithoutContentWidths(
             internalCascade(cascade),
@@ -340,6 +365,30 @@ pub const Engine = struct {
         return &self.state;
     }
 };
+
+fn uniformStyledOptions(
+    request: StyledParagraphRequest,
+) ?paragraph_options.Options {
+    if (request.spans.len != 1) return null;
+    const span = request.spans[0];
+    if (span.byte_start != 0 or span.byte_len != request.text.len or
+        span.font_size != request.default_font_size or span.faces != null or
+        span.script_tag != null or span.language_tag != null or
+        span.features.len != 0 or span.normalized_variation_coords.len != 0 or
+        span.minimum_line_height != null or span.vertical_align != .baseline or
+        span.wrap_mode != null or span.word_break != null or
+        span.overflow_wrap != null or request.options.letter_spacing != 0 or
+        request.options.word_spacing != 0 or request.options.script_tag != null or
+        request.options.language_tag != null or request.options.features.len != 0 or
+        request.options.normalized_variation_coords.len != 0)
+    {
+        return null;
+    }
+    var options = request.options;
+    options.letter_spacing = span.letter_spacing;
+    options.word_spacing = span.word_spacing;
+    return options;
+}
 
 fn internalCascade(cascade: face_mod.Cascade) font_fallback.Cascade {
     return .init(face_mod.backend.fonts(cascade.faces));

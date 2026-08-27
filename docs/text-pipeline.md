@@ -2252,3 +2252,15 @@ This moves Arabic alternating construction to `1.011x` ahead and the matrix to
 16/18. A 100,000-layout A/B/B/A run reduced instructions from about `42.79B`
 to `40.44B`, branches from `7.07B` to `6.81B`, and cycles from `13.83B` to
 `13.27B`, with both checksums unchanged.
+
+`layoutStyledWithoutContentWidths` now detects a single span whose style is
+exactly representable by uniform paragraph options and routes it through the
+uniform pipeline. This preserves the normalized geometry digest and every
+source boundary, while avoiding styled itemization and duplicate shaping. The
+Japanese spacing row moves to `1.811x` ahead, taking the matrix to 17/18. A
+50,000-layout A/B/B/A run reduced instructions from about `54.93B` to
+`37.98B`, branches from `9.22B` to `6.82B`, and cycles from about `21.11B` to
+`11.11B`. Its native checksum changes because the uniform pipeline accumulates
+equivalent floating advances in a different order; the cross-engine logical
+geometry checksum is unchanged. Japanese alternating remains the sole timing
+gap.

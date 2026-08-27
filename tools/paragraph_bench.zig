@@ -87,6 +87,7 @@ pub fn main(init: std.process.Init) !void {
     const samples = try allocator.alloc(i128, sample_count);
     defer allocator.free(samples);
     var checksum: u64 = 0;
+    var geometry_checksum: u64 = 0;
     var glyph_count: usize = 0;
     var line_count: usize = 0;
     for (samples) |*sample| {
@@ -106,6 +107,12 @@ pub fn main(init: std.process.Init) !void {
             const current_checksum = layoutChecksum(layout);
             if (checksum != 0 and checksum != current_checksum) return error.UnstableOutput;
             checksum = current_checksum;
+            geometry_checksum = try normalizedGeometryChecksum(
+                allocator,
+                text,
+                layout,
+                try resolvedDirection(direction, text),
+            );
             glyph_count = layout.glyphs.len;
             line_count = layout.lines.len;
         }
@@ -139,8 +146,8 @@ pub fn main(init: std.process.Init) !void {
         @as(f64, @floatFromInt(iterations));
     std.debug.print(
         "engine=cangjie\tphase={s}\tdirection={s}\tstyle={s}\ttext_bytes={d}\twidth={d:.3}\titerations={d}\tsamples={d}\t" ++
-            "median_ns_per_iter={d:.3}\tglyphs={d}\tlines={d}\tchecksum={x:0>16}\n",
-        .{ @tagName(phase), @tagName(direction), @tagName(style), text.len, width, iterations, sample_count, median, glyph_count, line_count, checksum },
+            "median_ns_per_iter={d:.3}\tglyphs={d}\tlines={d}\tchecksum={x:0>16}\tgeometry_checksum={x:0>16}\n",
+        .{ @tagName(phase), @tagName(direction), @tagName(style), text.len, width, iterations, sample_count, median, glyph_count, line_count, checksum, geometry_checksum },
     );
 }
 
@@ -266,6 +273,67 @@ fn layoutChecksum(layout: cangjie.paragraph.Layout) u64 {
         hash = bytes(hash, std.mem.asBytes(&glyph.y_offset));
     }
     return hash;
+}
+
+/// Hash source-addressable inline geometry shared by both public layout APIs.
+/// Baseline/line-height policy and visually retained trailing spaces differ, so
+/// those are normalized away rather than pretending native record equality.
+fn normalizedGeometryChecksum(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    layout: cangjie.paragraph.Layout,
+    direction: cangjie.shaping.Direction,
+) !u64 {
+    var geometry = try cangjie.paragraph.buildGeometry(
+        allocator,
+        text,
+        layout,
+        .{ .direction = if (direction == .rtl) .rtl else .ltr },
+    );
+    defer geometry.deinit();
+    var hash: u64 = 0xcbf29ce484222325;
+    for (geometry.lines) |line| {
+        hash = hashU64(hash, line.byte_start);
+        hash = hashU64(hash, line.byte_start + line.byte_len);
+        for (line.spans(geometry.spans)) |span| {
+            for (span.graphemes(geometry.graphemes)) |grapheme| {
+                const trailing = trailingAsciiWhitespace(
+                    text,
+                    grapheme.byte_start,
+                    line.byte_start + line.byte_len,
+                );
+                hash = hashU64(hash, grapheme.byte_start);
+                hash = hashU64(hash, grapheme.byte_len);
+                hash = hashF32(
+                    hash,
+                    span.bounds.x - line.bounds.x + grapheme.inline_position,
+                );
+                hash = hashF32(
+                    hash,
+                    if (trailing) 0 else grapheme.inline_size,
+                );
+            }
+        }
+    }
+    return hash;
+}
+
+fn trailingAsciiWhitespace(text: []const u8, start: usize, end: usize) bool {
+    if (start >= end or end > text.len) return false;
+    for (text[start..end]) |byte| {
+        if (byte != ' ' and byte != '\t') return false;
+    }
+    return true;
+}
+
+fn hashU64(initial: u64, value: usize) u64 {
+    const normalized: u64 = @intCast(value);
+    return bytes(initial, std.mem.asBytes(&normalized));
+}
+
+fn hashF32(initial: u64, value: f32) u64 {
+    const bits: u32 = @bitCast(value);
+    return bytes(initial, std.mem.asBytes(&bits));
 }
 
 fn bytes(initial: u64, value: []const u8) u64 {

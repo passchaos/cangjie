@@ -120,6 +120,12 @@ def main() -> int:
             }
             if len(shapes) != 1:
                 failures.append(f"{case.name}/{phase}/{style}: output counts={sorted(shapes)}")
+            # Native geometry is normalized to logical lines/graphemes by both
+            # oracles. Only default Latin currently has identical semantics;
+            # other rows remain visible audit evidence rather than being
+            # mistaken for parity from counts alone.
+            geometry_checksums = {item.get("geometry_checksum") for item in records}
+            geometry_equivalent = len(geometry_checksums) == 1 and None not in geometry_checksums
             # Each implementation also hashes its complete native layout. The
             # hash encodings intentionally differ (Cangjie uses Wyhash over its
             # public layout records; Parley uses FNV over line/glyph fields),
@@ -154,7 +160,8 @@ def main() -> int:
                 f"cangjie_ns={cangjie_a:.3f}/{cangjie_b:.3f} "
                 f"parley_ns={parley_a:.3f}/{parley_b:.3f} "
                 f"speedup={speedup:.3f}x glyphs={cangjie_first.get('glyphs')} "
-                f"lines={cangjie_first.get('lines')}"
+                f"lines={cangjie_first.get('lines')} "
+                f"geometry_equal={str(geometry_equivalent).lower()}"
             )
     if failures:
         print("Cangjie/Parley output-count matrix failed:", file=sys.stderr)

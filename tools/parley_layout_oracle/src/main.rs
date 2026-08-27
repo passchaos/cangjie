@@ -66,6 +66,7 @@ fn main() {
 
     let mut values = Vec::with_capacity(samples);
     let mut checksum = 0u64;
+    let mut geometry_checksum = 0u64;
     let mut glyphs = 0usize;
     let mut lines = 0usize;
     for _ in 0..samples {
@@ -84,7 +85,7 @@ fn main() {
                 checksum == 0 || checksum == result.0,
                 "unstable layout output"
             );
-            (checksum, glyphs, lines) = result;
+            (checksum, geometry_checksum, glyphs, lines) = result;
         }
         let start = Instant::now();
         let mut batch_checksum = 0xcbf29ce484222325u64;
@@ -100,12 +101,12 @@ fn main() {
                 retained.as_mut(),
             );
             assert_eq!(
-                (result.1, result.2),
+                (result.2, result.3),
                 (glyphs, lines),
                 "unstable layout shape"
             );
-            batch_checksum = bytes(batch_checksum, &result.1.to_le_bytes());
             batch_checksum = bytes(batch_checksum, &result.2.to_le_bytes());
+            batch_checksum = bytes(batch_checksum, &result.3.to_le_bytes());
         }
         values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
         black_box(batch_checksum);
@@ -113,7 +114,7 @@ fn main() {
     values.sort_by(f64::total_cmp);
     let median = values[values.len() / 2];
     println!(
-        "engine=parley\tphase={phase}\tdirection={direction}\tstyle={style}\ttext_bytes={}\twidth={width:.3}\titerations={}\tsamples={}\tmedian_ns_per_iter={median:.3}\tglyphs={glyphs}\tlines={lines}\tchecksum={checksum:016x}",
+        "engine=parley\tphase={phase}\tdirection={direction}\tstyle={style}\ttext_bytes={}\twidth={width:.3}\titerations={}\tsamples={}\tmedian_ns_per_iter={median:.3}\tglyphs={glyphs}\tlines={lines}\tchecksum={checksum:016x}\tgeometry_checksum={geometry_checksum:016x}",
         text.len(),
         iterations,
         samples
@@ -129,7 +130,7 @@ fn run_once(
     direction: &str,
     style: &str,
     retained: Option<&mut Layout<Brush>>,
-) -> (u64, usize, usize) {
+) -> (u64, u64, usize, usize) {
     let mut owned;
     let layout = if let Some(layout) = retained {
         layout.break_all_lines(Some(width));
@@ -141,7 +142,7 @@ fn run_once(
         owned.align(Alignment::Start, AlignmentOptions::default());
         &mut owned
     };
-    summarize(layout)
+    summarize(layout, text)
 }
 
 fn build_layout(
@@ -186,8 +187,9 @@ fn build_layout(
     builder.build(text)
 }
 
-fn summarize(layout: &Layout<Brush>) -> (u64, usize, usize) {
+fn summarize(layout: &Layout<Brush>, text: &str) -> (u64, u64, usize, usize) {
     let mut hash = 0xcbf29ce484222325u64;
+    let mut geometry_hash = 0xcbf29ce484222325u64;
     let mut glyph_count = 0usize;
     let mut line_count = 0usize;
     for line in layout.lines() {
@@ -196,6 +198,37 @@ fn summarize(layout: &Layout<Brush>) -> (u64, usize, usize) {
         hash = bytes(hash, &metrics.advance.to_bits().to_le_bytes());
         hash = bytes(hash, &(line.text_range().start as u64).to_le_bytes());
         hash = bytes(hash, &(line.text_range().end as u64).to_le_bytes());
+        geometry_hash = bytes(
+            geometry_hash,
+            &(line.text_range().start as u64).to_le_bytes(),
+        );
+        geometry_hash = bytes(geometry_hash, &(line.text_range().end as u64).to_le_bytes());
+        let mut records = Vec::new();
+        for run in line.runs() {
+            for cluster in run.clusters() {
+                let range = cluster.text_range();
+                records.push((
+                    range.start,
+                    range.end - range.start,
+                    cluster.visual_offset().unwrap_or_default(),
+                    if text[range.start..line.text_range().end]
+                        .bytes()
+                        .all(|byte| byte == b' ' || byte == b'\t')
+                    {
+                        0.0
+                    } else {
+                        cluster.advance()
+                    },
+                ));
+            }
+        }
+        records.sort_by_key(|record| record.0);
+        for (start, len, position, size) in records {
+            geometry_hash = bytes(geometry_hash, &(start as u64).to_le_bytes());
+            geometry_hash = bytes(geometry_hash, &(len as u64).to_le_bytes());
+            geometry_hash = bytes(geometry_hash, &position.to_bits().to_le_bytes());
+            geometry_hash = bytes(geometry_hash, &size.to_bits().to_le_bytes());
+        }
         for item in line.items() {
             if let PositionedLayoutItem::GlyphRun(run) = item {
                 for glyph in run.positioned_glyphs() {
@@ -209,7 +242,7 @@ fn summarize(layout: &Layout<Brush>) -> (u64, usize, usize) {
         }
     }
     black_box(&layout);
-    (hash, glyph_count, line_count)
+    (hash, geometry_hash, glyph_count, line_count)
 }
 
 fn bytes(mut hash: u64, value: &[u8]) -> u64 {

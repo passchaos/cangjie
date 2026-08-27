@@ -2112,6 +2112,11 @@ metric conventions (`14.0` versus `14.84375` on line zero). This is concrete
 evidence that count parity is not geometry parity; the maintained timing rows
 remain valid equal-cardinality workloads, but the broader Parley functionality
 claim stays open until whitespace and metric policies are normalized.
+The runners now additionally emit a common logical line/grapheme checksum that
+normalizes baselines and treats trailing line whitespace as zero advance. This
+proves the default Latin row equivalent (`c2b0cccb3e4b15a0`) instead of relying
+on count parity. The same gate explicitly reports `geometry_equal=false` for
+the other currently divergent policies; those rows remain performance-only.
 
 The matrix now also includes a default-style retained-reflow row for each
 script. Cangjie prepares a `ShapedParagraph` once; Parley builds one `Layout`

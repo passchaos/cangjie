@@ -4655,3 +4655,16 @@ shaping-performance superiority.
   5-iteration, 11-sample matrix measured `1.006x` for Amiri words and `1.040x`
   for Devanagari against the faster reference. These margins remain too small
   for a universal shaping-performance claim without repeated stability runs.
+- Cached merged GSUB execution now returns at the executor boundary when the
+  selected plan is empty, before copying GDEF options or entering the Font/table
+  wrapper; the lower-level empty guard remains as a defensive contract. This
+  targets Arabic stages whose requested feature set is absent from a font.
+  Against the independent pre-change binary, fixed-CPU-30 A/B/B/A counters over
+  twenty measured passes reduced Amiri-word instructions/branches/cycles by
+  about `1.23%`/`1.26%`/`1.43%` and long-Amiri instructions/branches by about
+  `1.08%`/`1.26%` (cycles `-0.57%`); Roboto, Source Serif, and Devanagari
+  retired work stayed within `0.02%`. Checksums were unchanged, the complete
+  ReleaseFast suite passes, and both retained shaping parity umbrellas pass.
+  A strict five-corpus matrix then measured `1.006x` for Amiri words and
+  `1.040x` for Devanagari against the faster reference, but these near-parity
+  rows still require a larger repeatable margin before any broad claim.

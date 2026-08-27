@@ -218,6 +218,12 @@ pub fn applyMerged(
         var mutable_plan = plan;
         mutable_plan.deinit(context.allocator);
     };
+    // A cached empty plan was produced from the already-proved table and the
+    // current feature key. No font/GDEF execution boundary is needed when
+    // there is no lookup to invoke. Uncached callers retain the defensive
+    // glyph-metadata checks performed by the Font wrapper below.
+    if (table_proved and context.lookup_selection_cache != null and
+        plan.lookups.len == 0) return;
     return try font_shaping.applyGsubMergedFeatureLookupPlanUsingGdefAfterProof(
         font,
         plan,
@@ -268,6 +274,7 @@ pub fn applyMergedAfterRunProof(
         var mutable_plan = plan;
         mutable_plan.deinit(context.allocator);
     };
+    if (plan.lookups.len == 0) return;
     return try font_shaping.applyGsubMergedFeatureLookupPlanUsingGdefAfterRunProof(
         font,
         plan,

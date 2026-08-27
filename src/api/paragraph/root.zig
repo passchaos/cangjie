@@ -27,6 +27,7 @@ pub const TabAlignment = paragraph_options.TabAlignment;
 pub const Request = context.ParagraphRequest;
 pub const StyledRequest = context.StyledParagraphRequest;
 pub const StyledResult = context.Engine.StyledParagraph;
+pub const StyledLayoutResult = context.Engine.StyledLayout;
 pub const Align = paragraph_types.TextAlign;
 pub const WrapMode = paragraph_types.WrapMode;
 pub const WordBreak = paragraph_types.WordBreak;

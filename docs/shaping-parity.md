@@ -154,6 +154,12 @@ safety trap. The initial campaign exposed a CID CFF ownership leak when parsing
 succeeded but a later whole-font validation failed; `Font.parseFace` now
 releases that decoded Font DICT state transactionally and a regression retains
 the exact failure path.
+An additional ReleaseSafe `--fuzz=100K` campaign on the current audit state
+completed 269,563 executions, 2,467 unique runs, and 4,331 of 32,005
+instrumented edges (13.53%) without a reported failure. Zig selected the
+malformed-font parsing/rendering target for that invocation; the separately
+embedded AAT target remains part of the ordinary deterministic gate and future
+coverage-guided campaigns.
 
 For output parity against HarfRust, build the local CLI once:
 

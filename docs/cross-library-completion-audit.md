@@ -37,6 +37,9 @@ The following checks were rerun from a clean worktree at commits through
   measured `5.168x`, `1.590x`, and `3.427x` for Latin, Arabic, and Japanese.
 - `zig build font-fuzz-smoke -Doptimize=ReleaseSafe -- ...`: six retained
   seeds and 2,946 deterministic mutations passed.
+- `zig build font-fuzz -Doptimize=ReleaseSafe --fuzz=100K`: the selected
+  parser/render target completed 269,563 executions, 2,467 unique runs, and
+  4,331/32,005 instrumented edges (13.53%) without a reported failure.
 
 The latest strict shaping run at `077cb97e` measured speedups of `1.213x`
 (Roboto), `1.042x` (Source Serif), `0.994x` (Amiri words), `1.083x` (Amiri

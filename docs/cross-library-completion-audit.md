@@ -40,6 +40,9 @@ The following checks were rerun from a clean worktree at commits through
 - `zig build font-fuzz -Doptimize=ReleaseSafe --fuzz=100K`: the selected
   parser/render target completed 269,563 executions, 2,467 unique runs, and
   4,331/32,005 instrumented edges (13.53%) without a reported failure.
+- `font-fuzz-smoke` over six external HarfBuzz fuzz seeds covering CFF2+COLR
+  v1, CBDT, sbix, SVG, variable CFF2, and malformed CBDT PNG completed 3,084
+  deterministic ReleaseSafe cases without a failure.
 - `zig build freetype-matrix -Doptimize=ReleaseFast -- --iterations 100
   --samples 5 --sizes 8,16,32,64,128 --cpu 30`: completed 40 symmetric
   A/B/B/A raster rows across Latin glyf, Latin CFF1, Arabic glyf, and CJK CFF.

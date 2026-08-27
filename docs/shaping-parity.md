@@ -160,6 +160,12 @@ instrumented edges (13.53%) without a reported failure. Zig selected the
 malformed-font parsing/rendering target for that invocation; the separately
 embedded AAT target remains part of the ordinary deterministic gate and future
 coverage-guided campaigns.
+A separate deterministic ReleaseSafe pass used six external HarfBuzz fuzz
+corpus files spanning CFF2+COLR v1, CBDT, sbix, SVG, variable CFF2, and a
+historical malformed CBDT PNG case. All 3,084 prefix/full/single-byte mutation
+cases completed without a crash, leak, or safety trap. This broadens the
+format ancestry beyond the six embedded smoke seeds without claiming
+exhaustive malformed-font coverage.
 
 For output parity against HarfRust, build the local CLI once:
 

@@ -49,6 +49,9 @@ pub const Interpreter = enum {
 };
 
 pub const Limits = struct {
+    max_points: usize = 0,
+    max_contours: usize = 0,
+    max_component_elements: usize = 0,
     max_storage: usize,
     max_function_defs: usize,
     max_instruction_defs: usize,

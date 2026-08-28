@@ -1903,6 +1903,12 @@ pub const Font = struct {
                 else
                     false,
                 .limits = .{
+                    .max_points = maxp_info.max_points orelse
+                        return error.BadSfnt,
+                    .max_contours = maxp_info.max_contours orelse
+                        return error.BadSfnt,
+                    .max_component_elements = maxp_info.max_component_elements orelse
+                        return error.BadSfnt,
                     .max_storage = maxp_info.max_storage orelse
                         return error.BadSfnt,
                     .max_function_defs = maxp_info.max_function_defs orelse
@@ -2061,7 +2067,16 @@ pub const Font = struct {
                 },
             );
             break :blk parsed_limits;
-        } else try (try maxp_mod.info(self.data, self.maxp)).trueTypeLimits();
+        } else maxp_mod.TrueTypeLimits{
+            .max_points = @intCast(instance.source.limits.max_points),
+            .max_contours = @intCast(instance.source.limits.max_contours),
+            .max_component_elements = @intCast(
+                instance.source.limits.max_component_elements,
+            ),
+            .max_component_depth = @intCast(
+                instance.source.limits.max_component_depth,
+            ),
+        };
         if (self.gvar) |gvar| {
             if (read_mode.shouldRevalidate()) {
                 try sfnt.checksum.validate(self.data, gvar);

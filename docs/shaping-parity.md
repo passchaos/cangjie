@@ -3392,6 +3392,10 @@ shaping-performance superiority.
   coordinate decoding, removing the previous second compressed-flag scan.
   Fixed-CPU-30 100,000-iteration medians improved DejaVu `A`, `X`, and U+00C2
   by roughly `0.5%`, `1.3%`, and `0.9%`, respectively.
+- Parsed maxp point/contour/component limits now live in the hinting instance,
+  avoiding another maxp decode for every immutable-face transaction. Retired
+  work fell about `0.7%` on DejaVu `A`; the full hinted differential and
+  50-row target matrix remain exact.
 - Repeated hinted-outline loads now reuse arena capacity in the benchmark,
   matching FreeType's retained glyph-loader lifecycle while still decoding
   and executing every glyph. Representative fixed-CPU medians were neutral on

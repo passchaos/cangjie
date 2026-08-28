@@ -169,6 +169,12 @@ x86-64, pinned to CPU 30 where the harness supports it:
   fixed-CPU-30 100,000-iteration, 11-sample check improved `A`, `X`, and
   U+00C2 from about `1.68`, `1.24`, and `4.19 us` to `1.67`, `1.23`, and
   `4.15 us`, with exact FreeType checksums.
+- Hinting instances now retain the parse-proved maxp point, contour, component,
+  and depth limits consumed by glyph transactions. The immutable hot path no
+  longer reparses maxp once per glyph merely to recover the same four values.
+  Seven-repeat fixed-CPU counters reduced `A` by about `0.66%` instructions
+  and `0.81%` branches, Arabic by `0.22%`/`0.18%`, and Devanagari by about
+  `1.55%` cycles; the 50-row v35/v40 target matrix retained exact checksums.
 - The benchmark's in-place rendering mode now retains transaction scratch
   capacity between glyph loads, matching FreeType's retained `FT_GlyphLoader`
   lifecycle instead of charging a fresh general-purpose allocation set on

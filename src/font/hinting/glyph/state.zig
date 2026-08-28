@@ -30,8 +30,16 @@ pub const GraphicsState = struct {
             .grid => (value +| 32) & ~@as(i32, 63),
             .half_grid => (value & ~@as(i32, 63)) +| 32,
             .double_grid => (value +| 16) & ~@as(i32, 31),
-            .down_to_grid => types.floor26Dot6(value),
-            .up_to_grid => types.ceil26Dot6(value),
+            // TrueType's RDTG/RUTG round the magnitude and restore the sign;
+            // they are not mathematical floor/ceil for negative distances.
+            .down_to_grid => if (value >= 0)
+                types.floor26Dot6(value)
+            else
+                0 -| types.floor26Dot6(0 -| value),
+            .up_to_grid => if (value >= 0)
+                types.ceil26Dot6(value)
+            else
+                0 -| types.ceil26Dot6(0 -| value),
             .super, .super_45 => blk: {
                 const period = self.super_round_period;
                 if (period <= 0) break :blk value;

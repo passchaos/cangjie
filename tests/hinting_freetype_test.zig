@@ -89,6 +89,16 @@ const fixtures = [_]Fixture{
         .ppem = 9,
     },
     .{
+        .path = "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        .codepoint = 0x0995,
+        .ppem = 9,
+    },
+    .{
+        .path = "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        .codepoint = 0x0b95,
+        .ppem = 9,
+    },
+    .{
         .path = "/usr/share/fonts/truetype/annapurna/AnnapurnaSIL-Regular.ttf",
         .codepoint = 0x0915,
         .ppem = 9,

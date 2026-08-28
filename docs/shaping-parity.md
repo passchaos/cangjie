@@ -4952,3 +4952,7 @@ shaping-performance superiority.
   independent `5cab5664` binary reduced DejaVu U+00C2 retired
   instructions/branches/cycles by `5.06%`/`5.79%`/`6.03%` while simple Latin
   retired work remained neutral.
+- Identity component placement also copies each point array in bulk rather
+  than testing the same transform once per coordinate stream and point. Against
+  `108776c5`, this removed a further `2.85%` instructions, `2.52%` branches,
+  and `4.28%` cycles from DejaVu U+00C2 with unchanged output.

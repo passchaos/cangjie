@@ -530,8 +530,7 @@ pub fn applyTransform(
     // Identity transforms dominate ordinary composite accents and are encoded
     // explicitly as 1.0 diagonal F2Dot14 values. Avoid four saturating fixed-
     // point multiplications in that overwhelmingly common case.
-    if (transform.xx == 0x4000 and transform.yy == 0x4000 and
-        transform.xy == 0 and transform.yx == 0) return point;
+    if (isIdentityTransform(transform)) return point;
     if (transform.xy == 0 and transform.yx == 0) {
         return .{
             .x = mulF2Dot14(point.x, transform.xx),
@@ -544,6 +543,11 @@ pub fn applyTransform(
         .y = mulF2Dot14(point.x, transform.yx) +|
             mulF2Dot14(point.y, transform.yy),
     };
+}
+
+pub fn isIdentityTransform(transform: FixedTransform) bool {
+    return transform.xx == 0x4000 and transform.yy == 0x4000 and
+        transform.xy == 0 and transform.yx == 0;
 }
 
 pub fn scaleComponentOffset(

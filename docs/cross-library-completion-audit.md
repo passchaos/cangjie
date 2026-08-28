@@ -218,6 +218,12 @@ x86-64, pinned to CPU 30 where the harness supports it:
   independently built `5cab5664` binary, fixed-CPU-30 A/B/B/A counters reduced
   that row's instructions, branches, and cycles by `5.06%`, `5.79%`, and
   `6.03%`; the simple `A`/`X` controls kept retired work neutral.
+- Component placement now handles identity transforms as three bulk copies
+  rather than repeating the per-point identity predicate for current, original,
+  and unscaled coordinates. A second fixed-CPU-30 A/B/B/A run against the
+  independent `108776c5` binary reduced U+00C2 instructions by `2.85%`,
+  branches by `2.52%`, and cycles by `4.28%`; `A`/`X` retired work remained
+  neutral and the FreeType differential stayed exact.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri

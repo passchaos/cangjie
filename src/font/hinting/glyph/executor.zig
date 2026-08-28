@@ -593,23 +593,38 @@ fn placeComponent(
         .xy = record.transform.xy,
         .yy = record.transform.yy,
     };
-    for (
-        parent.points[record.point_start..point_end],
-        child.points[0..child.real_point_count],
-    ) |*destination, point| {
-        destination.* = compound.applyTransform(point, transform);
-    }
-    for (
-        parent.original[record.point_start..point_end],
-        child.original[0..child.real_point_count],
-    ) |*destination, point| {
-        destination.* = compound.applyTransform(point, transform);
-    }
-    for (
-        parent.unscaled[record.point_start..point_end],
-        child.unscaled[0..child.real_point_count],
-    ) |*destination, point| {
-        destination.* = compound.applyTransform(point, transform);
+    if (compound.isIdentityTransform(transform)) {
+        @memcpy(
+            parent.points[record.point_start..point_end],
+            child.points[0..child.real_point_count],
+        );
+        @memcpy(
+            parent.original[record.point_start..point_end],
+            child.original[0..child.real_point_count],
+        );
+        @memcpy(
+            parent.unscaled[record.point_start..point_end],
+            child.unscaled[0..child.real_point_count],
+        );
+    } else {
+        for (
+            parent.points[record.point_start..point_end],
+            child.points[0..child.real_point_count],
+        ) |*destination, point| {
+            destination.* = compound.applyTransform(point, transform);
+        }
+        for (
+            parent.original[record.point_start..point_end],
+            child.original[0..child.real_point_count],
+        ) |*destination, point| {
+            destination.* = compound.applyTransform(point, transform);
+        }
+        for (
+            parent.unscaled[record.point_start..point_end],
+            child.unscaled[0..child.real_point_count],
+        ) |*destination, point| {
+            destination.* = compound.applyTransform(point, transform);
+        }
     }
     @memcpy(
         parent.flags[record.point_start..point_end],

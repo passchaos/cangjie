@@ -10,7 +10,9 @@ pub const type2 = @import("type2/root.zig");
 pub const compound = @import("compound.zig");
 pub const Instance = @import("instance.zig").Instance;
 pub const outline = @import("outline.zig");
+pub const transaction_buffer = @import("transaction_buffer.zig");
 pub const PointTransaction = outline.Transaction;
+pub const PointTransactionBuffer = transaction_buffer.Buffer;
 pub const PixelOutline = outline.PixelOutline;
 pub const Target = types.Target;
 pub const Interpreter = types.Interpreter;
@@ -27,6 +29,7 @@ test {
     _ = @import("vm.zig");
     _ = @import("instance.zig");
     _ = @import("outline.zig");
+    _ = @import("transaction_buffer.zig");
     _ = @import("tricky.zig");
     _ = @import("glyph/compatibility_tests.zig");
     _ = type2;

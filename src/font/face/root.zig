@@ -189,6 +189,23 @@ pub const Face = struct {
         );
     }
 
+    /// Decode into caller-owned storage while retaining point capacity across
+    /// glyph loads. The returned transaction is borrowed from `buffer` and
+    /// must not be individually deinitialized.
+    pub fn hintingPointTransactionInto(
+        self: *const Face,
+        buffer: *font_mod.TrueTypePointTransactionBuffer,
+        instance: *const font_mod.TrueTypeHintingInstance,
+        glyph_id: @import("../../glyph.zig").GlyphId,
+    ) (font_mod.FontError || @import("../hinting/root.zig").Error)!*font_mod.TrueTypePointTransaction {
+        return font_mod.raster_backend.hintingPointTransactionInto(
+            &self.implementation,
+            buffer,
+            instance,
+            glyph_id,
+        );
+    }
+
     /// Execute the transaction's glyph bytecode against this PPEM instance.
     ///
     /// The transaction and all mutable instance VM state commit together only

@@ -62,6 +62,56 @@ test "TrueType hinting instance executes fpgm and prep" {
     try std.testing.expectEqual(raw_phantoms[2].x, raw_phantoms[3].x);
 }
 
+test "hinting point buffer retains simple storage across loads" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildTrueTypeHintingTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var instance = try face.hintingInstance(allocator, 16, .normal);
+    defer instance.deinit();
+    var buffer = cangjie.font.HintingPointTransactionBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const first = try face.hintingPointTransactionInto(&buffer, &instance, 1);
+    const first_storage = first.points.ptr;
+    try face.executeHintingTransactionInPlace(&instance, first);
+    const first_checksum = first.horizontalAdvance();
+
+    const second = try face.hintingPointTransactionInto(&buffer, &instance, 1);
+    try std.testing.expectEqual(first_storage, second.points.ptr);
+    try face.executeHintingTransactionInPlace(&instance, second);
+    try std.testing.expectEqual(first_checksum, second.horizontalAdvance());
+    try std.testing.expectEqual(second, buffer.current().?);
+    try std.testing.expectError(
+        error.InvalidGlyph,
+        face.hintingPointTransactionInto(&buffer, &instance, 0xffff),
+    );
+    try std.testing.expect(buffer.current() == null);
+}
+
+test "hinting point buffer restores retained compound source state" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildTrueTypeCompoundHintingTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var instance = try face.hintingInstance(allocator, 16, .normal);
+    defer instance.deinit();
+    var buffer = cangjie.font.HintingPointTransactionBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const first = try face.hintingPointTransactionInto(&buffer, &instance, 2);
+    try std.testing.expect(first.is_compound);
+    const source_point = first.points[0];
+    try face.executeHintingTransactionInPlace(&instance, first);
+    const hinted_point = first.points[0];
+    const second = try face.hintingPointTransactionInto(&buffer, &instance, 2);
+    try std.testing.expectEqual(source_point, second.points[0]);
+    try face.executeHintingTransactionInPlace(&instance, second);
+    try std.testing.expectEqual(hinted_point, second.points[0]);
+}
+
 test "TrueType hinting rejects invalid sizes and borrowed mutations" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildTrueTypeHintingTtf(allocator);

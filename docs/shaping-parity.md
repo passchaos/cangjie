@@ -4938,3 +4938,12 @@ shaping-performance superiority.
   `147.267/147.185 ns` versus `2077.656/1976.212 ns` (`13.763x`), with exact
   command checksums. Including these reuse rows, the full 25-case matrix leads
   from `1.252x` through `13.865x`.
+- TrueType hinting now exposes `HintingPointTransactionBuffer`, a retained
+  caller-owned loader for render loops. It decodes simple glyf points directly
+  into reusable typed storage and restores a retained pristine compound
+  transaction before each repeated load. The benchmark therefore models
+  FreeType's persistent `FT_GlyphLoader` without relying on arena reset
+  behavior. Fixed-CPU-30 A/B/B/A counters versus the independent `a69336fa`
+  binary reduced DejaVu `A` and `X` instructions by `0.59%` and `0.77%`, and
+  compound U+00C2 instructions/branches/cycles by
+  `17.87%`/`18.25%`/`22.98%`; checksums remain exact.

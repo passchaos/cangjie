@@ -180,6 +180,7 @@ pub const TrueTypeHintingInterpreter = hinting.Interpreter;
 pub const TrueTypeHintingOptions = hinting.Options;
 pub const TrueTypeHintingError = hinting.Error;
 pub const TrueTypePointTransaction = hinting.PointTransaction;
+pub const TrueTypePointTransactionBuffer = hinting.PointTransactionBuffer;
 pub const TrueTypePixelOutline = hinting.PixelOutline;
 pub const Type2HintingInstance = hinting.type2.Instance;
 pub const Type2HintingError = hinting.type2.Error;
@@ -2023,6 +2024,116 @@ pub const Font = struct {
         );
     }
 
+    fn hintingPointTransactionForRasterInto(
+        self: *const Font,
+        buffer: *hinting.PointTransactionBuffer,
+        instance: *const TrueTypeHintingInstance,
+        glyph_id: glyph_mod.GlyphId,
+    ) (FontError || hinting.Error)!*TrueTypePointTransaction {
+        // A failed request invalidates the prior borrowed result just like the
+        // other caller-owned outline buffers. A valid compound reuse returns
+        // before any reset, while this guard handles every validation error.
+        errdefer buffer.resetRetainingCapacity();
+        if (self.format != .truetype) return error.UnsupportedHintGlyph;
+        if (instance.source.face_identity != @intFromPtr(self)) {
+            return error.StaleHintingInstance;
+        }
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const data = try self.glyphData(glyph_id);
+        if (data.len == 0) return error.UnsupportedHintGlyph;
+        const contour_count = try bin.readI16At(data, 0);
+        if (contour_count < 0) {
+            if (buffer.currentCompoundFor(
+                @intFromPtr(self),
+                glyph_id,
+                instance.scale_16_16,
+                instance.target,
+                instance.source.interpreter,
+                instance.isEnabled(),
+                instance.usesBackwardCompatibility(),
+                instance.normalizedCoordinates(),
+            )) |transaction| return transaction;
+            buffer.resetRetainingCapacity();
+            errdefer buffer.resetRetainingCapacity();
+            const horizontal = try self.horizontalMetricsForReadMode(
+                glyph_id,
+                .parsed,
+            );
+            const bounds = try self.glyphBoundsFromParsedTables(glyph_id);
+            const vertical = (try self.verticalMetricsForReadMode(
+                glyph_id,
+                .parsed,
+            )) orelse VerticalMetrics{
+                .advance_height = self.units_per_em,
+                .top_side_bearing = 0,
+            };
+            const transaction = try self.decodeHintingCompound(
+                buffer.fallbackAllocator(),
+                instance,
+                glyph_id,
+                data,
+                .{
+                    .bounds = bounds,
+                    .advance_width = horizontal.advance_width,
+                    .left_side_bearing = horizontal.left_side_bearing,
+                    .vertical_advance = vertical.advance_height,
+                    .top_side_bearing = vertical.top_side_bearing,
+                },
+                @intCast(instance.source.limits.max_component_depth),
+                .{
+                    .context = self,
+                    .resolveFn = resolveHintingComponentForRaster,
+                },
+            );
+            return buffer.publishFallback(transaction);
+        }
+
+        const horizontal = try self.horizontalMetricsForReadMode(
+            glyph_id,
+            .parsed,
+        );
+        const bounds = try self.glyphBoundsFromParsedTables(glyph_id);
+        const vertical = (try self.verticalMetricsForReadMode(
+            glyph_id,
+            .parsed,
+        )) orelse VerticalMetrics{
+            .advance_height = self.units_per_em,
+            .top_side_bearing = 0,
+        };
+        const variation: ?hinting.outline.Variation =
+            if (self.gvar) |gvar| .{
+                .data = self.data,
+                .table_offset = gvar.offset,
+                .table_length = gvar.length,
+                .glyph_count = self.glyph_count,
+                .axis_count = self.fvar_axis_count orelse
+                    return error.BadSfnt,
+                .normalized_coords = instance.normalizedCoordinates(),
+            } else null;
+        const transaction = try buffer.decodeSimple(
+            @intFromPtr(self),
+            instance.target,
+            instance.source.interpreter,
+            glyph_id,
+            data,
+            @intCast(contour_count),
+            .{
+                .bounds = bounds,
+                .advance_width = horizontal.advance_width,
+                .left_side_bearing = horizontal.left_side_bearing,
+                .vertical_advance = vertical.advance_height,
+                .top_side_bearing = vertical.top_side_bearing,
+            },
+            instance.scale_16_16,
+            variation,
+            instance.normalizedCoordinates(),
+        );
+        transaction.hinting_enabled = instance.isEnabled();
+        transaction.backward_compatibility =
+            instance.usesBackwardCompatibility();
+        return transaction;
+    }
+
     fn hintingPointTransactionForReadMode(
         self: *const Font,
         allocator: std.mem.Allocator,
@@ -2152,6 +2263,36 @@ pub const Font = struct {
                 instance.usesBackwardCompatibility();
             return transaction;
         }
+        return self.decodeHintingCompound(
+            allocator,
+            instance,
+            glyph_id,
+            data,
+            metrics,
+            limits.max_component_depth,
+            .{
+                .context = self,
+                // Component recursion is part of the same immutable Face
+                // operation. Do not fall back to the mutation-aware public
+                // metric resolver after the top-level parse proof was chosen.
+                .resolveFn = if (read_mode.shouldRevalidate())
+                    resolveHintingComponent
+                else
+                    resolveHintingComponentForRaster,
+            },
+        );
+    }
+
+    fn decodeHintingCompound(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        instance: *const TrueTypeHintingInstance,
+        glyph_id: glyph_mod.GlyphId,
+        data: []const u8,
+        metrics: hinting.outline.Metrics,
+        max_component_depth: u16,
+        resolver: hinting.compound.Resolver,
+    ) (FontError || hinting.Error)!TrueTypePointTransaction {
         const variation: ?hinting.compound.Variation =
             if (self.gvar) |gvar| .{
                 .data = self.data,
@@ -2169,23 +2310,10 @@ pub const Font = struct {
             instance.source.interpreter,
             instance.isEnabled(),
             instance.usesBackwardCompatibility(),
-            .{
-                .glyph_id = glyph_id,
-                .data = data,
-                .metrics = metrics,
-            },
+            .{ .glyph_id = glyph_id, .data = data, .metrics = metrics },
             instance.scale_16_16,
-            limits.max_component_depth,
-            .{
-                .context = self,
-                // Component recursion is part of the same immutable Face
-                // operation. Do not fall back to the mutation-aware public
-                // metric resolver after the top-level parse proof was chosen.
-                .resolveFn = if (read_mode.shouldRevalidate())
-                    resolveHintingComponent
-                else
-                    resolveHintingComponentForRaster,
-            },
+            max_component_depth,
+            resolver,
             variation,
         );
         errdefer transaction.deinit();
@@ -7432,6 +7560,8 @@ pub const raster_backend = struct {
     pub const colorLayers = Font.colorLayersForImmutableFace;
     pub const paletteColor = Font.paletteColorForImmutableFace;
     pub const hintingPointTransaction = Font.hintingPointTransactionForRaster;
+    pub const hintingPointTransactionInto =
+        Font.hintingPointTransactionForRasterInto;
     pub const glyphOutlineAtCoords = Font.glyphOutlineForRasterAtCoords;
     pub const glyphOutline = Font.glyphOutlineForRaster;
     pub const glyphOutlineInto = Font.glyphOutlineForRasterInto;

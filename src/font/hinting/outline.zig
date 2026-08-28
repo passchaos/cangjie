@@ -216,6 +216,50 @@ pub const Variation = struct {
     normalized_coords: []const f32,
 };
 
+const DecodedSimple = struct {
+    face_identity: usize,
+    target: types.Target,
+    interpreter: types.Interpreter,
+    glyph_id: glyph.GlyphId,
+    real_point_count: usize,
+    point_count: usize,
+    contour_count: usize,
+    instructions: []const u8,
+    scale_16_16: i32,
+    variation: ?Variation,
+
+    fn transaction(
+        self: DecodedSimple,
+        allocator: std.mem.Allocator,
+        storage: []Point,
+    ) Transaction {
+        const point_region_len = self.point_count * 3;
+        const tail = std.mem.sliceAsBytes(storage[point_region_len..]);
+        const contour_bytes = self.contour_count * @sizeOf(u16);
+        return .{
+            .allocator = allocator,
+            .face_identity = self.face_identity,
+            .target = self.target,
+            .interpreter = self.interpreter,
+            .glyph_id = self.glyph_id,
+            .real_point_count = self.real_point_count,
+            .points = storage[0..self.point_count],
+            .original = storage[self.point_count .. self.point_count * 2],
+            .unscaled = storage[self.point_count * 2 .. point_region_len],
+            .flags = @ptrCast(
+                tail[contour_bytes..][0..self.point_count],
+            ),
+            .contours = std.mem.bytesAsSlice(
+                u16,
+                tail[0..contour_bytes],
+            ),
+            .instructions = self.instructions,
+            .scale_16_16 = self.scale_16_16,
+            .variation = self.variation,
+        };
+    }
+};
+
 pub fn decodeSimple(
     allocator: std.mem.Allocator,
     face_identity: usize,
@@ -228,6 +272,69 @@ pub fn decodeSimple(
     scale_16_16: i32,
     variation: ?Variation,
 ) types.Error!Transaction {
+    var storage = std.ArrayList(Point).empty;
+    errdefer storage.deinit(allocator);
+    const decoded = try decodeSimpleInto(
+        allocator,
+        &storage,
+        face_identity,
+        target,
+        interpreter,
+        glyph_id,
+        data,
+        contour_count,
+        metrics,
+        scale_16_16,
+        variation,
+    );
+    const simple_storage = try storage.toOwnedSlice(allocator);
+    var transaction = decoded.transaction(allocator, simple_storage);
+    transaction.simple_storage = simple_storage;
+    return transaction;
+}
+
+pub fn decodeSimpleIntoStorage(
+    allocator: std.mem.Allocator,
+    storage: *std.ArrayList(Point),
+    face_identity: usize,
+    target: types.Target,
+    interpreter: types.Interpreter,
+    glyph_id: glyph.GlyphId,
+    data: []const u8,
+    contour_count: u16,
+    metrics: Metrics,
+    scale_16_16: i32,
+    variation: ?Variation,
+) types.Error!Transaction {
+    const decoded = try decodeSimpleInto(
+        allocator,
+        storage,
+        face_identity,
+        target,
+        interpreter,
+        glyph_id,
+        data,
+        contour_count,
+        metrics,
+        scale_16_16,
+        variation,
+    );
+    return decoded.transaction(allocator, storage.items);
+}
+
+fn decodeSimpleInto(
+    allocator: std.mem.Allocator,
+    storage: *std.ArrayList(Point),
+    face_identity: usize,
+    target: types.Target,
+    interpreter: types.Interpreter,
+    glyph_id: glyph.GlyphId,
+    data: []const u8,
+    contour_count: u16,
+    metrics: Metrics,
+    scale_16_16: i32,
+    variation: ?Variation,
+) types.Error!DecodedSimple {
     var reader = bin.Reader.init(data);
     _ = reader.readI16() catch return error.BadSfnt;
     reader.skip(8) catch return error.BadSfnt;
@@ -270,8 +377,8 @@ pub fn decodeSimple(
         payload_bytes,
         @sizeOf(Point),
     ) catch return error.BadSfnt;
-    const simple_storage = try allocator.alloc(Point, storage_len);
-    errdefer allocator.free(simple_storage);
+    try storage.resize(allocator, storage_len);
+    const simple_storage = storage.items;
     const points = simple_storage[0..point_count];
     const original = simple_storage[point_count .. point_count * 2];
     const unscaled = simple_storage[point_count * 2 .. point_count * 3];
@@ -447,18 +554,13 @@ pub fn decodeSimple(
         point.* = origin.*;
     }
     return .{
-        .allocator = allocator,
         .face_identity = face_identity,
         .target = target,
         .interpreter = interpreter,
         .glyph_id = glyph_id,
         .real_point_count = real_point_count,
-        .points = points,
-        .original = original,
-        .unscaled = unscaled,
-        .flags = flags,
-        .contours = contours,
-        .simple_storage = simple_storage,
+        .point_count = point_count,
+        .contour_count = contour_count,
         .instructions = instructions,
         .scale_16_16 = scale_16_16,
         .variation = variation,

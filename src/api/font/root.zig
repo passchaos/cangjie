@@ -39,6 +39,9 @@ pub const HintingOptions = font_mod.TrueTypeHintingOptions;
 pub const HintingError = font_mod.TrueTypeHintingError;
 /// Interpreter-bound glyf point owner with atomic simple/compound execution.
 pub const HintingPointTransaction = font_mod.TrueTypePointTransaction;
+/// Retained caller-owned storage for repeated hinted point decoding.
+pub const HintingPointTransactionBuffer =
+    font_mod.TrueTypePointTransactionBuffer;
 /// Path coordinates are pixels and must not be scaled by units-per-em again.
 pub const PixelOutline = font_mod.TrueTypePixelOutline;
 pub const Type2HintingInstance = font_mod.Type2HintingInstance;

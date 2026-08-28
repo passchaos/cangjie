@@ -197,6 +197,21 @@ x86-64, pinned to CPU 30 where the harness supports it:
   `4.18 us`, Devanagari from `24.23` to `23.97 us`, and Arabic from `5.51` to
   `5.40 us`, with unchanged checksums. The separately selectable atomic mode
   continues to measure its rollback-copy contract.
+- `HintingPointTransactionBuffer` now makes that retained loader lifecycle a
+  public, caller-owned contract rather than an arena benchmark artifact. Simple
+  glyphs decode directly into reusable packed point/flag/contour storage. For
+  repeated compound loads, the buffer retains the expanded transaction plus a
+  pristine point/flag snapshot and restores it before bytecode execution, so
+  pre-execution compound expansion is not repeated. The owning transaction and atomic execution
+  APIs remain unchanged. Against the independent `a69336fa` binary, fixed-CPU-
+  30 A/B/B/A counters reduced DejaVu `A` instructions/branches/cycles by
+  `0.59%`/`0.40%`/`3.19%`, `X` by `0.77%`/`0.49%`/`2.88%`, and U+00C2 by
+  `17.87%`/`18.25%`/`22.98%`; Devanagari retired work was neutral and Arabic
+  instructions/branches fell `0.19%`/`0.11%` (cycles were within `0.5%`
+  noise). Eleven-sample wall runs
+  kept exact checksums and improved the compound row from about `4.18 us` to
+  `3.20 us`. This substantially narrows, but does not close, the remaining
+  FreeType compound-Latin gap.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri

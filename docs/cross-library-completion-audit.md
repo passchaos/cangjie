@@ -293,10 +293,10 @@ x86-64, pinned to CPU 30 where the harness supports it:
 - Probing beyond that retained corpus found two further compatibility edges.
   DejaVu U+00B2 uses `SLOOP[0]`; matching FreeType requires accepting zero
   (and clamping oversized values to the 16-bit loop counter) rather than
-  rejecting it. DejaVu U+00C3 at 9 ppem also exposes a one-unit parent-IUP
-  difference in a translated compound accent. The former is fixed and gated;
-  the latter remains open, so the larger multilingual sweep is not yet a
-  claimed passing corpus.
+  rejecting it. That behavior is now fixed and gated. A separate experimental
+  U+00C3 sweep was not retained because it mixed parent compound-IUP coordinate
+  domains and regressed existing cases; broader multilingual coverage remains
+  open.
 - Parsed `gvar` header and glyph-offset metadata is now retained by `Font` and
   threaded into immutable simple-glyph hint loads. This removes a whole-table
   offset scan per glyph. Against the independent pre-change binary, fixed-CPU-

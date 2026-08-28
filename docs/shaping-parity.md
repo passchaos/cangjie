@@ -5001,9 +5001,9 @@ shaping-performance superiority.
   case matrix also passes all 500 semantic rows across five ppem sizes when
   linked against the independent FreeType 2.14.3 oracle.
 - A wider exploratory DejaVu sweep found and closed FreeType-compatible
-  `SLOOP[0]` handling, now retained with U+00B2 v35/v40 tests. The same sweep
-  found an unresolved one-unit compound-parent IUP difference for U+00C3 at
-  9 ppem; it remains outside the passing corpus and blocks a broader claim.
+  `SLOOP[0]` handling, now retained with U+00B2 v35/v40 tests. A separate
+  experimental compound-IUP change was reverted after it regressed existing
+  cases; broader multilingual coverage remains open.
 - Parsed `gvar` metadata is retained for immutable hinted glyph loads instead
   of rescanning the complete glyph-offset array per glyph. Default-instance
   Cascadia `X` retired instructions/branches/cycles fell

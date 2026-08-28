@@ -264,6 +264,14 @@ x86-64, pinned to CPU 30 where the harness supports it:
   `9a43a387`, fixed-CPU-30 A/B/B/A instructions/branches/cycles fell
   `3.65%`/`0.79%`/`1.79%` for `A`, `4.60%`/`0.97%`/`3.86%` for `X`, and
   `3.85%`/`0.93%`/`2.89%` for U+00C2. Devanagari and Arabic also improved.
+- Parsed-face simple decoding now specializes its already-validated byte reader:
+  it reads the final contour endpoint directly, omits repeated contour-order
+  checks, and uses debug assertions instead of release-mode bounds branches for
+  coordinate bytes. The mutation-aware owning decoder retains all checks.
+  Against `d7edc2ef`, fixed-CPU-30 A/B/B/A instructions/branches/cycles fell
+  `1.51%`/`2.01%`/`1.57%` for `A` and `2.15%`/`3.52%`/`2.09%` for `X`;
+  Arabic also improved, while compound and Devanagari controls were neutral
+  within cycle noise.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri

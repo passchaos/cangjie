@@ -305,6 +305,7 @@ pub fn decodeSimple(
     const decoded = try decodeSimpleInto(
         allocator,
         &storage,
+        false,
         face_identity,
         target,
         interpreter,
@@ -337,6 +338,7 @@ pub fn decodeSimpleIntoStorage(
     const decoded = try decodeSimpleInto(
         allocator,
         storage,
+        true,
         face_identity,
         target,
         interpreter,
@@ -353,6 +355,7 @@ pub fn decodeSimpleIntoStorage(
 fn decodeSimpleInto(
     allocator: std.mem.Allocator,
     storage: *std.ArrayList(Point),
+    comptime parsed: bool,
     face_identity: usize,
     target: types.Target,
     interpreter: types.Interpreter,
@@ -364,22 +367,42 @@ fn decodeSimpleInto(
     variation: ?Variation,
 ) types.Error!DecodedSimple {
     var reader = bin.Reader.init(data);
-    _ = reader.readI16() catch return error.BadSfnt;
-    reader.skip(8) catch return error.BadSfnt;
+    if (parsed) {
+        std.debug.assert(data.len >= 10 + @as(usize, contour_count) * 2 + 2);
+        reader.offset = 10;
+    } else {
+        _ = reader.readI16() catch return error.BadSfnt;
+        reader.skip(8) catch return error.BadSfnt;
+    }
     const contour_data_offset = reader.offset;
     var real_point_count: usize = 0;
-    var previous: ?u16 = null;
-    for (0..contour_count) |_| {
-        const end = reader.readU16() catch return error.BadSfnt;
-        if (previous) |prior| if (end <= prior) return error.BadSfnt;
-        previous = end;
-        real_point_count = @as(usize, end) + 1;
+    if (parsed) {
+        if (contour_count != 0) {
+            const last = contour_data_offset +
+                (@as(usize, contour_count) - 1) * 2;
+            real_point_count = @as(usize, std.mem.readInt(
+                u16,
+                data[last..][0..2],
+                .big,
+            )) + 1;
+        }
+        reader.offset += @as(usize, contour_count) * 2;
+    } else {
+        var previous: ?u16 = null;
+        for (0..contour_count) |_| {
+            const end = reader.readU16() catch return error.BadSfnt;
+            if (previous) |prior| if (end <= prior) return error.BadSfnt;
+            previous = end;
+            real_point_count = @as(usize, end) + 1;
+        }
     }
-    const instruction_len = reader.readU16() catch return error.BadSfnt;
-    if (instruction_len > data.len - reader.offset) return error.BadSfnt;
+    const instruction_len = try readU16(&reader, parsed);
+    if (!parsed and instruction_len > data.len - reader.offset) {
+        return error.BadSfnt;
+    }
     const instructions =
         data[reader.offset .. reader.offset + instruction_len];
-    reader.skip(instruction_len) catch return error.BadSfnt;
+    reader.offset += instruction_len;
 
     const point_count = std.math.add(usize, real_point_count, 4) catch
         return error.BadSfnt;
@@ -431,7 +454,7 @@ fn decodeSimpleInto(
     const raw_flags = tail[contour_bytes + point_count ..][0..point_count];
     var point_index: usize = 0;
     while (point_index < real_point_count) : (point_index += 1) {
-        const raw = reader.readU8() catch return error.BadSfnt;
+        const raw = try readU8(&reader, parsed);
         raw_flags[point_index] = raw;
         flags[point_index] = .{
             .on_curve = (raw & 0x01) != 0,
@@ -439,7 +462,7 @@ fn decodeSimpleInto(
         };
         unscaled[point_index].x = raw; // Temporary compressed flag storage.
         if ((raw & 0x08) != 0) {
-            const repeat = reader.readU8() catch return error.BadSfnt;
+            const repeat = try readU8(&reader, parsed);
             for (0..repeat) |_| {
                 point_index += 1;
                 if (point_index >= real_point_count) return error.BadSfnt;
@@ -455,13 +478,13 @@ fn decodeSimpleInto(
         const raw: u8 = @intCast(point.x);
         const delta: i32 = if ((raw & 0x02) != 0)
             if ((raw & 0x10) != 0)
-                reader.readU8() catch return error.BadSfnt
+                try readU8(&reader, parsed)
             else
-                -@as(i32, reader.readU8() catch return error.BadSfnt)
+                -@as(i32, try readU8(&reader, parsed))
         else if ((raw & 0x10) != 0)
             0
         else
-            reader.readI16() catch return error.BadSfnt;
+            try readI16(&reader, parsed);
         x += delta;
         point.x = x;
     }
@@ -470,13 +493,13 @@ fn decodeSimpleInto(
     for (unscaled[0..real_point_count], raw_flags[0..real_point_count]) |*point, raw| {
         const delta: i32 = if ((raw & 0x04) != 0)
             if ((raw & 0x20) != 0)
-                reader.readU8() catch return error.BadSfnt
+                try readU8(&reader, parsed)
             else
-                -@as(i32, reader.readU8() catch return error.BadSfnt)
+                -@as(i32, try readU8(&reader, parsed))
         else if ((raw & 0x20) != 0)
             0
         else
-            reader.readI16() catch return error.BadSfnt;
+            try readI16(&reader, parsed);
         y += delta;
         point.y = y;
     }
@@ -593,6 +616,27 @@ fn decodeSimpleInto(
         .scale_16_16 = scale_16_16,
         .variation = variation,
     };
+}
+
+inline fn readU8(reader: *bin.Reader, comptime parsed: bool) types.Error!u8 {
+    if (!parsed) return reader.readU8() catch return error.BadSfnt;
+    std.debug.assert(reader.offset < reader.data.len);
+    defer reader.offset += 1;
+    return reader.data[reader.offset];
+}
+
+inline fn readU16(reader: *bin.Reader, comptime parsed: bool) types.Error!u16 {
+    if (!parsed) return reader.readU16() catch return error.BadSfnt;
+    std.debug.assert(reader.offset + 2 <= reader.data.len);
+    defer reader.offset += 2;
+    return std.mem.readInt(u16, reader.data[reader.offset..][0..2], .big);
+}
+
+inline fn readI16(reader: *bin.Reader, comptime parsed: bool) types.Error!i16 {
+    if (!parsed) return reader.readI16() catch return error.BadSfnt;
+    std.debug.assert(reader.offset + 2 <= reader.data.len);
+    defer reader.offset += 2;
+    return std.mem.readInt(i16, reader.data[reader.offset..][0..2], .big);
 }
 
 fn readPointForVariation(points: []const Point, index: usize) gvar.Point {

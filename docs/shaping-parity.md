@@ -4984,3 +4984,8 @@ shaping-performance superiority.
   instead of once per point opcode. Fixed-CPU-30 A/B/B/A counters against
   `9a43a387` reduced instructions by `3.65%` for `A`, `4.60%` for `X`, and
   `3.85%` for U+00C2; all three cycle counts also improved.
+- Immutable-face simple glyf decoding now specializes the structural proof
+  established by `Face.parse`, while the owning mutation-aware path retains
+  its checked reader. Relative to `d7edc2ef`, fixed-CPU-30 A/B/B/A
+  instructions/branches/cycles fell `1.51%`/`2.01%`/`1.57%` for `A` and
+  `2.15%`/`3.52%`/`2.09%` for `X`.

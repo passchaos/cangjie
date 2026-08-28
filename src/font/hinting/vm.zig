@@ -214,8 +214,13 @@ pub const Vm = struct {
             },
             0x17 => {
                 const loop = try self.stack.popIndex();
-                if (loop == 0) return error.InvalidHintOperand;
-                self.transient.loop = loop;
+                // FreeType accepts zero and clamps oversized values to its
+                // unsigned 16-bit loop counter. A following loop-driven
+                // instruction consumes no points for zero and resets to one.
+                self.transient.loop = @min(
+                    loop,
+                    @as(usize, std.math.maxInt(u16)),
+                );
             },
             0x18 => self.transient.round_mode = .grid,
             0x19 => self.transient.round_mode = .half_grid,
@@ -789,6 +794,44 @@ test "byte pushes fill only the unused stack prefix" {
     try vm.run(.font);
     try std.testing.expectEqual(@as(usize, 3), vm.stack.depth());
     try std.testing.expectEqualSlices(i32, &.{ 7, 8, 9 }, vm.stack.values[0..3]);
+}
+
+test "SLOOP accepts zero and clamps to its 16-bit limit" {
+    var stack_values: [4]i32 = undefined;
+    var graphics = types.RetainedGraphicsState{
+        .scale_16_16 = 0x10000,
+        .ppem = 16,
+    };
+    const source = types.Source{
+        .units_per_em = 1000,
+        .font_program = &.{
+            0xb0, 0,    0x17, // SLOOP[0] is accepted.
+            0xba, 0x7f, 0xff,
+            0x7f, 0xff, 0x7f,
+            0xff,
+            0x60, 0x60, 0x17, // SLOOP[98301] clamps to 65535.
+        },
+        .control_value_program = &.{},
+        .control_value_data = &.{},
+        .limits = .{
+            .max_storage = 0,
+            .max_function_defs = 0,
+            .max_instruction_defs = 0,
+            .max_stack_elements = stack_values.len,
+            .max_twilight_points = 0,
+        },
+    };
+    var vm = Vm.init(
+        source,
+        .{ .functions = &.{}, .instructions = &.{} },
+        &stack_values,
+        &.{},
+        &.{},
+        &graphics,
+    );
+
+    try vm.run(.font);
+    try std.testing.expectEqual(@as(usize, 65535), vm.transient.loop);
 }
 
 test "font definitions execute from prep with bounded state" {

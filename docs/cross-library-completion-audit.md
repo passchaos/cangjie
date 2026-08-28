@@ -155,6 +155,14 @@ x86-64, pinned to CPU 30 where the harness supports it:
   exercises five glyphs, two sizes, v35/v40, and five targets in symmetric
   A/B/B/A order; its one-size smoke passed all 50 semantic rows. Latin and
   especially compound execution remain explicit performance blockers.
+- Simple hinted-glyph transactions now allocate one aligned backing block for
+  current/original/unscaled points, flags, and contour ends instead of five
+  independent owners. This preserves the public slice API and atomic cleanup
+  contract while reducing allocator traffic. A fixed-CPU-30 100,000-iteration,
+  11-sample direct comparison reduced DejaVu `A`, `X`, and U+00C2 from about
+  `1.76`, `1.32`, and `4.57 us` to `1.71`, `1.24`, and `4.24 us`; checksums
+  remained exact. The same rows are still behind FreeType, so this improvement
+  narrows rather than closes the retained Latin blocker.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri

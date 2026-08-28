@@ -3383,6 +3383,11 @@ shaping-performance superiority.
   but DejaVu `A`, `X`, and U+00C2 remain at roughly `0.92x`, `0.90x`, and
   `0.60x`; the new `hinted-outline-matrix` retains those deficits rather than
   hiding them behind the successful semantic differential.
+- The simple glyf hint transaction now owns its five point/flag/contour slices
+  in one aligned backing allocation. Fixed-CPU-30 100,000-iteration, 11-sample
+  medians improved DejaVu `A`, `X`, and compound U+00C2 from about `1.76`,
+  `1.32`, and `4.57 us` to `1.71`, `1.24`, and `4.24 us`, with unchanged
+  canonical output. FreeType remains faster on all three Latin controls.
 - Prepared geometry now caches the sorted edge intersections for all four
   fixed 4x4 sample rows during `prepare`, so every repeated draw starts at
   winding/span accumulation instead of rebuilding active edges and sorting the

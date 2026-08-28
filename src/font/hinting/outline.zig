@@ -88,6 +88,10 @@ pub const Transaction = struct {
     flags: []PointFlag,
     contours: []u16,
     components: []ComponentRecord = &.{},
+    /// One allocation backing simple-glyph points, originals, unscaled
+    /// coordinates, flags, and contour ends. Compound and test transactions
+    /// may leave this empty and retain the legacy independently-owned slices.
+    simple_storage: []Point = &.{},
     instructions: []const u8,
     scale_16_16: i32,
     normalized_coords: []f32 = &.{},
@@ -110,11 +114,15 @@ pub const Transaction = struct {
         if (self.components.len != 0) {
             self.allocator.free(self.components);
         }
-        self.allocator.free(self.contours);
-        self.allocator.free(self.flags);
-        self.allocator.free(self.unscaled);
-        self.allocator.free(self.original);
-        self.allocator.free(self.points);
+        if (self.simple_storage.len != 0) {
+            self.allocator.free(self.simple_storage);
+        } else {
+            self.allocator.free(self.contours);
+            self.allocator.free(self.flags);
+            self.allocator.free(self.unscaled);
+            self.allocator.free(self.original);
+            self.allocator.free(self.points);
+        }
         self.* = undefined;
     }
 
@@ -223,15 +231,14 @@ pub fn decodeSimple(
     var reader = bin.Reader.init(data);
     _ = reader.readI16() catch return error.BadSfnt;
     reader.skip(8) catch return error.BadSfnt;
-    const contours = try allocator.alloc(u16, contour_count);
-    errdefer allocator.free(contours);
+    const contour_data_offset = reader.offset;
     var real_point_count: usize = 0;
     var previous: ?u16 = null;
-    for (contours) |*end| {
-        end.* = reader.readU16() catch return error.BadSfnt;
-        if (previous) |prior| if (end.* <= prior) return error.BadSfnt;
-        previous = end.*;
-        real_point_count = @as(usize, end.*) + 1;
+    for (0..contour_count) |_| {
+        const end = reader.readU16() catch return error.BadSfnt;
+        if (previous) |prior| if (end <= prior) return error.BadSfnt;
+        previous = end;
+        real_point_count = @as(usize, end) + 1;
     }
     const instruction_len = reader.readU16() catch return error.BadSfnt;
     if (instruction_len > data.len - reader.offset) return error.BadSfnt;
@@ -239,15 +246,47 @@ pub fn decodeSimple(
         data[reader.offset .. reader.offset + instruction_len];
     reader.skip(instruction_len) catch return error.BadSfnt;
 
-    const point_count = real_point_count + 4;
-    const unscaled = try allocator.alloc(Point, point_count);
-    errdefer allocator.free(unscaled);
-    const original = try allocator.alloc(Point, point_count);
-    errdefer allocator.free(original);
-    const points = try allocator.alloc(Point, point_count);
-    errdefer allocator.free(points);
-    const flags = try allocator.alloc(PointFlag, point_count);
-    errdefer allocator.free(flags);
+    const point_count = std.math.add(usize, real_point_count, 4) catch
+        return error.BadSfnt;
+    const point_bytes = std.math.mul(
+        usize,
+        point_count,
+        @sizeOf(Point),
+    ) catch return error.BadSfnt;
+    const contour_bytes = std.math.mul(
+        usize,
+        contour_count,
+        @sizeOf(u16),
+    ) catch return error.BadSfnt;
+    const tail_bytes = std.math.add(usize, contour_bytes, point_count) catch
+        return error.BadSfnt;
+    const payload_bytes = std.math.add(
+        usize,
+        std.math.mul(usize, point_bytes, 3) catch return error.BadSfnt,
+        tail_bytes,
+    ) catch return error.BadSfnt;
+    const storage_len = std.math.divCeil(
+        usize,
+        payload_bytes,
+        @sizeOf(Point),
+    ) catch return error.BadSfnt;
+    const simple_storage = try allocator.alloc(Point, storage_len);
+    errdefer allocator.free(simple_storage);
+    const points = simple_storage[0..point_count];
+    const original = simple_storage[point_count .. point_count * 2];
+    const unscaled = simple_storage[point_count * 2 .. point_count * 3];
+    const tail = std.mem.sliceAsBytes(simple_storage[point_count * 3 ..]);
+    const contours = std.mem.bytesAsSlice(
+        u16,
+        tail[0..contour_bytes],
+    );
+    for (contours, 0..) |*end, index| {
+        const start = contour_data_offset + index * 2;
+        end.* = std.mem.readInt(u16, data[start..][0..2], .big);
+    }
+    const flags: []PointFlag = @ptrCast(
+        tail[contour_bytes..][0..point_count],
+    );
     @memset(flags, .{});
 
     var point_index: usize = 0;
@@ -435,6 +474,7 @@ pub fn decodeSimple(
         .unscaled = unscaled,
         .flags = flags,
         .contours = contours,
+        .simple_storage = simple_storage,
         .instructions = instructions,
         .scale_16_16 = scale_16_16,
         .variation = variation,

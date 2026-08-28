@@ -18,7 +18,6 @@ pub fn untouched(
     contours: []const u16,
     real_point_count: usize,
     x_axis: bool,
-    coordinates_are_scaled: bool,
 ) types.Error!void {
     if (current.len != original.len or
         current.len != unscaled.len or
@@ -29,9 +28,9 @@ pub fn untouched(
     }
     if (contours.len == 0) return;
     return if (x_axis)
-        untouchedAxis(current, original, unscaled, flags, contours, real_point_count, true, coordinates_are_scaled)
+        untouchedAxis(current, original, unscaled, flags, contours, real_point_count, true)
     else
-        untouchedAxis(current, original, unscaled, flags, contours, real_point_count, false, coordinates_are_scaled);
+        untouchedAxis(current, original, unscaled, flags, contours, real_point_count, false);
 }
 
 fn untouchedAxis(
@@ -42,7 +41,6 @@ fn untouchedAxis(
     contours: []const u16,
     real_point_count: usize,
     comptime x_axis: bool,
-    coordinates_are_scaled: bool,
 ) types.Error!void {
     var contour_start: usize = 0;
     for (contours) |end_value| {
@@ -60,7 +58,6 @@ fn untouchedAxis(
             contour_start,
             contour_end,
             x_axis,
-            coordinates_are_scaled,
         );
         contour_start = contour_end + 1;
     }
@@ -77,7 +74,6 @@ fn interpolateContour(
     start: usize,
     end: usize,
     comptime x_axis: bool,
-    coordinates_are_scaled: bool,
 ) void {
     var first_touched: ?usize = null;
     var index = start;
@@ -101,7 +97,6 @@ fn interpolateContour(
             previous,
             index,
             x_axis,
-            coordinates_are_scaled,
         );
         previous = index;
     }
@@ -127,7 +122,6 @@ fn interpolateContour(
         previous,
         first,
         x_axis,
-        coordinates_are_scaled,
     );
     if (first > start) {
         interpolateRange(
@@ -139,7 +133,6 @@ fn interpolateContour(
             previous,
             first,
             x_axis,
-            coordinates_are_scaled,
         );
     }
 }
@@ -153,7 +146,6 @@ fn interpolateRange(
     first_ref: usize,
     second_ref: usize,
     comptime x_axis: bool,
-    coordinates_are_scaled: bool,
 ) void {
     if (start > end) return;
     // `untouchedAxis` obtains both references from a contour that it has
@@ -174,18 +166,16 @@ fn interpolateRange(
     const high_current = coordinate(current[high_ref], x_axis);
     const low_delta = low_current -| low_original;
     const high_delta = high_current -| high_original;
-    // Compound programs execute after child hinting with unity projection
-    // scaling. FreeType's parent zone copies the placed device coordinates
-    // into both `org` and `orus`, so use `original` for its ratio domain.
-    // Simple programs retain design-space `orus` coordinates instead.
-    const low_ratio = if (coordinates_are_scaled) low_original else low_unscaled;
-    const high_ratio = if (coordinates_are_scaled) high_original else high_unscaled;
-    const scale = if (low_ratio == high_ratio)
+    // FreeType and the Microsoft interpreter quantize the interpolation
+    // ratio to 16.16 once per reference pair. Reusing that ratio is both the
+    // specified fixed-point data flow and observably different from one
+    // combined integer division near half-unit boundaries.
+    const scale = if (low_unscaled == high_unscaled)
         0
     else
         fixed.divFix16Clamped(
             high_current -| low_current,
-            high_ratio -| low_ratio,
+            high_unscaled -| low_unscaled,
         );
 
     for (start..end + 1) |point| {
@@ -194,17 +184,11 @@ fn interpolateRange(
             original_value +| low_delta
         else if (original_value >= high_original)
             original_value +| high_delta
-        else if (low_ratio == high_ratio or low_current == high_current)
+        else if (low_unscaled == high_unscaled or low_current == high_current)
             low_current
         else
             low_current +| fixed.mulFix16Clamped(
-                coordinate(
-                    if (coordinates_are_scaled)
-                        original[point]
-                    else
-                        unscaled[point],
-                    x_axis,
-                ) -| low_ratio,
+                coordinate(unscaled[point], x_axis) -| low_unscaled,
                 scale,
             );
         setCoordinate(&current[point], x_axis, result);
@@ -255,41 +239,6 @@ test "IUP shifts and interpolates untouched contour points" {
         &.{2},
         3,
         true,
-        false,
     );
     try std.testing.expectEqual(@as(i32, 164), current[1].x);
-}
-
-test "compound IUP interpolates in original scaled coordinates" {
-    var current = [_]outline.Point{
-        .{ .x = 64, .y = 0 },
-        .{ .x = 190, .y = 0 },
-        .{ .x = 320, .y = 0 },
-    };
-    const original = [_]outline.Point{
-        .{ .x = 64, .y = 0 },
-        .{ .x = 190, .y = 0 },
-        .{ .x = 256, .y = 0 },
-    };
-    const unscaled = [_]outline.Point{
-        .{ .x = -817, .y = 0 },
-        .{ .x = -418, .y = 0 },
-        .{ .x = -207, .y = 0 },
-    };
-    const flags = [_]outline.PointFlag{
-        .{ .touched_x = true },
-        .{},
-        .{ .touched_x = true },
-    };
-    try untouched(
-        &current,
-        &original,
-        &unscaled,
-        &flags,
-        &.{2},
-        3,
-        true,
-        true,
-    );
-    try std.testing.expectEqual(@as(i32, 232), current[1].x);
 }

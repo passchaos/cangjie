@@ -168,7 +168,9 @@ x86-64, pinned to CPU 30 where the harness supports it:
   longer rescans the compressed flag run solely to recover Y delta bits. A
   fixed-CPU-30 100,000-iteration, 11-sample check improved `A`, `X`, and
   U+00C2 from about `1.68`, `1.24`, and `4.19 us` to `1.67`, `1.23`, and
-  `4.15 us`, with exact FreeType checksums.
+  `4.15 us`, with exact FreeType checksums. A fixed-CPU-30 11-sample rerun of
+  the final retained path measured `1.74/1.63 us` (`0.94x`), `1.30/1.18 us`
+  (`0.91x`), and `4.54/2.76 us` (`0.61x`), respectively.
 - Hinting instances now retain the parse-proved maxp point, contour, component,
   and depth limits consumed by glyph transactions. The immutable hot path no
   longer reparses maxp once per glyph merely to recover the same four values.

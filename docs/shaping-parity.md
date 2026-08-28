@@ -3391,7 +3391,9 @@ shaping-performance superiority.
 - The same packed allocation retains expanded raw glyf flags through X and Y
   coordinate decoding, removing the previous second compressed-flag scan.
   Fixed-CPU-30 100,000-iteration medians improved DejaVu `A`, `X`, and U+00C2
-  by roughly `0.5%`, `1.3%`, and `0.9%`, respectively.
+  by roughly `0.5%`, `1.3%`, and `0.9%`, respectively. A final direct rerun
+  measured speedups versus FreeType of `0.94x`, `0.91x`, and `0.61x`; all
+  three therefore remain explicit blockers.
 - Parsed maxp point/contour/component limits now live in the hinting instance,
   avoiding another maxp decode for every immutable-face transaction. Retired
   work fell about `0.7%` on DejaVu `A`; the full hinted differential and

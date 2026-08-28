@@ -1138,19 +1138,24 @@ pub const Font = struct {
                 glyph_count,
             );
         }
-        if (cpal) |cpal_table| {
-            _ = cpal_mod.validate(
+        const cpal_layout: ?cpal_mod.Layout = if (cpal) |cpal_table| blk: {
+            const layout = cpal_mod.validate(
                 data,
                 cpalTable(cpal_table),
                 if (name) |name_table| nameTableView(name_table) else null,
             ) catch |err| switch (err) {
-                error.InvalidName => if (!is_ttc_face) return err,
+                error.InvalidName => if (!is_ttc_face) return err else try cpal_mod.validateStructure(
+                    data,
+                    cpalTable(cpal_table),
+                ),
                 else => return err,
             };
-        }
+            break :blk layout;
+        } else null;
         if (varc) |varc_table| try validateVarcTable(data, varc_table, glyph_count);
         if (ift) |ift_table| try validateIftPatchMapTable(data, ift_table);
         if (iftx) |iftx_table| try validateIftPatchMapTable(data, iftx_table);
+        var colr_v0_layout: ?colr_v0_mod.Layout = null;
         if (colr) |colr_table| {
             try colr_v1_mod.validateTopLevel(
                 data,
@@ -1159,18 +1164,13 @@ pub const Font = struct {
             try validateColrVariationData(data, colr_table, fvar, glyph_count);
             try validateColrGlyphBounds(data, colr_table, glyph_count);
             try validateColrPaletteBounds(data, colr_table, cpal);
+            if (try bin.readU16At(data, colr_table.offset) == 0) {
+                colr_v0_layout = try colr_v0_mod.structuralLayout(
+                    data,
+                    colrV0Table(colr_table),
+                );
+            }
         }
-        const cpal_layout = if (cpal) |cpal_table|
-            try cpal_mod.validateStructure(data, cpalTable(cpal_table))
-        else
-            null;
-        const colr_v0_layout = if (colr) |colr_table|
-            if (try bin.readU16At(data, colr_table.offset) == 0)
-                try colr_v0_mod.structuralLayout(data, colrV0Table(colr_table))
-            else
-                null
-        else
-            null;
         if (base) |base_table| try validateBaseTable(data, base_table);
         if (dsig) |dsig_table| try validateDsigTable(data, dsig_table);
         if (vorg) |vorg_table| try validateVorgTable(data, vorg_table, glyph_count);

@@ -212,6 +212,12 @@ x86-64, pinned to CPU 30 where the harness supports it:
   kept exact checksums and improved the compound row from about `4.18 us` to
   `3.20 us`. This substantially narrows, but does not close, the remaining
   FreeType compound-Latin gap.
+- Compound point transforms now recognize the identity matrix and diagonal-
+  only scale before entering the general four-multiply F2Dot14 path. Identity
+  is the common case for accent composites such as DejaVu U+00C2. Against the
+  independently built `5cab5664` binary, fixed-CPU-30 A/B/B/A counters reduced
+  that row's instructions, branches, and cycles by `5.06%`, `5.79%`, and
+  `6.03%`; the simple `A`/`X` controls kept retired work neutral.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri

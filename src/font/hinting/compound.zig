@@ -527,6 +527,17 @@ pub fn applyTransform(
     point: outline.Point,
     transform: FixedTransform,
 ) outline.Point {
+    // Identity transforms dominate ordinary composite accents and are encoded
+    // explicitly as 1.0 diagonal F2Dot14 values. Avoid four saturating fixed-
+    // point multiplications in that overwhelmingly common case.
+    if (transform.xx == 0x4000 and transform.yy == 0x4000 and
+        transform.xy == 0 and transform.yx == 0) return point;
+    if (transform.xy == 0 and transform.yx == 0) {
+        return .{
+            .x = mulF2Dot14(point.x, transform.xx),
+            .y = mulF2Dot14(point.y, transform.yy),
+        };
+    }
     return .{
         .x = mulF2Dot14(point.x, transform.xx) +|
             mulF2Dot14(point.y, transform.xy),

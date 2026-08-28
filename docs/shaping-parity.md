@@ -4947,3 +4947,8 @@ shaping-performance superiority.
   binary reduced DejaVu `A` and `X` instructions by `0.59%` and `0.77%`, and
   compound U+00C2 instructions/branches/cycles by
   `17.87%`/`18.25%`/`22.98%`; checksums remain exact.
+- Identity and diagonal-only compound transforms now bypass the fully general
+  four-multiply F2Dot14 path. A fixed-CPU-30 A/B/B/A comparison against the
+  independent `5cab5664` binary reduced DejaVu U+00C2 retired
+  instructions/branches/cycles by `5.06%`/`5.79%`/`6.03%` while simple Latin
+  retired work remained neutral.

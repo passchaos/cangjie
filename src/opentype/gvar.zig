@@ -895,6 +895,13 @@ pub fn accumulateSimpleGlyphPointDeltasWithReaderFromParsed(
     const point_count = original_point_count + 4;
     const shared_points = try sharedPointNumbers(table, glyph);
 
+    // Every tuple has zero support at the default normalized location. Parsed
+    // immutable faces have already validated tuple payload grammar, so no
+    // scratch buffers or per-tuple decoding are needed for this glyph.
+    if (!validate_inactive_payloads and isDefaultLocation(normalized_coords)) {
+        return null;
+    }
+
     const raw_scratch = try allocator.alloc(PointDelta, point_count);
     defer allocator.free(raw_scratch);
     const tuple_scratch = try allocator.alloc(ScaledPointDelta, point_count);
@@ -949,6 +956,13 @@ pub fn accumulateSimpleGlyphPointDeltasWithReaderFromParsed(
         return null;
     }
     return out;
+}
+
+fn isDefaultLocation(normalized_coords: []const f32) bool {
+    for (normalized_coords) |coordinate| {
+        if (coordinate != 0) return false;
+    }
+    return true;
 }
 
 fn validateSimpleContourEnds(point_count: usize, contour_ends: []const u16) Error!void {
@@ -2000,6 +2014,78 @@ test "gvar simple tuples run IUP independently before accumulation" {
     try std.testing.expectEqual(@as(f32, 11), out[1].x);
     try std.testing.expectEqual(@as(f32, 16), out[2].x);
     try std.testing.expectEqual(@as(f32, 0), out[3].x);
+}
+
+test "parsed simple gvar skips allocation at the default location" {
+    const bytes = [_]u8{
+        0, 1, 0, 0, // version.
+        0, 1, // axisCount.
+        0, 0, // sharedTupleCount.
+        0, 0, 0, 0, // sharedTupleOffset.
+        0, 1, // glyphCount.
+        0, 0, // short offsets.
+        0, 0, 0, 24, // glyphVariationDataArrayOffset.
+        0, 0, 0, 10, // offsets: 0, 20 bytes.
+        0, 1, 0, 10, // GlyphVariationData header.
+        0, 9, 0x80, 0x00, // Nine-byte payload, embedded peak, all points.
+        0x40, 0x00, // peak = 1.
+        0x06, 1, 2, 3, 4, 5, 6, 7, // X deltas for 3 real + 4 phantom points.
+        0x86, // Y deltas: zero run for all seven points.
+        0, // short-offset alignment padding.
+    };
+    const parsed = try info(&bytes, 0, bytes.len, 1, 1);
+    const original = [_]Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 5, .y = 0 },
+        .{ .x = 10, .y = 0 },
+    };
+    const contour_ends = [_]u16{2};
+    var failing = std.testing.FailingAllocator.init(
+        std.testing.allocator,
+        .{ .fail_index = 0 },
+    );
+
+    // Font.parse has already validated inactive payloads before this internal
+    // path is used, so a default instance can prove that every tuple scalar is
+    // zero without allocating the per-point accumulation buffers.
+    const deltas = try accumulateSimpleGlyphPointDeltasWithReaderFromParsed(
+        failing.allocator(),
+        &bytes,
+        0,
+        bytes.len,
+        parsed,
+        0,
+        &.{0},
+        []const Point,
+        &original,
+        original.len,
+        pointAt,
+        &contour_ends,
+        false,
+    );
+    try std.testing.expect(deltas == null);
+    try std.testing.expect(!failing.has_induced_failure);
+
+    // Defensive callers must still decode the inactive payload, retaining the
+    // public validation contract rather than silently accepting bad bytes.
+    try std.testing.expectError(
+        error.OutOfMemory,
+        accumulateSimpleGlyphPointDeltasWithReaderFromParsed(
+            failing.allocator(),
+            &bytes,
+            0,
+            bytes.len,
+            parsed,
+            0,
+            &.{0},
+            []const Point,
+            &original,
+            original.len,
+            pointAt,
+            &contour_ends,
+            true,
+        ),
+    );
 }
 
 test "gvar simple accumulation accepts phantom-only glyphs" {

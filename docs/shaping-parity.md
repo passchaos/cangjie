@@ -5000,6 +5000,12 @@ shaping-performance superiority.
   of rescanning the complete glyph-offset array per glyph. Default-instance
   Cascadia `X` retired instructions/branches/cycles fell
   `69.67%`/`76.19%`/`65.18%` versus the independent pre-change binary.
+- At the default normalized location that parsed path also bypasses all tuple
+  scratch allocation and payload decoding, after the owning parse has already
+  validated the bytes. Three fixed-CPU-30 A/B/B/A rounds against the
+  retained-metadata binary reduced Cascadia `X` instructions/branches/cycles
+  by another `6.85%`/`4.17%`/`8.24%`; three non-variable script controls kept
+  retired work flat.
 - Correct sign-symmetric RDTG/RUTG semantics close the FreeSans Bengali and
   Tamil mismatches, so those fixtures now run through every retained v35/v40
   target. Liberation Sans v40 matches the four smooth targets; mono remains

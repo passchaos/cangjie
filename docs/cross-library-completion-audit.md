@@ -290,6 +290,13 @@ x86-64, pinned to CPU 30 where the harness supports it:
   30 A/B/B/A counters for default-instance Cascadia `X` fell `69.67%` in
   instructions, `76.19%` in branches, and `65.18%` in cycles; non-variable
   DejaVu controls also improved through the later glyph-move work.
+- The same immutable path now returns before allocating or decoding tuple
+  payloads when every normalized coordinate is zero: OpenType tuple support is
+  necessarily zero at the default location, and `Font.parse` has already
+  validated the inactive payload grammar. Three fixed-CPU-30 A/B/B/A rounds
+  against the retained-metadata binary reduced Cascadia `X` instructions,
+  branches, and cycles by a further `6.85%`, `4.17%`, and `8.24%`; DejaVu
+  Latin, Noto Devanagari, and Noto Arabic controls kept retired work flat.
 - FreeType-style sign-symmetric RDTG/RUTG rounding fixes the newly exposed
   Bengali/Tamil mismatches: negative values round their magnitudes down/up and
   restore the sign, rather than using mathematical floor/ceil. Both scripts

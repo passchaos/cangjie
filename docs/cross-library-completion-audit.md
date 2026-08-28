@@ -272,6 +272,12 @@ x86-64, pinned to CPU 30 where the harness supports it:
   `1.51%`/`2.01%`/`1.57%` for `A` and `2.15%`/`3.52%`/`2.09%` for `X`;
   Arabic also improved, while compound and Devanagari controls were neutral
   within cycle noise.
+- The post-change fixed-CPU-30 `30000 * 7` two-size, two-interpreter, five-
+  target matrix passed all 100 semantic rows and led every timing row. The
+  narrowest row was DejaVu `A` at 9 ppem, v40 LCD: `1663.486/1682.563 ns`
+  (`1.011x`); every `X` row now led by at least `1.045x`. This closes the
+  maintained hinted-outline matrix, but broader glyph/platform evidence is
+  still required for the overall FreeType claim.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri

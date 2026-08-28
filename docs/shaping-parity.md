@@ -4989,3 +4989,6 @@ shaping-performance superiority.
   its checked reader. Relative to `d7edc2ef`, fixed-CPU-30 A/B/B/A
   instructions/branches/cycles fell `1.51%`/`2.01%`/`1.57%` for `A` and
   `2.15%`/`3.52%`/`2.09%` for `X`.
+- A final fixed-CPU-30 `30000 * 7` run passed all 100 maintained hinted-outline
+  semantic rows and led every performance row. The minimum lead was `1.011x`
+  for DejaVu `A` at 9 ppem/v40/LCD; all `X` rows led by at least `1.045x`.

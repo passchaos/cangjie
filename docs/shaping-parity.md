@@ -4960,3 +4960,8 @@ shaping-performance superiority.
   and Y. Relative to `9d3f39af`, fixed-CPU-30 retired instructions fell
   `0.88%` for `A`, `1.92%` for `X`, and `1.30%` for U+00C2; control scripts
   were neutral or slightly improved and checksums did not change.
+- The resulting fixed-CPU-30, 11-sample 9 ppem comparison measured Cangjie/
+  FreeType at `1.626/1.642 us` for `A`, `1.195/1.175 us` for `X`,
+  `2.908/2.747 us` for U+00C2, `23.767/29.363 us` for Devanagari, and
+  `5.437/6.558 us` for Arabic. Simple and compound Latin are now near parity,
+  but `X`, U+00C2, and wider target/size coverage remain open.

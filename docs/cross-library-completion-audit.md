@@ -284,6 +284,12 @@ x86-64, pinned to CPU 30 where the harness supports it:
   exposed unresolved Bengali/Tamil and Liberation Sans v40-mono mismatches;
   those are recorded as new open compatibility work rather than hidden behind
   the maintained matrix.
+- Parsed `gvar` header and glyph-offset metadata is now retained by `Font` and
+  threaded into immutable simple-glyph hint loads. This removes a whole-table
+  offset scan per glyph. Against the independent pre-change binary, fixed-CPU-
+  30 A/B/B/A counters for default-instance Cascadia `X` fell `69.67%` in
+  instructions, `76.19%` in branches, and `65.18%` in cycles; non-variable
+  DejaVu controls also improved through the later glyph-move work.
 - FreeType-style sign-symmetric RDTG/RUTG rounding fixes the newly exposed
   Bengali/Tamil mismatches: negative values round their magnitudes down/up and
   restore the sign, rather than using mathematical floor/ceil. Both scripts

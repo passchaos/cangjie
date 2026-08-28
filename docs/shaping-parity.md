@@ -4996,6 +4996,10 @@ shaping-performance superiority.
   Latin, and Annapurna SIL Devanagari. Wider probing also identified currently
   unresolved FreeSans Bengali/Tamil and Liberation Sans v40-mono differences,
   which remain explicit audit blockers.
+- Parsed `gvar` metadata is retained for immutable hinted glyph loads instead
+  of rescanning the complete glyph-offset array per glyph. Default-instance
+  Cascadia `X` retired instructions/branches/cycles fell
+  `69.67%`/`76.19%`/`65.18%` versus the independent pre-change binary.
 - Correct sign-symmetric RDTG/RUTG semantics close the FreeSans Bengali and
   Tamil mismatches, so those fixtures now run through every retained v35/v40
   target. Liberation Sans v40 matches the four smooth targets; mono remains

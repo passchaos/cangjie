@@ -252,6 +252,12 @@ x86-64, pinned to CPU 30 where the harness supports it:
   were all DejaVu `X` near-ties between `0.988x` and `1.000x`. This is not yet
   a strict every-row performance win, and wider glyph/platform coverage remains
   open.
+- IUP's internal interpolation ranges now consume the bounds proof established
+  once by their enclosing contour walk instead of rebuilding an impossible
+  error path for every touched-point pair. Against `e1343082`, fixed-CPU-30
+  A/B/B/A retired instructions/branches fell `0.78%`/`0.79%` for `A`,
+  `1.49%`/`1.00%` for `X`, and `1.17%`/`0.94%` for U+00C2; Devanagari and
+  Arabic controls remained neutral or improved.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri

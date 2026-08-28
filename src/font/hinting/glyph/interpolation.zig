@@ -50,7 +50,7 @@ fn untouchedAxis(
         {
             return error.InvalidHintOperand;
         }
-        try interpolateContour(
+        interpolateContour(
             current,
             original,
             unscaled,
@@ -74,7 +74,7 @@ fn interpolateContour(
     start: usize,
     end: usize,
     comptime x_axis: bool,
-) types.Error!void {
+) void {
     var first_touched: ?usize = null;
     var index = start;
     while (index <= end) : (index += 1) {
@@ -88,7 +88,7 @@ fn interpolateContour(
     index = first + 1;
     while (index <= end) : (index += 1) {
         if (!isTouched(flags[index], x_axis)) continue;
-        try interpolateRange(
+        interpolateRange(
             current,
             original,
             unscaled,
@@ -113,7 +113,7 @@ fn interpolateContour(
         }
         return;
     }
-    try interpolateRange(
+    interpolateRange(
         current,
         original,
         unscaled,
@@ -124,7 +124,7 @@ fn interpolateContour(
         x_axis,
     );
     if (first > start) {
-        try interpolateRange(
+        interpolateRange(
             current,
             original,
             unscaled,
@@ -146,11 +146,12 @@ fn interpolateRange(
     first_ref: usize,
     second_ref: usize,
     comptime x_axis: bool,
-) types.Error!void {
+) void {
     if (start > end) return;
-    if (first_ref >= current.len or second_ref >= current.len) {
-        return error.InvalidHintOperand;
-    }
+    // `untouchedAxis` obtains both references from a contour that it has
+    // already bounded against `real_point_count`, which is no greater than the
+    // three coordinate slice lengths. Keep that proof outside this hot loop.
+    std.debug.assert(first_ref < current.len and second_ref < current.len);
     var low_ref = first_ref;
     var high_ref = second_ref;
     var low_unscaled = coordinate(unscaled[low_ref], x_axis);

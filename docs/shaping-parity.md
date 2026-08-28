@@ -4976,3 +4976,7 @@ shaping-performance superiority.
   `5.469/6.721 us` for Arabic. A two-size, two-interpreter, five-target rerun
   then passed all 100 semantic rows and led 92; the remaining eight were `X`
   near-ties at `0.988x--1.000x`, so the strict all-row claim remains open.
+- IUP range helpers now rely on their enclosing contour's already-checked
+  reference bounds. Relative to `e1343082`, fixed-CPU-30 retired
+  instructions/branches fell `0.78%`/`0.79%` for `A`, `1.49%`/`1.00%` for
+  `X`, and `1.17%`/`0.94%` for U+00C2, with neutral control rows.

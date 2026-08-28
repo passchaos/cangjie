@@ -90,6 +90,28 @@ test "hinting point buffer retains simple storage across loads" {
     try std.testing.expect(buffer.current() == null);
 }
 
+test "hinting point buffer restores retained compound source state" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildTrueTypeCompoundHintingTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    var instance = try face.hintingInstance(allocator, 16, .normal);
+    defer instance.deinit();
+    var buffer = cangjie.font.HintingPointTransactionBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const first = try face.hintingPointTransactionInto(&buffer, &instance, 2);
+    try std.testing.expect(first.is_compound);
+    const source_point = first.points[0];
+    try face.executeHintingTransactionInPlace(&instance, first);
+    const hinted_point = first.points[0];
+    const second = try face.hintingPointTransactionInto(&buffer, &instance, 2);
+    try std.testing.expectEqual(source_point, second.points[0]);
+    try face.executeHintingTransactionInPlace(&instance, second);
+    try std.testing.expectEqual(hinted_point, second.points[0]);
+}
+
 test "TrueType hinting rejects invalid sizes and borrowed mutations" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildTrueTypeHintingTtf(allocator);

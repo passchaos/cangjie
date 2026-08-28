@@ -4940,12 +4940,13 @@ shaping-performance superiority.
   from `1.252x` through `13.865x`.
 - TrueType hinting now exposes `HintingPointTransactionBuffer`, a retained
   caller-owned loader for render loops. It decodes simple glyf points directly
-  into reusable typed storage; compound glyphs continue to decode afresh into
-  retained-capacity scratch. The benchmark therefore models
+  into reusable typed storage and restores a retained pristine compound
+  transaction before each repeated load. The benchmark therefore models
   FreeType's persistent `FT_GlyphLoader` without relying on arena reset
   behavior. Fixed-CPU-30 A/B/B/A counters versus the independent `a69336fa`
-  binary reduced DejaVu `A` and `X` instructions by `0.59%` and `0.77%`;
-  control rows remained neutral and checksums exact.
+  binary reduced DejaVu `A` and `X` instructions by `0.59%` and `0.77%`, and
+  compound U+00C2 instructions/branches/cycles by
+  `17.87%`/`18.25%`/`22.98%`; checksums remain exact.
 - Identity and diagonal-only compound transforms now bypass the fully general
   four-multiply F2Dot14 path. A fixed-CPU-30 A/B/B/A comparison against the
   independent `5cab5664` binary reduced DejaVu U+00C2 retired

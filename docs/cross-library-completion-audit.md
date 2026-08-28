@@ -163,6 +163,12 @@ x86-64, pinned to CPU 30 where the harness supports it:
   `1.76`, `1.32`, and `4.57 us` to `1.71`, `1.24`, and `4.24 us`; checksums
   remained exact. The same rows are still behind FreeType, so this improvement
   narrows rather than closes the retained Latin blocker.
+- Simple glyf decoding now keeps its already-expanded raw flag byte beside each
+  semantic point flag until both coordinate streams have been consumed. It no
+  longer rescans the compressed flag run solely to recover Y delta bits. A
+  fixed-CPU-30 100,000-iteration, 11-sample check improved `A`, `X`, and
+  U+00C2 from about `1.68`, `1.24`, and `4.19 us` to `1.67`, `1.23`, and
+  `4.15 us`, with exact FreeType checksums.
 - The benchmark's in-place rendering mode now retains transaction scratch
   capacity between glyph loads, matching FreeType's retained `FT_GlyphLoader`
   lifecycle instead of charging a fresh general-purpose allocation set on

@@ -178,6 +178,31 @@ test "v40 compatibility preserves pre-program phantom metrics" {
     );
 }
 
+test "v40 compatibility preserves a non-grid-fitted source advance" {
+    var source = glyphTestSource(0x4045);
+    source.interpreter = .cleartype;
+    var instance = try instance_mod.Instance.init(
+        std.testing.allocator,
+        source,
+        16,
+        .normal,
+    );
+    defer instance.deinit();
+    var transaction = try glyphTestTransaction(
+        std.testing.allocator,
+        source.face_identity,
+        &.{ 0xb1, 5, 44, 0x48 },
+    );
+    defer transaction.deinit();
+    transaction.interpreter = .cleartype;
+    transaction.backward_compatibility = true;
+    transaction.points[transaction.real_point_count].x = 13;
+    transaction.points[transaction.real_point_count + 1].x = 663;
+
+    try instance.executeGlyph(&transaction, null);
+    try std.testing.expectEqual(@as(i32, 640), transaction.horizontalAdvance());
+}
+
 test "disabled hinting does not round or execute glyph programs" {
     var source = glyphTestSource(0x4044);
     source.control_value_program = &.{

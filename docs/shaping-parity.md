@@ -3388,6 +3388,10 @@ shaping-performance superiority.
   medians improved DejaVu `A`, `X`, and compound U+00C2 from about `1.76`,
   `1.32`, and `4.57 us` to `1.71`, `1.24`, and `4.24 us`, with unchanged
   canonical output. FreeType remains faster on all three Latin controls.
+- The same packed allocation retains expanded raw glyf flags through X and Y
+  coordinate decoding, removing the previous second compressed-flag scan.
+  Fixed-CPU-30 100,000-iteration medians improved DejaVu `A`, `X`, and U+00C2
+  by roughly `0.5%`, `1.3%`, and `0.9%`, respectively.
 - Repeated hinted-outline loads now reuse arena capacity in the benchmark,
   matching FreeType's retained glyph-loader lifecycle while still decoding
   and executing every glyph. Representative fixed-CPU medians were neutral on

@@ -258,7 +258,7 @@ pub fn decodeSimple(
         contour_count,
         @sizeOf(u16),
     ) catch return error.BadSfnt;
-    const tail_bytes = std.math.add(usize, contour_bytes, point_count) catch
+    const tail_bytes = std.math.add(usize, contour_bytes, point_count * 2) catch
         return error.BadSfnt;
     const payload_bytes = std.math.add(
         usize,
@@ -289,10 +289,16 @@ pub fn decodeSimple(
     );
     @memset(flags, .{});
 
+    // Keep expanded glyf flags until both coordinate streams are decoded.
+    // `PointFlag` stores only semantic bits, while the packed x/y delta bits
+    // are needed a second time for Y; retaining one byte per point avoids a
+    // second walk over the compressed flag stream.
+    const raw_flags = tail[contour_bytes + point_count ..][0..point_count];
     var point_index: usize = 0;
     while (point_index < real_point_count) : (point_index += 1) {
         const raw = reader.readU8() catch return error.BadSfnt;
         glyf.validateSimpleFlag(raw, point_index) catch return error.BadSfnt;
+        raw_flags[point_index] = raw;
         flags[point_index] = .{
             .on_curve = (raw & 0x01) != 0,
             .overlap = point_index == 0 and (raw & 0x40) != 0,
@@ -303,6 +309,7 @@ pub fn decodeSimple(
             for (0..repeat) |_| {
                 point_index += 1;
                 if (point_index >= real_point_count) return error.BadSfnt;
+                raw_flags[point_index] = raw;
                 unscaled[point_index].x = raw;
                 flags[point_index] = flags[point_index - 1];
             }
@@ -324,31 +331,9 @@ pub fn decodeSimple(
         x += delta;
         point.x = x;
     }
-    // Re-decode flags to preserve the independent Y stream shape. This second
-    // bounded scan is cheaper than retaining another point-sized allocation.
-    var flag_reader = bin.Reader.init(data);
-    _ = flag_reader.readI16() catch return error.BadSfnt;
-    flag_reader.skip(8 + contour_count * 2) catch return error.BadSfnt;
-    const instruction_bytes = flag_reader.readU16() catch return error.BadSfnt;
-    flag_reader.skip(instruction_bytes) catch return error.BadSfnt;
-    var flag_index: usize = 0;
-    while (flag_index < real_point_count) : (flag_index += 1) {
-        const raw = flag_reader.readU8() catch return error.BadSfnt;
-        unscaled[flag_index].y = raw;
-        if ((raw & 0x08) != 0) {
-            const repeat = flag_reader.readU8() catch return error.BadSfnt;
-            for (0..repeat) |_| {
-                flag_index += 1;
-                if (flag_index >= real_point_count) return error.BadSfnt;
-                unscaled[flag_index].y = raw;
-            }
-        }
-    }
-    // Skip the X stream already consumed by `reader`; Y begins at its current
-    // position and uses the re-expanded raw flags stored in `unscaled.y`.
+    // Y begins at the reader's current position after the X stream.
     var y: i32 = 0;
-    for (unscaled[0..real_point_count]) |*point| {
-        const raw: u8 = @intCast(point.y);
+    for (unscaled[0..real_point_count], raw_flags[0..real_point_count]) |*point, raw| {
         const delta: i32 = if ((raw & 0x04) != 0)
             if ((raw & 0x20) != 0)
                 reader.readU8() catch return error.BadSfnt

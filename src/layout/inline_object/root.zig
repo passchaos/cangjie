@@ -351,6 +351,62 @@ pub fn position(
     // positioned output record.
 }
 
+/// Position one object after the caller has proved the retained simple-layout
+/// contract: one matching marker, one output slot, and no custom placement.
+/// This avoids a capacity check and binary search on every repeated reflow.
+pub fn positionSingleRetained(
+    buffer: anytype,
+    object: Object,
+    writing_mode: @import("../../shaping/pipeline/types.zig").WritingMode,
+) void {
+    std.debug.assert(object.kind != .custom_out_of_flow);
+    std.debug.assert(buffer.inline_objects.capacity >= 1);
+    buffer.inline_objects.clearRetainingCapacity();
+    for (buffer.lines.items, 0..) |*line, line_index| {
+        line.inline_object_start = buffer.inline_objects.items.len;
+        line.inline_object_len = 0;
+        var pen_inline: f32 = if (writing_mode.isVertical()) line.y else line.x;
+        const glyph_end = line.glyph_start + line.glyph_len;
+        for (buffer.glyphs.items[line.glyph_start..glyph_end]) |glyph| {
+            if (glyph.isInlineObject()) {
+                std.debug.assert(glyph.cluster == object.byte_index);
+                const baseline = object.resolvedBaseline();
+                buffer.inline_objects.appendAssumeCapacity(.{
+                    .id = object.id,
+                    .kind = object.kind,
+                    .byte_index = object.byte_index,
+                    .line_index = line_index,
+                    .x = if (writing_mode.isVertical())
+                        line.x + (line.width - object.width) / 2
+                    else
+                        pen_inline,
+                    .y = if (writing_mode.isVertical())
+                        pen_inline
+                    else
+                        line.y + line.baseline + glyph.y_offset - baseline,
+                    .width = object.width,
+                    .height = object.height,
+                    .baseline = baseline,
+                    .anchor_x = if (writing_mode.isVertical())
+                        line.x + (line.width - object.width) / 2
+                    else
+                        pen_inline,
+                    .anchor_y = if (writing_mode.isVertical())
+                        pen_inline
+                    else
+                        line.y + line.baseline + glyph.y_offset - baseline,
+                });
+                line.inline_object_len = 1;
+                return;
+            }
+            pen_inline += if (writing_mode.isVertical())
+                glyph.y_advance
+            else
+                glyph.x_advance;
+        }
+    }
+}
+
 fn findPlacement(
     placements: []const Placement,
     byte_index: usize,

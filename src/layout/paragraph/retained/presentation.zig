@@ -49,12 +49,22 @@ pub fn applySimpleRetained(
     // The proof keeps run ownership fixed. Only absolute pens change after
     // line-local permutation; no run rebuilding is needed.
     bidi_reorder.recomputeRunOffsets(buffer);
-    try inline_object.position(
-        buffer,
-        options.inline_objects,
-        options.out_of_flow_placements,
-        options.writing_mode,
-    );
+    if (options.inline_objects.len == 1 and
+        options.inline_objects[0].kind != .custom_out_of_flow)
+    {
+        inline_object.positionSingleRetained(
+            buffer,
+            options.inline_objects[0],
+            options.writing_mode,
+        );
+    } else {
+        try inline_object.position(
+            buffer,
+            options.inline_objects,
+            options.out_of_flow_placements,
+            options.writing_mode,
+        );
+    }
 }
 
 pub fn apply(

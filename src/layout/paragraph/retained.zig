@@ -366,6 +366,10 @@ pub const ReflowBuffer = struct {
             self.buffer.allocator,
             paragraph.runs.len,
         );
+        try self.buffer.inline_objects.ensureTotalCapacity(
+            self.buffer.allocator,
+            paragraph.inline_object_indexes.len,
+        );
         errdefer self.buffer.clear();
         self.buffer.variation_coords.appendSliceAssumeCapacity(
             paragraph.normalized_variation_coords,

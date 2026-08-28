@@ -2305,9 +2305,11 @@ that last noisy retained row to a `1.029x` lead.
 The cross-engine matrix now also has ordinary out-of-flow object construction
 and retained-reflow rows for Latin, Arabic, and Japanese. Both adapters insert
 the same 24x20 object at the same UTF-8 boundary and select their native
-zero-occupancy out-of-flow policy. A fixed-CPU-30 `1000 * 7` run passed all 24
-count/stability rows; the six new Cangjie speedups were `1.603x`/`1.345x` for
-Latin, `1.184x`/`1.030x` for Arabic, and `1.791x`/`1.383x` for Japanese
-(construction/reflow). The matrix still reports `geometry_equal=false` for
-these rows because the existing normalized digest describes text graphemes,
-not cross-engine positioned-object geometry.
+zero-occupancy out-of-flow policy. Retained Cangjie reflow reserves the known
+object-output count before its timed loop, avoiding a first-pass allocation. A
+fixed-CPU-30 `1000 * 7` run passed all 24 count/stability rows and led every
+row. The new Cangjie construction/reflow speedups were `1.618x`/`1.492x` for
+Latin, `1.187x`/`1.089x` for Arabic, and `1.801x`/`1.512x` for Japanese; the
+previously noisy Arabic in-flow reflow row measured `1.068x`. Object rows still
+report `geometry_equal=false` because the shared digest currently models text
+graphemes rather than positioned-object rectangles.

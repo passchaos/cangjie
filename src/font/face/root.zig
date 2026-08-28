@@ -15,14 +15,7 @@ pub const Stretch = attributes_mod.Stretch;
 pub const Style = attributes_mod.Style;
 pub const Weight = attributes_mod.Weight;
 
-pub const Properties = struct {
-    format: font_mod.FontFormat,
-    units_per_em: u16,
-    glyph_count: u16,
-    ascender: i16,
-    descender: i16,
-    line_gap: i16,
-};
+pub const Properties = @import("properties.zig").Properties;
 
 /// A parsed, zero-copy font face.
 ///

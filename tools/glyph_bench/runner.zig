@@ -64,20 +64,23 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.F
     };
 }
 
-/// Measure complete face construction and destruction from resident bytes.
-/// File I/O and source ownership are deliberately outside the timed interval.
-pub fn runColdParse(
+/// Measure allocation-free face opening from resident bytes. File I/O is
+/// deliberately outside the timed interval, matching FT_New_Memory_Face.
+pub fn runFaceLifecycle(
     io: std.Io,
     allocator: std.mem.Allocator,
     font_bytes: []const u8,
     options: options_mod.Options,
 ) !report.Result {
-    if (options.mode != .face_parse) return error.InvalidArguments;
+    if (options.mode != .face_open and options.mode != .face_validate) {
+        return error.InvalidArguments;
+    }
     if (options.warmup != 0) {
         var ignored: u64 = 0;
-        try runColdParseIterations(
+        try runFaceLifecycleIterations(
             allocator,
             font_bytes,
+            options.mode,
             options.warmup,
             &ignored,
         );
@@ -90,9 +93,10 @@ pub fn runColdParse(
     for (0..options.samples) |sample_index| {
         var sample_checksum: u64 = 0;
         const start = std.Io.Clock.now(.awake, io).nanoseconds;
-        try runColdParseIterations(
+        try runFaceLifecycleIterations(
             allocator,
             font_bytes,
+            options.mode,
             options.iterations,
             &sample_checksum,
         );
@@ -113,25 +117,35 @@ pub fn runColdParse(
     };
 }
 
-fn runColdParseIterations(
+fn runFaceLifecycleIterations(
     allocator: std.mem.Allocator,
     font_bytes: []const u8,
+    mode: options_mod.Mode,
     iterations: usize,
     checksum: *u64,
 ) !void {
     for (0..iterations) |_| {
-        var face = try cangjie.font.Face.parseIndex(
-            allocator,
-            font_bytes,
-            0,
-        );
-        const properties = face.properties();
+        const properties = switch (mode) {
+            .face_open => (try cangjie.font.OpenFace.openIndex(
+                font_bytes,
+                0,
+            )).properties(),
+            .face_validate => blk: {
+                var face = try cangjie.font.Face.parseIndex(
+                    allocator,
+                    font_bytes,
+                    0,
+                );
+                defer face.deinit();
+                break :blk face.properties();
+            },
+            else => unreachable,
+        };
         checksum.* = updateChecksum(
             checksum.*,
             (@as(u64, properties.units_per_em) << 32) |
                 properties.glyph_count,
         );
-        face.deinit();
     }
 }
 
@@ -248,7 +262,7 @@ fn resolveGlyphId(font: *const cangjie.font.Face, options: options_mod.Options) 
 
 fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
     switch (options.mode) {
-        .face_parse => unreachable,
+        .face_open, .face_validate => unreachable,
         .charmap => try runCharmapIterations(font, options, iterations, checksum),
         .metrics => try runMetricsIterations(font, glyph_id, iterations, checksum),
         .bounds => try runBoundsIterations(font, glyph_id, iterations, checksum),

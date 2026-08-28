@@ -22,8 +22,16 @@ TTC/OTC, web fonts, or current color-font formats.
 
 ## Ownership And Limits
 
-`cangjie.font.Face.parse` and `parseIndex` are zero-copy APIs: a `Face` borrows
-the caller's SFNT bytes. Both return a concrete parsed-face value; use
+`cangjie.font.OpenFace.open` and `openIndex` are allocation-free, zero-copy
+face-open APIs. They validate the collection/offset table, sorted bounded table
+records, mandatory `head`/`maxp`/`cmap`, and paired horizontal metrics before
+exposing core scalar properties. `OpenFace.validate(allocator)` promotes that
+handle through the complete table-grammar and checksum validation required by
+shaping and rendering. This split makes the inexpensive face-discovery boundary
+explicit instead of weakening the established `Face.parse` contract.
+
+`cangjie.font.Face.parse` and `parseIndex` remain zero-copy APIs: a `Face` borrows
+the caller's SFNT bytes. Both return a concrete fully validated face; use
 `properties()`, `glyphs()`, `metrics()`, `names()`, `variations()`, and
 `color()` rather than depending on parser table records. Compressed containers
 and DFONT resources require

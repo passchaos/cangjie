@@ -267,6 +267,10 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(@typeInfo(Face) == .@"struct");
     try std.testing.expect(@hasDecl(Face, "parse"));
     try std.testing.expect(@hasDecl(Face, "parseIndex"));
+    try std.testing.expect(@hasDecl(cangjie.font, "OpenFace"));
+    try std.testing.expect(@hasDecl(cangjie.font.OpenFace, "open"));
+    try std.testing.expect(@hasDecl(cangjie.font.OpenFace, "openIndex"));
+    try std.testing.expect(@hasDecl(cangjie.font.OpenFace, "validate"));
     try std.testing.expect(@hasDecl(Face, "properties"));
     try std.testing.expect(@hasDecl(Face, "glyphs"));
     try std.testing.expect(@hasDecl(Face, "at"));

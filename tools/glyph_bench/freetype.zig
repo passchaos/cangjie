@@ -100,13 +100,13 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font_bytes: []const u8, opt
 
 /// Measure cold in-memory face construction while retaining one initialized
 /// FreeType library. File I/O and source ownership remain outside timing.
-pub fn runColdParse(
+pub fn runFaceOpen(
     io: std.Io,
     allocator: std.mem.Allocator,
     font_bytes: []const u8,
     options: options_mod.Options,
 ) !report.Result {
-    if (options.mode != .face_parse or
+    if (options.mode != .face_open or
         font_bytes.len > std.math.maxInt(c_long))
     {
         return error.InvalidArguments;
@@ -320,7 +320,7 @@ fn runIterations(ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_m
         return;
     }
     const load_flags: ft.FT_Int32 = switch (options.mode) {
-        .face_parse, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .color_layers, .bitmap, .bitmap_render => unreachable,
+        .face_open, .face_validate, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .color_layers, .bitmap, .bitmap_render => unreachable,
         .outline => ft.FT_LOAD_NO_SCALE | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
         .outline_session, .outline_reuse => unreachable,
         .raster, .raster_owning => ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
@@ -331,7 +331,7 @@ fn runIterations(ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_m
     while (i < iterations) : (i += 1) {
         if (ft.FT_Load_Glyph(face, glyph_id, load_flags) != 0) return error.FreeTypeFailed;
         checksum.* = updateChecksum(checksum.*, switch (options.mode) {
-            .face_parse, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .color_layers, .bitmap, .bitmap_render => unreachable,
+            .face_open, .face_validate, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .color_layers, .bitmap, .bitmap_render => unreachable,
             .outline => outlineChecksum(face.*.glyph),
             .raster, .raster_owning, .raster_reuse => rasterTargetChecksum(face.*.glyph, options, target_pixels),
             .outline_session, .outline_reuse, .raster_prepare, .raster_prepared => unreachable,

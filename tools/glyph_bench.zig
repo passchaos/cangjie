@@ -28,11 +28,11 @@ pub fn main(init: std.process.Init) !void {
 
     const font_bytes = try runner.loadFontBytes(init.io, allocator, options);
     defer allocator.free(font_bytes);
-    if (options.mode == .face_parse) {
+    if (options.mode == .face_open or options.mode == .face_validate) {
         if (options.engine == .compare_freetype) {
             var cangjie_options = options;
             cangjie_options.engine = .cangjie;
-            const cangjie_result = try runner.runColdParse(
+            const cangjie_result = try runner.runFaceLifecycle(
                 init.io,
                 allocator,
                 font_bytes,
@@ -43,7 +43,7 @@ pub fn main(init: std.process.Init) !void {
 
             var freetype_options = options;
             freetype_options.engine = .freetype;
-            const freetype_result = try freetype.runColdParse(
+            const freetype_result = try freetype.runFaceOpen(
                 init.io,
                 allocator,
                 font_bytes,
@@ -55,9 +55,9 @@ pub fn main(init: std.process.Init) !void {
             return;
         }
         const result = if (options.engine == .freetype)
-            try freetype.runColdParse(init.io, allocator, font_bytes, options)
+            try freetype.runFaceOpen(init.io, allocator, font_bytes, options)
         else
-            try runner.runColdParse(init.io, allocator, font_bytes, options);
+            try runner.runFaceLifecycle(init.io, allocator, font_bytes, options);
         defer allocator.free(result.samples);
         report.print(options, result);
         return;

@@ -106,11 +106,11 @@ def main() -> int:
         # Parsing is independent of glyph and size. Run one resident-byte
         # cold-face lifecycle per representative format before raster rows.
         cangjie_cmd = command(
-            args.glyph_bench, case, "cangjie", "face-parse", 16,
+            args.glyph_bench, case, "cangjie", "face-open", 16,
             args.iterations, args.samples, args.minimum_target_size,
         )
         freetype_cmd = command(
-            args.glyph_bench, case, "freetype", "face-parse", 16,
+            args.glyph_bench, case, "freetype", "face-open", 16,
             args.iterations, args.samples, args.minimum_target_size,
         )
         cangjie_a = run(cangjie_cmd, args.cpu)
@@ -123,12 +123,12 @@ def main() -> int:
         ):
             if first.get("checksum") != second.get("checksum"):
                 failures.append(
-                    f"{case.name}/face-parse: {engine} checksum "
+                    f"{case.name}/face-open: {engine} checksum "
                     f"{first.get('checksum')}/{second.get('checksum')}"
                 )
         if cangjie_a.get("checksum") != freetype_a.get("checksum"):
             failures.append(
-                f"{case.name}/face-parse: cross-engine properties "
+                f"{case.name}/face-open: cross-engine properties "
                 f"{cangjie_a.get('checksum')}/{freetype_a.get('checksum')}"
             )
         cangjie_ns = math.sqrt(
@@ -141,7 +141,7 @@ def main() -> int:
         )
         speedup = math.inf if cangjie_ns == 0 else freetype_ns / cangjie_ns
         print(
-            f"{case.name}/face-parse: "
+            f"{case.name}/face-open: "
             f"cangjie={cangjie_ns:.3f}ns freetype={freetype_ns:.3f}ns "
             f"speedup={speedup:.3f}x"
         )

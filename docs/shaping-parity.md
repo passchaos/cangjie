@@ -4998,7 +4998,8 @@ shaping-performance superiority.
   which remain explicit audit blockers.
 - Correct sign-symmetric RDTG/RUTG semantics close the FreeSans Bengali and
   Tamil mismatches, so those fixtures now run through every retained v35/v40
-  target. Liberation Sans v40-mono remains open.
+  target. Liberation Sans v40 matches the four smooth targets; mono remains
+  open.
 - Common glyph-zone MDRP/MIRP execution now resolves both points and the glyph
   zone once. Fixed-CPU-30 A/B/B/A instructions fell `5.86%` for `A`, `6.30%`
   for `X`, and `4.69%` for U+00C2, with lower cycles and improved controls.

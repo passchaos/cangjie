@@ -288,7 +288,8 @@ x86-64, pinned to CPU 30 where the harness supports it:
   Bengali/Tamil mismatches: negative values round their magnitudes down/up and
   restore the sign, rather than using mathematical floor/ceil. Both scripts
   now remain in every v35/v40 target differential fixture. Liberation Sans
-  v40-mono is the remaining newly discovered semantic gap.
+  v40 matches normal/light/LCD/LCD_V and differs only under mono, isolating the
+  remaining newly discovered gap to FreeType's special mono compound policy.
 - Glyph-zone MDRP/MIRP now share one bounds/zone resolution and operate
   directly on glyph arrays when zp0/zp1 are both zone 1. Against the pre-change
   binary, fixed-CPU-30 A/B/B/A instructions/branches/cycles fell

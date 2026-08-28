@@ -176,6 +176,17 @@ test "ClearType target modes match FreeType v40" {
     }
 }
 
+test "Liberation compound v40 stable targets match FreeType" {
+    const fixture = Fixture{
+        .path = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        .codepoint = 0x00c2,
+        .ppem = 9,
+    };
+    for ([_]Target{ .normal, .light, .lcd, .vertical_lcd }) |target| {
+        try compareFixture(fixture, .cleartype, target);
+    }
+}
+
 test "ClearType light target matches stable FreeType v40" {
     if (!try freeTypeVersionAtLeast(2, 14)) return error.SkipZigTest;
     for (fixtures) |fixture| {

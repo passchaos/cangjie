@@ -243,6 +243,13 @@ x86-64, pinned to CPU 30 where the harness supports it:
   The simple `A` row has reached a narrow lead and compound Latin has moved
   close to parity, but `X`, U+00C2, and the broader matrix still prevent an
   overall hinting-performance claim.
+- After retained child state and axis-specialized IUP, another fixed-CPU-30
+  11-sample A/B/B/A run measured `A` at `1.664/1.662 us` (tie), `X` at
+  `1.181/1.188 us` (`1.005x`), U+00C2 at `2.596/2.773 us` (`1.068x`),
+  Devanagari at `24.177/29.624 us` (`1.225x`), and Arabic at
+  `5.469/6.721 us` (`1.229x`). This closes these five normal/v35 rows at the
+  observed machine, but narrow Latin margins and the wider size/target matrix
+  still preclude a universal result.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri

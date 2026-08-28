@@ -133,8 +133,13 @@ pub const Vm = struct {
             }
         } else {
             // The range was checked by decode.next, so one capacity proof is
-            // sufficient for the complete byte operand batch.
-            for (instruction.operands, self.stack.values[self.stack.len..]) |value, *destination| {
+            // sufficient for the complete byte operand batch. Bound the
+            // destination to the batch: Zig's multi-slice loop requires equal
+            // lengths, while the stack normally has additional spare slots.
+            for (
+                instruction.operands,
+                self.stack.values[self.stack.len..][0..count],
+            ) |value, *destination| {
                 destination.* = value;
             }
         }
@@ -751,6 +756,39 @@ fn isCustomizableOpcode(opcode: u8) bool {
         0x28, 0x7b, 0x83, 0x84, 0x8f, 0x90, 0x93...0xaf => true,
         else => false,
     };
+}
+
+test "byte pushes fill only the unused stack prefix" {
+    var stack_values: [8]i32 = undefined;
+    var graphics = types.RetainedGraphicsState{
+        .scale_16_16 = 0x10000,
+        .ppem = 16,
+    };
+    const source = types.Source{
+        .units_per_em = 1000,
+        .font_program = &.{ 0xb2, 7, 8, 9 },
+        .control_value_program = &.{},
+        .control_value_data = &.{},
+        .limits = .{
+            .max_storage = 0,
+            .max_function_defs = 0,
+            .max_instruction_defs = 0,
+            .max_stack_elements = stack_values.len,
+            .max_twilight_points = 0,
+        },
+    };
+    var vm = Vm.init(
+        source,
+        .{ .functions = &.{}, .instructions = &.{} },
+        &stack_values,
+        &.{},
+        &.{},
+        &graphics,
+    );
+
+    try vm.run(.font);
+    try std.testing.expectEqual(@as(usize, 3), vm.stack.depth());
+    try std.testing.expectEqualSlices(i32, &.{ 7, 8, 9 }, vm.stack.values[0..3]);
 }
 
 test "font definitions execute from prep with bounded state" {

@@ -44,6 +44,10 @@ def main() -> int:
     parser.add_argument("--cpu", type=int)
     parser.add_argument("--sizes", default="9,16")
     parser.add_argument(
+        "--extended", action="store_true",
+        help="include additional installed-font/script fixtures",
+    )
+    parser.add_argument(
         "--fail-on-slower", action="store_true",
         help="fail when any Cangjie row is not faster than FreeType",
     )
@@ -54,13 +58,21 @@ def main() -> int:
     if not sizes or any(value <= 0 for value in sizes):
         parser.error("sizes must be positive integers")
 
-    cases = (
+    cases = [
         Case("latin-a", Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"), "U+0041"),
         Case("latin-x", Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"), "U+0058"),
         Case("latin-compound", Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"), "U+00C2"),
         Case("devanagari", Path("/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf"), "U+0915"),
         Case("arabic", Path("/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"), "U+0627"),
-    )
+    ]
+    if args.extended:
+        cases.extend((
+            Case("serif-cyrillic", Path("/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"), "U+0416"),
+            Case("freesans-latin", Path("/usr/share/fonts/truetype/freefont/FreeSans.ttf"), "U+0058"),
+            Case("annapurna-devanagari", Path("/usr/share/fonts/truetype/annapurna/AnnapurnaSIL-Regular.ttf"), "U+0915"),
+            Case("liberation-compound", Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"), "U+00C2"),
+            Case("cascadia-latin", Path("/usr/share/fonts/truetype/cascadia-code/CascadiaCode.ttf"), "U+0058"),
+        ))
     targets = ("normal", "light", "lcd", "vertical-lcd", "mono")
     interpreters = ("classic", "cleartype")
     failures: list[str] = []

@@ -2031,8 +2031,8 @@ pub const Font = struct {
         glyph_id: glyph_mod.GlyphId,
     ) (FontError || hinting.Error)!*TrueTypePointTransaction {
         // A failed request invalidates the prior borrowed result just like the
-        // other caller-owned outline buffers. A valid compound reuse returns
-        // before any reset, while this guard handles every validation error.
+        // other caller-owned outline buffers. The guard handles every
+        // validation or allocation error after entry.
         errdefer buffer.resetRetainingCapacity();
         if (self.format != .truetype) return error.UnsupportedHintGlyph;
         if (instance.source.face_identity != @intFromPtr(self)) {
@@ -2043,16 +2043,6 @@ pub const Font = struct {
         if (data.len == 0) return error.UnsupportedHintGlyph;
         const contour_count = try bin.readI16At(data, 0);
         if (contour_count < 0) {
-            if (buffer.currentCompoundFor(
-                @intFromPtr(self),
-                glyph_id,
-                instance.scale_16_16,
-                instance.target,
-                instance.source.interpreter,
-                instance.isEnabled(),
-                instance.usesBackwardCompatibility(),
-                instance.normalizedCoordinates(),
-            )) |transaction| return transaction;
             buffer.resetRetainingCapacity();
             errdefer buffer.resetRetainingCapacity();
             const horizontal = try self.horizontalMetricsForReadMode(

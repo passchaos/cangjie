@@ -199,19 +199,15 @@ x86-64, pinned to CPU 30 where the harness supports it:
   continues to measure its rollback-copy contract.
 - `HintingPointTransactionBuffer` now makes that retained loader lifecycle a
   public, caller-owned contract rather than an arena benchmark artifact. Simple
-  glyphs decode directly into reusable packed point/flag/contour storage. For
-  repeated compound loads, the buffer retains the expanded transaction plus a
-  pristine point/flag snapshot and restores it before bytecode execution, so
-  pre-execution compound expansion is not repeated. The owning transaction and atomic execution
+  glyphs decode directly into reusable packed point/flag/contour storage.
+  Compound construction uses retained-capacity scratch but still performs a
+  fresh semantic decode on each call. The owning transaction and atomic execution
   APIs remain unchanged. Against the independent `a69336fa` binary, fixed-CPU-
   30 A/B/B/A counters reduced DejaVu `A` instructions/branches/cycles by
-  `0.59%`/`0.40%`/`3.19%`, `X` by `0.77%`/`0.49%`/`2.88%`, and U+00C2 by
-  `17.87%`/`18.25%`/`22.98%`; Devanagari retired work was neutral and Arabic
-  instructions/branches fell `0.19%`/`0.11%` (cycles were within `0.5%`
-  noise). Eleven-sample wall runs
-  kept exact checksums and improved the compound row from about `4.18 us` to
-  `3.20 us`. This substantially narrows, but does not close, the remaining
-  FreeType compound-Latin gap.
+  `0.59%`/`0.40%`/`3.19%` and `X` by `0.77%`/`0.49%`/`2.88%`; Devanagari
+  and Arabic retired work were neutral. The compound row remained near
+  `4.2 us`, so direct typed compound storage was still an open optimization
+  at this stage. Eleven-sample wall runs kept exact checksums.
 - Compound point transforms now recognize the identity matrix and diagonal-
   only scale before entering the general four-multiply F2Dot14 path. Identity
   is the common case for accent composites such as DejaVu U+00C2. Against the

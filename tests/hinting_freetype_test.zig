@@ -201,6 +201,19 @@ test "ClearType light target matches stable FreeType v40" {
     }
 }
 
+test "DejaVu Sans printable ASCII hinting corpus matches FreeType" {
+    for (33..127) |codepoint| {
+        const fixture = Fixture{
+            .path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            .codepoint = @intCast(codepoint),
+            .ppem = 9,
+        };
+        try compareFixture(fixture, .classic, .normal);
+        try compareFixture(fixture, .cleartype, .normal);
+        try compareFixture(fixture, .cleartype, .mono);
+    }
+}
+
 test "CFF Type2 hinted outlines match FreeType" {
     for (type2_fixtures) |fixture| try compareType2Fixture(fixture);
 }

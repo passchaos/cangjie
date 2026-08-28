@@ -284,6 +284,12 @@ x86-64, pinned to CPU 30 where the harness supports it:
   exposed unresolved Bengali/Tamil and Liberation Sans v40-mono mismatches;
   those are recorded as new open compatibility work rather than hidden behind
   the maintained matrix.
+- The differential additionally walks all 94 printable ASCII characters in
+  DejaVu Sans at 9 ppem under v35 normal, v40 normal, and v40 mono semantics
+  (282 exact outline comparisons). An independent FreeType 2.14.3 run of the
+  extended ten-font-case matrix across 8, 9, 12, 16, and 20 ppem also passed
+  all 500 semantic rows. This broadens the Linux oracle evidence, but does not
+  substitute for other operating systems or arbitrary installed fonts.
 - Parsed `gvar` header and glyph-offset metadata is now retained by `Font` and
   threaded into immutable simple-glyph hint loads. This removes a whole-table
   offset scan per glyph. Against the independent pre-change binary, fixed-CPU-

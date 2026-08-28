@@ -4996,6 +4996,10 @@ shaping-performance superiority.
   Latin, and Annapurna SIL Devanagari. Wider probing also identified currently
   unresolved FreeSans Bengali/Tamil and Liberation Sans v40-mono differences,
   which remain explicit audit blockers.
+- A printable-ASCII DejaVu Sans corpus now adds 282 exact v35-normal,
+  v40-normal, and v40-mono outline comparisons at 9 ppem. The extended ten-
+  case matrix also passes all 500 semantic rows across five ppem sizes when
+  linked against the independent FreeType 2.14.3 oracle.
 - Parsed `gvar` metadata is retained for immutable hinted glyph loads instead
   of rescanning the complete glyph-offset array per glyph. Default-instance
   Cascadia `X` retired instructions/branches/cycles fell

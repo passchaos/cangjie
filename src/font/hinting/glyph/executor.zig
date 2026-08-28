@@ -261,17 +261,24 @@ const Work = struct {
         const resolver = self.resolver orelse
             return error.UnsupportedHintGlyph;
         for (transaction.components) |*component_record| {
-            var child = try OwnedGlyph.decode(
-                self.allocator,
-                transaction,
-                .{
-                    .glyph_id = component_record.glyph_id,
-                    .data = component_record.data,
-                    .metrics = component_record.metrics,
-                },
-                @intCast(self.state.source.limits.max_component_depth),
-                resolver,
-            );
+            var child = if (!component_record.is_compound and
+                retainedSimpleAvailable(transaction, component_record.*))
+                try OwnedGlyph.fromRetainedSimple(
+                    transaction,
+                    component_record.*,
+                )
+            else
+                try OwnedGlyph.decode(
+                    self.allocator,
+                    transaction,
+                    .{
+                        .glyph_id = component_record.glyph_id,
+                        .data = component_record.data,
+                        .metrics = component_record.metrics,
+                    },
+                    @intCast(self.state.source.limits.max_component_depth),
+                    resolver,
+                );
             defer child.deinit();
             if (child.transaction.real_point_count != component_record.point_len) {
                 return error.BadSfnt;
@@ -362,6 +369,7 @@ const Work = struct {
 
 const OwnedGlyph = struct {
     transaction: outline.Transaction,
+    owns_transaction: bool = true,
 
     fn clone(
         allocator: std.mem.Allocator,
@@ -386,6 +394,31 @@ const OwnedGlyph = struct {
                     source.components,
                 );
         errdefer if (components.len != 0) allocator.free(components);
+        const component_points = try allocator.dupe(
+            outline.Point,
+            source.component_points,
+        );
+        errdefer if (component_points.len != 0) allocator.free(component_points);
+        const component_original = try allocator.dupe(
+            outline.Point,
+            source.component_original,
+        );
+        errdefer if (component_original.len != 0) allocator.free(component_original);
+        const component_unscaled = try allocator.dupe(
+            outline.Point,
+            source.component_unscaled,
+        );
+        errdefer if (component_unscaled.len != 0) allocator.free(component_unscaled);
+        const component_flags = try allocator.dupe(
+            outline.PointFlag,
+            source.component_flags,
+        );
+        errdefer if (component_flags.len != 0) allocator.free(component_flags);
+        const component_contours = try allocator.dupe(
+            u16,
+            source.component_contours,
+        );
+        errdefer if (component_contours.len != 0) allocator.free(component_contours);
         const normalized_coords: []f32 =
             if (source.normalized_coords.len == 0)
                 @constCast(&.{})
@@ -406,6 +439,11 @@ const OwnedGlyph = struct {
             .flags = flags,
             .contours = contours,
             .components = components,
+            .component_points = component_points,
+            .component_original = component_original,
+            .component_unscaled = component_unscaled,
+            .component_flags = component_flags,
+            .component_contours = component_contours,
             .instructions = source.instructions,
             .scale_16_16 = source.scale_16_16,
             .normalized_coords = normalized_coords,
@@ -480,11 +518,90 @@ const OwnedGlyph = struct {
         return .{ .transaction = owned };
     }
 
+    fn fromRetainedSimple(
+        parent: *outline.Transaction,
+        record: outline.ComponentRecord,
+    ) types.Error!OwnedGlyph {
+        const point_end = record.source_point_start + record.source_point_len;
+        const contour_end =
+            record.source_contour_start + record.source_contour_len;
+        if (point_end > parent.component_points.len or
+            point_end > parent.component_original.len or
+            point_end > parent.component_unscaled.len or
+            point_end > parent.component_flags.len or
+            contour_end > parent.component_contours.len or
+            record.source_point_len < 4)
+        {
+            return error.BadSfnt;
+        }
+        const points = parent.component_points[record.source_point_start..point_end];
+        const original = parent.component_original[record.source_point_start..point_end];
+        const unscaled = parent.component_unscaled[record.source_point_start..point_end];
+        const flags = parent.component_flags[record.source_point_start..point_end];
+        const real_point_count = record.source_point_len - 4;
+        if (real_point_count != record.point_len) return error.BadSfnt;
+        @memcpy(points, original);
+        @memcpy(
+            flags[0..real_point_count],
+            parent.flags[record.point_start .. record.point_start + record.point_len],
+        );
+        @memset(flags[real_point_count..], .{});
+        var transaction = outline.Transaction{
+            .allocator = parent.allocator,
+            .face_identity = parent.face_identity,
+            .target = parent.target,
+            .interpreter = parent.interpreter,
+            .glyph_id = record.glyph_id,
+            .real_point_count = real_point_count,
+            .points = points,
+            .original = original,
+            .unscaled = unscaled,
+            .flags = flags,
+            .contours = parent.component_contours[record.source_contour_start..contour_end],
+            .instructions = record.instructions,
+            .scale_16_16 = parent.scale_16_16,
+            .normalized_coords = parent.normalized_coords,
+            .variation = parent.variation,
+            .hinting_enabled = parent.hinting_enabled,
+            .backward_compatibility = parent.backward_compatibility,
+        };
+        if (transaction.variation) |*context| {
+            context.normalized_coords = transaction.normalized_coords;
+        }
+        return .{
+            .transaction = transaction,
+            .owns_transaction = false,
+        };
+    }
+
     fn deinit(self: *OwnedGlyph) void {
-        self.transaction.deinit();
+        if (self.owns_transaction) self.transaction.deinit();
         self.* = undefined;
     }
 };
+
+fn retainedSimpleAvailable(
+    parent: *const outline.Transaction,
+    record: outline.ComponentRecord,
+) bool {
+    if (record.source_point_len < 4 or
+        record.point_len + 4 != record.source_point_len) return false;
+    const point_end = std.math.add(
+        usize,
+        record.source_point_start,
+        record.source_point_len,
+    ) catch return false;
+    const contour_end = std.math.add(
+        usize,
+        record.source_contour_start,
+        record.source_contour_len,
+    ) catch return false;
+    return point_end <= parent.component_points.len and
+        point_end <= parent.component_original.len and
+        point_end <= parent.component_unscaled.len and
+        point_end <= parent.component_flags.len and
+        contour_end <= parent.component_contours.len;
+}
 
 fn emptyTransaction(
     allocator: std.mem.Allocator,

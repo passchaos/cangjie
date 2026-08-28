@@ -229,6 +229,13 @@ x86-64, pinned to CPU 30 where the harness supports it:
   the independent `9d3f39af` binary, fixed-CPU-30 A/B/B/A counters reduced
   instructions by `0.88%` for `A`, `1.92%` for `X`, and `1.30%` for U+00C2;
   Devanagari also fell `0.16%`, while Arabic retired work stayed neutral.
+- Top-level compound construction now retains pristine point/original/
+  unscaled/flag/contour state for direct simple children. Compound execution
+  borrows that state instead of parsing and scaling the same child `glyf` a
+  second time; nested compound children retain the established recursive
+  fallback. Fixed-CPU-30 A/B/B/A counters versus `37ba6d1c` reduced U+00C2
+  instructions by `8.51%`, branches by `7.77%`, and cycles by `11.11%`;
+  simple `A`/`X` retired work remained neutral.
 - A final fixed-CPU-30, 11-sample Cangjie/FreeType A/B/B/A check at 9 ppem
   measured `A` at `1.626/1.642 us` (`1.010x`), `X` at `1.195/1.175 us`
   (`0.983x`), U+00C2 at `2.908/2.747 us` (`0.945x`), Devanagari at

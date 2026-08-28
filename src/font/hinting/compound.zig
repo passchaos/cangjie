@@ -60,7 +60,7 @@ pub fn decode(
         .variation = variation,
     };
     defer builder.deinit();
-    const result = try builder.appendGlyph(root, 0, true);
+    const result = try builder.appendGlyph(root, 0, true, false);
     if (!result.is_compound) return error.UnsupportedHintGlyph;
 
     const real_point_count = builder.points.items.len;
@@ -77,6 +77,16 @@ pub fn decode(
     errdefer allocator.free(contours);
     const components = try builder.components.toOwnedSlice(allocator);
     errdefer allocator.free(components);
+    const component_points = try builder.component_points.toOwnedSlice(allocator);
+    errdefer allocator.free(component_points);
+    const component_original = try builder.component_original.toOwnedSlice(allocator);
+    errdefer allocator.free(component_original);
+    const component_unscaled = try builder.component_unscaled.toOwnedSlice(allocator);
+    errdefer allocator.free(component_unscaled);
+    const component_flags = try builder.component_flags.toOwnedSlice(allocator);
+    errdefer allocator.free(component_flags);
+    const component_contours = try builder.component_contours.toOwnedSlice(allocator);
+    errdefer allocator.free(component_contours);
     return .{
         .allocator = allocator,
         .face_identity = face_identity,
@@ -90,6 +100,11 @@ pub fn decode(
         .flags = flags,
         .contours = contours,
         .components = components,
+        .component_points = component_points,
+        .component_original = component_original,
+        .component_unscaled = component_unscaled,
+        .component_flags = component_flags,
+        .component_contours = component_contours,
         .instructions = result.instructions,
         .scale_16_16 = scale_16_16,
         .variation = variation,
@@ -104,6 +119,14 @@ const Result = struct {
     effective_phantoms: [4]outline.Point,
     instructions: []const u8 = &.{},
     is_compound: bool = false,
+    retained_source: ?SourceRange = null,
+};
+
+const SourceRange = struct {
+    point_start: usize,
+    point_len: usize,
+    contour_start: usize,
+    contour_len: usize,
 };
 
 pub const FixedTransform = struct {
@@ -133,8 +156,18 @@ const Builder = struct {
     flags: std.ArrayList(outline.PointFlag) = .empty,
     contours: std.ArrayList(u16) = .empty,
     components: std.ArrayList(outline.ComponentRecord) = .empty,
+    component_points: std.ArrayList(outline.Point) = .empty,
+    component_original: std.ArrayList(outline.Point) = .empty,
+    component_unscaled: std.ArrayList(outline.Point) = .empty,
+    component_flags: std.ArrayList(outline.PointFlag) = .empty,
+    component_contours: std.ArrayList(u16) = .empty,
 
     fn deinit(self: *Builder) void {
+        self.component_contours.deinit(self.allocator);
+        self.component_flags.deinit(self.allocator);
+        self.component_unscaled.deinit(self.allocator);
+        self.component_original.deinit(self.allocator);
+        self.component_points.deinit(self.allocator);
         self.components.deinit(self.allocator);
         self.contours.deinit(self.allocator);
         self.flags.deinit(self.allocator);
@@ -147,6 +180,7 @@ const Builder = struct {
         source: Source,
         depth: usize,
         record_components: bool,
+        retain_simple_source: bool,
     ) types.Error!Result {
         if (depth > self.max_component_depth) {
             return error.UnsupportedHintGlyph;
@@ -160,7 +194,11 @@ const Builder = struct {
         const contour_count = bin.readI16At(source.data, 0) catch
             return error.BadSfnt;
         if (contour_count >= 0) {
-            return self.appendSimple(source, @intCast(contour_count));
+            return self.appendSimple(
+                source,
+                @intCast(contour_count),
+                retain_simple_source,
+            );
         }
         return self.appendCompound(source, depth, record_components);
     }
@@ -169,6 +207,7 @@ const Builder = struct {
         self: *Builder,
         source: Source,
         contour_count: u16,
+        retain_source: bool,
     ) types.Error!Result {
         const variation: ?outline.Variation = if (self.variation) |context|
             .{
@@ -194,6 +233,21 @@ const Builder = struct {
             variation,
         );
         defer decoded.deinit();
+        const retained_source: ?SourceRange = if (retain_source) retained: {
+            const source_point_start = self.component_points.items.len;
+            const source_contour_start = self.component_contours.items.len;
+            try self.component_points.appendSlice(self.allocator, decoded.points);
+            try self.component_original.appendSlice(self.allocator, decoded.original);
+            try self.component_unscaled.appendSlice(self.allocator, decoded.unscaled);
+            try self.component_flags.appendSlice(self.allocator, decoded.flags);
+            try self.component_contours.appendSlice(self.allocator, decoded.contours);
+            break :retained .{
+                .point_start = source_point_start,
+                .point_len = decoded.points.len,
+                .contour_start = source_contour_start,
+                .contour_len = decoded.contours.len,
+            };
+        } else null;
         const point_start = self.points.items.len;
         try self.points.appendSlice(
             self.allocator,
@@ -220,6 +274,7 @@ const Builder = struct {
             .effective_metrics = source.metrics,
             .effective_phantoms = decoded.unscaled[decoded.real_point_count..][0..4].*,
             .instructions = decoded.instructions,
+            .retained_source = retained_source,
         };
     }
 
@@ -259,6 +314,7 @@ const Builder = struct {
                 child,
                 depth + 1,
                 false,
+                record_components,
             );
             const child_point_end = self.points.items.len;
             const transform = fixedTransform(component.fixed_transform);
@@ -311,6 +367,7 @@ const Builder = struct {
                 offsets,
             );
             if (record_components) {
+                const retained = child_result.retained_source;
                 try self.components.append(self.allocator, .{
                     .glyph_id = component.glyph_id,
                     .data = child.data,
@@ -320,6 +377,22 @@ const Builder = struct {
                     .point_len = child_point_end - child_point_start,
                     .contour_start = child_contour_start,
                     .contour_len = self.contours.items.len - child_contour_start,
+                    .source_point_start = if (retained) |value|
+                        value.point_start
+                    else
+                        0,
+                    .source_point_len = if (retained) |value|
+                        value.point_len
+                    else
+                        0,
+                    .source_contour_start = if (retained) |value|
+                        value.contour_start
+                    else
+                        0,
+                    .source_contour_len = if (retained) |value|
+                        value.contour_len
+                    else
+                        0,
                     .transform = .{
                         .xx = component.fixed_transform.xx,
                         .yx = component.fixed_transform.yx,

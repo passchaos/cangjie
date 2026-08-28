@@ -45,6 +45,12 @@ pub const ComponentRecord = struct {
     point_len: usize,
     contour_start: usize,
     contour_len: usize,
+    /// Offsets into the parent transaction's retained pre-transform child
+    /// arrays. A zero length means the direct child is itself compound.
+    source_point_start: usize = 0,
+    source_point_len: usize = 0,
+    source_contour_start: usize = 0,
+    source_contour_len: usize = 0,
     transform: ComponentTransform,
     placement: ComponentPlacement,
     use_my_metrics: bool,
@@ -88,6 +94,13 @@ pub const Transaction = struct {
     flags: []PointFlag,
     contours: []u16,
     components: []ComponentRecord = &.{},
+    /// Pristine direct-simple child state used to avoid decoding each child a
+    /// second time during compound bytecode execution.
+    component_points: []Point = &.{},
+    component_original: []Point = &.{},
+    component_unscaled: []Point = &.{},
+    component_flags: []PointFlag = &.{},
+    component_contours: []u16 = &.{},
     /// One allocation backing simple-glyph points, originals, unscaled
     /// coordinates, flags, and contour ends. Compound and test transactions
     /// may leave this empty and retain the legacy independently-owned slices.
@@ -113,6 +126,21 @@ pub const Transaction = struct {
         }
         if (self.components.len != 0) {
             self.allocator.free(self.components);
+        }
+        if (self.component_contours.len != 0) {
+            self.allocator.free(self.component_contours);
+        }
+        if (self.component_flags.len != 0) {
+            self.allocator.free(self.component_flags);
+        }
+        if (self.component_unscaled.len != 0) {
+            self.allocator.free(self.component_unscaled);
+        }
+        if (self.component_original.len != 0) {
+            self.allocator.free(self.component_original);
+        }
+        if (self.component_points.len != 0) {
+            self.allocator.free(self.component_points);
         }
         if (self.simple_storage.len != 0) {
             self.allocator.free(self.simple_storage);

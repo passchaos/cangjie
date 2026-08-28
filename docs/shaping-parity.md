@@ -4960,6 +4960,11 @@ shaping-performance superiority.
   and Y. Relative to `9d3f39af`, fixed-CPU-30 retired instructions fell
   `0.88%` for `A`, `1.92%` for `X`, and `1.30%` for U+00C2; control scripts
   were neutral or slightly improved and checksums did not change.
+- Compound transactions now retain pristine direct-simple child point state,
+  allowing execution to skip the second child parse/scale pass while keeping
+  recursive handling for nested compounds. Against `37ba6d1c`, fixed-CPU-30
+  U+00C2 instructions/branches/cycles fell `8.51%`/`7.77%`/`11.11%`; simple
+  controls stayed neutral.
 - The resulting fixed-CPU-30, 11-sample 9 ppem comparison measured Cangjie/
   FreeType at `1.626/1.642 us` for `A`, `1.195/1.175 us` for `X`,
   `2.908/2.747 us` for U+00C2, `23.767/29.363 us` for Devanagari, and

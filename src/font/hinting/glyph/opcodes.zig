@@ -238,6 +238,9 @@ pub const Runtime = struct {
         if (opcode < 0xe0) {
             const point = try self.stack.popIndex();
             var context = try self.pointContext();
+            if (self.transient.zp0 == 1 and self.transient.zp1 == 1) {
+                return context.mdrpGlyph(point, opcode, self.retained.*);
+            }
             return context.mdrp(point, opcode, self.retained.*);
         }
         return self.moveIndirectRelative(opcode);
@@ -419,6 +422,14 @@ pub const Runtime = struct {
             break :blk self.cvt[index];
         };
         var context = try self.pointContext();
+        if (self.transient.zp0 == 1 and self.transient.zp1 == 1) {
+            return context.mirpGlyph(
+                point,
+                cvt_value,
+                opcode,
+                self.retained.*,
+            );
+        }
         try context.mirp(
             point,
             cvt_value,

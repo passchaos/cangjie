@@ -252,6 +252,54 @@ pub const Context = struct {
         self.finishRelativeMove(point, old_rp0, opcode);
     }
 
+    /// Glyph-zone relative moves dominate normal font programs. When zp0/zp1
+    /// both select the glyph zone, resolve and bounds-check both points once
+    /// instead of repeatedly routing original/current/move through zoneAt.
+    pub fn mdrpGlyph(
+        self: *Context,
+        point: usize,
+        opcode: u8,
+        retained: types.RetainedGraphicsState,
+    ) types.Error!void {
+        const old_rp0 = self.state.rp0;
+        const zone = self.glyph;
+        if (point >= zone.current.len or old_rp0 >= zone.current.len) {
+            return error.InvalidHintOperand;
+        }
+        var original_distance = fixed.projectDifference(
+            .{
+                .x = types.scaleFUnits(
+                    zone.unscaled[point].x -| zone.unscaled[old_rp0].x,
+                    self.scale_16_16,
+                ),
+                .y = types.scaleFUnits(
+                    zone.unscaled[point].y -| zone.unscaled[old_rp0].y,
+                    self.scale_16_16,
+                ),
+            },
+            .{ .x = 0, .y = 0 },
+            self.state.dual_projection,
+        );
+        original_distance = applySingleWidth(original_distance, retained);
+        var target = if ((opcode & 0x04) != 0)
+            self.state.round(original_distance)
+        else
+            original_distance;
+        target = applyMinimumDistance(
+            target,
+            original_distance,
+            opcode,
+            retained.min_distance,
+        );
+        const current = fixed.projectDifference(
+            zone.current[point],
+            zone.current[old_rp0],
+            self.state.projection,
+        );
+        try self.move(1, point, target -| current);
+        self.finishRelativeMove(point, old_rp0, opcode);
+    }
+
     pub fn mirp(
         self: *Context,
         point: usize,
@@ -310,6 +358,61 @@ pub const Context = struct {
             old_rp0,
         );
         try self.move(self.state.zp1, point, target -| current);
+        self.finishRelativeMove(point, old_rp0, opcode);
+    }
+
+    pub fn mirpGlyph(
+        self: *Context,
+        point: usize,
+        cvt_value: i32,
+        opcode: u8,
+        retained: types.RetainedGraphicsState,
+    ) types.Error!void {
+        const old_rp0 = self.state.rp0;
+        const zone = self.glyph;
+        if (point >= zone.current.len or old_rp0 >= zone.current.len) {
+            return error.InvalidHintOperand;
+        }
+        var target = applySingleWidth(cvt_value, retained);
+        const original_distance = fixed.projectDifference(
+            .{
+                .x = types.scaleFUnits(
+                    zone.unscaled[point].x -| zone.unscaled[old_rp0].x,
+                    self.scale_16_16,
+                ),
+                .y = types.scaleFUnits(
+                    zone.unscaled[point].y -| zone.unscaled[old_rp0].y,
+                    self.scale_16_16,
+                ),
+            },
+            .{ .x = 0, .y = 0 },
+            self.state.dual_projection,
+        );
+        if (retained.auto_flip and
+            ((original_distance < 0) != (target < 0)))
+        {
+            target = 0 -| target;
+        }
+        if ((opcode & 0x04) != 0) {
+            if (fixed.absDistance(target, original_distance) >
+                retained.control_value_cutin)
+            {
+                target = original_distance;
+            }
+            target = self.state.round(target);
+        }
+        target = applyMinimumDistance(
+            target,
+            original_distance,
+            opcode,
+            retained.min_distance,
+        );
+        const current = fixed.projectDifference(
+            zone.current[point],
+            zone.current[old_rp0],
+            self.state.projection,
+        );
+        try self.move(1, point, target -| current);
         self.finishRelativeMove(point, old_rp0, opcode);
     }
 

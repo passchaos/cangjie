@@ -4956,3 +4956,7 @@ shaping-performance superiority.
   than testing the same transform once per coordinate stream and point. Against
   `108776c5`, this removed a further `2.85%` instructions, `2.52%` branches,
   and `4.28%` cycles from DejaVu U+00C2 with unchanged output.
+- IUP contour interpolation now specializes its inner coordinate access for X
+  and Y. Relative to `9d3f39af`, fixed-CPU-30 retired instructions fell
+  `0.88%` for `A`, `1.92%` for `X`, and `1.30%` for U+00C2; control scripts
+  were neutral or slightly improved and checksums did not change.

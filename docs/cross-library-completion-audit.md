@@ -224,6 +224,11 @@ x86-64, pinned to CPU 30 where the harness supports it:
   independent `108776c5` binary reduced U+00C2 instructions by `2.85%`,
   branches by `2.52%`, and cycles by `4.28%`; `A`/`X` retired work remained
   neutral and the FreeType differential stayed exact.
+- IUP now specializes its contour interpolation loop for X and Y at compile
+  time, eliminating repeated runtime axis selection from the point loop. Against
+  the independent `9d3f39af` binary, fixed-CPU-30 A/B/B/A counters reduced
+  instructions by `0.88%` for `A`, `1.92%` for `X`, and `1.30%` for U+00C2;
+  Devanagari also fell `0.16%`, while Arabic retired work stayed neutral.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri

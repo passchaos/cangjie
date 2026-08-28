@@ -27,6 +27,21 @@ pub fn untouched(
         return error.InvalidHintOperand;
     }
     if (contours.len == 0) return;
+    return if (x_axis)
+        untouchedAxis(current, original, unscaled, flags, contours, real_point_count, true)
+    else
+        untouchedAxis(current, original, unscaled, flags, contours, real_point_count, false);
+}
+
+fn untouchedAxis(
+    current: []outline.Point,
+    original: []const outline.Point,
+    unscaled: []const outline.Point,
+    flags: []const outline.PointFlag,
+    contours: []const u16,
+    real_point_count: usize,
+    comptime x_axis: bool,
+) types.Error!void {
     var contour_start: usize = 0;
     for (contours) |end_value| {
         const contour_end: usize = end_value;
@@ -58,7 +73,7 @@ fn interpolateContour(
     flags: []const outline.PointFlag,
     start: usize,
     end: usize,
-    x_axis: bool,
+    comptime x_axis: bool,
 ) types.Error!void {
     var first_touched: ?usize = null;
     var index = start;
@@ -130,7 +145,7 @@ fn interpolateRange(
     end: usize,
     first_ref: usize,
     second_ref: usize,
-    x_axis: bool,
+    comptime x_axis: bool,
 ) types.Error!void {
     if (start > end) return;
     if (first_ref >= current.len or second_ref >= current.len) {

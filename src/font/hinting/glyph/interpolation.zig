@@ -194,15 +194,19 @@ fn interpolateRange(
     }
 }
 
-fn isTouched(flag: outline.PointFlag, x_axis: bool) bool {
+fn isTouched(flag: outline.PointFlag, comptime x_axis: bool) bool {
     return if (x_axis) flag.touched_x else flag.touched_y;
 }
 
-fn coordinate(point: outline.Point, x_axis: bool) i32 {
+fn coordinate(point: outline.Point, comptime x_axis: bool) i32 {
     return if (x_axis) point.x else point.y;
 }
 
-fn setCoordinate(point: *outline.Point, x_axis: bool, value: i32) void {
+fn setCoordinate(
+    point: *outline.Point,
+    comptime x_axis: bool,
+    value: i32,
+) void {
     if (x_axis) {
         point.x = value;
     } else {

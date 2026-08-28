@@ -214,6 +214,19 @@ test "DejaVu Sans printable ASCII hinting corpus matches FreeType" {
     }
 }
 
+test "DejaVu Sans superscript zero-loop hinting matches FreeType" {
+    // U+00B2 deliberately executes SLOOP[0]. FreeType accepts that value and
+    // makes the following loop-driven point operation a no-op.
+    const fixture = Fixture{
+        .path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        .codepoint = 0x00b2,
+        .ppem = 9,
+    };
+    try compareFixture(fixture, .classic, .normal);
+    try compareFixture(fixture, .cleartype, .normal);
+    try compareFixture(fixture, .cleartype, .mono);
+}
+
 test "CFF Type2 hinted outlines match FreeType" {
     for (type2_fixtures) |fixture| try compareType2Fixture(fixture);
 }

@@ -34,6 +34,22 @@ pub const Vector = struct {
 };
 
 pub fn pointAlongVector(distance: i32, vector: Vector) outline.Point {
+    if (vector.y == 0 and
+        (vector.x == 0x4000 or vector.x == -0x4000))
+    {
+        return .{
+            .x = if (vector.x > 0) distance else 0 -| distance,
+            .y = 0,
+        };
+    }
+    if (vector.x == 0 and
+        (vector.y == 0x4000 or vector.y == -0x4000))
+    {
+        return .{
+            .x = 0,
+            .y = if (vector.y > 0) distance else 0 -| distance,
+        };
+    }
     return .{
         .x = mulShift14(distance, vector.x),
         .y = mulShift14(distance, vector.y),
@@ -41,6 +57,14 @@ pub fn pointAlongVector(distance: i32, vector: Vector) outline.Point {
 }
 
 pub fn projectPoint(point: outline.Point, vector: Vector) i32 {
+    if (vector.y == 0) {
+        if (vector.x == 0x4000) return point.x;
+        if (vector.x == -0x4000) return 0 -| point.x;
+    }
+    if (vector.x == 0) {
+        if (vector.y == 0x4000) return point.y;
+        if (vector.y == -0x4000) return 0 -| point.y;
+    }
     return dot26Dot6(point.x, point.y, vector);
 }
 
@@ -49,6 +73,14 @@ pub fn projectDifference(
     second: outline.Point,
     vector: Vector,
 ) i32 {
+    if (vector.y == 0) {
+        if (vector.x == 0x4000) return first.x -| second.x;
+        if (vector.x == -0x4000) return second.x -| first.x;
+    }
+    if (vector.x == 0) {
+        if (vector.y == 0x4000) return first.y -| second.y;
+        if (vector.y == -0x4000) return second.y -| first.y;
+    }
     return dot26Dot6(
         first.x -| second.x,
         first.y -| second.y,
@@ -108,6 +140,38 @@ pub fn compatibleMovement(
     projection: Vector,
     policy: compatibility.State,
 ) outline.Point {
+    // The vast majority of TrueType moves use one of the four signed axis
+    // pairs selected by SVTCA/SPVTCA/SFVTCA. Preserve the generic staged
+    // 16.16 calculation for diagonal vectors, but avoid it when projection
+    // and freedom already make the result exact.
+    if (freedom.y == 0 and projection.y == 0 and
+        (freedom.x == 0x4000 or freedom.x == -0x4000) and
+        (projection.x == 0x4000 or projection.x == -0x4000))
+    {
+        return .{
+            .x = if (policy.active())
+                0
+            else if (freedom.x == projection.x)
+                distance
+            else
+                0 -| distance,
+            .y = 0,
+        };
+    }
+    if (freedom.x == 0 and projection.x == 0 and
+        (freedom.y == 0x4000 or freedom.y == -0x4000) and
+        (projection.y == 0x4000 or projection.y == -0x4000))
+    {
+        return .{
+            .x = 0,
+            .y = if (policy.postIup())
+                0
+            else if (freedom.y == projection.y)
+                distance
+            else
+                0 -| distance,
+        };
+    }
     var result = movementAlongFreedom(distance, freedom, projection);
     const axes = policy.directAxes(freedom);
     if (!axes.x) result.x = 0;

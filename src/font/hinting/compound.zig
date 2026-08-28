@@ -313,6 +313,8 @@ const Builder = struct {
             if (record_components) {
                 try self.components.append(self.allocator, .{
                     .glyph_id = component.glyph_id,
+                    .data = child.data,
+                    .metrics = child.metrics,
                     .flags = component.flags,
                     .point_start = child_point_start,
                     .point_len = child_point_end - child_point_start,

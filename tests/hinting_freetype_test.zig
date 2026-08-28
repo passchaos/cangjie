@@ -355,7 +355,7 @@ fn compareFixture(
         glyph_id,
     );
     defer transaction.deinit();
-    try face.executeHintingTransaction(&instance, &transaction);
+    try face.executeHintingTransactionInPlace(&instance, &transaction);
 
     const expected = try freeTypeOutline(
         allocator,

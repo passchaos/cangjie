@@ -22,7 +22,9 @@ pub const Instruction = struct {
     }
 };
 
-pub fn next(bytecode: []const u8, pc: usize) types.Error!Instruction {
+/// Decode one variable-length instruction. The VM inlines this in its hot
+/// fetch loop; bounded-definition scans reuse the same checked implementation.
+pub inline fn next(bytecode: []const u8, pc: usize) types.Error!Instruction {
     if (pc >= bytecode.len) return error.BadSfnt;
     const opcode = bytecode[pc];
     return switch (opcode) {

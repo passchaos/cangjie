@@ -12,7 +12,7 @@ one benchmark. The claim remains **open** until every row below is closed.
 | HarfBuzz | Exact glyph IDs, clusters, advances, offsets, and relevant flags across retained upstream and production-font corpora | `shaping-parity-smoke`, `shaping-corpus-parity-smoke`, `tests/data/`, `docs/shaping-parity.md` | Strong retained coverage, not exhaustive |
 | HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: all five maintained core rows now lead (`1.014x--1.216x`) and `react-dom.txt` leads by more than `1.50x`; Amiri words and Devanagari still have narrow margins, and broader font/script coverage remains incomplete |
 | Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; all 25 maintained rows, including variable-CFF2 default/axis-endpoint owning and reuse outlines, lead; broader semantic differentials remain open |
-| FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 75 maintained grayscale raster rows, all 10 native-strike bitmap rows, the shared COLRv0 layer/CPAL row, and all five matched face-open rows lead; complete eager validation is separately reported and remains slower, COLRv1/SVG have no FreeType built-in renderer for direct performance comparison, and broader hinting/glyph/platform coverage remains incomplete |
+| FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `hinted-outline-matrix`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 75 maintained grayscale raster rows, all 10 native-strike bitmap rows, the shared COLRv0 layer/CPAL row, and all five matched face-open rows lead. The new 50-row hinted-outline matrix is semantically exact; Arabic and Devanagari lead, while simple and compound Latin remain slower. Complete eager validation is separately reported and remains slower, COLRv1/SVG have no FreeType built-in renderer for direct performance comparison, and broader glyph/platform coverage remains incomplete |
 | Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the maintained 18-row matrix covers three scripts, three construction styles, retained reflow, and matched in-flow inline objects and now leads every performance row; logical-line normalization proves 9/18 geometry rows equivalent, while vertical, fallback, out-of-flow, and the remaining structural geometry differences are not comparable |
 | Robustness | Malformed supported inputs fail atomically under safety checks and sustained coverage-guided fuzzing | `font-fuzz-smoke`, `font-fuzz`, regression fixtures | Open: the retained 100K campaign is useful evidence, not exhaustive format coverage |
 | Platform scope | Results reproduced on each supported target or the performance claim explicitly scoped to named hardware/OS/toolchain versions | benchmark documentation | Open: current performance evidence is primarily one Linux x86-64 host |
@@ -136,6 +136,25 @@ x86-64, pinned to CPU 30 where the harness supports it:
   about `1.355 ms` to `4.8--5.4 us`, while the normalized checksum remained
   exact. The row still trails FreeType's roughly `1.44 us`, so hinted-outline
   performance remains an explicit blocker.
+- The hint VM now borrows its bounded `Cursor` instead of copying its 32-entry
+  call stack per executed opcode, batches already-bounds-checked push operands,
+  keeps scalar state opcodes out of the point-zone adapter, and gives dominant
+  MDRP/MIRP instructions a focused dispatcher. Point contexts borrow the VM's
+  zone descriptors rather than copying twelve slices per geometry opcode, and
+  compound transactions retain parse-proved child data/metrics so execution
+  does not resolve each child twice. A separate public in-place execution API
+  makes the non-atomic renderer contract explicit while the original method
+  again guarantees rollback on malformed caller-edited bytecode. Against the
+  independent `d4d890d6` binary, fixed-CPU-30 A/B/B/A 11-sample rows improved
+  DejaVu `A`/`X`, compound U+00C2, Devanagari U+0915, and Arabic U+0627 by
+  `2.81x`, `2.56x`, `6.07x`, `6.46x`, and `6.90x`, respectively, without a
+  checksum change. A matched candidate/FreeType run measured about `1.78/1.63
+  us` (`0.92x`) for `A`, `1.32/1.19 us` (`0.90x`) for `X`, `4.58/2.75 us`
+  (`0.60x`) for U+00C2, `24.24/27.48 us` (`1.13x`) for Devanagari, and
+  `5.51/6.57 us` (`1.19x`) for Arabic. The retained `hinted-outline-matrix`
+  exercises five glyphs, two sizes, v35/v40, and five targets in symmetric
+  A/B/B/A order; its one-size smoke passed all 50 semantic rows. Latin and
+  especially compound execution remain explicit performance blockers.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri

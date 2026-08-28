@@ -3372,6 +3372,17 @@ shaping-performance superiority.
   to `4.8--5.4 us` against independent binaries with unchanged output.
   FreeType remains faster at roughly `1.44 us`, so this is a large improvement
   but not closure of hinted-outline performance.
+- The hinted-outline benchmark now defaults to the explicitly non-atomic
+  `Face.executeHintingTransactionInPlace` rendering boundary;
+  `--hinting-execution atomic` measures the rollback-preserving public API
+  separately. The VM no longer copies its 32-entry call stack for every opcode
+  and avoids constructing full point-zone adapters for scalar instructions.
+  Fixed-CPU-30 A/B/B/A measurements against the independent `d4d890d6` binary
+  reduced the five representative rows by `2.56x--6.90x`. Exact-checksum
+  comparisons now lead FreeType on Devanagari (`1.13x`) and Arabic (`1.19x`),
+  but DejaVu `A`, `X`, and U+00C2 remain at roughly `0.92x`, `0.90x`, and
+  `0.60x`; the new `hinted-outline-matrix` retains those deficits rather than
+  hiding them behind the successful semantic differential.
 - Prepared geometry now caches the sorted edge intersections for all four
   fixed 4x4 sample rows during `prepare`, so every repeated draw starts at
   winding/span accumulation instead of rebuilding active edges and sorting the

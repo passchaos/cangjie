@@ -135,7 +135,9 @@ pub const Cursor = struct {
         self.call_len = 0;
     }
 
-    pub fn bytes(self: Cursor) []const u8 {
+    // Cursor owns the bounded TrueType call stack. Keep this receiver borrowed:
+    // passing it by value makes every decoded opcode copy the complete stack.
+    pub fn bytes(self: *const Cursor) []const u8 {
         return self.sources[@intFromEnum(self.program)];
     }
 

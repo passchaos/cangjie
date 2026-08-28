@@ -30,6 +30,17 @@ pub const HintingInterpreter = enum {
     }
 };
 
+pub const HintingExecution = enum {
+    in_place,
+    atomic,
+
+    fn fromName(name: []const u8) ?HintingExecution {
+        if (std.mem.eql(u8, name, "in-place")) return .in_place;
+        if (std.mem.eql(u8, name, "atomic")) return .atomic;
+        return null;
+    }
+};
+
 pub const Engine = enum {
     cangjie,
     freetype,
@@ -204,6 +215,7 @@ pub const Options = struct {
     dirty_rect: bool = false,
     hinting_target: HintingTarget = .normal,
     hinting_interpreter: HintingInterpreter = .cleartype,
+    hinting_execution: HintingExecution = .in_place,
     variation_coord_buf: [max_variation_coords]f32 = undefined,
     variation_coord_count: usize = 0,
 
@@ -288,6 +300,11 @@ pub fn parse(args: []const []const u8) !Options {
             options.hinting_interpreter = HintingInterpreter.fromName(
                 args[i],
             ) orelse return error.InvalidArguments;
+        } else if (std.mem.eql(u8, arg, "--hinting-execution")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.hinting_execution = HintingExecution.fromName(args[i]) orelse
+                return error.InvalidArguments;
         } else if (std.mem.eql(u8, arg, "--variation") or std.mem.eql(u8, arg, "--variations")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -371,6 +388,7 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --dirty-rect         for reused/prepared raster, clear and hash only the clipped glyph rectangle
         \\  --hinting-target NAME normal, light, lcd, vertical-lcd, or mono
         \\  --hinting-interpreter NAME classic (v35) or cleartype (v40)
+        \\  --hinting-execution NAME in-place rendering path or atomic rollback
         \\  --variation CSV      normalized variation coordinates, e.g. 0.5,-0.25
         \\
         \\examples:
@@ -460,7 +478,7 @@ test "parse accepts embedded bitmap fixtures" {
     }
 }
 
-test "parse accepts explicit hinting target and interpreter" {
+test "parse accepts explicit hinting controls" {
     const options = try parse(&.{
         "glyph-bench",
         "--mode",
@@ -469,10 +487,13 @@ test "parse accepts explicit hinting target and interpreter" {
         "vertical-lcd",
         "--hinting-interpreter",
         "classic",
+        "--hinting-execution",
+        "atomic",
     });
     try std.testing.expectEqual(Mode.hinted_outline, options.mode);
     try std.testing.expectEqual(HintingTarget.vertical_lcd, options.hinting_target);
     try std.testing.expectEqual(HintingInterpreter.classic, options.hinting_interpreter);
+    try std.testing.expectEqual(HintingExecution.atomic, options.hinting_execution);
 }
 
 test "raster preparation has no FreeType comparison mode" {

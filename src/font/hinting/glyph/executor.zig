@@ -64,6 +64,8 @@ pub fn execute(
     @memcpy(transaction.unscaled, glyph.transaction.unscaled);
     @memcpy(transaction.flags, glyph.transaction.flags);
     transaction.grid_fit_metrics = glyph.transaction.grid_fit_metrics;
+    transaction.metric_advance_26_6 =
+        glyph.transaction.metric_advance_26_6;
     work.commit(state);
 }
 
@@ -224,6 +226,9 @@ const Work = struct {
         // top-level load, then Work disposal resets it for the next glyph.
         self.compatibility.beginGlyph(transaction.is_compound);
         transaction.grid_fit_metrics = false;
+        transaction.metric_advance_26_6 =
+            transaction.phantomPoints()[1].x -|
+            transaction.phantomPoints()[0].x;
         if (!self.state.hinting_enabled) return;
         if (transaction.is_compound) {
             try self.executeCompound(transaction);
@@ -255,12 +260,15 @@ const Work = struct {
     ) types.Error!void {
         const resolver = self.resolver orelse
             return error.UnsupportedHintGlyph;
-        for (transaction.components) |component_record| {
-            const source = try resolver.resolve(component_record.glyph_id);
+        for (transaction.components) |*component_record| {
             var child = try OwnedGlyph.decode(
                 self.allocator,
                 transaction,
-                source,
+                .{
+                    .glyph_id = component_record.glyph_id,
+                    .data = component_record.data,
+                    .metrics = component_record.metrics,
+                },
                 @intCast(self.state.source.limits.max_component_depth),
                 resolver,
             );
@@ -271,7 +279,7 @@ const Work = struct {
             try self.executeGlyph(&child.transaction);
             try placeComponent(
                 transaction,
-                component_record,
+                component_record.*,
                 &child.transaction,
                 self.compatibility,
             );
@@ -406,6 +414,7 @@ const OwnedGlyph = struct {
             .hinting_enabled = source.hinting_enabled,
             .backward_compatibility = source.backward_compatibility,
             .grid_fit_metrics = source.grid_fit_metrics,
+            .metric_advance_26_6 = source.metric_advance_26_6,
         };
         if (transaction.variation) |*context| {
             context.normalized_coords = normalized_coords;
@@ -751,6 +760,7 @@ test "v40 skips component X grid rounding" {
         .contours = @constCast(&[_]u16{0}),
         .instructions = &.{},
         .scale_16_16 = 0x10000,
+        .metric_advance_26_6 = 0,
     };
     const child = outline.Transaction{
         .allocator = std.testing.allocator,
@@ -766,9 +776,18 @@ test "v40 skips component X grid rounding" {
         .contours = @constCast(&[_]u16{0}),
         .instructions = &.{},
         .scale_16_16 = 0x10000,
+        .metric_advance_26_6 = 0,
     };
     const record = outline.ComponentRecord{
         .glyph_id = 1,
+        .data = &.{},
+        .metrics = .{
+            .bounds = .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 },
+            .advance_width = 0,
+            .left_side_bearing = 0,
+            .vertical_advance = 0,
+            .top_side_bearing = 0,
+        },
         .flags = 0x0004,
         .point_start = 0,
         .point_len = 1,

@@ -201,6 +201,30 @@ pub const Face = struct {
         if (transaction.face_identity != @intFromPtr(&self.implementation)) {
             return error.StaleHintingInstance;
         }
+        return instance.executeGlyph(
+            transaction,
+            .{
+                .context = &self.implementation,
+                .resolveFn = font_mod.resolveHintingComponentForExecution,
+            },
+        );
+    }
+
+    /// Execute directly in caller-owned transaction and instance storage.
+    ///
+    /// Unlike `executeHintingTransaction`, an execution error may leave both
+    /// objects partially modified. This is the allocation-free rendering path
+    /// for transactions produced by this immutable validated face; callers
+    /// that edit transaction bytecode or require rollback must use the atomic
+    /// method above.
+    pub fn executeHintingTransactionInPlace(
+        self: *const Face,
+        instance: *font_mod.TrueTypeHintingInstance,
+        transaction: *font_mod.TrueTypePointTransaction,
+    ) @import("../hinting/root.zig").Error!void {
+        if (transaction.face_identity != @intFromPtr(&self.implementation)) {
+            return error.StaleHintingInstance;
+        }
         return instance.executeGlyphAfterProof(
             transaction,
             .{

@@ -20,8 +20,10 @@ pub const GraphicsState = state.GraphicsState;
 pub const Zone = state.Zone;
 
 pub const Context = struct {
-    twilight: Zone,
-    glyph: Zone,
+    // The VM owns these descriptors. Borrow them rather than copying all six
+    // slices every time an opcode asks for point-zone access.
+    twilight: *Zone,
+    glyph: *Zone,
     state: *GraphicsState,
     compatibility: *compatibility.State,
     scale_16_16: i32,
@@ -50,6 +52,17 @@ pub const Context = struct {
             x = 0 -| y;
             y = previous_x;
         }
+        // Stem-control programs commonly derive perfectly horizontal or
+        // vertical vectors from points. Their normalized 2.14 values are
+        // exact, so avoid floating-point sqrt/division on this hot path.
+        if (y == 0) return .{
+            .x = if (x > 0) 0x4000 else -0x4000,
+            .y = 0,
+        };
+        if (x == 0) return .{
+            .x = 0,
+            .y = if (y > 0) 0x4000 else -0x4000,
+        };
         return Vector.normalized(x, y);
     }
 
@@ -388,8 +401,8 @@ pub const Context = struct {
         points: []const usize,
     ) types.Error!void {
         return shifts.pointsByReference(
-            &self.twilight,
-            &self.glyph,
+            self.twilight,
+            self.glyph,
             self.state,
             self.compatibility.*,
             use_rp1,
@@ -403,8 +416,8 @@ pub const Context = struct {
         contour: usize,
     ) types.Error!void {
         return shifts.contourByReference(
-            &self.twilight,
-            &self.glyph,
+            self.twilight,
+            self.glyph,
             self.state,
             self.compatibility.*,
             use_rp1,
@@ -418,8 +431,8 @@ pub const Context = struct {
         zone_index: u8,
     ) types.Error!void {
         return shifts.zoneByReference(
-            &self.twilight,
-            &self.glyph,
+            self.twilight,
+            self.glyph,
             self.state,
             self.compatibility.*,
             use_rp1,
@@ -465,7 +478,7 @@ pub const Context = struct {
         self: *Context,
         x_axis: bool,
     ) types.Error!void {
-        const zone = &self.glyph;
+        const zone = self.glyph;
         return interpolation.untouched(
             zone.current,
             zone.original,
@@ -612,8 +625,8 @@ pub const Context = struct {
 
     fn zoneAt(self: *Context, index: u8) types.Error!*Zone {
         return switch (index) {
-            0 => &self.twilight,
-            1 => &self.glyph,
+            0 => self.twilight,
+            1 => self.glyph,
             else => error.InvalidHintOperand,
         };
     }
@@ -676,22 +689,24 @@ test "IP derives glyph-zone ratios from unscaled coordinates" {
         .rp2 = 2,
     };
     var compatibility_state = compatibility.State{};
+    var twilight = Zone{
+        .current = &twilight_points,
+        .original = &twilight_points,
+        .unscaled = &twilight_points,
+        .flags = &twilight_flags,
+        .real_point_count = twilight_points.len,
+    };
+    var glyph = Zone{
+        .current = &current,
+        .original = &original,
+        .unscaled = &unscaled,
+        .flags = &flags,
+        .contours = &.{2},
+        .real_point_count = current.len,
+    };
     var context = Context{
-        .twilight = .{
-            .current = &twilight_points,
-            .original = &twilight_points,
-            .unscaled = &twilight_points,
-            .flags = &twilight_flags,
-            .real_point_count = twilight_points.len,
-        },
-        .glyph = .{
-            .current = &current,
-            .original = &original,
-            .unscaled = &unscaled,
-            .flags = &flags,
-            .contours = &.{2},
-            .real_point_count = current.len,
-        },
+        .twilight = &twilight,
+        .glyph = &glyph,
         .state = &graphics,
         .compatibility = &compatibility_state,
         .scale_16_16 = 0x10000,

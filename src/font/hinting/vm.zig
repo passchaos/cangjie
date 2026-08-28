@@ -80,14 +80,60 @@ pub const Vm = struct {
                 }
                 return;
             }
-            const instruction = try decode.next(bytecode, self.cursor.pc);
-            self.cursor.pc = instruction.next_pc;
-            self.executed += 1;
-            if (self.executed > max_executed_instructions) {
-                return error.HintExecutionLimitExceeded;
+            const opcode = bytecode[self.cursor.pc];
+            // The only variable-length TrueType instructions are pushes. Keep
+            // their checked decode separate so ordinary one-byte opcodes do
+            // not construct and pass an Instruction record.
+            if (opcode == 0x40 or opcode == 0x41 or
+                (opcode >= 0xb0 and opcode <= 0xbf))
+            {
+                const instruction = try decode.next(
+                    bytecode,
+                    self.cursor.pc,
+                );
+                self.cursor.pc = instruction.next_pc;
+                try self.accountInstruction();
+                try self.pushOperands(instruction);
+                continue;
             }
-            try self.dispatch(instruction);
+            self.cursor.pc += 1;
+            try self.accountInstruction();
+            try self.dispatch(opcode);
         }
+    }
+
+    inline fn accountInstruction(self: *Vm) types.Error!void {
+        self.executed += 1;
+        if (self.executed > max_executed_instructions) {
+            return error.HintExecutionLimitExceeded;
+        }
+    }
+
+    fn pushOperands(
+        self: *Vm,
+        instruction: decode.Instruction,
+    ) types.Error!void {
+        const count = instruction.operandCount();
+        if (count > self.stack.values.len - self.stack.len) {
+            return error.HintStackOverflow;
+        }
+        if (instruction.words) {
+            for (0..count) |index| {
+                const start = index * 2;
+                self.stack.values[self.stack.len + index] = std.mem.readInt(
+                    i16,
+                    instruction.operands[start..][0..2],
+                    .big,
+                );
+            }
+        } else {
+            // The range was checked by decode.next, so one capacity proof is
+            // sufficient for the complete byte operand batch.
+            for (instruction.operands, self.stack.values[self.stack.len..]) |value, *destination| {
+                destination.* = value;
+            }
+        }
+        self.stack.len += count;
     }
 
     pub fn attachZones(
@@ -107,30 +153,61 @@ pub const Vm = struct {
 
     fn dispatch(
         self: *Vm,
-        instruction: decode.Instruction,
+        opcode: u8,
     ) types.Error!void {
-        const opcode = instruction.opcode;
-        if (instruction.operandCount() != 0 or
-            opcode == 0x40 or opcode == 0x41 or
-            (opcode >= 0xb0 and opcode <= 0xbf))
-        {
-            for (0..instruction.operandCount()) |index| {
-                try self.stack.push(try instruction.operand(index));
-            }
+        if (opcode >= 0xc0) {
+            var point_runtime = self.pointRuntime();
+            return point_runtime.relativeMove(opcode);
+        }
+        if (glyph_opcodes.handles(opcode)) {
+            var point_runtime = self.pointRuntime();
+            if (!try point_runtime.handle(opcode)) unreachable;
             return;
         }
-        var point_runtime = glyph_opcodes.Runtime{
-            .stack = &self.stack,
-            .cvt = self.cvt,
-            .retained = self.graphics,
-            .transient = &self.transient,
-            .compatibility = &self.compatibility,
-            .twilight = self.twilight,
-            .glyph = self.glyph,
-            .point_scale_16_16 = self.point_scale_16_16,
-        };
-        if (try point_runtime.handle(opcode)) return;
         switch (opcode) {
+            0x00, 0x01 => {
+                const vector = zones.Vector.axis((opcode & 1) == 0);
+                self.transient.projection = vector;
+                self.transient.dual_projection = vector;
+                self.transient.freedom = vector;
+            },
+            0x02, 0x03 => {
+                const vector = zones.Vector.axis((opcode & 1) == 0);
+                self.transient.projection = vector;
+                self.transient.dual_projection = vector;
+            },
+            0x04, 0x05 => self.transient.freedom = zones.Vector.axis((opcode & 1) == 0),
+            0x0e => self.transient.freedom = self.transient.projection,
+            0x10...0x12 => {
+                const value = try self.stack.popIndex();
+                switch (opcode) {
+                    0x10 => self.transient.rp0 = value,
+                    0x11 => self.transient.rp1 = value,
+                    0x12 => self.transient.rp2 = value,
+                    else => unreachable,
+                }
+            },
+            0x13...0x16 => {
+                const value = try self.stack.pop();
+                if (value < 0 or value > 1) return error.InvalidHintOperand;
+                const zone_index: u8 = @intCast(value);
+                switch (opcode) {
+                    0x13 => self.transient.zp0 = zone_index,
+                    0x14 => self.transient.zp1 = zone_index,
+                    0x15 => self.transient.zp2 = zone_index,
+                    0x16 => {
+                        self.transient.zp0 = zone_index;
+                        self.transient.zp1 = zone_index;
+                        self.transient.zp2 = zone_index;
+                    },
+                    else => unreachable,
+                }
+            },
+            0x17 => {
+                const loop = try self.stack.popIndex();
+                if (loop == 0) return error.InvalidHintOperand;
+                self.transient.loop = loop;
+            },
             0x18 => self.transient.round_mode = .grid,
             0x19 => self.transient.round_mode = .half_grid,
             0x1a => self.graphics.min_distance = try self.stack.pop(),
@@ -305,6 +382,19 @@ pub const Vm = struct {
                 try self.cursor.enter(definition, 1);
             },
         }
+    }
+
+    fn pointRuntime(self: *Vm) glyph_opcodes.Runtime {
+        return .{
+            .stack = &self.stack,
+            .cvt = self.cvt,
+            .retained = self.graphics,
+            .transient = &self.transient,
+            .compatibility = &self.compatibility,
+            .twilight = if (self.twilight) |*value| value else null,
+            .glyph = if (self.glyph) |*value| value else null,
+            .point_scale_16_16 = self.point_scale_16_16,
+        };
     }
 
     fn define(self: *Vm, instruction: bool) types.Error!void {

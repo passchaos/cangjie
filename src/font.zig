@@ -2163,7 +2163,13 @@ pub const Font = struct {
             limits.max_component_depth,
             .{
                 .context = self,
-                .resolveFn = resolveHintingComponent,
+                // Component recursion is part of the same immutable Face
+                // operation. Do not fall back to the mutation-aware public
+                // metric resolver after the top-level parse proof was chosen.
+                .resolveFn = if (read_mode.shouldRevalidate())
+                    resolveHintingComponent
+                else
+                    resolveHintingComponentForRaster,
             },
             variation,
         );

@@ -11,31 +11,43 @@ const compatibility_mod = @import("compatibility.zig");
 const geometry = @import("geometry.zig");
 const zones = @import("zones.zig");
 
+/// Whether an opcode needs point-zone state. Scalar opcodes bypass Runtime
+/// construction in the VM; this matters for function-heavy bytecode where
+/// most instructions only manipulate the value stack or control flow.
+pub fn handles(opcode: u8) bool {
+    return switch (opcode) {
+        0x06...0x0d,
+        0x0f,
+        0x27,
+        0x29,
+        0x2e...0x3c,
+        0x3e,
+        0x3f,
+        0x46...0x4a,
+        0x5d,
+        0x71,
+        0x72,
+        0x80...0x82,
+        0x86,
+        0x87,
+        => true,
+        else => false,
+    };
+}
+
 pub const Runtime = struct {
     stack: *stack_mod.Stack,
     cvt: []i32,
     retained: *types.RetainedGraphicsState,
     transient: *zones.GraphicsState,
     compatibility: *compatibility_mod.State,
-    twilight: ?zones.Zone,
-    glyph: ?zones.Zone,
+    twilight: ?*zones.Zone,
+    glyph: ?*zones.Zone,
     point_scale_16_16: i32,
 
     /// Return whether `opcode` belongs to the point/vector instruction set.
-    pub fn handle(self: *Runtime, opcode: u8) types.Error!bool {
+    pub noinline fn handle(self: *Runtime, opcode: u8) types.Error!bool {
         switch (opcode) {
-            0x00, 0x01 => {
-                const vector = axisVector(opcode);
-                self.transient.projection = vector;
-                self.transient.dual_projection = vector;
-                self.transient.freedom = vector;
-            },
-            0x02, 0x03 => {
-                const vector = axisVector(opcode);
-                self.transient.projection = vector;
-                self.transient.dual_projection = vector;
-            },
-            0x04, 0x05 => self.transient.freedom = axisVector(opcode),
             0x06, 0x07 => {
                 const second = try self.stack.popIndex();
                 const first = try self.stack.popIndex();
@@ -72,17 +84,16 @@ pub const Runtime = struct {
                 try self.stack.push(self.transient.freedom.x);
                 try self.stack.push(self.transient.freedom.y);
             },
-            0x0e => self.transient.freedom = self.transient.projection,
             0x0f => {
                 const b1 = try self.stack.popIndex();
                 const b0 = try self.stack.popIndex();
                 const a1 = try self.stack.popIndex();
                 const a0 = try self.stack.popIndex();
                 const point = try self.stack.popIndex();
-                var context = try self.pointContext();
+                const context = try self.pointContext();
                 try geometry.intersect(
-                    &context.twilight,
-                    &context.glyph,
+                    context.twilight,
+                    context.glyph,
                     self.transient,
                     point,
                     a0,
@@ -92,27 +103,13 @@ pub const Runtime = struct {
                 );
             },
 
-            0x10...0x12 => self.setReference(
-                opcode - 0x10,
-                try self.stack.popIndex(),
-            ),
-            0x13...0x15 => try self.setZone(
-                opcode - 0x13,
-                try self.popZoneIndex(),
-            ),
-            0x16 => try self.setZone(3, try self.popZoneIndex()),
-            0x17 => {
-                const loop = try self.stack.popIndex();
-                if (loop == 0) return error.InvalidHintOperand;
-                self.transient.loop = loop;
-            },
             0x27 => {
                 const second = try self.stack.popIndex();
                 const first = try self.stack.popIndex();
-                var context = try self.pointContext();
+                const context = try self.pointContext();
                 try geometry.alignPoints(
-                    &context.twilight,
-                    &context.glyph,
+                    context.twilight,
+                    context.glyph,
                     self.transient,
                     first,
                     second,
@@ -214,25 +211,35 @@ pub const Runtime = struct {
             0x86, 0x87 => {
                 const second = try self.stack.popIndex();
                 const first = try self.stack.popIndex();
-                var context = try self.pointContext();
+                const context = try self.pointContext();
                 try geometry.setDualProjectionLine(
-                    &context.twilight,
-                    &context.glyph,
+                    context.twilight,
+                    context.glyph,
                     self.transient,
                     first,
                     second,
                     (opcode & 1) != 0,
                 );
             },
-            0xc0...0xdf => {
-                const point = try self.stack.popIndex();
-                var context = try self.pointContext();
-                try context.mdrp(point, opcode, self.retained.*);
-            },
-            0xe0...0xff => try self.moveIndirectRelative(opcode),
             else => return false,
         }
         return true;
+    }
+
+    /// Relative moves dominate conventionally hinted Latin glyphs. Keep them
+    /// out of the large miscellaneous opcode switch so MDRP/MIRP do not pay
+    /// that switch's large stack frame and dispatch cost on every point.
+    pub noinline fn relativeMove(
+        self: *Runtime,
+        opcode: u8,
+    ) types.Error!void {
+        if (opcode < 0xc0) unreachable;
+        if (opcode < 0xe0) {
+            const point = try self.stack.popIndex();
+            var context = try self.pointContext();
+            return context.mdrp(point, opcode, self.retained.*);
+        }
+        return self.moveIndirectRelative(opcode);
     }
 
     fn pointContext(self: *Runtime) types.Error!zones.Context {
@@ -245,32 +252,6 @@ pub const Runtime = struct {
             .compatibility = self.compatibility,
             .scale_16_16 = self.point_scale_16_16,
         };
-    }
-
-    /// Zone and reference setters remain legal in prep without attached point
-    /// arrays; only an instruction that dereferences a point requires zones.
-    fn setReference(self: *Runtime, which: u8, value: usize) void {
-        switch (which) {
-            0 => self.transient.rp0 = value,
-            1 => self.transient.rp1 = value,
-            2 => self.transient.rp2 = value,
-            else => unreachable,
-        }
-    }
-
-    fn setZone(self: *Runtime, which: u8, value: u8) types.Error!void {
-        if (value > 1) return error.InvalidHintOperand;
-        switch (which) {
-            0 => self.transient.zp0 = value,
-            1 => self.transient.zp1 = value,
-            2 => self.transient.zp2 = value,
-            3 => {
-                self.transient.zp0 = value;
-                self.transient.zp1 = value;
-                self.transient.zp2 = value;
-            },
-            else => unreachable,
-        }
     }
 
     fn popZoneIndex(self: *Runtime) types.Error!u8 {
@@ -444,7 +425,3 @@ pub const Runtime = struct {
         );
     }
 };
-
-fn axisVector(opcode: u8) zones.Vector {
-    return zones.Vector.axis((opcode & 1) == 0);
-}

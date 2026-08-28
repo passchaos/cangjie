@@ -148,7 +148,7 @@ pub const Rasterizer = struct {
             glyph_id,
         );
         defer transaction.deinit();
-        try face.executeHintingTransaction(instance, &transaction);
+        try face.executeHintingTransactionInPlace(instance, &transaction);
         var outline = try transaction.toPixelOutline();
         defer outline.deinit();
         return self.drawPixelOutline(target, &outline, x, baseline_y);
@@ -191,7 +191,7 @@ pub const Rasterizer = struct {
             glyph_id,
         );
         defer transaction.deinit();
-        try face.executeHintingTransaction(instance, &transaction);
+        try face.executeHintingTransactionInPlace(instance, &transaction);
         var outline = try transaction.toPixelOutline();
         defer outline.deinit();
         return self.implementation.renderPixelOutlineOriented(

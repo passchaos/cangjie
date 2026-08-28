@@ -3976,6 +3976,19 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| freetype_matrix_cmd.addArgs(args);
     freetype_matrix_step.dependOn(&freetype_matrix_cmd.step);
 
+    const hinted_outline_matrix_step = b.step(
+        "hinted-outline-matrix",
+        "Benchmark matched hinted outlines against FreeType",
+    );
+    const hinted_outline_matrix_cmd = b.addSystemCommand(&.{
+        "python3",
+        "tools/run_hinted_outline_matrix.py",
+        "--glyph-bench",
+    });
+    hinted_outline_matrix_cmd.addArtifactArg(glyph_bench_exe);
+    if (b.args) |args| hinted_outline_matrix_cmd.addArgs(args);
+    hinted_outline_matrix_step.dependOn(&hinted_outline_matrix_cmd.step);
+
     const glyph_name_fixtures_exe = b.addExecutable(.{
         .name = "cangjie-glyph-name-fixtures",
         .root_module = b.createModule(.{

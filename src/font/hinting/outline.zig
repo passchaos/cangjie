@@ -36,6 +36,10 @@ pub const ComponentPlacement = union(enum) {
 
 pub const ComponentRecord = struct {
     glyph_id: glyph.GlyphId,
+    /// Parse-proved component source retained by the top-level transaction.
+    /// Execution must not resolve the same glyph and metrics a second time.
+    data: []const u8,
+    metrics: Metrics,
     flags: u16,
     point_start: usize,
     point_len: usize,
@@ -95,6 +99,9 @@ pub const Transaction = struct {
     /// v40 keeps unrounded phantom origins while the base layer rounds
     /// reported advances independently.
     grid_fit_metrics: bool = false,
+    /// Advance captured before glyph bytecode. In v40 compatibility mode the
+    /// public metric ignores phantom writes and rounds this value instead.
+    metric_advance_26_6: i32 = 0,
 
     pub fn deinit(self: *Transaction) void {
         if (self.normalized_coords.len != 0) {
@@ -121,7 +128,11 @@ pub const Transaction = struct {
 
     pub fn horizontalAdvance(self: *const Transaction) i32 {
         const phantoms = self.phantomPoints();
-        const value = phantoms[1].x -| phantoms[0].x;
+        const value = if (self.backward_compatibility and
+            self.grid_fit_metrics)
+            self.metric_advance_26_6
+        else
+            phantoms[1].x -| phantoms[0].x;
         return if (self.grid_fit_metrics) roundGrid(value) else value;
     }
 

@@ -331,7 +331,16 @@ fn runHintedOutlineIterations(
             glyph_id,
         );
         defer transaction.deinit();
-        try font.executeHintingTransaction(&instance, &transaction);
+        switch (options.hinting_execution) {
+            .in_place => try font.executeHintingTransactionInPlace(
+                &instance,
+                &transaction,
+            ),
+            .atomic => try font.executeHintingTransaction(
+                &instance,
+                &transaction,
+            ),
+        }
         checksum.* = updateChecksum(
             checksum.*,
             hinted_outline.cangjieChecksum(&transaction),

@@ -62,6 +62,7 @@ def main() -> int:
     parser.add_argument("--cjk", required=True, type=Path)
     parser.add_argument("--cbdt", type=Path)
     parser.add_argument("--sbix", type=Path)
+    parser.add_argument("--colr-v0", type=Path)
     parser.add_argument("--iterations", type=int, default=1000)
     parser.add_argument("--samples", type=int, default=7)
     parser.add_argument("--cpu", type=int)
@@ -76,7 +77,11 @@ def main() -> int:
         parser.error("sizes must be a comma-separated integer list")
     if not sizes or any(size <= 0 for size in sizes):
         parser.error("sizes must be positive")
-    for label, path in (("cbdt", args.cbdt), ("sbix", args.sbix)):
+    for label, path in (
+        ("cbdt", args.cbdt),
+        ("sbix", args.sbix),
+        ("colr-v0", args.colr_v0),
+    ):
         if path is not None and not path.is_file():
             parser.error(f"{label} fixture does not exist: {path}")
 
@@ -232,6 +237,48 @@ def main() -> int:
                 f"speedup={speedup:.3f}x"
             )
             row_count += 1
+    if args.colr_v0 is not None:
+        case = Case("colr-v0-layers", args.colr_v0, "U+0041")
+        cangjie_cmd = command(
+            args.glyph_bench, case, "cangjie", "color-layers", 64,
+            args.iterations, args.samples, args.minimum_target_size,
+        )
+        freetype_cmd = command(
+            args.glyph_bench, case, "freetype", "color-layers", 64,
+            args.iterations, args.samples, args.minimum_target_size,
+        )
+        cangjie_a = run(cangjie_cmd, args.cpu)
+        freetype_a = run(freetype_cmd, args.cpu)
+        freetype_b = run(freetype_cmd, args.cpu)
+        cangjie_b = run(cangjie_cmd, args.cpu)
+        for engine, first, second in (
+            ("cangjie", cangjie_a, cangjie_b),
+            ("freetype", freetype_a, freetype_b),
+        ):
+            if first.get("checksum") != second.get("checksum"):
+                failures.append(
+                    f"{case.name}: {engine} checksum "
+                    f"{first.get('checksum')}/{second.get('checksum')}"
+                )
+        if cangjie_a.get("checksum") != freetype_a.get("checksum"):
+            failures.append(
+                f"{case.name}: cross-engine layers "
+                f"{cangjie_a.get('checksum')}/{freetype_a.get('checksum')}"
+            )
+        cangjie_ns = math.sqrt(
+            float(cangjie_a["sample_median_ns_per_iter"])
+            * float(cangjie_b["sample_median_ns_per_iter"])
+        )
+        freetype_ns = math.sqrt(
+            float(freetype_a["sample_median_ns_per_iter"])
+            * float(freetype_b["sample_median_ns_per_iter"])
+        )
+        speedup = math.inf if cangjie_ns == 0 else freetype_ns / cangjie_ns
+        print(
+            f"{case.name}: cangjie={cangjie_ns:.3f}ns "
+            f"freetype={freetype_ns:.3f}ns speedup={speedup:.3f}x"
+        )
+        row_count += 1
     if failures:
         print("Cangjie/FreeType lifecycle matrix failed:", file=sys.stderr)
         for failure in failures:

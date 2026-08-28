@@ -1250,7 +1250,11 @@ pub const Rasterizer = struct {
     }
 
     pub fn renderColorGlyphAtCoords(self: *Rasterizer, target: *ColorRenderTarget, font: *const font_mod.Font, glyph_id: glyph_mod.GlyphId, font_size: f32, x: f32, baseline_y: f32, palette_index: u16, normalized_variation_coords: []const f32) !void {
-        const layers = try font.colorLayers(self.allocator, glyph_id);
+        const layers = try font_raster.colorLayers(
+            font,
+            self.allocator,
+            glyph_id,
+        );
         defer self.allocator.free(layers);
         if (layers.len == 0) {
             if (try font.colorPaintAtCoords(glyph_id, normalized_variation_coords)) |paint| {
@@ -1345,7 +1349,11 @@ pub const Rasterizer = struct {
             const color = if (layer.palette_index == 0xffff)
                 font_mod.PaletteColor{ .red = 255, .green = 255, .blue = 255, .alpha = 255 }
             else
-                (try font.paletteColor(palette_index, layer.palette_index)) orelse continue;
+                (try font_raster.paletteColor(
+                    font,
+                    palette_index,
+                    layer.palette_index,
+                )) orelse continue;
             var outline = try self.glyphOutlineForRenderAtCoords(font, layer.glyph_id, normalized_variation_coords);
             defer outline.deinit();
             var mask = try RenderTarget.init(self.allocator, target.width, target.height);

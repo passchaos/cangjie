@@ -14,7 +14,25 @@ pub const View = struct {
         allocator: std.mem.Allocator,
         glyph_id: glyph_mod.GlyphId,
     ) font_mod.FontError![]font_mod.ColorLayer {
-        return self.implementation.colorLayers(allocator, glyph_id);
+        return font_mod.immutable_face_backend.colorLayers(
+            self.implementation,
+            allocator,
+            glyph_id,
+        );
+    }
+
+    pub fn layerSummary(
+        self: View,
+        glyph_id: glyph_mod.GlyphId,
+        palette_index: u16,
+        foreground: font_mod.PaletteColor,
+    ) font_mod.FontError!font_mod.ColorLayerSummary {
+        return font_mod.immutable_face_backend.colorLayerSummary(
+            self.implementation,
+            glyph_id,
+            palette_index,
+            foreground,
+        );
     }
 
     /// Return the preferred COLRv1/COLRv0 representation and compact content.
@@ -33,7 +51,8 @@ pub const View = struct {
         palette_index: u16,
         color_index: u16,
     ) font_mod.FontError!?font_mod.PaletteColor {
-        return self.implementation.paletteColor(
+        return font_mod.immutable_face_backend.paletteColor(
+            self.implementation,
             palette_index,
             color_index,
         );

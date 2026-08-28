@@ -3,6 +3,7 @@
 const font = @import("../../../../font.zig");
 
 pub const Layer = font.ColorLayer;
+pub const LayerSummary = font.ColorLayerSummary;
 pub const Paint = font.ColorPaint;
 pub const ClipBox = font.ColorClipBox;
 pub const Affine = font.ColorAffine;

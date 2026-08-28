@@ -5,6 +5,7 @@ const options_mod = @import("options.zig");
 const report = @import("report.zig");
 const dirty_rect = @import("dirty_rect.zig");
 const bitmap_render = @import("bitmap_render.zig");
+const color_layers = @import("color_layers.zig");
 
 const FreeTypeFace = struct {
     library: ft.FT_Library,
@@ -276,6 +277,15 @@ fn resolveGlyphId(face: ft.FT_Face, options: options_mod.Options) ft.FT_UInt {
 
 fn runIterations(ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_mod.Options, iterations: usize, target_pixels: []u8, checksum: *u64) !void {
     const face = ft_face.face;
+    if (options.mode == .color_layers) {
+        for (0..iterations) |_| {
+            checksum.* = updateChecksum(
+                checksum.*,
+                try color_layers.freeTypeChecksum(face, glyph_id),
+            );
+        }
+        return;
+    }
     if (options.mode == .bitmap_render) {
         const ppem = try bitmap_render.selectFreeTypeStrike(
             face,
@@ -310,7 +320,7 @@ fn runIterations(ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_m
         return;
     }
     const load_flags: ft.FT_Int32 = switch (options.mode) {
-        .face_parse, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .bitmap, .bitmap_render => unreachable,
+        .face_parse, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .color_layers, .bitmap, .bitmap_render => unreachable,
         .outline => ft.FT_LOAD_NO_SCALE | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
         .outline_session, .outline_reuse => unreachable,
         .raster, .raster_owning => ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
@@ -321,7 +331,7 @@ fn runIterations(ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_m
     while (i < iterations) : (i += 1) {
         if (ft.FT_Load_Glyph(face, glyph_id, load_flags) != 0) return error.FreeTypeFailed;
         checksum.* = updateChecksum(checksum.*, switch (options.mode) {
-            .face_parse, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .bitmap, .bitmap_render => unreachable,
+            .face_parse, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .color_layers, .bitmap, .bitmap_render => unreachable,
             .outline => outlineChecksum(face.*.glyph),
             .raster, .raster_owning, .raster_reuse => rasterTargetChecksum(face.*.glyph, options, target_pixels),
             .outline_session, .outline_reuse, .raster_prepare, .raster_prepared => unreachable,

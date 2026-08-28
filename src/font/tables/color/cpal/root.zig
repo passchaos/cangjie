@@ -60,6 +60,36 @@ pub fn color(
     );
 }
 
+pub fn colorAfterProof(
+    data: []const u8,
+    table: Table,
+    layout: Layout,
+    palette_index: u16,
+    color_index: u16,
+) ?Color {
+    if (palette_index >= layout.palette_count or
+        color_index >= layout.palette_entries)
+    {
+        return null;
+    }
+    const palette_record = table.offset + 12 +
+        @as(usize, palette_index) * 2;
+    const first_color_index = std.mem.readInt(
+        u16,
+        data[palette_record..][0..2],
+        .big,
+    );
+    const record = table.offset + layout.color_records_offset +
+        (@as(usize, first_color_index) + color_index) * 4;
+    const bgra = data[record..][0..4];
+    return .{
+        .blue = bgra[0],
+        .green = bgra[1],
+        .red = bgra[2],
+        .alpha = bgra[3],
+    };
+}
+
 pub fn colors(
     allocator: std.mem.Allocator,
     data: []const u8,

@@ -3970,6 +3970,8 @@ pub fn build(b: *std.Build) void {
         b.fmt("{s}/harfbuzz/test/fuzzing/fonts/NotoColorEmoji.subset.ttf", .{parity_work_root orelse ""}),
         "--sbix",
         b.fmt("{s}/harfbuzz/test/fuzzing/fonts/sbix.ttf", .{parity_work_root orelse ""}),
+        "--colr-v0",
+        b.fmt("{s}/harfbuzz/test/subset/data/expected/colr_glyphs/BungeeColor-Regular.default.41.ttf", .{parity_work_root orelse ""}),
     });
     if (b.args) |args| freetype_matrix_cmd.addArgs(args);
     freetype_matrix_step.dependOn(&freetype_matrix_cmd.step);
@@ -4163,6 +4165,19 @@ pub fn build(b: *std.Build) void {
         "--samples",    "1",
     });
     bench_smoke_step.dependOn(&glyph_color_source_smoke_cmd.step);
+
+    const glyph_color_layers_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
+    glyph_color_layers_smoke_cmd.addArgs(&.{
+        "--engine",     "compare-freetype",
+        "--mode",       "color-layers",
+        "--format",     "tsv",
+        "--builtin",    "color-v0",
+        "--glyph-id",   "1",
+        "--iterations", "1",
+        "--warmup",     "0",
+        "--samples",    "1",
+    });
+    bench_smoke_step.dependOn(&glyph_color_layers_smoke_cmd.step);
 
     const glyph_freetype_outline_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
     glyph_freetype_outline_smoke_cmd.addArgs(&.{

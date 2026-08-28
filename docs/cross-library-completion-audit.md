@@ -12,7 +12,7 @@ one benchmark. The claim remains **open** until every row below is closed.
 | HarfBuzz | Exact glyph IDs, clusters, advances, offsets, and relevant flags across retained upstream and production-font corpora | `shaping-parity-smoke`, `shaping-corpus-parity-smoke`, `tests/data/`, `docs/shaping-parity.md` | Strong retained coverage, not exhaustive |
 | HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: all five maintained core rows now lead (`1.014x--1.216x`) and `react-dom.txt` leads by more than `1.50x`; Amiri words and Devanagari still have narrow margins, and broader font/script coverage remains incomplete |
 | Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; all 25 maintained rows, including variable-CFF2 default/axis-endpoint owning and reuse outlines, lead; broader semantic differentials remain open |
-| FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 75 maintained grayscale glyf/CFF1/CFF2 raster rows and all 10 native-strike CBDT/sbix decoded-pixel rows lead; the five-font cold in-memory face rows expose large parsing deficits, and COLR/SVG, broader hinting-target/glyph coverage, plus additional platforms remain incomplete |
+| FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 75 maintained grayscale raster rows, all 10 native-strike bitmap rows, and the shared COLRv0 layer/CPAL row lead; the five-font cold in-memory face rows expose large parsing deficits, and COLRv1/SVG have no FreeType built-in renderer for direct performance comparison; broader hinting/glyph/platform coverage remains incomplete |
 | Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the maintained 18-row matrix covers three scripts, three construction styles, retained reflow, and matched in-flow inline objects and now leads every performance row; logical-line normalization proves 9/18 geometry rows equivalent, while vertical, fallback, out-of-flow, and the remaining structural geometry differences are not comparable |
 | Robustness | Malformed supported inputs fail atomically under safety checks and sustained coverage-guided fuzzing | `font-fuzz-smoke`, `font-fuzz`, regression fixtures | Open: the retained 100K campaign is useful evidence, not exhaustive format coverage |
 | Platform scope | Results reproduced on each supported target or the performance claim explicitly scoped to named hardware/OS/toolchain versions | benchmark documentation | Open: current performance evidence is primarily one Linux x86-64 host |
@@ -101,6 +101,18 @@ x86-64, pinned to CPU 30 where the harness supports it:
   `1.189x--1.215x` and sbix at `1.118x--2.011x`; all 75 grayscale rows also
   remained ahead. This closes the maintained embedded-bitmap matrix, but not
   cold parsing or broader COLR/SVG and hinting coverage.
+- The matrix now also includes the common COLRv0 layer/CPAL boundary exposed by
+  both libraries. Cangjie retains parse-proved compact COLR/CPAL layouts and
+  provides allocation-free ordered layer iteration; low-level mutation-aware
+  APIs retain checksum and whole-table validation. Synthetic and real Bungee
+  fixtures match FreeType's layer glyph IDs, palette indices, and RGBA entries.
+  A fixed-CPU-30 B/A/A/B `1,000,000 * 21` real-font run measured
+  `65.979/63.882 ns` for FreeType and `49.916/51.649 ns` for Cangjie, a
+  `1.273x` endpoint geometric Cangjie lead. The final `500 * 11` lifecycle
+  matrix completed 91 rows and measured the same real row at `1.287x`. FreeType
+  upstream explicitly documents that COLRv1 needs a separate graphics library,
+  so COLRv1 and SVG remain Cangjie functionality evidence rather than a fair
+  FreeType renderer-performance row.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri
@@ -139,6 +151,6 @@ all 18 rows, including all six retained-reflow rows. This evidence is
 substantial but does not satisfy the stronger overall claim. In particular,
 the latest shaping runs lead all five maintained rows, but Amiri words and
 Devanagari remain narrow single-font/corpus results. The
-FreeType cold parsing remains a concrete performance blocker; COLR/SVG, broader
-hinting targets, and more glyphs remain uncovered. Parley semantic matrices
-also remain incomplete.
+FreeType cold parsing remains a concrete performance blocker; broader hinting
+targets and more glyphs remain uncovered, while COLRv1/SVG need a separate
+renderer reference. Parley semantic matrices also remain incomplete.

@@ -26,6 +26,17 @@ pub const Layout = struct {
     layer_offset: usize,
 };
 
+pub const LayerIterator = struct {
+    table: Table,
+    layer_offset: usize,
+    next_layer: u16,
+    remaining: u16,
+
+    pub fn count(self: LayerIterator) u16 {
+        return self.remaining;
+    }
+};
+
 const Range = struct {
     start: usize,
     end: usize,
@@ -137,6 +148,58 @@ pub fn layers(
         return result;
     }
     return try allocator.alloc(Layer, 0);
+}
+
+/// Locate one base glyph for allocation-free layer iteration.
+///
+/// `validate` has already established sorted unique base records and bounded
+/// layer slices. The binary search therefore needs only the requested record.
+pub fn layerIteratorAfterProof(
+    data: []const u8,
+    table: Table,
+    layout: Layout,
+    glyph_id: glyph.GlyphId,
+) Error!?LayerIterator {
+    var low: usize = 0;
+    var high: usize = layout.base_count;
+    while (low < high) {
+        const middle = low + (high - low) / 2;
+        const record = table.offset + layout.base_offset + middle * 6;
+        const base_glyph = try bin.readU16At(data, record);
+        if (base_glyph < glyph_id) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    if (low >= layout.base_count) return null;
+    const record = table.offset + layout.base_offset + low * 6;
+    if (try bin.readU16At(data, record) != glyph_id) return null;
+    return .{
+        .table = table,
+        .layer_offset = layout.layer_offset,
+        .next_layer = try bin.readU16At(data, record + 2),
+        .remaining = try bin.readU16At(data, record + 4),
+    };
+}
+
+pub fn nextLayerAfterProof(
+    data: []const u8,
+    iterator: *LayerIterator,
+) Error!?Layer {
+    if (iterator.remaining == 0) return null;
+    const record = iterator.table.offset + iterator.layer_offset +
+        @as(usize, iterator.next_layer) * 4;
+    // The iterator is constructed only from a parse-time validated COLRv0
+    // layout, so these four bytes are already proven to lie inside `data`.
+    const bytes = data[record..][0..4];
+    const layer = Layer{
+        .glyph_id = std.mem.readInt(u16, bytes[0..2], .big),
+        .palette_index = std.mem.readInt(u16, bytes[2..4], .big),
+    };
+    iterator.next_layer += 1;
+    iterator.remaining -= 1;
+    return layer;
 }
 
 pub fn structuralLayout(

@@ -357,6 +357,12 @@ pub const StatAxisValue = stat_mod.AxisValue;
 pub const StatAxisValueCoordinate = stat_mod.AxisValueCoordinate;
 
 pub const ColorLayer = colr_v0_mod.Layer;
+const ColorLayerIterator = colr_v0_mod.LayerIterator;
+
+pub const ColorLayerSummary = struct {
+    layer_count: usize,
+    checksum: u64,
+};
 
 pub const ColorGlyphSource = enum { colr_v0, colr_v1 };
 
@@ -773,6 +779,9 @@ pub const Font = struct {
     iftx: ?TableRecord,
     colr: ?TableRecord,
     cpal: ?TableRecord,
+    /// Validated compact layouts retained for allocation-free COLRv0 draws.
+    colr_v0_layout: ?colr_v0_mod.Layout,
+    cpal_layout: ?cpal_mod.Layout,
     base: ?TableRecord,
     dsig: ?TableRecord,
     vorg: ?TableRecord,
@@ -1151,6 +1160,17 @@ pub const Font = struct {
             try validateColrGlyphBounds(data, colr_table, glyph_count);
             try validateColrPaletteBounds(data, colr_table, cpal);
         }
+        const cpal_layout = if (cpal) |cpal_table|
+            try cpal_mod.validateStructure(data, cpalTable(cpal_table))
+        else
+            null;
+        const colr_v0_layout = if (colr) |colr_table|
+            if (try bin.readU16At(data, colr_table.offset) == 0)
+                try colr_v0_mod.structuralLayout(data, colrV0Table(colr_table))
+            else
+                null
+        else
+            null;
         if (base) |base_table| try validateBaseTable(data, base_table);
         if (dsig) |dsig_table| try validateDsigTable(data, dsig_table);
         if (vorg) |vorg_table| try validateVorgTable(data, vorg_table, glyph_count);
@@ -1262,6 +1282,8 @@ pub const Font = struct {
             .iftx = iftx,
             .colr = colr,
             .cpal = cpal,
+            .colr_v0_layout = colr_v0_layout,
+            .cpal_layout = cpal_layout,
             .base = base,
             .dsig = dsig,
             .vorg = vorg,
@@ -4693,9 +4715,91 @@ pub const Font = struct {
     }
 
     pub fn colorLayers(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId) FontError![]ColorLayer {
+        return self.colorLayersForReadMode(allocator, glyph_id, .revalidate);
+    }
+
+    fn colorLayersForImmutableFace(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+    ) FontError![]ColorLayer {
+        return self.colorLayersForReadMode(allocator, glyph_id, .parsed);
+    }
+
+    fn colorLayerIteratorForImmutableFace(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+    ) FontError!?ColorLayerIterator {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        const colr = self.colr orelse return null;
+        if (try bin.readU16At(self.data, colr.offset) != 0) return null;
+        const layout = self.colr_v0_layout orelse return null;
+        return colr_v0_mod.layerIteratorAfterProof(
+            self.data,
+            colrV0Table(colr),
+            layout,
+            glyph_id,
+        );
+    }
+
+    fn nextColorLayerForImmutableFace(
+        self: *const Font,
+        iterator: *ColorLayerIterator,
+    ) FontError!?ColorLayer {
+        return colr_v0_mod.nextLayerAfterProof(self.data, iterator);
+    }
+
+    fn colorLayerSummaryForImmutableFace(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+        palette_index: u16,
+        foreground: PaletteColor,
+    ) FontError!ColorLayerSummary {
+        var iterator = (try self.colorLayerIteratorForImmutableFace(glyph_id)) orelse
+            return error.UnsupportedGlyph;
+        var hasher = std.hash.Wyhash.init(0);
+        const layer_count: u32 = iterator.count();
+        hasher.update(std.mem.asBytes(&layer_count));
+        while (try self.nextColorLayerForImmutableFace(&iterator)) |layer| {
+            const layer_glyph: u32 = layer.glyph_id;
+            const color_index: u32 = layer.palette_index;
+            hasher.update(std.mem.asBytes(&layer_glyph));
+            hasher.update(std.mem.asBytes(&color_index));
+            if (layer.palette_index == 0xffff) {
+                hasher.update(&.{
+                    foreground.red,
+                    foreground.green,
+                    foreground.blue,
+                    foreground.alpha,
+                });
+            } else {
+                const entry = (try self.paletteColorForImmutableFace(
+                    palette_index,
+                    layer.palette_index,
+                )) orelse return error.BadSfnt;
+                hasher.update(&.{
+                    entry.red,
+                    entry.green,
+                    entry.blue,
+                    entry.alpha,
+                });
+            }
+        }
+        return .{
+            .layer_count = layer_count,
+            .checksum = hasher.final(),
+        };
+    }
+
+    fn colorLayersForReadMode(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        glyph_id: glyph_mod.GlyphId,
+        read_mode: MetadataReadMode,
+    ) FontError![]ColorLayer {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         const colr = self.colr orelse return try allocator.alloc(ColorLayer, 0);
-        try sfnt.checksum.validate(self.data, colr);
+        if (read_mode == .revalidate) try sfnt.checksum.validate(self.data, colr);
         // Preserve the established lazy API contract: even non-v0 tables need
         // the complete legacy header prefix before this method can conclude
         // that no layer-list representation is available.
@@ -4706,10 +4810,7 @@ pub const Font = struct {
         // v0 directory and every glyph/palette reference before materializing
         // one selected base glyph.
         const palette_entries = if (self.cpal) |cpal|
-            (try cpal_mod.validateStructure(
-                self.data,
-                cpalTable(cpal),
-            )).palette_entries
+            (try cpal_mod.validateStructure(self.data, cpalTable(cpal))).palette_entries
         else
             null;
         const layout = try colr_v0_mod.validate(
@@ -4732,7 +4833,10 @@ pub const Font = struct {
             // an actual palette slot. Foreground-only and missing glyph reads
             // do not touch CPAL payload bytes.
             if (layer.palette_index == 0xffff) continue;
-            _ = try self.validatedCpalLayout(self.cpal orelse return error.BadSfnt);
+            const cpal = self.cpal orelse return error.BadSfnt;
+            if (read_mode == .revalidate) {
+                _ = try self.validatedCpalLayout(cpal);
+            }
             break;
         }
         return result;
@@ -4840,10 +4944,7 @@ pub const Font = struct {
         allocator: std.mem.Allocator,
     ) FontError![]PaletteInfo {
         const cpal = self.cpal orelse return try allocator.alloc(PaletteInfo, 0);
-        const layout = try cpal_mod.validateStructure(
-            self.data,
-            cpalTable(cpal),
-        );
+        const layout = self.cpal_layout orelse return error.BadSfnt;
         return try cpal_mod.palettes(
             allocator,
             self.data,
@@ -4858,16 +4959,29 @@ pub const Font = struct {
         palette_index: u16,
     ) FontError![]PaletteColor {
         const cpal = self.cpal orelse return try allocator.alloc(PaletteColor, 0);
-        const layout = try cpal_mod.validateStructure(
-            self.data,
-            cpalTable(cpal),
-        );
+        const layout = self.cpal_layout orelse return error.BadSfnt;
         return try cpal_mod.colors(
             allocator,
             self.data,
             cpalTable(cpal),
             layout,
             palette_index,
+        );
+    }
+
+    fn paletteColorForImmutableFace(
+        self: *const Font,
+        palette_index: u16,
+        color_index: u16,
+    ) FontError!?PaletteColor {
+        const cpal = self.cpal orelse return null;
+        const layout = self.cpal_layout orelse return error.BadSfnt;
+        return cpal_mod.colorAfterProof(
+            self.data,
+            cpalTable(cpal),
+            layout,
+            palette_index,
+            color_index,
         );
     }
 
@@ -7193,6 +7307,8 @@ pub const shaping = struct {
 /// `Face.parse` and therefore skips per-glyph borrowed-byte revalidation.
 pub const raster_backend = struct {
     pub const resolvedSvgGlyphDocument = Font.resolvedSvgGlyphDocumentForRaster;
+    pub const colorLayers = Font.colorLayersForImmutableFace;
+    pub const paletteColor = Font.paletteColorForImmutableFace;
     pub const glyphOutlineAtCoords = Font.glyphOutlineForRasterAtCoords;
     pub const glyphOutline = Font.glyphOutlineForRaster;
     pub const glyphOutlineInto = Font.glyphOutlineForRasterInto;
@@ -7251,6 +7367,7 @@ pub const immutable_face_backend = struct {
     pub const variationSummary = Font.variationSummaryForImmutableFace;
     pub const colorPalettes = Font.colorPalettesForImmutableFace;
     pub const paletteColors = Font.paletteColorsForImmutableFace;
+    pub const paletteColor = Font.paletteColorForImmutableFace;
     pub const paletteSummary = Font.paletteSummaryForImmutableFace;
     pub const bitmapStrikes = Font.bitmapStrikesForImmutableFace;
     pub const bitmapStrikeSummary = Font.bitmapStrikeSummaryForImmutableFace;
@@ -7296,6 +7413,8 @@ pub const immutable_face_backend = struct {
         }
     }.read;
     pub const bitmapGlyphData = Font.bitmapGlyphDataForImmutableFace;
+    pub const colorLayers = Font.colorLayersForImmutableFace;
+    pub const colorLayerSummary = Font.colorLayerSummaryForImmutableFace;
 };
 
 fn validateCff2Table(data: []const u8, cff2: TableRecord) FontError!void {

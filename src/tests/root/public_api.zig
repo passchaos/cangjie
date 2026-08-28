@@ -277,6 +277,7 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(@hasDecl(Face, "names"));
     try std.testing.expect(@hasDecl(Face, "variations"));
     try std.testing.expect(@hasDecl(Face, "color"));
+    try std.testing.expect(@hasDecl(cangjie.font.Color, "layerSummary"));
     try std.testing.expect(!@hasDecl(Face, "parseFace"));
     try std.testing.expect(!@hasDecl(Face, "glyphIndex"));
     try std.testing.expect(!@hasDecl(Face, "glyphOutline"));

@@ -4726,6 +4726,17 @@ shaping-performance superiority.
   `1.189x--1.215x`, sbix by `1.118x--2.011x`, and all 75 grayscale rows
   remained ahead. This is an adapter-side correction; the full FreeType
   matrix remains the authority for cross-library status.
+- `glyph-bench --mode color-layers` covers the color operation that FreeType
+  actually shares: ordered COLRv0 layer lookup plus CPAL palette resolution.
+  Source review of `ftcolor.h` confirms that FreeType has only limited COLRv0
+  convenience rendering and explicitly requires another graphics library for
+  COLRv1. Cangjie now retains the parse-proved compact COLR/CPAL layouts and
+  exposes an allocation-free iterator while its mutation-aware low-level APIs
+  keep defensive revalidation. Synthetic and real Bungee checksums match
+  FreeType exactly. A fixed-CPU-30 B/A/A/B `1,000,000 * 21` Bungee run measured
+  FreeType at `65.979/63.882 ns` and Cangjie at `49.916/51.649 ns`, a `1.273x`
+  endpoint geometric lead. The final `500 * 11` lifecycle matrix now contains
+  91 rows; the real COLRv0 row led by `1.287x`.
 - The glyph harness now names the fresh owning-outline boundary explicitly as
   `raster-owning`; `raster` uses the public caller-owned `OutlineBuffer` and
   therefore measures the cached session plus direct draw, while

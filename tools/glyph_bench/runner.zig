@@ -5,6 +5,7 @@ const options_mod = @import("options.zig");
 const report = @import("report.zig");
 const dirty_rect = @import("dirty_rect.zig");
 const bitmap_render = @import("bitmap_render.zig");
+const color_layers = @import("color_layers.zig");
 
 pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Options) ![]u8 {
     if (options.font_path) |path| {
@@ -14,6 +15,7 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
         .minimal => try cangjie.testing.test_font.buildMinimalTtf(allocator),
         .gvar_compound => try cangjie.testing.test_font.buildGvarCompoundTtf(allocator),
         .cff2_variation => try cangjie.testing.test_font.buildCff2VariationOtf(allocator),
+        .color_v0 => try cangjie.testing.test_font.buildColorTtf(allocator),
         .cbdt_png => try cangjie.testing.test_font.buildCbdtPngTtf(allocator),
         .cbdt_bgra => try cangjie.testing.test_font.buildCbdtBgraTtf(allocator),
         .ebdt_mask => try cangjie.testing.test_font.buildEbdtBitmapTtf(allocator),
@@ -258,6 +260,7 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, g
         .palettes => try runPalettesIterations(font, iterations, checksum),
         .strikes => try runStrikesIterations(font, iterations, checksum),
         .color_glyph => try runColorGlyphIterations(font, glyph_id, iterations, checksum),
+        .color_layers => try runColorLayerIterations(allocator, font, glyph_id, iterations, checksum),
         .bitmap => try runBitmapIterations(font, glyph_id, options, iterations, checksum),
         .bitmap_render => try runBitmapRenderIterations(allocator, font, glyph_id, options, iterations, checksum),
         .outline => try runOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
@@ -299,6 +302,21 @@ fn runColorGlyphIterations(
             .colr_v1 => 1,
             .colr_v0 => 2,
         };
+    }
+}
+
+fn runColorLayerIterations(
+    allocator: std.mem.Allocator,
+    font: *const cangjie.font.Face,
+    glyph_id: cangjie.font.GlyphId,
+    iterations: usize,
+    checksum: *u64,
+) !void {
+    for (0..iterations) |_| {
+        checksum.* = updateChecksum(
+            checksum.*,
+            try color_layers.cangjieChecksum(allocator, font, glyph_id),
+        );
     }
 }
 

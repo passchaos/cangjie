@@ -88,6 +88,8 @@ pub fn init(
         .cff_parsed = null,
         .cff2 = null,
         .cff2_parsed = null,
+        .colr_v0_layout = null,
+        .cpal_layout = null,
         .cmap_subtables = &.{},
         .selected_cmap_subtable = null,
         .selected_cmap_groups = &.{},

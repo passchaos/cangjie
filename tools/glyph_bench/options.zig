@@ -36,6 +36,7 @@ pub const Mode = enum {
     palettes,
     strikes,
     color_glyph,
+    color_layers,
     bitmap,
     bitmap_render,
     outline,
@@ -60,6 +61,7 @@ pub const Mode = enum {
         if (std.mem.eql(u8, name, "palettes")) return .palettes;
         if (std.mem.eql(u8, name, "strikes")) return .strikes;
         if (std.mem.eql(u8, name, "color-glyph")) return .color_glyph;
+        if (std.mem.eql(u8, name, "color-layers")) return .color_layers;
         if (std.mem.eql(u8, name, "bitmap")) return .bitmap;
         if (std.mem.eql(u8, name, "bitmap-render")) return .bitmap_render;
         if (std.mem.eql(u8, name, "outline")) return .outline;
@@ -87,6 +89,7 @@ pub const Mode = enum {
             .palettes => "palettes",
             .strikes => "strikes",
             .color_glyph => "color-glyph",
+            .color_layers => "color-layers",
             .bitmap => "bitmap",
             .bitmap_render => "bitmap-render",
             .outline => "outline",
@@ -105,6 +108,7 @@ pub const BuiltinFont = enum {
     minimal,
     gvar_compound,
     cff2_variation,
+    color_v0,
     cbdt_png,
     cbdt_bgra,
     ebdt_mask,
@@ -114,6 +118,7 @@ pub const BuiltinFont = enum {
         if (std.mem.eql(u8, name, "minimal")) return .minimal;
         if (std.mem.eql(u8, name, "gvar-compound")) return .gvar_compound;
         if (std.mem.eql(u8, name, "cff2-variation")) return .cff2_variation;
+        if (std.mem.eql(u8, name, "color-v0")) return .color_v0;
         if (std.mem.eql(u8, name, "cbdt-png")) return .cbdt_png;
         if (std.mem.eql(u8, name, "cbdt-bgra")) return .cbdt_bgra;
         if (std.mem.eql(u8, name, "ebdt-mask")) return .ebdt_mask;
@@ -126,6 +131,7 @@ pub const BuiltinFont = enum {
             .minimal => "builtin:minimal",
             .gvar_compound => "builtin:gvar-compound",
             .cff2_variation => "builtin:cff2-variation",
+            .color_v0 => "builtin:color-v0",
             .cbdt_png => "builtin:cbdt-png",
             .cbdt_bgra => "builtin:cbdt-bgra",
             .ebdt_mask => "builtin:ebdt-mask",
@@ -296,11 +302,11 @@ fn parseVariationCoords(options: *Options, text: []const u8) !void {
 pub fn printUsage(args: []const []const u8) void {
     const exe = if (args.len > 0) args[0] else "glyph-bench";
     std.debug.print(
-        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode face-parse|charmap|metrics|bounds|global-metrics|family-name|glyph-name|attributes|bitmap|bitmap-render|outline|outline-session|outline-reuse|raster|raster-owning|raster-reuse|raster-prepare|raster-prepared] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation|cbdt-png|cbdt-bgra|ebdt-mask|ebdt-compound] [--glyph-id n|--codepoint U+XXXX]
+        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode face-parse|charmap|metrics|bounds|global-metrics|family-name|glyph-name|attributes|color-layers|bitmap|bitmap-render|outline|outline-session|outline-reuse|raster|raster-owning|raster-reuse|raster-prepare|raster-prepared] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation|color-v0|cbdt-png|cbdt-bgra|ebdt-mask|ebdt-compound] [--glyph-id n|--codepoint U+XXXX]
         \\
         \\options:
         \\  --engine NAME        cangjie, freetype, or compare-freetype; default cangjie
-        \\  --mode NAME          face-parse, charmap, metrics, bounds, global-metrics, family-name, glyph-name, attributes, bitmap, bitmap-render, outline, outline-session, outline-reuse, raster, raster-owning, raster-reuse, raster-prepare, or raster-prepared; default outline
+        \\  --mode NAME          face-parse, charmap, metrics, bounds, global-metrics, family-name, glyph-name, attributes, color-layers, bitmap, bitmap-render, outline, outline-session, outline-reuse, raster, raster-owning, raster-reuse, raster-prepare, or raster-prepared; default outline
         \\  --format text|tsv    output format, default text
         \\  --font PATH          use a real font
         \\  --builtin NAME       use an in-repo fixture, default gvar-compound

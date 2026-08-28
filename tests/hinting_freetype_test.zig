@@ -79,6 +79,21 @@ const fixtures = [_]Fixture{
         .ppem = 16,
     },
     .{
+        .path = "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+        .codepoint = 0x0416,
+        .ppem = 9,
+    },
+    .{
+        .path = "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        .codepoint = 'X',
+        .ppem = 9,
+    },
+    .{
+        .path = "/usr/share/fonts/truetype/annapurna/AnnapurnaSIL-Regular.ttf",
+        .codepoint = 0x0915,
+        .ppem = 9,
+    },
+    .{
         .path = "/usr/share/fonts/truetype/cascadia-code/CascadiaCode.ttf",
         .codepoint = 'A',
         .ppem = 16,

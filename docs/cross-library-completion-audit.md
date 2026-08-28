@@ -278,6 +278,12 @@ x86-64, pinned to CPU 30 where the harness supports it:
   (`1.011x`); every `X` row now led by at least `1.045x`. This closes the
   maintained hinted-outline matrix, but broader glyph/platform evidence is
   still required for the overall FreeType claim.
+- The FreeType differential now also covers a 499-byte DejaVu Serif Cyrillic
+  program, a separate FreeSans Latin instruction style, and Annapurna SIL
+  Devanagari across the retained interpreter/target gates. A first wider probe
+  exposed unresolved Bengali/Tamil and Liberation Sans v40-mono mismatches;
+  those are recorded as new open compatibility work rather than hidden behind
+  the maintained matrix.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri

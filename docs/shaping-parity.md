@@ -4992,3 +4992,7 @@ shaping-performance superiority.
 - A final fixed-CPU-30 `30000 * 7` run passed all 100 maintained hinted-outline
   semantic rows and led every performance row. The minimum lead was `1.011x`
   for DejaVu `A` at 9 ppem/v40/LCD; all `X` rows led by at least `1.045x`.
+- Differential hinting coverage now includes DejaVu Serif Cyrillic, FreeSans
+  Latin, and Annapurna SIL Devanagari. Wider probing also identified currently
+  unresolved FreeSans Bengali/Tamil and Liberation Sans v40-mono differences,
+  which remain explicit audit blockers.

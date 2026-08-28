@@ -324,13 +324,18 @@ fn runHintedOutlineIterations(
             options.normalizedVariationCoords(),
         );
     defer instance.deinit();
+    // FreeType retains its glyph loader between FT_Load_Glyph calls. Give the
+    // matched Cangjie loop the same lifecycle: each transaction is logically
+    // discarded, while its scratch capacity survives for the next glyph load.
+    var transaction_arena = std.heap.ArenaAllocator.init(allocator);
+    defer transaction_arena.deinit();
     for (0..iterations) |_| {
+        _ = transaction_arena.reset(.retain_capacity);
         var transaction = try font.hintingPointTransaction(
-            allocator,
+            transaction_arena.allocator(),
             &instance,
             glyph_id,
         );
-        defer transaction.deinit();
         switch (options.hinting_execution) {
             .in_place => try font.executeHintingTransactionInPlace(
                 &instance,

@@ -163,6 +163,14 @@ x86-64, pinned to CPU 30 where the harness supports it:
   `1.76`, `1.32`, and `4.57 us` to `1.71`, `1.24`, and `4.24 us`; checksums
   remained exact. The same rows are still behind FreeType, so this improvement
   narrows rather than closes the retained Latin blocker.
+- The benchmark's in-place rendering mode now retains transaction scratch
+  capacity between glyph loads, matching FreeType's retained `FT_GlyphLoader`
+  lifecycle instead of charging a fresh general-purpose allocation set on
+  every iteration. Fixed-CPU-30 11-sample medians remained neutral for `A`,
+  improved `X` from about `1.25` to `1.24 us`, compound U+00C2 from `4.22` to
+  `4.18 us`, Devanagari from `24.23` to `23.97 us`, and Arabic from `5.51` to
+  `5.40 us`, with unchanged checksums. The separately selectable atomic mode
+  continues to measure its rollback-copy contract.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri

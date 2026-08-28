@@ -3388,6 +3388,11 @@ shaping-performance superiority.
   medians improved DejaVu `A`, `X`, and compound U+00C2 from about `1.76`,
   `1.32`, and `4.57 us` to `1.71`, `1.24`, and `4.24 us`, with unchanged
   canonical output. FreeType remains faster on all three Latin controls.
+- Repeated hinted-outline loads now reuse arena capacity in the benchmark,
+  matching FreeType's retained glyph-loader lifecycle while still decoding
+  and executing every glyph. Representative fixed-CPU medians were neutral on
+  `A` and improved `X`, U+00C2, Devanagari, and Arabic by roughly `0.4%`,
+  `1.0%`, `1.0%`, and `1.9%`, respectively.
 - Prepared geometry now caches the sorted edge intersections for all four
   fixed 4x4 sample rows during `prepare`, so every repeated draw starts at
   winding/span accumulation instead of rebuilding active edges and sorting the

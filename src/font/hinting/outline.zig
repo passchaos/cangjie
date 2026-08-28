@@ -297,7 +297,6 @@ pub fn decodeSimple(
     var point_index: usize = 0;
     while (point_index < real_point_count) : (point_index += 1) {
         const raw = reader.readU8() catch return error.BadSfnt;
-        glyf.validateSimpleFlag(raw, point_index) catch return error.BadSfnt;
         raw_flags[point_index] = raw;
         flags[point_index] = .{
             .on_curve = (raw & 0x01) != 0,

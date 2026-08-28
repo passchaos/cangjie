@@ -3396,6 +3396,10 @@ shaping-performance superiority.
   avoiding another maxp decode for every immutable-face transaction. Retired
   work fell about `0.7%` on DejaVu `A`; the full hinted differential and
   50-row target matrix remain exact.
+- The immutable-face simple-glyph decoder also consumes the face-wide proof
+  for reserved/repeat flag grammar instead of rechecking every expanded point.
+  This leaves mutation-aware public decoding unchanged and improves the
+  representative `X`, Devanagari, and Arabic rows by about `1.4--2.7%`.
 - Repeated hinted-outline loads now reuse arena capacity in the benchmark,
   matching FreeType's retained glyph-loader lifecycle while still decoding
   and executing every glyph. Representative fixed-CPU medians were neutral on

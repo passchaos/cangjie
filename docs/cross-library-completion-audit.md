@@ -175,6 +175,11 @@ x86-64, pinned to CPU 30 where the harness supports it:
   Seven-repeat fixed-CPU counters reduced `A` by about `0.66%` instructions
   and `0.81%` branches, Arabic by `0.22%`/`0.18%`, and Devanagari by about
   `1.55%` cycles; the 50-row v35/v40 target matrix retained exact checksums.
+- Immutable-face simple-glyph decoding no longer repeats the per-flag grammar
+  predicate already established by whole-face glyf validation. The checked
+  public transaction path retains that validation. Fixed-CPU-30 medians kept
+  `A` and U+00C2 neutral and improved `X`, Devanagari, and Arabic by about
+  `1.4%`, `2.5%`, and `2.7%`; full tests and the FreeType differential pass.
 - The benchmark's in-place rendering mode now retains transaction scratch
   capacity between glyph loads, matching FreeType's retained `FT_GlyphLoader`
   lifecycle instead of charging a fresh general-purpose allocation set on

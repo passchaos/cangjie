@@ -301,8 +301,11 @@ x86-64, pinned to CPU 30 where the harness supports it:
   Bengali/Tamil mismatches: negative values round their magnitudes down/up and
   restore the sign, rather than using mathematical floor/ceil. Both scripts
   now remain in every v35/v40 target differential fixture. Liberation Sans
-  v40 matches normal/light/LCD/LCD_V and differs only under mono, isolating the
-  remaining newly discovered gap to FreeType's special mono compound policy.
+  v40 matches normal/light/LCD/LCD_V against FreeType 2.13 and mono against
+  FreeType 2.14. FreeType 2.14 deliberately changed compound
+  `ROUND_XY_TO_GRID` from an interpreter-version test to the actual v40
+  compatibility state; Cangjie's rounded mono result matches the current
+  behavior rather than 2.13's obsolete unrounded component X offset.
 - Glyph-zone MDRP/MIRP now share one bounds/zone resolution and operate
   directly on glyph arrays when zp0/zp1 are both zone 1. Against the pre-change
   binary, fixed-CPU-30 A/B/B/A instructions/branches/cycles fell

@@ -176,7 +176,7 @@ test "ClearType target modes match FreeType v40" {
     }
 }
 
-test "Liberation compound v40 stable targets match FreeType" {
+test "Liberation compound v40 targets match current FreeType" {
     const fixture = Fixture{
         .path = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         .codepoint = 0x00c2,
@@ -184,6 +184,13 @@ test "Liberation compound v40 stable targets match FreeType" {
     };
     for ([_]Target{ .normal, .light, .lcd, .vertical_lcd }) |target| {
         try compareFixture(fixture, .cleartype, target);
+    }
+    // FreeType 2.14 changed ROUND_XY_TO_GRID for v40 monochrome compounds
+    // from an interpreter-version check to the actual compatibility state.
+    // Cangjie follows that current behavior; the system 2.13 oracle retains
+    // the old unrounded X placement, so only gate mono against 2.14 or newer.
+    if (try freeTypeVersionAtLeast(2, 14)) {
+        try compareFixture(fixture, .cleartype, .mono);
     }
 }
 

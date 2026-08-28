@@ -856,6 +856,40 @@ pub fn accumulateSimpleGlyphPointDeltasWithReader(
     try validateSimpleContourEnds(original_point_count, contour_ends);
 
     const parsed = try info(data, offset, length, expected_glyph_count, expected_axis_count);
+    return accumulateSimpleGlyphPointDeltasWithReaderFromParsed(
+        allocator,
+        data,
+        offset,
+        length,
+        parsed,
+        glyph_id,
+        normalized_coords,
+        Context,
+        context,
+        original_point_count,
+        read_point,
+        contour_ends,
+        validate_inactive_payloads,
+    );
+}
+
+pub fn accumulateSimpleGlyphPointDeltasWithReaderFromParsed(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    parsed: Info,
+    glyph_id: usize,
+    normalized_coords: []const f32,
+    comptime Context: type,
+    context: Context,
+    original_point_count: usize,
+    comptime read_point: fn (Context, usize) Point,
+    contour_ends: []const u16,
+    validate_inactive_payloads: bool,
+) Error!?[]ScaledPointDelta {
+    if (original_point_count > @as(usize, std.math.maxInt(u16)) - 3) return error.BadSfnt;
+    try validateSimpleContourEnds(original_point_count, contour_ends);
     const table = data[offset .. offset + length];
     const glyph = (try glyphInfoFromParsed(table, parsed, glyph_id)) orelse return null;
     const point_count = original_point_count + 4;

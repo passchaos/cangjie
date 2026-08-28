@@ -242,6 +242,9 @@ pub const Variation = struct {
     glyph_count: usize,
     axis_count: usize,
     normalized_coords: []const f32,
+    /// Header/offset proof retained by the parsed face. Public mutation-aware
+    /// callers leave this null and keep the defensive parser boundary.
+    parsed: ?gvar.Info = null,
 };
 
 const DecodedSimple = struct {
@@ -536,27 +539,45 @@ fn decodeSimpleInto(
         // directly by one 26.6 unit.
         use_variation_scaling =
             hasNonDefaultLocation(context.normalized_coords);
-        const deltas = gvar.accumulateSimpleGlyphPointDeltasWithReader(
-            allocator,
-            context.data,
-            context.table_offset,
-            context.table_length,
-            context.glyph_count,
-            context.axis_count,
-            glyph_id,
-            context.normalized_coords,
-            []const Point,
-            unscaled[0..real_point_count],
-            real_point_count,
-            readPointForVariation,
-            contours,
-            true,
-        ) catch |err| return switch (err) {
+        const deltas = if (context.parsed) |gvar_info|
+            gvar.accumulateSimpleGlyphPointDeltasWithReaderFromParsed(
+                allocator,
+                context.data,
+                context.table_offset,
+                context.table_length,
+                gvar_info,
+                glyph_id,
+                context.normalized_coords,
+                []const Point,
+                unscaled[0..real_point_count],
+                real_point_count,
+                readPointForVariation,
+                contours,
+                false,
+            )
+        else
+            gvar.accumulateSimpleGlyphPointDeltasWithReader(
+                allocator,
+                context.data,
+                context.table_offset,
+                context.table_length,
+                context.glyph_count,
+                context.axis_count,
+                glyph_id,
+                context.normalized_coords,
+                []const Point,
+                unscaled[0..real_point_count],
+                real_point_count,
+                readPointForVariation,
+                contours,
+                true,
+            );
+        const active_deltas = deltas catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
             else => error.BadSfnt,
         };
-        defer if (deltas) |owned| allocator.free(owned);
-        if (deltas) |active| {
+        defer if (active_deltas) |owned| allocator.free(owned);
+        if (active_deltas) |active| {
             if (active.len != point_count) return error.BadSfnt;
             for (unscaled, original, active) |*point, *origin, delta| {
                 const varied_x =

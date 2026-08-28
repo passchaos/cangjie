@@ -770,6 +770,7 @@ pub const Font = struct {
     cvt: ?TableRecord,
     cvar: ?TableRecord,
     gvar: ?TableRecord,
+    gvar_parsed: ?gvar_mod.Info = null,
     fpgm: ?TableRecord,
     prep: ?TableRecord,
     hvar: ?TableRecord,
@@ -1119,6 +1120,16 @@ pub const Font = struct {
         else
             null;
         try validateVariationDataTablesWithCvar(data, glyph_count, fvar, gvar, hvar, mvar, vvar, cvar, cvt_value_count, gvar_target_context);
+        const gvar_parsed: ?gvar_mod.Info = if (gvar) |record|
+            try gvar_mod.info(
+                data,
+                record.offset,
+                record.length,
+                glyph_count,
+                fvar_axis_count orelse return error.BadSfnt,
+            )
+        else
+            null;
         try validateVariationNameReferences(allocator, data, fvar, stat, name, .{ .compat_ttc_face = is_ttc_face });
         if (gdef) |gdef_table| {
             try gdef_mod.validate(
@@ -1273,6 +1284,7 @@ pub const Font = struct {
             .cvt = cvt,
             .cvar = cvar,
             .gvar = gvar,
+            .gvar_parsed = gvar_parsed,
             .fpgm = fpgm,
             .prep = prep,
             .hvar = hvar,
@@ -2109,6 +2121,7 @@ pub const Font = struct {
                 .axis_count = self.fvar_axis_count orelse
                     return error.BadSfnt,
                 .normalized_coords = instance.normalizedCoordinates(),
+                .parsed = self.gvar_parsed,
             } else null;
         const transaction = try buffer.decodeSimple(
             @intFromPtr(self),

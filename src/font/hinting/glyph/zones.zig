@@ -19,6 +19,44 @@ pub const Vector = fixed.Vector;
 pub const GraphicsState = state.GraphicsState;
 pub const Zone = state.Zone;
 
+/// Small direct-mapped cache for repeated point-derived vectors. TrueType
+/// function programs commonly alternate a handful of stem directions; one
+/// comparison per lookup avoids a linear cache scan on non-repeating fonts.
+pub const LineVectorCache = struct {
+    entries: [4]Entry = .{Entry{}} ** 4,
+
+    const Entry = struct {
+        x: i32 = 0,
+        y: i32 = 0,
+        vector: Vector = .{},
+        valid: bool = false,
+    };
+
+    fn index(x: i32, y: i32) usize {
+        const ux: u32 = @bitCast(x);
+        const uy: u32 = @bitCast(y);
+        return @intCast(((ux >> 5) ^ (uy >> 5) ^
+            (ux >> 31) ^ (uy >> 31)) & 3);
+    }
+
+    fn get(self: *const LineVectorCache, x: i32, y: i32) ?Vector {
+        const entry = self.entries[index(x, y)];
+        return if (entry.valid and entry.x == x and entry.y == y)
+            entry.vector
+        else
+            null;
+    }
+
+    fn put(self: *LineVectorCache, x: i32, y: i32, vector: Vector) void {
+        self.entries[index(x, y)] = .{
+            .x = x,
+            .y = y,
+            .vector = vector,
+            .valid = true,
+        };
+    }
+};
+
 pub const Context = struct {
     // The VM owns these descriptors. Borrow them rather than copying all six
     // slices every time an opcode asks for point-zone access.
@@ -27,6 +65,7 @@ pub const Context = struct {
     state: *GraphicsState,
     compatibility: *compatibility.State,
     scale_16_16: i32,
+    line_vector_cache: ?*LineVectorCache = null,
 
     pub fn validate(self: Context) types.Error!void {
         try self.twilight.validate();
@@ -63,6 +102,12 @@ pub const Context = struct {
             .x = 0,
             .y = if (y > 0) 0x4000 else -0x4000,
         };
+        if (self.line_vector_cache) |cache| {
+            if (cache.get(x, y)) |vector| return vector;
+            const vector = Vector.normalized(x, y);
+            cache.put(x, y, vector);
+            return vector;
+        }
         return Vector.normalized(x, y);
     }
 

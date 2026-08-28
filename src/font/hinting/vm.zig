@@ -33,6 +33,7 @@ pub const Vm = struct {
     transient: zones.GraphicsState = .{},
     compatibility: compatibility_mod.State = .{},
     is_compound: bool = false,
+    line_vector_cache: zones.LineVectorCache = .{},
 
     pub fn init(
         source: types.Source,
@@ -394,6 +395,7 @@ pub const Vm = struct {
             .twilight = if (self.twilight) |*value| value else null,
             .glyph = if (self.glyph) |*value| value else null,
             .point_scale_16_16 = self.point_scale_16_16,
+            .line_vector_cache = &self.line_vector_cache,
         };
     }
 

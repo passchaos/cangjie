@@ -3402,6 +3402,10 @@ shaping-performance superiority.
   for reserved/repeat flag grammar instead of rechecking every expanded point.
   This leaves mutation-aware public decoding unchanged and improves the
   representative `X`, Devanagari, and Arabic rows by about `1.4--2.7%`.
+- A four-entry direct-mapped per-run cache now reuses normalized point-derived
+  line vectors. Fixed-CPU-30 counters reduced DejaVu `A` cycles by about `3.5%`
+  and compound U+00C2 cycles by about `1.6%`, without retaining state across
+  glyphs or changing any differential output.
 - Repeated hinted-outline loads now reuse arena capacity in the benchmark,
   matching FreeType's retained glyph-loader lifecycle while still decoding
   and executing every glyph. Representative fixed-CPU medians were neutral on

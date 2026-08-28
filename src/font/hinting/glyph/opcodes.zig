@@ -44,6 +44,7 @@ pub const Runtime = struct {
     twilight: ?*zones.Zone,
     glyph: ?*zones.Zone,
     point_scale_16_16: i32,
+    line_vector_cache: *zones.LineVectorCache,
 
     /// Return whether `opcode` belongs to the point/vector instruction set.
     pub noinline fn handle(self: *Runtime, opcode: u8) types.Error!bool {
@@ -251,6 +252,7 @@ pub const Runtime = struct {
             .state = self.transient,
             .compatibility = self.compatibility,
             .scale_16_16 = self.point_scale_16_16,
+            .line_vector_cache = self.line_vector_cache,
         };
     }
 

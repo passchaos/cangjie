@@ -182,6 +182,13 @@ x86-64, pinned to CPU 30 where the harness supports it:
   public transaction path retains that validation. Fixed-CPU-30 medians kept
   `A` and U+00C2 neutral and improved `X`, Devanagari, and Arabic by about
   `1.4%`, `2.5%`, and `2.7%`; full tests and the FreeType differential pass.
+- Point-derived line vectors now use a four-entry direct-mapped cache local to
+  one VM run. DejaVu's `A` repeatedly alternates only a few diagonal stem
+  directions, so this avoids repeated normalization without carrying state
+  across glyphs. Seven-repeat fixed-CPU counters reduced `A` instructions by
+  `0.47%`, branches by `0.75%`, and cycles by `3.5%`; U+00C2 instructions,
+  branches, and cycles fell `0.40%`, `1.12%`, and `1.58%`. Other controls were
+  neutral within the observed cycle noise and the full differential passes.
 - The benchmark's in-place rendering mode now retains transaction scratch
   capacity between glyph loads, matching FreeType's retained `FT_GlyphLoader`
   lifecycle instead of charging a fresh general-purpose allocation set on

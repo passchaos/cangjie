@@ -100,13 +100,13 @@ fn pngChecksum(
     var converted: ?imx.buffer.RgbaImage = null;
     defer if (converted) |*image| image.deinit();
     const rgba = if (decoded.colorType() == .rgba8)
-        decoded.bytes()
+        decoded.bytesMut()
     else converted_bytes: {
         converted = decoded.toRgba8(allocator) catch |err| return switch (err) {
             error.AllocationFailed => error.OutOfMemory,
             else => error.BadSfnt,
         };
-        break :converted_bytes converted.?.bytes();
+        break :converted_bytes converted.?.bytesMut();
     };
 
     const pixel_count = try checkedPixelCount(bitmap.width, bitmap.height);
@@ -119,17 +119,11 @@ fn pngChecksum(
         bitmap.origin_offset_x,
         topBearing(bitmap.source, bitmap.height, bitmap.origin_offset_y),
     );
-    for (0..pixel_count) |index| {
-        const pixel = rgba[index * 4 ..][0..4];
-        const alpha = pixel[3];
-        const canonical = [4]u8{
-            multiplyAlpha(alpha, pixel[2]),
-            multiplyAlpha(alpha, pixel[1]),
-            multiplyAlpha(alpha, pixel[0]),
-            alpha,
-        };
-        hasher.update(&canonical);
-    }
+    canonicalizeRgbaToPremultipliedBgra(rgba);
+    // A single contiguous update avoids one generic Wyhash dispatch and copy
+    // per pixel. The decoded image is private to this call, so canonicalizing
+    // its channel order in place does not affect any observable API value.
+    hasher.update(rgba);
     return hasher.final();
 }
 
@@ -376,6 +370,18 @@ fn canonicalHasher(
     return hasher;
 }
 
+fn canonicalizeRgbaToPremultipliedBgra(rgba: []u8) void {
+    std.debug.assert(rgba.len % 4 == 0);
+    for (0..rgba.len / 4) |index| {
+        const pixel = rgba[index * 4 ..][0..4];
+        const alpha = pixel[3];
+        const red = pixel[0];
+        pixel[0] = multiplyAlpha(alpha, pixel[2]);
+        pixel[1] = multiplyAlpha(alpha, pixel[1]);
+        pixel[2] = multiplyAlpha(alpha, red);
+    }
+}
+
 fn multiplyAlpha(alpha: u8, color: u8) u8 {
     if (alpha == 0) return 0;
     if (alpha == 255) return color;
@@ -388,4 +394,18 @@ test "FreeType-compatible alpha multiplication rounds exactly" {
     try std.testing.expectEqual(@as(u8, 128), multiplyAlpha(128, 255));
     try std.testing.expectEqual(@as(u8, 64), multiplyAlpha(128, 128));
     try std.testing.expectEqual(@as(u8, 255), multiplyAlpha(255, 255));
+}
+
+test "RGBA canonicalization produces FreeType premultiplied BGRA bytes" {
+    var pixels = [_]u8{
+        255, 0,   7,   128,
+        30,  20,  10,  255,
+        99,  127, 201, 0,
+    };
+    canonicalizeRgbaToPremultipliedBgra(&pixels);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 4, 0, 128, 128, 10, 20, 30, 255, 0, 0, 0, 0 },
+        &pixels,
+    );
 }

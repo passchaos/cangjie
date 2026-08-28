@@ -4711,6 +4711,21 @@ shaping-performance superiority.
   `1.171x`/`1.153x`/`1.038x`. Thus parity is established for these rows, but
   CBDT PNG performance is now a measured blocker rather than an uninstrumented
   one.
+- A profile of that CBDT boundary attributed most Cangjie time to invoking
+  Wyhash separately for each four-byte pixel. The benchmark now canonicalizes
+  its private RGBA decode allocation to premultiplied BGRA in place and hashes
+  the complete span once. Against independent binaries, a fixed-CPU-30 A/B/B/A
+  `1000 * 11` run improved from `130423.622/131862.929` to
+  `59242.994/59744.398 ns` with the same checksum. Three-repeat perf-stat
+  measurements reduced retired instructions from about `1.857B` to
+  `632--636M`, branches from `263.8M` to `104.2--104.8M`, and cycles from
+  `585.6M` to `266.9--269.0M`. A same-binary seven-sample check measured CBDT
+  at `59033.811/66747.079 ns` (`1.131x`) and sbix at `1.101x`, `1.465x`, and
+  `2.046x` for 20/32/128 ppem. The final fixed-CPU-30 `500 * 11` 90-row matrix
+  passed all semantic checks and all ten bitmap timing rows: CBDT led by
+  `1.189x--1.215x`, sbix by `1.118x--2.011x`, and all 75 grayscale rows
+  remained ahead. This is an adapter-side correction; the full FreeType
+  matrix remains the authority for cross-library status.
 - The glyph harness now names the fresh owning-outline boundary explicitly as
   `raster-owning`; `raster` uses the public caller-owned `OutlineBuffer` and
   therefore measures the cached session plus direct draw, while

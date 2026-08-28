@@ -4938,6 +4938,9 @@ shaping-performance superiority.
   `147.267/147.185 ns` versus `2077.656/1976.212 ns` (`13.763x`), with exact
   command checksums. Including these reuse rows, the full 25-case matrix leads
   from `1.252x` through `13.865x`.
+- The matrix runner now exposes `--fail-on-slower`, turning those printed
+  ratios into a reproducible gate. A fresh fixed-CPU-30 `100000 * 7` strict run
+  passed all 25 semantic and performance rows with a `1.271x--13.947x` range.
 - TrueType hinting now exposes `HintingPointTransactionBuffer`, a retained
   caller-owned loader for render loops. It decodes simple glyf points directly
   into reusable typed storage and restores a retained pristine compound

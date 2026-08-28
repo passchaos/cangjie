@@ -30,6 +30,13 @@ class Case:
     variation: str | None = None
 
 
+@dataclass(frozen=True)
+class OutlineCorpus:
+    name: str
+    font: Path
+    glyph_ids: tuple[int, ...]
+
+
 CASES = (
     Case("attributes-head", "attributes", "attributes-head.ttf", 0),
     Case("attributes-os2", "attributes", "attributes-os2.ttf", 0),
@@ -167,9 +174,17 @@ def main() -> int:
     parser.add_argument("--fixture-dir", required=True, type=Path)
     parser.add_argument("--roboto", required=True, type=Path)
     parser.add_argument("--cff2", required=True, type=Path)
+    parser.add_argument(
+        "--extended", action="store_true",
+        help="include broader production-font outline differentials",
+    )
     parser.add_argument("--iterations", type=int, default=1)
     parser.add_argument("--samples", type=int, default=1)
     parser.add_argument("--cpu", type=int)
+    parser.add_argument(
+        "--fail-on-slower", action="store_true",
+        help="fail when any measured Cangjie row is not faster than Skrifa",
+    )
     args = parser.parse_args()
     if args.iterations <= 0 or args.samples <= 0:
         parser.error("iterations and samples must be positive")
@@ -208,6 +223,63 @@ def main() -> int:
             float(cangjie_second["sample_median_ns_per_iter"]),
             float(reference_first["median_ns_per_iter"]),
             float(reference_second["median_ns_per_iter"])))
+
+    if args.extended:
+        corpora = (
+            OutlineCorpus(
+                "roboto-glyf", args.roboto,
+                (1, 2, 3, 10, 20, 38, 64, 96, 128, 192),
+            ),
+            OutlineCorpus(
+                "dejavu-glyf",
+                Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+                (1, 36, 59, 97, 116, 132, 133, 171, 256, 5926),
+            ),
+            OutlineCorpus(
+                "noto-arabic-glyf",
+                Path("/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"),
+                (1, 2, 3, 10, 20, 50, 100, 200, 400, 600),
+            ),
+            OutlineCorpus(
+                "stix-cff",
+                Path("/usr/share/fonts/opentype/stix/STIXGeneral-Regular.otf"),
+                (1, 2, 3, 10, 20, 36, 64, 96, 128, 192),
+            ),
+        )
+        for corpus in corpora:
+            if not corpus.font.is_file():
+                failures.append(f"{corpus.name}: missing font {corpus.font}")
+                continue
+            for glyph_id in corpus.glyph_ids:
+                for mode in ("outline-session", "outline-reuse"):
+                    case = Case(
+                        f"{corpus.name}-gid{glyph_id}-{mode}",
+                        mode, corpus.font.name, glyph_id, fixture=False,
+                    )
+                    cangjie_semantic = run(cangjie_command(args.cangjie, case, corpus.font, 1, 1), args.cpu)
+                    reference_semantic = run(skrifa_command(skrifa, case, corpus.font, 1, 1), args.cpu)
+                    if int(cangjie_semantic.get("checksum", "-1"), 16) != int(reference_semantic.get("checksum", "-2"), 16):
+                        failures.append(
+                            f"{case.name}: checksum: Cangjie={cangjie_semantic.get('checksum')!r}, "
+                            f"Skrifa={reference_semantic.get('checksum')!r}"
+                        )
+                    cangjie_first = cangjie_semantic if args.iterations == 1 and args.samples == 1 else run(
+                        cangjie_command(args.cangjie, case, corpus.font, args.iterations, args.samples), args.cpu
+                    )
+                    reference_first = reference_semantic if args.iterations == 1 and args.samples == 1 else run(
+                        skrifa_command(skrifa, case, corpus.font, args.iterations, args.samples), args.cpu
+                    )
+                    reference_second = run(
+                        skrifa_command(skrifa, case, corpus.font, args.iterations, args.samples), args.cpu
+                    )
+                    cangjie_second = run(
+                        cangjie_command(args.cangjie, case, corpus.font, args.iterations, args.samples), args.cpu
+                    )
+                    measured.append((case.name,
+                        float(cangjie_first["sample_median_ns_per_iter"]),
+                        float(cangjie_second["sample_median_ns_per_iter"]),
+                        float(reference_first["median_ns_per_iter"]),
+                        float(reference_second["median_ns_per_iter"])))
 
     # Production-font queries cover the immutable cmap, metrics, bounds, and
     # complete global-metrics paths that synthetic fixtures cannot represent.
@@ -253,12 +325,17 @@ def main() -> int:
             f"skrifa_ns={skrifa_first:.3f}/{skrifa_second:.3f} "
             f"speedup={speedup:.3f}x"
         )
+        if args.fail_on_slower and speedup <= 1.0:
+            failures.append(
+                f"{name}: performance Cangjie={cangjie_mean:.3f}ns/"
+                f"Skrifa={skrifa_mean:.3f}ns"
+            )
     if failures:
         print("Fontations/Skrifa semantic matrix failed:", file=sys.stderr)
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         return 1
-    print(f"Fontations/Skrifa semantic matrix passed: {len(measured)} cases")
+    print(f"Fontations/Skrifa matrix passed: {len(measured)} cases")
     return 0
 
 

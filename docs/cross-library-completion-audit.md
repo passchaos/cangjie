@@ -30,8 +30,10 @@ x86-64, pinned to CPU 30 where the harness supports it:
 - `zig build fontations-coverage -Doptimize=ReleaseFast`: 41 table families,
   48 public modules, and eight high-level capability groups mapped.
 - `zig build fontations-matrix -Doptimize=ReleaseFast -- --iterations 100000
-  --samples 7 --cpu 30`: 25/25 semantic rows passed; every measured row
-  favored Cangjie (`1.252x--13.865x` in the latest run). The real
+  --samples 7 --cpu 30 --fail-on-slower`: 25/25 semantic rows passed and the
+  runner now enforces rather than merely reports the performance requirement.
+  Every measured row favored Cangjie (`1.271x--13.947x` in the latest strict
+  run). The real
   variable-CFF2 rows require identical normalized FNV command streams and
   cover default owning output (`1.252x`), retained caller storage (`13.814x`),
   and owning output at normalized `wght` endpoints `+1`/`-1`

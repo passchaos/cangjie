@@ -4973,6 +4973,6 @@ shaping-performance superiority.
 - With retained direct-child state included, a later 11-sample run measured
   Cangjie/FreeType at `1.664/1.662 us` for `A`, `1.181/1.188 us` for `X`,
   `2.596/2.773 us` for U+00C2, `24.177/29.624 us` for Devanagari, and
-  `5.469/6.721 us` for Arabic. The three Latin rows now range from a tie to a
-  `1.068x` lead on this workload, but their narrow margins still need wider
-  target/size and platform confirmation.
+  `5.469/6.721 us` for Arabic. A two-size, two-interpreter, five-target rerun
+  then passed all 100 semantic rows and led 92; the remaining eight were `X`
+  near-ties at `0.988x--1.000x`, so the strict all-row claim remains open.

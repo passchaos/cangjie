@@ -247,9 +247,11 @@ x86-64, pinned to CPU 30 where the harness supports it:
   11-sample A/B/B/A run measured `A` at `1.664/1.662 us` (tie), `X` at
   `1.181/1.188 us` (`1.005x`), U+00C2 at `2.596/2.773 us` (`1.068x`),
   Devanagari at `24.177/29.624 us` (`1.225x`), and Arabic at
-  `5.469/6.721 us` (`1.229x`). This closes these five normal/v35 rows at the
-  observed machine, but narrow Latin margins and the wider size/target matrix
-  still preclude a universal result.
+  `5.469/6.721 us` (`1.229x`). A subsequent two-size, two-interpreter, five-
+  target matrix passed all 100 semantic rows; 92 rows led and the other eight
+  were all DejaVu `X` near-ties between `0.988x` and `1.000x`. This is not yet
+  a strict every-row performance win, and wider glyph/platform coverage remains
+  open.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri

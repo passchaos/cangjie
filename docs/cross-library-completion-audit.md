@@ -125,6 +125,17 @@ x86-64, pinned to CPU 30 where the harness supports it:
   Full eager validation still costs roughly `0.807 ms`, `0.177 ms`, `0.007
   ms`, `0.221 ms`, and `10.433 ms` respectively and is not misreported as the
   FreeType-equivalent boundary.
+- `glyph-bench --mode hinted-outline` now exposes the same 26.6 point, on-curve,
+  contour, and advance summary used by the FreeType hinting differential, with
+  explicit v35/v40 and normal/light/LCD/LCD_V/mono controls. The existing
+  `hinting-freetype-test` already covers seven TrueType fixtures (Latin,
+  compound, Arabic, Devanagari, and variable glyf) across those modes, plus five
+  CFF1/CFF2 Type2 cases. Moving public `Face` hint transactions onto the
+  immutable parse-proof path removed repeated whole-glyf validation: against
+  the independent `926b941d` binary, DejaVu Sans `A` at 9 ppem improved from
+  about `1.355 ms` to `4.8--5.4 us`, while the normalized checksum remained
+  exact. The row still trails FreeType's roughly `1.44 us`, so hinted-outline
+  performance remains an explicit blocker.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri

@@ -3360,6 +3360,18 @@ shaping-performance superiority.
   distinct from the charstring blend opcode. This closes a concrete
   Fontations/Skrifa outline-correctness gap, but no Type2 speed claim is made;
   FreeType still leads the broader scan-conversion measurements above.
+- `glyph-bench --mode hinted-outline` adds a matched point-output benchmark
+  with selectable v35/v40 interpreter and normal/light/LCD/LCD_V/mono target.
+  The canonical checksum covers 26.6 points relative to pp1, on-curve flags,
+  contour endpoints, and hinted advance. Existing `hinting-freetype-test` rows
+  prove those values across Latin/simple/compound, Arabic, Devanagari, variable
+  glyf, CFF1, and CFF2 inputs. A profile initially found that the public Face
+  path revalidated the complete glyf/loca graph for every transaction. Reusing
+  the immutable `Face.parse` proof, while retaining validation on the low-level
+  mutation-aware API, reduced DejaVu Sans `A` at 9 ppem from roughly `1.355 ms`
+  to `4.8--5.4 us` against independent binaries with unchanged output.
+  FreeType remains faster at roughly `1.44 us`, so this is a large improvement
+  but not closure of hinted-outline performance.
 - Prepared geometry now caches the sorted edge intersections for all four
   fixed 4x4 sample rows during `prepare`, so every repeated draw starts at
   winding/span accumulation instead of rebuilding active edges and sorting the

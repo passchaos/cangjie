@@ -181,7 +181,8 @@ pub const Face = struct {
         instance: *const font_mod.TrueTypeHintingInstance,
         glyph_id: @import("../../glyph.zig").GlyphId,
     ) (font_mod.FontError || @import("../hinting/root.zig").Error)!font_mod.TrueTypePointTransaction {
-        return self.implementation.hintingPointTransaction(
+        return font_mod.raster_backend.hintingPointTransaction(
+            &self.implementation,
             allocator,
             instance,
             glyph_id,
@@ -204,7 +205,7 @@ pub const Face = struct {
             transaction,
             .{
                 .context = &self.implementation,
-                .resolveFn = font_mod.resolveHintingComponentForExecution,
+                .resolveFn = font_mod.resolveHintingComponentForRendering,
             },
         );
     }

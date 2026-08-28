@@ -1995,60 +1995,101 @@ pub const Font = struct {
         instance: *const TrueTypeHintingInstance,
         glyph_id: glyph_mod.GlyphId,
     ) (FontError || hinting.Error)!TrueTypePointTransaction {
+        return self.hintingPointTransactionForReadMode(
+            allocator,
+            instance,
+            glyph_id,
+            .revalidate,
+        );
+    }
+
+    fn hintingPointTransactionForRaster(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        instance: *const TrueTypeHintingInstance,
+        glyph_id: glyph_mod.GlyphId,
+    ) (FontError || hinting.Error)!TrueTypePointTransaction {
+        return self.hintingPointTransactionForReadMode(
+            allocator,
+            instance,
+            glyph_id,
+            .parsed,
+        );
+    }
+
+    fn hintingPointTransactionForReadMode(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        instance: *const TrueTypeHintingInstance,
+        glyph_id: glyph_mod.GlyphId,
+        read_mode: OutlineReadMode,
+    ) (FontError || hinting.Error)!TrueTypePointTransaction {
         if (self.format != .truetype) return error.UnsupportedHintGlyph;
         if (instance.source.face_identity != @intFromPtr(self)) {
             return error.StaleHintingInstance;
         }
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
-        // Revalidate the complete outline stack because the transaction
-        // exposes borrowed glyph bytecode and point topology to the VM.
         const loca = self.loca orelse return error.MissingTable;
         const glyf = self.glyf orelse return error.MissingTable;
-        try sfnt.checksum.validate(self.data, self.maxp);
-        try sfnt.checksum.validate(self.data, loca);
-        try sfnt.checksum.validate(self.data, glyf);
-        const limits = try (try self.maxpInfo()).trueTypeLimits();
-        try loca_mod.validate(
-            self.data,
-            loca,
-            glyf,
-            self.glyph_count,
-            self.index_to_loc_format,
-        );
-        try glyf_mod.validate(
-            allocator,
-            self.data,
-            loca,
-            glyf,
-            self.glyph_count,
-            self.index_to_loc_format,
-            .{
-                .max_points = limits.max_points,
-                .max_contours = limits.max_contours,
-                .max_component_elements = limits.max_component_elements,
-                .max_component_depth = limits.max_component_depth,
-            },
-        );
-        if (self.gvar) |gvar| {
-            try sfnt.checksum.validate(self.data, gvar);
-            try gvar_validation.validate(
+        const limits = if (read_mode.shouldRevalidate()) blk: {
+            // Public low-level transactions defend against mutation of the
+            // caller-owned bytes after parse. Normal Face rendering instead
+            // consumes the immutable whole-face proof already established.
+            try sfnt.checksum.validate(self.data, self.maxp);
+            try sfnt.checksum.validate(self.data, loca);
+            try sfnt.checksum.validate(self.data, glyf);
+            const parsed_limits = try (try self.maxpInfo()).trueTypeLimits();
+            try loca_mod.validate(
                 self.data,
-                gvar,
+                loca,
+                glyf,
                 self.glyph_count,
-                self.fvar_axis_count orelse return error.BadSfnt,
+                self.index_to_loc_format,
+            );
+            try glyf_mod.validate(
+                allocator,
+                self.data,
+                loca,
+                glyf,
+                self.glyph_count,
+                self.index_to_loc_format,
                 .{
-                    .loca = loca,
-                    .glyf = glyf,
-                    .index_to_loc_format = self.index_to_loc_format,
+                    .max_points = parsed_limits.max_points,
+                    .max_contours = parsed_limits.max_contours,
+                    .max_component_elements = parsed_limits.max_component_elements,
+                    .max_component_depth = parsed_limits.max_component_depth,
                 },
             );
+            break :blk parsed_limits;
+        } else try (try maxp_mod.info(self.data, self.maxp)).trueTypeLimits();
+        if (self.gvar) |gvar| {
+            if (read_mode.shouldRevalidate()) {
+                try sfnt.checksum.validate(self.data, gvar);
+                try gvar_validation.validate(
+                    self.data,
+                    gvar,
+                    self.glyph_count,
+                    self.fvar_axis_count orelse return error.BadSfnt,
+                    .{
+                        .loca = loca,
+                        .glyf = glyf,
+                        .index_to_loc_format = self.index_to_loc_format,
+                    },
+                );
+            }
         }
         const data = try self.glyphData(glyph_id);
         if (data.len == 0) return error.UnsupportedHintGlyph;
         const contour_count = try bin.readI16At(data, 0);
-        const horizontal = try self.horizontalMetrics(glyph_id);
+        const horizontal = try self.horizontalMetricsForReadMode(
+            glyph_id,
+            read_mode,
+        );
         const bounds = try self.glyphBoundsFromParsedTables(glyph_id);
-        const vertical = (try self.verticalMetrics(glyph_id)) orelse
+        const vertical = (try self.verticalMetricsForReadMode(
+            glyph_id,
+            read_mode,
+        )) orelse
             VerticalMetrics{
                 .advance_height = self.units_per_em,
                 .top_side_bearing = 0,
@@ -3163,13 +3204,33 @@ pub const Font = struct {
     /// mutated vertical metrics report InvalidMetrics instead of falling back
     /// to horizontal advances.
     pub fn verticalMetrics(self: *const Font, glyph_id: glyph_mod.GlyphId) FontError!?VerticalMetrics {
+        return self.verticalMetricsForReadMode(glyph_id, .revalidate);
+    }
+
+    fn verticalMetricsForReadMode(
+        self: *const Font,
+        glyph_id: glyph_mod.GlyphId,
+        read_mode: OutlineReadMode,
+    ) FontError!?VerticalMetrics {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
-        const context = try self.verticalMetricTablesForRead();
-        const metric_count = context.metric_count orelse return null;
+        const vhea = sfnt.find(self.owned_tables, "vhea") orelse {
+            if (sfnt.find(self.owned_tables, "vmtx") != null) {
+                return error.InvalidMetrics;
+            }
+            return null;
+        };
+        const vmtx = sfnt.find(self.owned_tables, "vmtx") orelse
+            return error.InvalidMetrics;
+        const header = switch (read_mode) {
+            .revalidate => (try self.verticalMetricTablesForRead())
+                .metric_count orelse return null,
+            .parsed => (try metric_tables.header.read(self.data, vhea))
+                .long_metric_count,
+        };
         return try metric_tables.vertical(
             self.data,
-            context.vmtx.?,
-            metric_count,
+            vmtx,
+            header,
             glyph_id,
         );
     }
@@ -7212,6 +7273,39 @@ fn resolveHintingComponent(
     };
 }
 
+fn resolveHintingComponentForRaster(
+    context: *const anyopaque,
+    glyph_id: glyph_mod.GlyphId,
+) hinting.Error!hinting.compound.Source {
+    const self: *const Font = @ptrCast(@alignCast(context));
+    if (glyph_id >= self.glyph_count) return error.BadSfnt;
+    const data = self.glyphData(glyph_id) catch return error.BadSfnt;
+    const horizontal = self.horizontalMetricsForReadMode(
+        glyph_id,
+        .parsed,
+    ) catch return error.BadSfnt;
+    const bounds = self.glyphBoundsFromParsedTables(glyph_id) catch
+        return error.BadSfnt;
+    const vertical = (self.verticalMetricsForReadMode(
+        glyph_id,
+        .parsed,
+    ) catch return error.BadSfnt) orelse VerticalMetrics{
+        .advance_height = self.units_per_em,
+        .top_side_bearing = 0,
+    };
+    return .{
+        .glyph_id = glyph_id,
+        .data = data,
+        .metrics = .{
+            .bounds = bounds,
+            .advance_width = horizontal.advance_width,
+            .left_side_bearing = horizontal.left_side_bearing,
+            .vertical_advance = vertical.advance_height,
+            .top_side_bearing = vertical.top_side_bearing,
+        },
+    };
+}
+
 /// Internal bridge used by the public face executor to materialize component
 /// glyph transactions without exposing parser storage through the public API.
 pub fn resolveHintingComponentForExecution(
@@ -7219,6 +7313,13 @@ pub fn resolveHintingComponentForExecution(
     glyph_id: glyph_mod.GlyphId,
 ) hinting.Error!hinting.compound.Source {
     return resolveHintingComponent(context, glyph_id);
+}
+
+pub fn resolveHintingComponentForRendering(
+    context: *const anyopaque,
+    glyph_id: glyph_mod.GlyphId,
+) hinting.Error!hinting.compound.Source {
+    return resolveHintingComponentForRaster(context, glyph_id);
 }
 
 fn validateSbixTable(
@@ -7309,6 +7410,7 @@ pub const raster_backend = struct {
     pub const resolvedSvgGlyphDocument = Font.resolvedSvgGlyphDocumentForRaster;
     pub const colorLayers = Font.colorLayersForImmutableFace;
     pub const paletteColor = Font.paletteColorForImmutableFace;
+    pub const hintingPointTransaction = Font.hintingPointTransactionForRaster;
     pub const glyphOutlineAtCoords = Font.glyphOutlineForRasterAtCoords;
     pub const glyphOutline = Font.glyphOutlineForRaster;
     pub const glyphOutlineInto = Font.glyphOutlineForRasterInto;

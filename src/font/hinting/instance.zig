@@ -248,6 +248,40 @@ pub const Instance = struct {
         );
     }
 
+    pub fn executeGlyphAfterProof(
+        self: *Instance,
+        transaction: *outline.Transaction,
+        component_resolver: ?compound.Resolver,
+    ) types.Error!void {
+        return glyph_executor.executeAfterProof(
+            self.allocator,
+            self.state(),
+            transaction,
+            component_resolver,
+        );
+    }
+
+    fn state(self: *Instance) glyph_executor.InstanceState {
+        return .{
+            .source = self.source,
+            .definitions = .{
+                .functions = self.functions,
+                .instructions = self.instructions,
+            },
+            .stack = self.stack,
+            .cvt = self.cvt,
+            .storage = self.storage,
+            .graphics = self.graphics,
+            .hinting_enabled = self.hinting_enabled,
+            .twilight = .{
+                .points = self.twilight_points,
+                .original = self.twilight_original,
+                .unscaled = self.twilight_unscaled,
+                .flags = self.twilight_flags,
+            },
+        };
+    }
+
     fn vm(self: *Instance) vm_mod.Vm {
         return vm_mod.Vm.init(
             self.source,

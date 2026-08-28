@@ -50,6 +50,62 @@ pub fn execute(
     component_resolver: ?compound.Resolver,
 ) types.Error!void {
     try state.twilight.validate();
+    try validateTransactionIdentity(state, transaction);
+
+    var work = try Work.init(allocator, state, component_resolver);
+    defer work.deinit();
+    var glyph = try OwnedGlyph.clone(allocator, transaction);
+    defer glyph.deinit();
+
+    try work.executeGlyph(&glyph.transaction);
+
+    @memcpy(transaction.points, glyph.transaction.points);
+    @memcpy(transaction.original, glyph.transaction.original);
+    @memcpy(transaction.unscaled, glyph.transaction.unscaled);
+    @memcpy(transaction.flags, glyph.transaction.flags);
+    transaction.grid_fit_metrics = glyph.transaction.grid_fit_metrics;
+    work.commit(state);
+}
+
+/// Execute directly against a parsed-face transaction.
+///
+/// This deliberately omits the rollback copies used by `execute`: the caller
+/// has crossed whole-face validation, so malformed glyph bytecode is no longer
+/// an expected recoverable input. The reusable instance remains mutable, just
+/// like a FreeType size/slot pair after a successful `FT_Load_Glyph`.
+pub fn executeAfterProof(
+    allocator: std.mem.Allocator,
+    state: InstanceState,
+    transaction: *outline.Transaction,
+    component_resolver: ?compound.Resolver,
+) types.Error!void {
+    try state.twilight.validate();
+    try validateTransactionIdentity(state, transaction);
+    var work = Work{
+        .allocator = allocator,
+        .state = state,
+        .resolver = component_resolver,
+        .cvt = state.cvt,
+        .storage = state.storage,
+        .twilight_points = state.twilight.points,
+        .twilight_original = state.twilight.original,
+        .twilight_unscaled = state.twilight.unscaled,
+        .twilight_flags = state.twilight.flags,
+        .retained = state.graphics,
+        .compatibility = compatibility.State.init(
+            state.source.interpreter,
+            state.graphics.target,
+            state.graphics.instruct_control,
+            state.source.tricky,
+        ),
+    };
+    try work.executeGlyph(transaction);
+}
+
+fn validateTransactionIdentity(
+    state: InstanceState,
+    transaction: *const outline.Transaction,
+) types.Error!void {
     if (transaction.face_identity != state.source.face_identity or
         transaction.scale_16_16 != state.graphics.scale_16_16 or
         transaction.target != state.graphics.target or
@@ -70,20 +126,6 @@ pub fn execute(
         return error.StaleHintingInstance;
     }
     try validateTransaction(transaction);
-
-    var work = try Work.init(allocator, state, component_resolver);
-    defer work.deinit();
-    var glyph = try OwnedGlyph.clone(allocator, transaction);
-    defer glyph.deinit();
-
-    try work.executeGlyph(&glyph.transaction);
-
-    @memcpy(transaction.points, glyph.transaction.points);
-    @memcpy(transaction.original, glyph.transaction.original);
-    @memcpy(transaction.unscaled, glyph.transaction.unscaled);
-    @memcpy(transaction.flags, glyph.transaction.flags);
-    transaction.grid_fit_metrics = glyph.transaction.grid_fit_metrics;
-    work.commit(state);
 }
 
 const Work = struct {

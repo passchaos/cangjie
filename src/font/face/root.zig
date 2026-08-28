@@ -201,7 +201,7 @@ pub const Face = struct {
         if (transaction.face_identity != @intFromPtr(&self.implementation)) {
             return error.StaleHintingInstance;
         }
-        return instance.executeGlyph(
+        return instance.executeGlyphAfterProof(
             transaction,
             .{
                 .context = &self.implementation,

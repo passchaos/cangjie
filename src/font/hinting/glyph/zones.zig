@@ -635,6 +635,7 @@ pub const Context = struct {
             zone.contours,
             zone.real_point_count,
             x_axis,
+            self.compatibility.is_compound,
         );
     }
 

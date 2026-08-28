@@ -6,6 +6,7 @@ const report = @import("report.zig");
 const dirty_rect = @import("dirty_rect.zig");
 const bitmap_render = @import("bitmap_render.zig");
 const color_layers = @import("color_layers.zig");
+const hinted_outline = @import("hinted_outline.zig");
 
 pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Options) ![]u8 {
     if (options.font_path) |path| {
@@ -280,11 +281,61 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, g
         .outline => try runOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
         .outline_session => try runOutlineSessionIterations(allocator, font, glyph_id, options, iterations, checksum),
         .outline_reuse => try runOutlineReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
+        .hinted_outline => try runHintedOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster => try runRasterIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_owning => try runRasterOwningIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_reuse => try runRasterReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_prepare => try runRasterPrepareIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_prepared => try runRasterPreparedIterations(allocator, font, glyph_id, options, iterations, checksum),
+    }
+}
+
+fn runHintedOutlineIterations(
+    allocator: std.mem.Allocator,
+    font: *const cangjie.font.Face,
+    glyph_id: cangjie.font.GlyphId,
+    options: options_mod.Options,
+    iterations: usize,
+    checksum: *u64,
+) !void {
+    const target: cangjie.font.HintingTarget = switch (options.hinting_target) {
+        .normal => .normal,
+        .light => .light,
+        .lcd => .lcd,
+        .vertical_lcd => .vertical_lcd,
+        .mono => .mono,
+    };
+    const interpreter: cangjie.font.HintingInterpreter =
+        switch (options.hinting_interpreter) {
+            .classic => .classic,
+            .cleartype => .cleartype,
+        };
+    var instance = if (options.normalizedVariationCoords().len == 0)
+        try font.hintingInstanceWithOptions(
+            allocator,
+            @intFromFloat(@round(options.font_size)),
+            .{ .target = target, .interpreter = interpreter },
+        )
+    else
+        try font.hintingInstanceAtWithOptions(
+            allocator,
+            @intFromFloat(@round(options.font_size)),
+            .{ .target = target, .interpreter = interpreter },
+            options.normalizedVariationCoords(),
+        );
+    defer instance.deinit();
+    for (0..iterations) |_| {
+        var transaction = try font.hintingPointTransaction(
+            allocator,
+            &instance,
+            glyph_id,
+        );
+        defer transaction.deinit();
+        try font.executeHintingTransaction(&instance, &transaction);
+        checksum.* = updateChecksum(
+            checksum.*,
+            hinted_outline.cangjieChecksum(&transaction),
+        );
     }
 }
 

@@ -2,6 +2,34 @@ const std = @import("std");
 
 const max_variation_coords = 32;
 
+pub const HintingTarget = enum {
+    normal,
+    light,
+    lcd,
+    vertical_lcd,
+    mono,
+
+    fn fromName(name: []const u8) ?HintingTarget {
+        if (std.mem.eql(u8, name, "normal")) return .normal;
+        if (std.mem.eql(u8, name, "light")) return .light;
+        if (std.mem.eql(u8, name, "lcd")) return .lcd;
+        if (std.mem.eql(u8, name, "vertical-lcd")) return .vertical_lcd;
+        if (std.mem.eql(u8, name, "mono")) return .mono;
+        return null;
+    }
+};
+
+pub const HintingInterpreter = enum {
+    classic,
+    cleartype,
+
+    fn fromName(name: []const u8) ?HintingInterpreter {
+        if (std.mem.eql(u8, name, "classic")) return .classic;
+        if (std.mem.eql(u8, name, "cleartype")) return .cleartype;
+        return null;
+    }
+};
+
 pub const Engine = enum {
     cangjie,
     freetype,
@@ -43,6 +71,7 @@ pub const Mode = enum {
     outline,
     outline_session,
     outline_reuse,
+    hinted_outline,
     raster,
     raster_owning,
     raster_reuse,
@@ -71,6 +100,7 @@ pub const Mode = enum {
         if (std.mem.eql(u8, name, "outline")) return .outline;
         if (std.mem.eql(u8, name, "outline-session")) return .outline_session;
         if (std.mem.eql(u8, name, "outline-reuse")) return .outline_reuse;
+        if (std.mem.eql(u8, name, "hinted-outline")) return .hinted_outline;
         if (std.mem.eql(u8, name, "raster")) return .raster;
         if (std.mem.eql(u8, name, "raster-owning")) return .raster_owning;
         if (std.mem.eql(u8, name, "raster-reuse")) return .raster_reuse;
@@ -100,6 +130,7 @@ pub const Mode = enum {
             .outline => "outline",
             .outline_session => "outline-session",
             .outline_reuse => "outline-reuse",
+            .hinted_outline => "hinted-outline",
             .raster => "raster",
             .raster_owning => "raster-owning",
             .raster_reuse => "raster-reuse",
@@ -171,6 +202,8 @@ pub const Options = struct {
     warmup: usize = 1_000,
     samples: usize = 1,
     dirty_rect: bool = false,
+    hinting_target: HintingTarget = .normal,
+    hinting_interpreter: HintingInterpreter = .cleartype,
     variation_coord_buf: [max_variation_coords]f32 = undefined,
     variation_coord_count: usize = 0,
 
@@ -244,6 +277,17 @@ pub fn parse(args: []const []const u8) !Options {
             options.samples = try parsePositiveUsize(args[i]);
         } else if (std.mem.eql(u8, arg, "--dirty-rect")) {
             options.dirty_rect = true;
+        } else if (std.mem.eql(u8, arg, "--hinting-target")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.hinting_target = HintingTarget.fromName(args[i]) orelse
+                return error.InvalidArguments;
+        } else if (std.mem.eql(u8, arg, "--hinting-interpreter")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            options.hinting_interpreter = HintingInterpreter.fromName(
+                args[i],
+            ) orelse return error.InvalidArguments;
         } else if (std.mem.eql(u8, arg, "--variation") or std.mem.eql(u8, arg, "--variations")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -308,11 +352,11 @@ fn parseVariationCoords(options: *Options, text: []const u8) !void {
 pub fn printUsage(args: []const []const u8) void {
     const exe = if (args.len > 0) args[0] else "glyph-bench";
     std.debug.print(
-        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode face-open|face-validate|charmap|metrics|bounds|global-metrics|family-name|glyph-name|attributes|color-layers|bitmap|bitmap-render|outline|outline-session|outline-reuse|raster|raster-owning|raster-reuse|raster-prepare|raster-prepared] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation|color-v0|cbdt-png|cbdt-bgra|ebdt-mask|ebdt-compound] [--glyph-id n|--codepoint U+XXXX]
+        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode face-open|face-validate|charmap|metrics|bounds|global-metrics|family-name|glyph-name|attributes|color-layers|bitmap|bitmap-render|outline|outline-session|outline-reuse|hinted-outline|raster|raster-owning|raster-reuse|raster-prepare|raster-prepared] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation|color-v0|cbdt-png|cbdt-bgra|ebdt-mask|ebdt-compound] [--glyph-id n|--codepoint U+XXXX]
         \\
         \\options:
         \\  --engine NAME        cangjie, freetype, or compare-freetype; default cangjie
-        \\  --mode NAME          face-open, face-validate, charmap, metrics, bounds, global-metrics, family-name, glyph-name, attributes, color-layers, bitmap, bitmap-render, outline, outline-session, outline-reuse, raster, raster-owning, raster-reuse, raster-prepare, or raster-prepared; default outline
+        \\  --mode NAME          face-open, face-validate, charmap, metrics, bounds, global-metrics, family-name, glyph-name, attributes, color-layers, bitmap, bitmap-render, outline, outline-session, outline-reuse, hinted-outline, raster, raster-owning, raster-reuse, raster-prepare, or raster-prepared; default outline
         \\  --format text|tsv    output format, default text
         \\  --font PATH          use a real font
         \\  --builtin NAME       use an in-repo fixture, default gvar-compound
@@ -325,6 +369,8 @@ pub fn printUsage(args: []const []const u8) void {
         \\  --warmup N           unmeasured warmup iterations, default 1000
         \\  --samples N          independent measured samples, default 1
         \\  --dirty-rect         for reused/prepared raster, clear and hash only the clipped glyph rectangle
+        \\  --hinting-target NAME normal, light, lcd, vertical-lcd, or mono
+        \\  --hinting-interpreter NAME classic (v35) or cleartype (v40)
         \\  --variation CSV      normalized variation coordinates, e.g. 0.5,-0.25
         \\
         \\examples:
@@ -412,6 +458,21 @@ test "parse accepts embedded bitmap fixtures" {
         });
         try std.testing.expectEqual(case[1], options.builtin_font);
     }
+}
+
+test "parse accepts explicit hinting target and interpreter" {
+    const options = try parse(&.{
+        "glyph-bench",
+        "--mode",
+        "hinted-outline",
+        "--hinting-target",
+        "vertical-lcd",
+        "--hinting-interpreter",
+        "classic",
+    });
+    try std.testing.expectEqual(Mode.hinted_outline, options.mode);
+    try std.testing.expectEqual(HintingTarget.vertical_lcd, options.hinting_target);
+    try std.testing.expectEqual(HintingInterpreter.classic, options.hinting_interpreter);
 }
 
 test "raster preparation has no FreeType comparison mode" {

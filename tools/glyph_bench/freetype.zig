@@ -6,6 +6,7 @@ const report = @import("report.zig");
 const dirty_rect = @import("dirty_rect.zig");
 const bitmap_render = @import("bitmap_render.zig");
 const color_layers = @import("color_layers.zig");
+const hinted_outline = @import("hinted_outline.zig");
 
 const FreeTypeFace = struct {
     library: ft.FT_Library,
@@ -20,7 +21,20 @@ const FreeTypeFace = struct {
         var face: ft.FT_Face = null;
         if (ft.FT_New_Memory_Face(library, @ptrCast(font_bytes.ptr), @intCast(font_bytes.len), 0, &face) != 0) return error.FreeTypeFailed;
         errdefer _ = ft.FT_Done_Face(face);
-        if (options.mode == .bitmap_render) {
+        if (options.mode == .hinted_outline) {
+            const version: ft.FT_UInt = switch (options.hinting_interpreter) {
+                .classic => 35,
+                .cleartype => 40,
+            };
+            if (ft.cangjie_ft_select_interpreter(library, version) != 0) {
+                return error.FreeTypeFailed;
+            }
+            if (ft.FT_Set_Pixel_Sizes(
+                face,
+                0,
+                @intFromFloat(@round(options.font_size)),
+            ) != 0) return error.FreeTypeFailed;
+        } else if (options.mode == .bitmap_render) {
             _ = try bitmap_render.selectFreeTypeStrike(face, options.font_size);
         } else if (options.mode == .raster or options.mode == .raster_owning or options.mode == .raster_reuse) {
             if (ft.FT_Set_Pixel_Sizes(face, 0, @intFromFloat(@round(options.font_size))) != 0) return error.FreeTypeFailed;
@@ -299,6 +313,29 @@ fn runIterations(ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_m
         }
         return;
     }
+    if (options.mode == .hinted_outline) {
+        const target: ft.FT_Int32 = @intCast(switch (options.hinting_target) {
+            .normal => ft.FT_LOAD_TARGET_NORMAL,
+            .light => ft.FT_LOAD_TARGET_LIGHT,
+            .lcd => ft.FT_LOAD_TARGET_LCD,
+            .vertical_lcd => ft.FT_LOAD_TARGET_LCD_V,
+            .mono => ft.FT_LOAD_TARGET_MONO,
+        });
+        const flags: ft.FT_Int32 = target |
+            @as(ft.FT_Int32, @intCast(
+                ft.FT_LOAD_NO_BITMAP | ft.FT_LOAD_NO_AUTOHINT,
+            ));
+        for (0..iterations) |_| {
+            if (ft.FT_Load_Glyph(face, glyph_id, flags) != 0) {
+                return error.FreeTypeFailed;
+            }
+            checksum.* = updateChecksum(
+                checksum.*,
+                try hinted_outline.freeTypeChecksum(face.*.glyph),
+            );
+        }
+        return;
+    }
     if (options.mode == .raster_reuse) {
         if (ft.FT_Load_Glyph(
             face,
@@ -320,7 +357,7 @@ fn runIterations(ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_m
         return;
     }
     const load_flags: ft.FT_Int32 = switch (options.mode) {
-        .face_open, .face_validate, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .color_layers, .bitmap, .bitmap_render => unreachable,
+        .face_open, .face_validate, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .color_layers, .bitmap, .bitmap_render, .hinted_outline => unreachable,
         .outline => ft.FT_LOAD_NO_SCALE | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
         .outline_session, .outline_reuse => unreachable,
         .raster, .raster_owning => ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
@@ -331,7 +368,7 @@ fn runIterations(ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_m
     while (i < iterations) : (i += 1) {
         if (ft.FT_Load_Glyph(face, glyph_id, load_flags) != 0) return error.FreeTypeFailed;
         checksum.* = updateChecksum(checksum.*, switch (options.mode) {
-            .face_open, .face_validate, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .color_layers, .bitmap, .bitmap_render => unreachable,
+            .face_open, .face_validate, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .color_layers, .bitmap, .bitmap_render, .hinted_outline => unreachable,
             .outline => outlineChecksum(face.*.glyph),
             .raster, .raster_owning, .raster_reuse => rasterTargetChecksum(face.*.glyph, options, target_pixels),
             .outline_session, .outline_reuse, .raster_prepare, .raster_prepared => unreachable,

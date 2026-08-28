@@ -284,6 +284,11 @@ x86-64, pinned to CPU 30 where the harness supports it:
   exposed unresolved Bengali/Tamil and Liberation Sans v40-mono mismatches;
   those are recorded as new open compatibility work rather than hidden behind
   the maintained matrix.
+- Glyph-zone MDRP/MIRP now share one bounds/zone resolution and operate
+  directly on glyph arrays when zp0/zp1 are both zone 1. Against the pre-change
+  binary, fixed-CPU-30 A/B/B/A instructions/branches/cycles fell
+  `5.86%`/`5.73%`/`3.23%` for `A`, `6.30%`/`7.15%`/`2.59%` for `X`, and
+  `4.69%`/`4.59%`/`3.79%` for U+00C2; control scripts also improved.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri

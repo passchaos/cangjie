@@ -4996,3 +4996,6 @@ shaping-performance superiority.
   Latin, and Annapurna SIL Devanagari. Wider probing also identified currently
   unresolved FreeSans Bengali/Tamil and Liberation Sans v40-mono differences,
   which remain explicit audit blockers.
+- Common glyph-zone MDRP/MIRP execution now resolves both points and the glyph
+  zone once. Fixed-CPU-30 A/B/B/A instructions fell `5.86%` for `A`, `6.30%`
+  for `X`, and `4.69%` for U+00C2, with lower cycles and improved controls.

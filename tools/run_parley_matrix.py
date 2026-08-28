@@ -96,6 +96,8 @@ def main() -> int:
             ("reflow", "default"),
             ("layout", "inline-object"),
             ("reflow", "inline-object"),
+            ("layout", "out-of-flow-object"),
+            ("reflow", "out-of-flow-object"),
         ):
             cangjie_first = run(
                 cangjie_command(args.cangjie, case, style, phase, args.iterations, args.samples),
@@ -168,7 +170,7 @@ def main() -> int:
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         return 1
-    print("Cangjie/Parley output-count matrix passed: 18 cases")
+    print("Cangjie/Parley output-count matrix passed: 24 cases")
     return 0
 
 

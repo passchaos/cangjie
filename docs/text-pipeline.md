@@ -2301,3 +2301,13 @@ Arabic inline-object reflow A/B/B/A comparison from about `5.01B` to `4.32B`
 instructions, `0.726B` to `0.583B` branches, and `1.43B` to `1.28B` cycles.
 The native and geometry checksums remain unchanged, and the final matrix moves
 that last noisy retained row to a `1.029x` lead.
+
+The cross-engine matrix now also has ordinary out-of-flow object construction
+and retained-reflow rows for Latin, Arabic, and Japanese. Both adapters insert
+the same 24x20 object at the same UTF-8 boundary and select their native
+zero-occupancy out-of-flow policy. A fixed-CPU-30 `1000 * 7` run passed all 24
+count/stability rows; the six new Cangjie speedups were `1.603x`/`1.345x` for
+Latin, `1.184x`/`1.030x` for Arabic, and `1.791x`/`1.383x` for Japanese
+(construction/reflow). The matrix still reports `geometry_equal=false` for
+these rows because the existing normalized digest describes text graphemes,
+not cross-engine positioned-object geometry.

@@ -28,7 +28,8 @@ fn main() {
     let text_file = fs::read_to_string(text_path).unwrap();
     let source_text = text_file.lines().next().unwrap_or("");
     let owned_text;
-    let text = if style == "inline-object" {
+    let has_inline_object = matches!(style.as_str(), "inline-object" | "out-of-flow-object");
+    let text = if has_inline_object {
         let split = source_text.ceil_char_boundary(source_text.len() / 2);
         owned_text = format!("{}\u{fffc}{}", &source_text[..split], &source_text[split..]);
         owned_text.as_str()
@@ -177,15 +178,21 @@ fn build_layout(
             builder.push(StyleProperty::LetterSpacing(0.75), split..);
             builder.push(StyleProperty::WordSpacing(2.0), split..);
         }
-        "inline-object" => builder.push_inline_box(InlineBox {
+        "inline-object" | "out-of-flow-object" => builder.push_inline_box(InlineBox {
             id: 1,
-            kind: InlineBoxKind::InFlow,
+            kind: if style == "inline-object" {
+                InlineBoxKind::InFlow
+            } else {
+                InlineBoxKind::OutOfFlow
+            },
             index: text.ceil_char_boundary(text.len() / 2),
             width: 24.0,
             height: 20.0,
             baseline: Some(15.0),
         }),
-        _ => panic!("style must be default, spacing, alternating, or inline-object"),
+        _ => panic!(
+            "style must be default, spacing, alternating, inline-object, or out-of-flow-object"
+        ),
     }
     builder.set_base_direction(match direction {
         "auto" => BaseDirection::Auto,

@@ -18,7 +18,11 @@ pub fn main(init: std.process.Init) !void {
     const direction = if (args.next()) |value| try parseDirection(value) else Direction.auto;
     const style = if (args.next()) |value| try parseStyle(value) else Style.default;
     if (args.next() != null) return usage();
-    if (phase == .reflow and style != .default and style != .inline_object) {
+    if (phase == .reflow and
+        style != .default and
+        style != .inline_object and
+        style != .out_of_flow_object)
+    {
         return error.InvalidArguments;
     }
 
@@ -48,7 +52,7 @@ pub fn main(init: std.process.Init) !void {
         source_text,
         source_text.len / 2,
     );
-    const text = if (style == .inline_object)
+    const text = if (style.hasInlineObject())
         try std.mem.concat(
             allocator,
             u8,
@@ -56,20 +60,21 @@ pub fn main(init: std.process.Init) !void {
         )
     else
         source_text;
-    defer if (style == .inline_object) allocator.free(text);
+    defer if (style.hasInlineObject()) allocator.free(text);
     if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
     const faces = [_]*const cangjie.font.Face{&face};
     const cascade = cangjie.font.Cascade.init(&faces);
     var engine = cangjie.shaping.Engine.init(allocator, .{});
     defer engine.deinit();
     const paragraph_direction = try resolvedDirection(direction, text);
-    const inline_objects = if (style == .inline_object)
+    const inline_objects = if (style.hasInlineObject())
         &[_]cangjie.paragraph.InlineObject{.{
             .id = 1,
             .byte_index = inline_object_index,
             .width = 24,
             .height = 20,
             .baseline = 15,
+            .kind = if (style == .inline_object) .in_flow else .out_of_flow,
         }}
     else
         &.{};
@@ -154,7 +159,17 @@ pub fn main(init: std.process.Init) !void {
 
 const Phase = enum { layout, reflow };
 const Direction = enum { auto, ltr, rtl };
-const Style = enum { default, spacing, alternating, inline_object };
+const Style = enum {
+    default,
+    spacing,
+    alternating,
+    inline_object,
+    out_of_flow_object,
+
+    fn hasInlineObject(self: Style) bool {
+        return self == .inline_object or self == .out_of_flow_object;
+    }
+};
 
 fn benchmarkOnce(
     phase: Phase,
@@ -428,6 +443,7 @@ fn parseStyle(value: []const u8) !Style {
     if (std.mem.eql(u8, value, "spacing")) return .spacing;
     if (std.mem.eql(u8, value, "alternating")) return .alternating;
     if (std.mem.eql(u8, value, "inline-object")) return .inline_object;
+    if (std.mem.eql(u8, value, "out-of-flow-object")) return .out_of_flow_object;
     return error.InvalidArguments;
 }
 

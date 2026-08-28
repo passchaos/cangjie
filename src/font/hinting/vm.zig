@@ -73,6 +73,10 @@ pub const Vm = struct {
             // Font and prep programs always run without v40 movement hacks.
             self.compatibility = .{};
         }
+        // Zone bindings and their owners stay stable for an entire program.
+        // Build this adapter once; its state fields are pointers, so scalar
+        // opcodes below still update what later point opcodes observe.
+        var point_runtime = self.pointRuntime();
         while (true) {
             const bytecode = self.cursor.bytes();
             if (self.cursor.pc >= bytecode.len) {
@@ -99,7 +103,7 @@ pub const Vm = struct {
             }
             self.cursor.pc += 1;
             try self.accountInstruction();
-            try self.dispatch(opcode);
+            try self.dispatch(opcode, &point_runtime);
         }
     }
 
@@ -155,13 +159,12 @@ pub const Vm = struct {
     fn dispatch(
         self: *Vm,
         opcode: u8,
+        point_runtime: *glyph_opcodes.Runtime,
     ) types.Error!void {
         if (opcode >= 0xc0) {
-            var point_runtime = self.pointRuntime();
             return point_runtime.relativeMove(opcode);
         }
         if (glyph_opcodes.handles(opcode)) {
-            var point_runtime = self.pointRuntime();
             if (!try point_runtime.handle(opcode)) unreachable;
             return;
         }

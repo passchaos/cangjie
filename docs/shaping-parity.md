@@ -4980,3 +4980,7 @@ shaping-performance superiority.
   reference bounds. Relative to `e1343082`, fixed-CPU-30 retired
   instructions/branches fell `0.78%`/`0.79%` for `A`, `1.49%`/`1.00%` for
   `X`, and `1.17%`/`0.94%` for U+00C2, with neutral control rows.
+- The VM now constructs its pointer-based point runtime once per program
+  instead of once per point opcode. Fixed-CPU-30 A/B/B/A counters against
+  `9a43a387` reduced instructions by `3.65%` for `A`, `4.60%` for `X`, and
+  `3.85%` for U+00C2; all three cycle counts also improved.

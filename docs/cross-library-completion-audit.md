@@ -258,6 +258,12 @@ x86-64, pinned to CPU 30 where the harness supports it:
   A/B/B/A retired instructions/branches fell `0.78%`/`0.79%` for `A`,
   `1.49%`/`1.00%` for `X`, and `1.17%`/`0.94%` for U+00C2; Devanagari and
   Arabic controls remained neutral or improved.
+- The VM now materializes its point-zone runtime adapter once per program, not
+  once per point opcode. Its members are pointers into VM state, so scalar
+  opcodes remain immediately visible without reconstruction. Against
+  `9a43a387`, fixed-CPU-30 A/B/B/A instructions/branches/cycles fell
+  `3.65%`/`0.79%`/`1.79%` for `A`, `4.60%`/`0.97%`/`3.86%` for `X`, and
+  `3.85%`/`0.93%`/`2.89%` for U+00C2. Devanagari and Arabic also improved.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri

@@ -104,6 +104,16 @@ bearings/advances instead of collapsing them into one horizontal record.
 `tools/freetype_bitmap_oracle.c` reads the retained format-8 fixture through
 FreeType and confirms parent metrics `4x2`, bearing `(0,2)`, and rows `1000` /
 `0010`; the Cangjie materializer and CPU-render tests retain the same pixels.
+`glyph-bench --mode bitmap-render` provides a repeatable in-process FreeType
+differential for that boundary. Both engines select the same exact/nearest-
+larger/largest-smaller native strike and hash dimensions, authored placement,
+and either decoded 8-bit coverage or premultiplied BGRA8 pixels. The adapter
+normalizes FreeType's padded/negative-pitch MONO/GRAY/GRAY2/GRAY4/BGRA layouts
+and Cangjie's PNG/raw/compound records; it deliberately does not compare a
+scaled destination surface, where renderer sampling policy is a separate
+operation. The default FreeType matrix adds real CBDT and sbix PNG rows when
+the retained HarfBuzz fixtures are available, while `bench-smoke` also checks
+synthetic CBDT PNG, raw BGRA, EBDT mask, and compound format-8 output.
 
 ## Performance Scope
 

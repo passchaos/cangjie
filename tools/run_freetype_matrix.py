@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a symmetric Cangjie/FreeType raster lifecycle matrix."""
+"""Run a symmetric Cangjie/FreeType raster and bitmap lifecycle matrix."""
 
 from __future__ import annotations
 
@@ -60,6 +60,8 @@ def main() -> int:
     parser.add_argument("--cff2", required=True, type=Path)
     parser.add_argument("--arabic", required=True, type=Path)
     parser.add_argument("--cjk", required=True, type=Path)
+    parser.add_argument("--cbdt", type=Path)
+    parser.add_argument("--sbix", type=Path)
     parser.add_argument("--iterations", type=int, default=1000)
     parser.add_argument("--samples", type=int, default=7)
     parser.add_argument("--cpu", type=int)
@@ -74,6 +76,9 @@ def main() -> int:
         parser.error("sizes must be a comma-separated integer list")
     if not sizes or any(size <= 0 for size in sizes):
         parser.error("sizes must be positive")
+    for label, path in (("cbdt", args.cbdt), ("sbix", args.sbix)):
+        if path is not None and not path.is_file():
+            parser.error(f"{label} fixture does not exist: {path}")
 
     cases = (
         Case("glyf-latin", args.roboto, "U+00E9"),
@@ -81,6 +86,14 @@ def main() -> int:
         Case("cff2-latin", args.cff2, "U+0041"),
         Case("glyf-arabic", args.arabic, "U+0633"),
         Case("cff-cjk", args.cjk, "U+6F22"),
+    )
+    bitmap_cases = (
+        (() if args.cbdt is None else (
+            Case("cbdt-png", args.cbdt, "U+0038"),
+        )) +
+        (() if args.sbix is None else (
+            Case("sbix-png", args.sbix, "U+0058"),
+        ))
     )
     failures: list[str] = []
     row_count = 0
@@ -171,6 +184,54 @@ def main() -> int:
                     f"speedup={speedup:.3f}x"
                 )
                 row_count += 1
+    for case in bitmap_cases:
+        for size in sizes:
+            # Compare decoded native strike output rather than differently
+            # scaled destination surfaces. Both engines hash dimensions,
+            # authored placement, and normalized mask8 or premultiplied BGRA.
+            cangjie_cmd = command(
+                args.glyph_bench, case, "cangjie", "bitmap-render", size,
+                args.iterations, args.samples, args.minimum_target_size,
+            )
+            freetype_cmd = command(
+                args.glyph_bench, case, "freetype", "bitmap-render", size,
+                args.iterations, args.samples, args.minimum_target_size,
+            )
+            cangjie_a = run(cangjie_cmd, args.cpu)
+            freetype_a = run(freetype_cmd, args.cpu)
+            freetype_b = run(freetype_cmd, args.cpu)
+            cangjie_b = run(cangjie_cmd, args.cpu)
+            for engine, first, second in (
+                ("cangjie", cangjie_a, cangjie_b),
+                ("freetype", freetype_a, freetype_b),
+            ):
+                if first.get("checksum") != second.get("checksum"):
+                    failures.append(
+                        f"{case.name}/bitmap-render/{size}: {engine} "
+                        f"checksum {first.get('checksum')}/"
+                        f"{second.get('checksum')}"
+                    )
+            if cangjie_a.get("checksum") != freetype_a.get("checksum"):
+                failures.append(
+                    f"{case.name}/bitmap-render/{size}: cross-engine pixels "
+                    f"{cangjie_a.get('checksum')}/"
+                    f"{freetype_a.get('checksum')}"
+                )
+            cangjie_ns = math.sqrt(
+                float(cangjie_a["sample_median_ns_per_iter"])
+                * float(cangjie_b["sample_median_ns_per_iter"])
+            )
+            freetype_ns = math.sqrt(
+                float(freetype_a["sample_median_ns_per_iter"])
+                * float(freetype_b["sample_median_ns_per_iter"])
+            )
+            speedup = math.inf if cangjie_ns == 0 else freetype_ns / cangjie_ns
+            print(
+                f"{case.name}/bitmap-render/{size}px: "
+                f"cangjie={cangjie_ns:.3f}ns freetype={freetype_ns:.3f}ns "
+                f"speedup={speedup:.3f}x"
+            )
+            row_count += 1
     if failures:
         print("Cangjie/FreeType lifecycle matrix failed:", file=sys.stderr)
         for failure in failures:

@@ -1365,7 +1365,13 @@ pub const Rasterizer = struct {
     ) !void {
         if (bitmap.ppem == 0) return error.BadSfnt;
 
-        var decoder = imx.PngDecoder.init(bitmap.data) catch return error.BadSfnt;
+        // bitmapGlyphData's immutable-face path already proved all PNG chunk
+        // CRCs during Face.parse. The decoder still validates structure and
+        // zlib integrity, but need not hash the same chunks for every draw.
+        var decoder = imx.PngDecoder.initWithOptions(
+            bitmap.data,
+            .{ .ignore_crc = true },
+        ) catch return error.BadSfnt;
         var decoded = decoder.decodeNormalizedToColor8WithAlpha(
             self.allocator,
             .{

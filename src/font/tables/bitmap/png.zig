@@ -67,6 +67,20 @@ pub fn validate(data: []const u8) types.Error!Dimensions {
     }
 }
 
+/// Read IHDR dimensions after `validate` has proved the full PNG datastream.
+pub fn dimensionsAfterProof(data: []const u8) types.Error!Dimensions {
+    if (data.len < signature.len + 8 + 13 + 4 or
+        !std.mem.eql(u8, data[0..signature.len], &signature) or
+        !bin.tagEq(try bin.readTagAt(data, signature.len + 4), "IHDR"))
+    {
+        return error.BadSfnt;
+    }
+    return .{
+        .width = try bin.readU32At(data, signature.len + 8),
+        .height = try bin.readU32At(data, signature.len + 12),
+    };
+}
+
 pub fn glyph(
     data: []const u8,
     source: types.StrikeSource,
@@ -84,6 +98,31 @@ pub fn glyph(
         .origin_offset_y = origin_offset_y,
         .width = dimensions.width,
         .height = dimensions.height,
+        .data = data,
+    };
+}
+
+/// Build a PNG glyph after the containing face has validated the complete
+/// datastream and cached its dimensions. This is intentionally internal to
+/// immutable-face hot paths; public mutation-aware accessors use `glyph`.
+pub fn glyphAfterProof(
+    data: []const u8,
+    source: types.StrikeSource,
+    ppem: u16,
+    ppi: u16,
+    origin_offset_x: i16,
+    origin_offset_y: i16,
+    width: u32,
+    height: u32,
+) types.GlyphPng {
+    return .{
+        .source = source,
+        .ppem = ppem,
+        .ppi = ppi,
+        .origin_offset_x = origin_offset_x,
+        .origin_offset_y = origin_offset_y,
+        .width = width,
+        .height = height,
         .data = data,
     };
 }

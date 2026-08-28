@@ -37,6 +37,7 @@ pub const Mode = enum {
     strikes,
     color_glyph,
     bitmap,
+    bitmap_render,
     outline,
     outline_session,
     outline_reuse,
@@ -60,6 +61,7 @@ pub const Mode = enum {
         if (std.mem.eql(u8, name, "strikes")) return .strikes;
         if (std.mem.eql(u8, name, "color-glyph")) return .color_glyph;
         if (std.mem.eql(u8, name, "bitmap")) return .bitmap;
+        if (std.mem.eql(u8, name, "bitmap-render")) return .bitmap_render;
         if (std.mem.eql(u8, name, "outline")) return .outline;
         if (std.mem.eql(u8, name, "outline-session")) return .outline_session;
         if (std.mem.eql(u8, name, "outline-reuse")) return .outline_reuse;
@@ -86,6 +88,7 @@ pub const Mode = enum {
             .strikes => "strikes",
             .color_glyph => "color-glyph",
             .bitmap => "bitmap",
+            .bitmap_render => "bitmap-render",
             .outline => "outline",
             .outline_session => "outline-session",
             .outline_reuse => "outline-reuse",
@@ -102,13 +105,19 @@ pub const BuiltinFont = enum {
     minimal,
     gvar_compound,
     cff2_variation,
+    cbdt_png,
     cbdt_bgra,
+    ebdt_mask,
+    ebdt_compound,
 
     pub fn fromName(name: []const u8) ?BuiltinFont {
         if (std.mem.eql(u8, name, "minimal")) return .minimal;
         if (std.mem.eql(u8, name, "gvar-compound")) return .gvar_compound;
         if (std.mem.eql(u8, name, "cff2-variation")) return .cff2_variation;
+        if (std.mem.eql(u8, name, "cbdt-png")) return .cbdt_png;
         if (std.mem.eql(u8, name, "cbdt-bgra")) return .cbdt_bgra;
+        if (std.mem.eql(u8, name, "ebdt-mask")) return .ebdt_mask;
+        if (std.mem.eql(u8, name, "ebdt-compound")) return .ebdt_compound;
         return null;
     }
 
@@ -117,7 +126,10 @@ pub const BuiltinFont = enum {
             .minimal => "builtin:minimal",
             .gvar_compound => "builtin:gvar-compound",
             .cff2_variation => "builtin:cff2-variation",
+            .cbdt_png => "builtin:cbdt-png",
             .cbdt_bgra => "builtin:cbdt-bgra",
+            .ebdt_mask => "builtin:ebdt-mask",
+            .ebdt_compound => "builtin:ebdt-compound",
         };
     }
 };
@@ -284,11 +296,11 @@ fn parseVariationCoords(options: *Options, text: []const u8) !void {
 pub fn printUsage(args: []const []const u8) void {
     const exe = if (args.len > 0) args[0] else "glyph-bench";
     std.debug.print(
-        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode face-parse|charmap|metrics|bounds|global-metrics|family-name|glyph-name|attributes|bitmap|outline|outline-session|outline-reuse|raster|raster-owning|raster-reuse|raster-prepare|raster-prepared] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation|cbdt-bgra] [--glyph-id n|--codepoint U+XXXX]
+        \\usage: {s} [--engine cangjie|freetype|compare-freetype] [--mode face-parse|charmap|metrics|bounds|global-metrics|family-name|glyph-name|attributes|bitmap|bitmap-render|outline|outline-session|outline-reuse|raster|raster-owning|raster-reuse|raster-prepare|raster-prepared] [--font font.ttf|font.otf] [--builtin minimal|gvar-compound|cff2-variation|cbdt-png|cbdt-bgra|ebdt-mask|ebdt-compound] [--glyph-id n|--codepoint U+XXXX]
         \\
         \\options:
         \\  --engine NAME        cangjie, freetype, or compare-freetype; default cangjie
-        \\  --mode NAME          face-parse, charmap, metrics, bounds, global-metrics, family-name, glyph-name, attributes, bitmap, outline, outline-session, outline-reuse, raster, raster-owning, raster-reuse, raster-prepare, or raster-prepared; default outline
+        \\  --mode NAME          face-parse, charmap, metrics, bounds, global-metrics, family-name, glyph-name, attributes, bitmap, bitmap-render, outline, outline-session, outline-reuse, raster, raster-owning, raster-reuse, raster-prepare, or raster-prepared; default outline
         \\  --format text|tsv    output format, default text
         \\  --font PATH          use a real font
         \\  --builtin NAME       use an in-repo fixture, default gvar-compound
@@ -345,6 +357,34 @@ test "parse accepts cold face construction benchmark mode" {
     const options = try parse(&.{ "glyph-bench", "--mode", "face-parse" });
     try std.testing.expectEqual(Mode.face_parse, options.mode);
     try std.testing.expectEqualStrings("face-parse", options.mode.label());
+}
+
+test "parse accepts cross-engine embedded bitmap render mode" {
+    const options = try parse(&.{
+        "glyph-bench",
+        "--engine",
+        "compare-freetype",
+        "--mode",
+        "bitmap-render",
+    });
+    try std.testing.expectEqual(Mode.bitmap_render, options.mode);
+    try std.testing.expectEqualStrings("bitmap-render", options.mode.label());
+}
+
+test "parse accepts embedded bitmap fixtures" {
+    inline for (.{
+        .{ "cbdt-png", BuiltinFont.cbdt_png },
+        .{ "cbdt-bgra", BuiltinFont.cbdt_bgra },
+        .{ "ebdt-mask", BuiltinFont.ebdt_mask },
+        .{ "ebdt-compound", BuiltinFont.ebdt_compound },
+    }) |case| {
+        const options = try parse(&.{
+            "glyph-bench",
+            "--builtin",
+            case[0],
+        });
+        try std.testing.expectEqual(case[1], options.builtin_font);
+    }
 }
 
 test "raster preparation has no FreeType comparison mode" {

@@ -146,6 +146,41 @@ pub fn glyphPng(
     location: GlyphLocation,
     source: types.StrikeSource,
 ) types.Error!?types.GlyphPng {
+    return glyphPngForReadMode(
+        data,
+        data_table,
+        selected_strike,
+        location,
+        source,
+        true,
+    );
+}
+
+pub fn glyphPngAfterProof(
+    data: []const u8,
+    data_table: types.Table,
+    selected_strike: Strike,
+    location: GlyphLocation,
+    source: types.StrikeSource,
+) types.Error!?types.GlyphPng {
+    return glyphPngForReadMode(
+        data,
+        data_table,
+        selected_strike,
+        location,
+        source,
+        false,
+    );
+}
+
+fn glyphPngForReadMode(
+    data: []const u8,
+    data_table: types.Table,
+    selected_strike: Strike,
+    location: GlyphLocation,
+    source: types.StrikeSource,
+    validate_payload: bool,
+) types.Error!?types.GlyphPng {
     if (location.offset > data_table.length or
         location.length > data_table.length - location.offset)
     {
@@ -175,13 +210,26 @@ pub fn glyphPng(
     const data_len = try bin.readU32At(image, metrics_len);
     if (data_len > image.len - metrics_len - 4) return error.BadSfnt;
     const payload = image[metrics_len + 4 .. metrics_len + 4 + data_len];
-    return try png.glyph(
+    if (validate_payload) {
+        return try png.glyph(
+            payload,
+            source,
+            selected_strike.ppem,
+            selected_strike.ppi,
+            metrics.bearing_x,
+            metrics.bearing_y,
+        );
+    }
+    const dimensions = try png.dimensionsAfterProof(payload);
+    return png.glyphAfterProof(
         payload,
         source,
         selected_strike.ppem,
         selected_strike.ppi,
         metrics.bearing_x,
         metrics.bearing_y,
+        dimensions.width,
+        dimensions.height,
     );
 }
 
@@ -246,6 +294,37 @@ pub fn glyphData(
     source: types.StrikeSource,
 ) types.Error!?types.GlyphData {
     if (try glyphPng(
+        data,
+        data_table,
+        selected_strike,
+        location,
+        source,
+    )) |png_glyph| return .{ .png = png_glyph };
+    if (try glyphBgra(
+        data,
+        data_table,
+        selected_strike,
+        location,
+        source,
+    )) |bgra_glyph| return .{ .bgra = bgra_glyph };
+    if (try glyphMask(
+        data,
+        data_table,
+        selected_strike,
+        location,
+        source,
+    )) |mask_glyph| return .{ .mask = mask_glyph };
+    return null;
+}
+
+pub fn glyphDataAfterProof(
+    data: []const u8,
+    data_table: types.Table,
+    selected_strike: Strike,
+    location: GlyphLocation,
+    source: types.StrikeSource,
+) types.Error!?types.GlyphData {
+    if (try glyphPngAfterProof(
         data,
         data_table,
         selected_strike,

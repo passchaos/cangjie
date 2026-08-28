@@ -4690,6 +4690,27 @@ shaping-performance superiority.
   Noto Kufi Arabic, and `0.032x` for Noto CJK). This turns the former unmeasured
   cold-parse requirement into a concrete optimization blocker rather than
   implying closure from the raster-only matrix.
+- `glyph-bench --mode bitmap-render` adds the missing common native-strike
+  output boundary. Cangjie and FreeType independently select the exact, nearest
+  larger, or largest smaller strike, decode one glyph, and hash the same ppem,
+  dimensions, authored placement, and row-padding-free mask8 or premultiplied
+  BGRA8 pixels. The adapter follows FreeType's upstream `FT_LOAD_COLOR`
+  contract and normalizes MONO/GRAY/GRAY2/GRAY4/BGRA; Cangjie covers PNG, raw
+  bitmap, and compound data. Synthetic CBDT PNG/BGRA, EBDT mask, and format-8
+  compound smoke rows have identical cross-engine checksums. Real
+  `NotoColorEmoji.subset.ttf` CBDT and `sbix.ttf` PNG checksums also match. A
+  fixed-CPU-30 A/B/B/A `1000 * 7` probe measured CBDT 109 ppem at
+  `131756.841/66794.454/66687.966/129480.187 ns`
+  (`0.511x` endpoint geometric ratio). After the immutable-face sbix path
+  stopped repeating its already-proved all-strike/all-glyph validation, sbix
+  20 ppem measured `7283.473/7133.671/7069.543/7010.458 ns` (`0.981x`, a
+  tie); 32 and 128 ppem led by about `1.164x` and `1.049x`. The complete
+  fixed-CPU-30 `500 * 11` lifecycle run now contains 90 rows: all 75 grayscale
+  rows remain ahead, CBDT is `0.442x--0.514x`, sbix 8/16 ppem are ties at
+  `0.983x`/`0.987x`, and sbix 32/64/128 ppem lead by
+  `1.171x`/`1.153x`/`1.038x`. Thus parity is established for these rows, but
+  CBDT PNG performance is now a measured blocker rather than an uninstrumented
+  one.
 - The glyph harness now names the fresh owning-outline boundary explicitly as
   `raster-owning`; `raster` uses the public caller-owned `OutlineBuffer` and
   therefore measures the cached session plus direct draw, while

@@ -3933,6 +3933,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "cangjie", .module = mod },
                 .{ .name = "freetype", .module = freetype_c.createModule() },
+                .{ .name = "imx", .module = imx_dep.module("imx") },
             },
         }),
     });
@@ -3965,6 +3966,10 @@ pub fn build(b: *std.Build) void {
         "/usr/share/fonts/truetype/noto/NotoKufiArabic-Regular.ttf",
         "--cjk",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "--cbdt",
+        b.fmt("{s}/harfbuzz/test/fuzzing/fonts/NotoColorEmoji.subset.ttf", .{parity_work_root orelse ""}),
+        "--sbix",
+        b.fmt("{s}/harfbuzz/test/fuzzing/fonts/sbix.ttf", .{parity_work_root orelse ""}),
     });
     if (b.args) |args| freetype_matrix_cmd.addArgs(args);
     freetype_matrix_step.dependOn(&freetype_matrix_cmd.step);
@@ -4182,6 +4187,41 @@ pub fn build(b: *std.Build) void {
         "--samples",    "1",
     });
     bench_smoke_step.dependOn(&glyph_freetype_raster_smoke_cmd.step);
+
+    const glyph_bitmap_render_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
+    glyph_bitmap_render_smoke_cmd.addArgs(&.{
+        "--engine",     "compare-freetype",
+        "--mode",       "bitmap-render",
+        "--format",     "tsv",
+        "--builtin",    "cbdt-bgra",
+        "--glyph-id",   "1",
+        "--font-size",  "16",
+        "--iterations", "1",
+        "--warmup",     "0",
+        "--samples",    "1",
+    });
+    bench_smoke_step.dependOn(&glyph_bitmap_render_smoke_cmd.step);
+
+    inline for (.{
+        .{ .fixture = "cbdt-png", .glyph_id = "1" },
+        .{ .fixture = "ebdt-mask", .glyph_id = "1" },
+        .{ .fixture = "ebdt-compound", .glyph_id = "2" },
+    }) |bitmap_case| {
+        const glyph_bitmap_format_smoke_cmd =
+            b.addRunArtifact(glyph_bench_exe);
+        glyph_bitmap_format_smoke_cmd.addArgs(&.{
+            "--engine",     "compare-freetype",
+            "--mode",       "bitmap-render",
+            "--format",     "tsv",
+            "--builtin",    bitmap_case.fixture,
+            "--glyph-id",   bitmap_case.glyph_id,
+            "--font-size",  "16",
+            "--iterations", "1",
+            "--warmup",     "0",
+            "--samples",    "1",
+        });
+        bench_smoke_step.dependOn(&glyph_bitmap_format_smoke_cmd.step);
+    }
 
     const glyph_freetype_raster_reuse_smoke_cmd = b.addRunArtifact(glyph_bench_exe);
     glyph_freetype_raster_reuse_smoke_cmd.addArgs(&.{

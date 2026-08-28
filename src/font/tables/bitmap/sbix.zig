@@ -132,6 +132,29 @@ pub fn glyphPng(
     );
 }
 
+pub fn glyphPngAfterProof(
+    data: []const u8,
+    selected_strike: Strike,
+    glyph_id: glyph.GlyphId,
+    glyph_count: u16,
+) types.Error!?types.GlyphPng {
+    const record =
+        (try resolveGlyphRecord(data, selected_strike, glyph_id, glyph_count)) orelse
+        return null;
+    if (!bin.tagEq(record.graphic_type, "png ")) return null;
+    const dimensions = try png.dimensionsAfterProof(record.payload);
+    return png.glyphAfterProof(
+        record.payload,
+        .sbix,
+        selected_strike.ppem,
+        selected_strike.ppi,
+        record.origin_offset_x,
+        record.origin_offset_y,
+        dimensions.width,
+        dimensions.height,
+    );
+}
+
 pub fn validate(
     allocator: std.mem.Allocator,
     data: []const u8,

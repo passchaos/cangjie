@@ -4,6 +4,7 @@ const ft = @import("freetype");
 const options_mod = @import("options.zig");
 const report = @import("report.zig");
 const dirty_rect = @import("dirty_rect.zig");
+const bitmap_render = @import("bitmap_render.zig");
 
 const FreeTypeFace = struct {
     library: ft.FT_Library,
@@ -18,7 +19,9 @@ const FreeTypeFace = struct {
         var face: ft.FT_Face = null;
         if (ft.FT_New_Memory_Face(library, @ptrCast(font_bytes.ptr), @intCast(font_bytes.len), 0, &face) != 0) return error.FreeTypeFailed;
         errdefer _ = ft.FT_Done_Face(face);
-        if (options.mode == .raster or options.mode == .raster_owning or options.mode == .raster_reuse) {
+        if (options.mode == .bitmap_render) {
+            _ = try bitmap_render.selectFreeTypeStrike(face, options.font_size);
+        } else if (options.mode == .raster or options.mode == .raster_owning or options.mode == .raster_reuse) {
             if (ft.FT_Set_Pixel_Sizes(face, 0, @intFromFloat(@round(options.font_size))) != 0) return error.FreeTypeFailed;
         }
 
@@ -263,12 +266,29 @@ fn blitBitmap(slot: ft.FT_GlyphSlot, options: options_mod.Options, target_pixels
 
 fn resolveGlyphId(face: ft.FT_Face, options: options_mod.Options) ft.FT_UInt {
     if (options.glyph_id) |glyph_id| return glyph_id;
+    if (options.builtin_font == .cbdt_png or
+        options.builtin_font == .cbdt_bgra or
+        options.builtin_font == .ebdt_mask) return 1;
+    if (options.builtin_font == .ebdt_compound) return 2;
     if (options.font_path == null and options.builtin_font == .gvar_compound) return 2;
     return ft.FT_Get_Char_Index(face, options.codepoint);
 }
 
 fn runIterations(ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_mod.Options, iterations: usize, target_pixels: []u8, checksum: *u64) !void {
     const face = ft_face.face;
+    if (options.mode == .bitmap_render) {
+        const ppem = try bitmap_render.selectFreeTypeStrike(
+            face,
+            options.font_size,
+        );
+        for (0..iterations) |_| {
+            checksum.* = updateChecksum(
+                checksum.*,
+                try bitmap_render.freeTypeChecksum(face, glyph_id, ppem),
+            );
+        }
+        return;
+    }
     if (options.mode == .raster_reuse) {
         if (ft.FT_Load_Glyph(
             face,
@@ -290,7 +310,7 @@ fn runIterations(ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_m
         return;
     }
     const load_flags: ft.FT_Int32 = switch (options.mode) {
-        .face_parse, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .bitmap => unreachable,
+        .face_parse, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .bitmap, .bitmap_render => unreachable,
         .outline => ft.FT_LOAD_NO_SCALE | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
         .outline_session, .outline_reuse => unreachable,
         .raster, .raster_owning => ft.FT_LOAD_RENDER | ft.FT_LOAD_NO_HINTING | ft.FT_LOAD_NO_BITMAP,
@@ -301,7 +321,7 @@ fn runIterations(ft_face: FreeTypeFace, glyph_id: ft.FT_UInt, options: options_m
     while (i < iterations) : (i += 1) {
         if (ft.FT_Load_Glyph(face, glyph_id, load_flags) != 0) return error.FreeTypeFailed;
         checksum.* = updateChecksum(checksum.*, switch (options.mode) {
-            .face_parse, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .bitmap => unreachable,
+            .face_parse, .charmap, .metrics, .bounds, .global_metrics, .family_name, .glyph_name, .attributes, .variations, .palettes, .strikes, .color_glyph, .bitmap, .bitmap_render => unreachable,
             .outline => outlineChecksum(face.*.glyph),
             .raster, .raster_owning, .raster_reuse => rasterTargetChecksum(face.*.glyph, options, target_pixels),
             .outline_session, .outline_reuse, .raster_prepare, .raster_prepared => unreachable,

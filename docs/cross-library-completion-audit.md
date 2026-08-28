@@ -12,7 +12,7 @@ one benchmark. The claim remains **open** until every row below is closed.
 | HarfBuzz | Exact glyph IDs, clusters, advances, offsets, and relevant flags across retained upstream and production-font corpora | `shaping-parity-smoke`, `shaping-corpus-parity-smoke`, `tests/data/`, `docs/shaping-parity.md` | Strong retained coverage, not exhaustive |
 | HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: all five maintained core rows now lead (`1.014x--1.216x`) and `react-dom.txt` leads by more than `1.50x`; Amiri words and Devanagari still have narrow margins, and broader font/script coverage remains incomplete |
 | Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; all 25 maintained rows, including variable-CFF2 default/axis-endpoint owning and reuse outlines, lead; broader semantic differentials remain open |
-| FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 75 maintained grayscale glyf/CFF1/CFF2 raster lifecycle rows lead; the new five-font cold in-memory face rows expose large parsing deficits, and bitmap/color, broader hinting-target and glyph coverage, plus additional platforms remain incomplete |
+| FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 75 maintained grayscale glyf/CFF1/CFF2 raster lifecycle rows lead; native-strike CBDT/sbix decoded-pixel parity is now measured, but FreeType leads both real PNG rows; the five-font cold in-memory face rows expose larger parsing deficits, and COLR/SVG, broader hinting-target/glyph coverage, plus additional platforms remain incomplete |
 | Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the maintained 18-row matrix covers three scripts, three construction styles, retained reflow, and matched in-flow inline objects and now leads every performance row; logical-line normalization proves 9/18 geometry rows equivalent, while vertical, fallback, out-of-flow, and the remaining structural geometry differences are not comparable |
 | Robustness | Malformed supported inputs fail atomically under safety checks and sustained coverage-guided fuzzing | `font-fuzz-smoke`, `font-fuzz`, regression fixtures | Open: the retained 100K campaign is useful evidence, not exhaustive format coverage |
 | Platform scope | Results reproduced on each supported target or the performance claim explicitly scoped to named hardware/OS/toolchain versions | benchmark documentation | Open: current performance evidence is primarily one Linux x86-64 host |
@@ -24,7 +24,8 @@ x86-64, pinned to CPU 30 where the harness supports it:
 
 - `zig build test -j1 -Doptimize=ReleaseFast --summary failures`: pass.
 - `zig build shaping-parity-smoke ... --summary none`: pass against the local
-  HarfBuzz 14.3 and HarfRust references.
+  HarfBuzz 14.3 and HarfRust references. The same gate was rerun after the
+  bitmap-differential additions and passed.
 - `zig build shaping-corpus-parity-smoke ... --summary none`: pass.
 - `zig build fontations-coverage -Doptimize=ReleaseFast`: 41 table families,
   48 public modules, and eight high-level capability groups mapped.
@@ -50,7 +51,8 @@ x86-64, pinned to CPU 30 where the harness supports it:
   placement while discarding only a per-line translation and sub-1/1024 px
   accumulation noise.
 - `zig build font-fuzz-smoke -Doptimize=ReleaseSafe -- ...`: six retained
-  seeds and 2,946 deterministic mutations passed.
+  bitmap/color/container seeds and 3,084 deterministic mutations passed in the
+  latest bitmap-audit rerun.
 - `zig build font-fuzz -Doptimize=ReleaseSafe --fuzz=100K`: the selected
   parser/render target completed 269,563 executions, 2,467 unique runs, and
   4,331/32,005 instrumented edges (13.53%) without a reported failure.
@@ -71,6 +73,20 @@ x86-64, pinned to CPU 30 where the harness supports it:
   outlines completed with every row ahead (`1.174x--17.073x`); after the
   CFF2 charstring improvements described below, the former owning 8 px blocker
   moved from `0.989x` to `1.698x`.
+- `glyph-bench --mode bitmap-render` now compares decoded native embedded-
+  bitmap output with FreeType. It hashes the selected ppem, dimensions,
+  authored horizontal placement, and normalized mask8 or premultiplied BGRA8
+  pixels while excluding row padding. `bench-smoke` proves identical output
+  for synthetic CBDT PNG, raw BGRA, EBDT mask, and compound format 8; real
+  HarfBuzz CBDT and sbix PNG fixtures also produce identical checksums. A
+  fixed-CPU-30 symmetric `1000 * 7` probe found explicit performance deficits:
+  Cangjie/FreeType were `131756.841/66794.454` and
+  `129480.187/66687.966 ns` for NotoColorEmoji CBDT at 109 ppem
+  (`0.511x` endpoint geometric ratio). The complete fixed-CPU-30 `500 * 11`
+  matrix added five CBDT and five sbix rows (90 total). CBDT remained behind
+  at `0.442x--0.514x`; sbix 8/16 ppem were ties at `0.983x`/`0.987x`, while
+  32/64/128 ppem led by `1.171x`/`1.153x`/`1.038x`. This closes
+  the missing common-output instrumentation, not the performance requirement.
 
 The latest strict `10 * 21` shaping run measured speedups of `1.216x`
 (Roboto), `1.084x` (Source Serif), `1.046x` (Amiri words), `1.112x` (Amiri
@@ -109,5 +125,6 @@ all 18 rows, including all six retained-reflow rows. This evidence is
 substantial but does not satisfy the stronger overall claim. In particular,
 the latest shaping runs lead all five maintained rows, but Amiri words and
 Devanagari remain narrow single-font/corpus results. The
-broader FreeType bitmap/color/hinting/cold-parse coverage and Parley semantic
-matrices remain incomplete.
+FreeType cold parsing and decoded PNG bitmap performance are concrete blockers;
+COLR/SVG, broader hinting targets, and more glyphs remain uncovered. Parley
+semantic matrices also remain incomplete.

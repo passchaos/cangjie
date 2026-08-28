@@ -5860,8 +5860,42 @@ pub const Font = struct {
     ) FontError!?BitmapGlyphData {
         if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
         try bitmap_mod.validateRequestSize(size_px);
+        if (self.sbix) |sbix| {
+            // Face.parse has already validated the complete strike directory,
+            // every PNG payload, and the dupe graph. Rendering must not repeat
+            // that O(all strikes * all glyphs) proof for each selected glyph.
+            const table = bitmapTable(sbix);
+            const strike_count = try bitmap_mod.sbix.strikeCount(
+                self.data,
+                table,
+            );
+            var best: ?BitmapGlyphPng = null;
+            for (0..strike_count) |strike_index| {
+                const strike = try bitmap_mod.sbix.strike(
+                    self.data,
+                    table,
+                    self.glyph_count,
+                    strike_index,
+                );
+                if (try bitmap_mod.sbix.glyphPngAfterProof(
+                    self.data,
+                    strike,
+                    glyph_id,
+                    self.glyph_count,
+                )) |candidate| {
+                    if (best == null or bitmap_mod.ppemIsPreferred(
+                        candidate.ppem,
+                        best.?.ppem,
+                        size_px,
+                    )) best = candidate;
+                }
+            }
+            if (best) |png_glyph| {
+                return .{ .png = png_glyph };
+            }
+        }
         if (self.cblc != null and self.cbdt != null) {
-            return bitmap_mod.cblc.glyphData(
+            return bitmap_mod.cblc.glyphDataAfterProof(
                 self.data,
                 bitmapTable(self.cblc.?),
                 bitmapTable(self.cbdt.?),
@@ -5872,7 +5906,7 @@ pub const Font = struct {
             );
         }
         if (self.eblc != null and self.ebdt != null) {
-            return bitmap_mod.cblc.glyphData(
+            return bitmap_mod.cblc.glyphDataAfterProof(
                 self.data,
                 bitmapTable(self.eblc.?),
                 bitmapTable(self.ebdt.?),
@@ -5882,7 +5916,7 @@ pub const Font = struct {
                 .eblc_ebdt,
             );
         }
-        return self.bitmapGlyphData(glyph_id, size_px);
+        return null;
     }
 
     fn localizedNamesForImmutableFace(

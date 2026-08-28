@@ -4,6 +4,7 @@ const cangjie = @import("cangjie");
 const options_mod = @import("options.zig");
 const report = @import("report.zig");
 const dirty_rect = @import("dirty_rect.zig");
+const bitmap_render = @import("bitmap_render.zig");
 
 pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_mod.Options) ![]u8 {
     if (options.font_path) |path| {
@@ -13,7 +14,10 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
         .minimal => try cangjie.testing.test_font.buildMinimalTtf(allocator),
         .gvar_compound => try cangjie.testing.test_font.buildGvarCompoundTtf(allocator),
         .cff2_variation => try cangjie.testing.test_font.buildCff2VariationOtf(allocator),
+        .cbdt_png => try cangjie.testing.test_font.buildCbdtPngTtf(allocator),
         .cbdt_bgra => try cangjie.testing.test_font.buildCbdtBgraTtf(allocator),
+        .ebdt_mask => try cangjie.testing.test_font.buildEbdtBitmapTtf(allocator),
+        .ebdt_compound => try cangjie.testing.test_font.buildCompoundEbdtTtf(allocator),
     };
 }
 
@@ -232,7 +236,10 @@ fn runPreparedDirtyIterations(rasterizer: *cangjie.render.Rasterizer, target: *c
 
 fn resolveGlyphId(font: *const cangjie.font.Face, options: options_mod.Options) !cangjie.font.GlyphId {
     if (options.glyph_id) |glyph_id| return glyph_id;
-    if (options.builtin_font == .cbdt_bgra) return 1;
+    if (options.builtin_font == .cbdt_png or
+        options.builtin_font == .cbdt_bgra or
+        options.builtin_font == .ebdt_mask) return 1;
+    if (options.builtin_font == .ebdt_compound) return 2;
     if (options.font_path == null and options.builtin_font == .gvar_compound) return 2;
     return try font.glyphs().index(options.codepoint);
 }
@@ -252,6 +259,7 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, g
         .strikes => try runStrikesIterations(font, iterations, checksum),
         .color_glyph => try runColorGlyphIterations(font, glyph_id, iterations, checksum),
         .bitmap => try runBitmapIterations(font, glyph_id, options, iterations, checksum),
+        .bitmap_render => try runBitmapRenderIterations(allocator, font, glyph_id, options, iterations, checksum),
         .outline => try runOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
         .outline_session => try runOutlineSessionIterations(allocator, font, glyph_id, options, iterations, checksum),
         .outline_reuse => try runOutlineReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
@@ -462,6 +470,27 @@ fn runBitmapIterations(
         checksum.* +%= switch (data) {
             inline else => |glyph| glyph.width + glyph.height + glyph.data.len,
         };
+    }
+}
+
+fn runBitmapRenderIterations(
+    allocator: std.mem.Allocator,
+    font: *const cangjie.font.Face,
+    glyph_id: cangjie.font.GlyphId,
+    options: options_mod.Options,
+    iterations: usize,
+    checksum: *u64,
+) !void {
+    for (0..iterations) |_| {
+        checksum.* = updateChecksum(
+            checksum.*,
+            try bitmap_render.cangjieChecksum(
+                allocator,
+                font,
+                glyph_id,
+                options.font_size,
+            ),
+        );
     }
 }
 

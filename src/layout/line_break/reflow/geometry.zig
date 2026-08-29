@@ -87,27 +87,13 @@ pub fn lineRunInfo(
     default_metrics: BaselineMetrics,
     explicit_line_height: ?f32,
 ) LineRunInfo {
-    // The primary font is the paragraph's minimum strut, so empty lines and
-    // fallback-only lines retain a stable baseline. Actual runs can enlarge
-    // any side of that strut; otherwise a fallback with taller ascenders or
-    // deeper descenders would be clipped by primary-font-only geometry.
-    var metrics = default_metrics;
-    var first_run: ?usize = null;
-    var run_end_index: usize = 0;
-    for (runs, 0..) |run, run_index| {
-        const run_start = run.glyph_start;
-        const run_end = run.glyph_start + run.glyph_len;
-        if (run_end <= glyph_start or run_start >= glyph_end) continue;
-        if (first_run == null) first_run = run_index;
-        run_end_index = run_index + 1;
-        const run_metrics = defaultBaselineMetrics(
-            run_types.fontForBackend(run),
-            run.font_size,
-        );
-        metrics.ascent = @max(metrics.ascent, run_metrics.ascent);
-        metrics.descent = @max(metrics.descent, run_metrics.descent);
-        metrics.leading = @max(metrics.leading, run_metrics.leading);
-    }
+    var info = lineRunInfoWithoutObjects(
+        runs,
+        glyph_start,
+        glyph_end,
+        default_metrics,
+    );
+    var metrics = info.metrics;
     // Most lines, and every line containing only out-of-flow objects, have no
     // object metrics to merge. Avoid walking their glyph slice solely to prove
     // the already-known empty case.
@@ -134,14 +120,48 @@ pub fn lineRunInfo(
             metrics.descent = @max(metrics.descent, object_metrics.descent);
         }
     }
+    info.metrics = if (explicit_line_height) |line_height|
+        metricsForLineHeight(metrics, line_height)
+    else
+        metrics;
+    return info;
+}
+
+/// Resolve run ownership and font metrics without inspecting inline objects.
+/// Retained simple reflow uses this when object presence is already known from
+/// immutable source ranges, avoiding a redundant scan of the owning line.
+pub fn lineRunInfoWithoutObjects(
+    runs: anytype,
+    glyph_start: usize,
+    glyph_end: usize,
+    default_metrics: BaselineMetrics,
+) LineRunInfo {
+    // The primary font is the paragraph's minimum strut, so empty lines and
+    // fallback-only lines retain a stable baseline. Actual runs can enlarge
+    // any side of that strut; otherwise a fallback with taller ascenders or
+    // deeper descenders would be clipped by primary-font-only geometry.
+    var metrics = default_metrics;
+    var first_run: ?usize = null;
+    var run_end_index: usize = 0;
+    for (runs, 0..) |run, run_index| {
+        const run_start = run.glyph_start;
+        const run_end = run.glyph_start + run.glyph_len;
+        if (run_end <= glyph_start or run_start >= glyph_end) continue;
+        if (first_run == null) first_run = run_index;
+        run_end_index = run_index + 1;
+        const run_metrics = defaultBaselineMetrics(
+            run_types.fontForBackend(run),
+            run.font_size,
+        );
+        metrics.ascent = @max(metrics.ascent, run_metrics.ascent);
+        metrics.descent = @max(metrics.descent, run_metrics.descent);
+        metrics.leading = @max(metrics.leading, run_metrics.leading);
+    }
     const run_start_index = first_run orelse 0;
     return .{
         .run_start = run_start_index,
         .run_len = run_end_index - run_start_index,
-        .metrics = if (explicit_line_height) |line_height|
-            metricsForLineHeight(metrics, line_height)
-        else
-            metrics,
+        .metrics = metrics,
     };
 }
 

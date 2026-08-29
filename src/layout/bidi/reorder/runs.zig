@@ -80,7 +80,7 @@ pub fn recomputeOffsets(buffer: anytype) void {
     var x_offset: f32 = 0;
     var y_offset: f32 = 0;
     var glyph_cursor: usize = 0;
-    for (buffer.runs.items) |*run| {
+    for (buffer.runs.items, 0..) |*run, run_index| {
         const run_start = @min(run.glyph_start, buffer.glyphs.items.len);
         for (buffer.glyphs.items[glyph_cursor..run_start]) |glyph| {
             x_offset += glyph.x_advance;
@@ -88,6 +88,11 @@ pub fn recomputeOffsets(buffer: anytype) void {
         }
         run.x_offset = x_offset;
         run.y_offset = y_offset;
+        // Offsets are prefix sums. Once the final run's origin is known its
+        // trailing advances have no consumer, so avoid walking the remainder
+        // of the paragraph on every retained reflow. A single-run paragraph
+        // consequently needs no glyph scan at all.
+        if (run_index + 1 == buffer.runs.items.len) return;
         const run_end = @min(
             run_start + run.glyph_len,
             buffer.glyphs.items.len,

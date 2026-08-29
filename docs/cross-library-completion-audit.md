@@ -13,7 +13,7 @@ one benchmark. The claim remains **open** until every row below is closed.
 | HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: all five maintained core rows now lead (`1.052x--1.145x` in the latest strict run) and `react-dom.txt` leads by more than `1.50x`; broader font/script coverage remains incomplete |
 | Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; all 25 maintained rows, including variable-CFF2 default/axis-endpoint owning and reuse outlines, lead; broader semantic differentials remain open |
 | FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `hinted-outline-matrix`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 75 maintained grayscale raster rows, all 10 native-strike bitmap rows, the shared COLRv0 layer/CPAL row, all five matched face-open rows, and the expanded 120-row hinted-outline matrix lead. Complete eager validation is separately reported and remains slower, COLRv1/SVG have no FreeType built-in renderer for direct performance comparison, and broader glyph/platform coverage remains incomplete |
-| Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the maintained 32-row matrix covers three scripts, three construction styles, retained reflow, matched in-flow/ordinary/custom out-of-flow objects, and mixed Roboto→Noto Sans Devanagari fallback. All 18 object rows prove identical id/source/line/position/size/baseline geometry at fractional coordinates. Custom and ordinary out-of-flow reflow now lead in the latest full run; Arabic in-flow retained reflow remains a noise-sensitive `0.978x`, and vertical comparison remains unavailable because the pinned Parley API has no writing-mode input |
+| Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the maintained 32-row matrix covers three scripts, three construction styles, retained reflow, matched in-flow/ordinary/custom out-of-flow objects, and mixed Roboto→Noto Sans Devanagari fallback. All 18 object rows prove identical id/source/line/position/size/baseline geometry at fractional coordinates. The latest strict matrix leads every row, including Arabic in-flow/ordinary/custom retained reflow at `1.022x`/`1.007x`/`1.013x`; these remain narrow margins, and vertical comparison remains unavailable because the pinned Parley API has no writing-mode input |
 | Robustness | Malformed supported inputs fail atomically under safety checks and sustained coverage-guided fuzzing | `font-fuzz-smoke`, `font-fuzz`, regression fixtures | Open: the retained 100K campaign is useful evidence, not exhaustive format coverage |
 | Platform scope | Results reproduced on each supported target or the performance claim explicitly scoped to named hardware/OS/toolchain versions | benchmark documentation | Open: current performance evidence is primarily one Linux x86-64 host |
 
@@ -117,6 +117,14 @@ x86-64, pinned to CPU 30 where the harness supports it:
   `1.413x`/`1.013x`/`1.381x`. A later full strict run remained red only on the
   noise-sensitive Arabic in-flow row (`0.978x`); the other two Arabic object
   modes narrowly led (`1.013x` and `1.048x`).
+  The retained simple line builder now derives a single validated in-flow
+  object's metric contribution from its already-known source range instead of
+  scanning each line for the marker, and run-offset recomputation stops after
+  establishing the final run origin because no later run can consume its
+  trailing prefix sum. The resulting fixed-CPU-30 `10000 * 11` strict matrix
+  passes all 32 rows; Arabic default/in-flow/ordinary/custom retained reflow
+  leads by `1.048x`/`1.022x`/`1.007x`/`1.013x`. These margins are still close
+  enough to require continued monitoring.
   The mixed Roboto→Noto Sans Devanagari fallback rows also have identical
   normalized geometry. Extending the retained simple-path proof to adjacent
   multi-glyph clusters moved fallback construction/reflow to `1.664x`/`1.718x`
@@ -464,9 +472,8 @@ report-only result.
 
 Cangjie is already ahead in the maintained 25-case Fontations/Skrifa matrix
 and complete maintained 75-row FreeType grayscale lifecycle matrix, plus most
-of the five-corpus shaping matrix. The earlier corrected Parley matrix led all
-18 original rows; the expanded 32-row matrix currently retains one narrow
-Arabic in-flow reflow deficit while both out-of-flow modes lead. This evidence is
+of the five-corpus shaping matrix. The latest strict Parley matrix led all 32
+rows, although its three Arabic object-reflow margins remain narrow. This evidence is
 substantial but does not satisfy the stronger overall claim. In particular,
 the latest shaping runs lead all five maintained rows, but Amiri words and
 Devanagari remain narrow single-font/corpus results. The

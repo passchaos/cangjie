@@ -2302,6 +2302,15 @@ instructions, `0.726B` to `0.583B` branches, and `1.43B` to `1.28B` cycles.
 The native and geometry checksums remain unchanged, and the final matrix moves
 that last noisy retained row to a `1.029x` lead.
 
+The retained simple line builder additionally uses its immutable one-object
+proof and selected source-byte range to merge in-flow object metrics without a
+glyph scan. Run-offset recomputation stops once the last run's origin is known,
+because its trailing advances have no downstream consumer. A fixed-CPU-30
+`10000 * 11` strict rerun passed all 32 rows; Arabic retained default, in-flow,
+ordinary out-of-flow, and custom out-of-flow rows measured `1.048x`, `1.022x`,
+`1.007x`, and `1.013x` respectively. The latter margins remain close enough to
+monitor in future runs.
+
 The cross-engine matrix now also has ordinary out-of-flow object construction
 and retained-reflow rows for Latin, Arabic, and Japanese. Both adapters insert
 the same 24x20 object at the same UTF-8 boundary and select their native

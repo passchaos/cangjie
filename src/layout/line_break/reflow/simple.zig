@@ -12,6 +12,7 @@
 const std = @import("std");
 
 const geometry = @import("geometry.zig");
+const inline_object = @import("../../inline_object/root.zig");
 const opportunity = @import("../opportunity.zig");
 const opportunities = @import("opportunities.zig");
 const paragraph_options = @import("../../paragraph/options.zig");
@@ -105,15 +106,15 @@ pub fn tryBuild(
                 next_line_start,
                 line_byte_start,
             );
-            const run_info = geometry.resolvedLineInfo(
+            const run_info = resolvedLineInfo(
                 buffer.runs.items,
                 glyphs,
-                inFlowObjects(options.inline_objects),
+                options.inline_objects,
                 line_start,
                 break_end,
+                line_byte_start,
+                line_byte_end,
                 default_metrics,
-                null,
-                null,
             );
             try appendSimpleLine(
                 buffer,
@@ -138,15 +139,15 @@ pub fn tryBuild(
         }
         if (committed) continue;
 
-        const run_info = geometry.resolvedLineInfo(
+        const run_info = resolvedLineInfo(
             buffer.runs.items,
             glyphs,
-            inFlowObjects(options.inline_objects),
+            options.inline_objects,
             line_start,
             glyphs.len,
+            line_byte_start,
+            text.len,
             default_metrics,
-            null,
-            null,
         );
         try appendSimpleLine(
             buffer,
@@ -168,11 +169,48 @@ pub fn tryBuild(
     return true;
 }
 
-inline fn inFlowObjects(
-    objects: []const @import("../../inline_object/root.zig").Object,
-) []const @import("../../inline_object/root.zig").Object {
-    if (objects.len == 1 and objects[0].kind != .in_flow) return &.{};
-    return objects;
+fn resolvedLineInfo(
+    runs: anytype,
+    glyphs: []const @import("../../glyph_position.zig").GlyphPosition,
+    objects: []const inline_object.Object,
+    glyph_start: usize,
+    glyph_end: usize,
+    byte_start: usize,
+    byte_end: usize,
+    default_metrics: geometry.BaselineMetrics,
+) geometry.LineRunInfo {
+    var info = geometry.lineRunInfoWithoutObjects(
+        runs,
+        glyph_start,
+        glyph_end,
+        default_metrics,
+    );
+    if (objects.len != 1) {
+        return geometry.resolvedLineInfo(
+            runs,
+            glyphs,
+            objects,
+            glyph_start,
+            glyph_end,
+            default_metrics,
+            null,
+            null,
+        );
+    }
+    const object = objects[0];
+    if (object.kind == .in_flow and
+        object.byte_index >= byte_start and
+        object.byte_index < byte_end)
+    {
+        // The retained simple-shape proof guarantees that the sole validated
+        // marker owns exactly one glyph in this source range. Use that proof
+        // instead of rescanning every glyph on every reflow merely to locate
+        // the object whose byte index is already known.
+        const metrics = inline_object.verticalMetrics(object);
+        info.metrics.ascent = @max(info.metrics.ascent, metrics.ascent);
+        info.metrics.descent = @max(info.metrics.descent, metrics.descent);
+    }
+    return info;
 }
 
 fn finalLineWidth(

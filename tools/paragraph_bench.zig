@@ -94,8 +94,10 @@ pub fn main(init: std.process.Init) !void {
     defer allocator.free(samples);
     var checksum: u64 = 0;
     var geometry_checksum: u64 = 0;
+    var object_checksum: u64 = 0;
     var glyph_count: usize = 0;
     var line_count: usize = 0;
+    var object_count: usize = 0;
     for (samples) |*sample| {
         for (0..3) |_| {
             const layout = try benchmarkOnce(
@@ -119,8 +121,10 @@ pub fn main(init: std.process.Init) !void {
                 layout,
                 paragraph_direction,
             );
+            object_checksum = normalizedObjectGeometryChecksum(layout);
             glyph_count = layout.glyphs.len;
             line_count = layout.lines.len;
+            object_count = layout.inline_objects.len;
         }
         var batch_checksum = std.hash.Wyhash.init(0);
         const start = std.Io.Clock.now(.awake, init.io).nanoseconds;
@@ -137,7 +141,10 @@ pub fn main(init: std.process.Init) !void {
                 if (retained) |*paragraph| paragraph else null,
                 &reflow,
             );
-            if (layout.glyphs.len != glyph_count or layout.lines.len != line_count) {
+            if (layout.glyphs.len != glyph_count or
+                layout.lines.len != line_count or
+                layout.inline_objects.len != object_count)
+            {
                 return error.UnstableOutput;
             }
             batch_checksum.update(std.mem.asBytes(&layout.width));
@@ -152,8 +159,8 @@ pub fn main(init: std.process.Init) !void {
         @as(f64, @floatFromInt(iterations));
     std.debug.print(
         "engine=cangjie\tphase={s}\tdirection={s}\tstyle={s}\ttext_bytes={d}\twidth={d:.3}\titerations={d}\tsamples={d}\t" ++
-            "median_ns_per_iter={d:.3}\tglyphs={d}\tlines={d}\tchecksum={x:0>16}\tgeometry_checksum={x:0>16}\n",
-        .{ @tagName(phase), @tagName(direction), @tagName(style), text.len, width, iterations, sample_count, median, glyph_count, line_count, checksum, geometry_checksum },
+            "median_ns_per_iter={d:.3}\tglyphs={d}\tlines={d}\tobjects={d}\tchecksum={x:0>16}\tgeometry_checksum={x:0>16}\tobject_checksum={x:0>16}\n",
+        .{ @tagName(phase), @tagName(direction), @tagName(style), text.len, width, iterations, sample_count, median, glyph_count, line_count, object_count, checksum, geometry_checksum, object_checksum },
     );
 }
 
@@ -363,6 +370,22 @@ fn normalizedGeometryChecksum(
     return hash;
 }
 
+fn normalizedObjectGeometryChecksum(layout: cangjie.paragraph.Layout) u64 {
+    var hash: u64 = 0xcbf29ce484222325;
+    hash = hashU64(hash, layout.inline_objects.len);
+    for (layout.inline_objects) |object| {
+        hash = hashU64Value(hash, object.id);
+        hash = hashU64(hash, object.byte_index);
+        hash = hashU64(hash, object.line_index);
+        hash = hashI32(hash, canonicalInlinePosition(object.x));
+        hash = hashI32(hash, canonicalInlinePosition(object.y));
+        hash = hashI32(hash, canonicalInlinePosition(object.width));
+        hash = hashI32(hash, canonicalInlinePosition(object.height));
+        hash = hashI32(hash, canonicalInlinePosition(object.baseline));
+    }
+    return hash;
+}
+
 fn canonicalInlinePosition(value: f32) i32 {
     // 1/1024 px remains four orders of magnitude below the matrix's smallest
     // glyph advance while absorbing the <1.6e-5 px accumulation drift seen
@@ -387,7 +410,13 @@ fn trailingAsciiWhitespace(text: []const u8, start: usize, end: usize) bool {
 
 fn hashU64(initial: u64, value: usize) u64 {
     const normalized: u64 = @intCast(value);
-    return bytes(initial, std.mem.asBytes(&normalized));
+    return hashU64Value(initial, normalized);
+}
+
+fn hashU64Value(initial: u64, value: u64) u64 {
+    var encoded: [8]u8 = undefined;
+    std.mem.writeInt(u64, &encoded, value, .little);
+    return bytes(initial, &encoded);
 }
 
 fn hashF32(initial: u64, value: f32) u64 {
@@ -396,7 +425,9 @@ fn hashF32(initial: u64, value: f32) u64 {
 }
 
 fn hashI32(initial: u64, value: i32) u64 {
-    return bytes(initial, std.mem.asBytes(&value));
+    var encoded: [4]u8 = undefined;
+    std.mem.writeInt(i32, &encoded, value, .little);
+    return bytes(initial, &encoded);
 }
 
 fn bytes(initial: u64, value: []const u8) u64 {

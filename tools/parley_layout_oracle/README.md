@@ -14,15 +14,19 @@ graph. Example:
 
 ```sh
 cargo run --release --manifest-path tools/parley_layout_oracle/Cargo.toml -- \
-  /path/to/Roboto-Regular.ttf /path/to/latin.txt 1000 31 [FAMILY] [WIDTH] [DIRECTION] [default|spacing|alternating]
+  /path/to/Roboto-Regular.ttf /path/to/latin.txt 1000 31 [FAMILY] [WIDTH] [DIRECTION] [default|spacing|alternating|inline-object|out-of-flow-object] [layout|reflow]
 
 zig build paragraph-bench -Doptimize=ReleaseFast -- \
-  /path/to/Roboto-Regular.ttf /path/to/latin.txt 1000 31 [WIDTH] [PHASE] [DIRECTION] [default|spacing|alternating]
+  /path/to/Roboto-Regular.ttf /path/to/latin.txt 1000 31 [WIDTH] [PHASE] [DIRECTION] [default|spacing|alternating|inline-object|out-of-flow-object]
 ```
 
-`zig build parley-matrix -Doptimize=ReleaseFast` runs the default, spacing, and
-alternating-style boundaries over Parley's Latin, Arabic, and Japanese sample
-paragraphs, and rejects mismatched source-byte, glyph, or line counts. Optional
-`-- --iterations N --samples N --cpu CPU` arguments provide a repeatable
-fixed-core performance run. The default font paths target the local Linux Noto
-installation and can be overridden with the script directly when required.
+`zig build parley-matrix -Doptimize=ReleaseFast` runs default, spacing,
+alternating-style, in-flow-object, and out-of-flow-object boundaries over
+Parley's Latin, Arabic, and Japanese sample paragraphs. It rejects mismatched
+source-byte, glyph, line, or object counts and requires exact normalized object
+geometry (stable id/source/line, x/y, size, and baseline) for all object rows.
+The Parley oracle disables optional paint-time pixel quantization so both
+engines expose fractional coordinates. Optional `-- --iterations N --samples
+N --cpu CPU` arguments provide a repeatable fixed-core performance run. The
+default font paths target the local Linux Noto installation and can be
+overridden with the script directly when required.

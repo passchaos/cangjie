@@ -68,8 +68,10 @@ fn main() {
     let mut values = Vec::with_capacity(samples);
     let mut checksum = 0u64;
     let mut geometry_checksum = 0u64;
+    let mut object_checksum = 0u64;
     let mut glyphs = 0usize;
     let mut lines = 0usize;
+    let mut objects = 0usize;
     for _ in 0..samples {
         for _ in 0..3 {
             let result = run_once(
@@ -87,7 +89,14 @@ fn main() {
                 checksum == 0 || checksum == result.0,
                 "unstable layout output"
             );
-            (checksum, geometry_checksum, glyphs, lines) = result;
+            (
+                checksum,
+                geometry_checksum,
+                object_checksum,
+                glyphs,
+                lines,
+                objects,
+            ) = result;
         }
         let start = Instant::now();
         let mut batch_checksum = 0xcbf29ce484222325u64;
@@ -103,9 +112,9 @@ fn main() {
                 retained.as_mut(),
                 false,
             );
-            assert_eq!(result.3, lines, "unstable layout line count");
-            batch_checksum = bytes(batch_checksum, &result.2.to_le_bytes());
+            assert_eq!(result.4, lines, "unstable layout line count");
             batch_checksum = bytes(batch_checksum, &result.3.to_le_bytes());
+            batch_checksum = bytes(batch_checksum, &result.4.to_le_bytes());
         }
         values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
         black_box(batch_checksum);
@@ -113,7 +122,7 @@ fn main() {
     values.sort_by(f64::total_cmp);
     let median = values[values.len() / 2];
     println!(
-        "engine=parley\tphase={phase}\tdirection={direction}\tstyle={style}\ttext_bytes={}\twidth={width:.3}\titerations={}\tsamples={}\tmedian_ns_per_iter={median:.3}\tglyphs={glyphs}\tlines={lines}\tchecksum={checksum:016x}\tgeometry_checksum={geometry_checksum:016x}",
+        "engine=parley\tphase={phase}\tdirection={direction}\tstyle={style}\ttext_bytes={}\twidth={width:.3}\titerations={}\tsamples={}\tmedian_ns_per_iter={median:.3}\tglyphs={glyphs}\tlines={lines}\tobjects={objects}\tchecksum={checksum:016x}\tgeometry_checksum={geometry_checksum:016x}\tobject_checksum={object_checksum:016x}",
         text.len(),
         iterations,
         samples
@@ -130,7 +139,7 @@ fn run_once(
     style: &str,
     retained: Option<&mut Layout<Brush>>,
     summarize_output: bool,
-) -> (u64, u64, usize, usize) {
+) -> (u64, u64, u64, usize, usize, usize) {
     let mut owned;
     let layout = if let Some(layout) = retained {
         layout.break_all_lines(Some(width));
@@ -151,8 +160,16 @@ fn run_once(
         let mut checksum = 0xcbf29ce484222325u64;
         checksum = bytes(checksum, &layout.width().to_bits().to_le_bytes());
         checksum = bytes(checksum, &layout.height().to_bits().to_le_bytes());
-        (checksum, 0, 0, layout.len())
+        // Object geometry is verified by the untimed warm-up summaries. Do
+        // not make Parley enumerate every line and item inside the measured
+        // loop solely to reproduce that diagnostic checksum. The count is a
+        // direct consequence of this benchmark's validated style/input pair.
+        (checksum, 0, 0, 0, layout.len(), object_count_hint(style))
     }
+}
+
+fn object_count_hint(style: &str) -> usize {
+    usize::from(style == "inline-object" || style == "out-of-flow-object")
 }
 
 fn build_layout(
@@ -163,7 +180,9 @@ fn build_layout(
     direction: &str,
     style: &str,
 ) -> Layout<Brush> {
-    let mut builder = layout_cx.ranged_builder(font_cx, text, 1.0, true);
+    // Cangjie retains fractional layout metrics. Disable Parley's optional
+    // paint-time pixel snapping so both engines expose the same coordinates.
+    let mut builder = layout_cx.ranged_builder(font_cx, text, 1.0, false);
     builder.push_default(FontFamily::named(family_name));
     builder.push_default(StyleProperty::FontSize(16.0));
     match style {
@@ -185,7 +204,11 @@ fn build_layout(
             } else {
                 InlineBoxKind::OutOfFlow
             },
-            index: text.ceil_char_boundary(text.len() / 2),
+            // The object source coordinate is the marker inserted into the
+            // original sample, not the midpoint of the now-three-byte-longer
+            // benchmark string. Recomputing the midpoint moved Latin and CJK
+            // objects to a later boundary and made the workloads inequivalent.
+            index: text.find('\u{fffc}').expect("inline-object marker"),
             width: 24.0,
             height: 20.0,
             baseline: Some(15.0),
@@ -203,7 +226,7 @@ fn build_layout(
     builder.build(text)
 }
 
-fn summarize(layout: &Layout<Brush>, text: &str) -> (u64, u64, usize, usize) {
+fn summarize(layout: &Layout<Brush>, text: &str) -> (u64, u64, u64, usize, usize, usize) {
     let mut hash = 0xcbf29ce484222325u64;
     let mut geometry_hash = 0xcbf29ce484222325u64;
     let mut glyph_count = 0usize;
@@ -257,19 +280,96 @@ fn summarize(layout: &Layout<Brush>, text: &str) -> (u64, u64, usize, usize) {
             geometry_hash = bytes(geometry_hash, &size.to_bits().to_le_bytes());
         }
         for item in line.items() {
-            if let PositionedLayoutItem::GlyphRun(run) = item {
-                for glyph in run.positioned_glyphs() {
-                    glyph_count += 1;
-                    hash = bytes(hash, &glyph.id.to_le_bytes());
-                    hash = bytes(hash, &glyph.x.to_bits().to_le_bytes());
-                    hash = bytes(hash, &glyph.y.to_bits().to_le_bytes());
-                    hash = bytes(hash, &glyph.advance.to_bits().to_le_bytes());
+            match item {
+                PositionedLayoutItem::GlyphRun(run) => {
+                    for glyph in run.positioned_glyphs() {
+                        glyph_count += 1;
+                        hash = bytes(hash, &glyph.id.to_le_bytes());
+                        hash = bytes(hash, &glyph.x.to_bits().to_le_bytes());
+                        hash = bytes(hash, &glyph.y.to_bits().to_le_bytes());
+                        hash = bytes(hash, &glyph.advance.to_bits().to_le_bytes());
+                    }
                 }
+                PositionedLayoutItem::InlineBox(_) => {}
             }
         }
     }
+    let (object_hash, object_count) = summarize_objects(layout, text);
     black_box(&layout);
-    (hash, geometry_hash, glyph_count, line_count)
+    (
+        hash,
+        geometry_hash,
+        object_hash,
+        glyph_count,
+        line_count,
+        object_count,
+    )
+}
+
+fn summarize_objects(layout: &Layout<Brush>, text: &str) -> (u64, usize) {
+    // This oracle inserts at most one object. Parley's positioned record keeps
+    // the id and geometry but not the source index, so recover that stable
+    // input coordinate from the benchmark's replacement marker.
+    let object_byte_index = text.find('\u{fffc}');
+    let expected_count = usize::from(object_byte_index.is_some());
+    let mut object_hash = 0xcbf29ce484222325u64;
+    object_hash = bytes(object_hash, &(expected_count as u64).to_le_bytes());
+    let mut object_count = 0;
+    for (line_index, line) in layout.lines().enumerate() {
+        for item in line.items() {
+            let PositionedLayoutItem::InlineBox(inline_box) = item else {
+                continue;
+            };
+            object_count += 1;
+            object_hash = bytes(object_hash, &inline_box.id.to_le_bytes());
+            object_hash = bytes(
+                object_hash,
+                &(object_byte_index.expect("positioned object marker") as u64).to_le_bytes(),
+            );
+            object_hash = bytes(object_hash, &(line_index as u64).to_le_bytes());
+            for coordinate in [
+                inline_box.x,
+                inline_box.y,
+                inline_box.width,
+                inline_box.height,
+                inline_box.baseline.unwrap_or(inline_box.height),
+            ] {
+                object_hash = bytes(
+                    object_hash,
+                    &canonical_inline_position(coordinate).to_le_bytes(),
+                );
+            }
+        }
+    }
+    assert_eq!(
+        object_count, expected_count,
+        "missing positioned inline object"
+    );
+    (object_hash, object_count)
+}
+
+fn canonical_inline_position(value: f32) -> i32 {
+    // Keep the same 1/1024 px normalization as Cangjie. Rust's saturating
+    // float-to-int cast also matches the explicit bounds in the Zig oracle.
+    (value * 1024.0).round() as i32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bytes, canonical_inline_position};
+
+    #[test]
+    fn object_hash_encoding_is_little_endian_and_quantized() {
+        let mut hash = 0xcbf29ce484222325u64;
+        hash = bytes(hash, &1u64.to_le_bytes());
+        hash = bytes(hash, &7u64.to_le_bytes());
+        hash = bytes(hash, &54u64.to_le_bytes());
+        hash = bytes(hash, &2u64.to_le_bytes());
+        for value in [34.804_688, 37.5, 24.0, 20.0, 15.0] {
+            hash = bytes(hash, &canonical_inline_position(value).to_le_bytes());
+        }
+        assert_eq!(hash, 0x9c03a3dc53c000c4);
+    }
 }
 
 fn bytes(mut hash: u64, value: &[u8]) -> u64 {

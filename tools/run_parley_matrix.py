@@ -117,17 +117,38 @@ def main() -> int:
             )
             records = (cangjie_first, parley_first, parley_second, cangjie_second)
             shapes = {
-                (item.get("text_bytes"), item.get("glyphs"), item.get("lines"))
+                (
+                    item.get("text_bytes"),
+                    item.get("glyphs"),
+                    item.get("lines"),
+                    item.get("objects"),
+                )
                 for item in records
             }
             if len(shapes) != 1:
                 failures.append(f"{case.name}/{phase}/{style}: output counts={sorted(shapes)}")
+            expected_objects = "1" if style in ("inline-object", "out-of-flow-object") else "0"
+            if any(item.get("objects") != expected_objects for item in records):
+                failures.append(
+                    f"{case.name}/{phase}/{style}: expected objects={expected_objects}, "
+                    f"got {[item.get('objects') for item in records]}"
+                )
             # Native geometry is normalized to logical lines/graphemes by both
             # oracles. The checksum retains source ranges, visible advances,
             # and line-relative cluster positions; native physical origins and
             # visually discarded trailing whitespace are intentionally absent.
             geometry_checksums = {item.get("geometry_checksum") for item in records}
             geometry_equivalent = len(geometry_checksums) == 1 and None not in geometry_checksums
+            object_checksums = {item.get("object_checksum") for item in records}
+            object_geometry_equivalent = (
+                len(object_checksums) == 1 and None not in object_checksums
+            )
+            requires_object_geometry = expected_objects == "1"
+            if requires_object_geometry and not object_geometry_equivalent:
+                failures.append(
+                    f"{case.name}/{phase}/{style}: object checksums="
+                    f"{[item.get('object_checksum') for item in records]}"
+                )
             # Each implementation also hashes its complete native layout. The
             # hash encodings intentionally differ (Cangjie uses Wyhash over its
             # public layout records; Parley uses FNV over line/glyph fields),
@@ -163,14 +184,17 @@ def main() -> int:
                 f"parley_ns={parley_a:.3f}/{parley_b:.3f} "
                 f"speedup={speedup:.3f}x glyphs={cangjie_first.get('glyphs')} "
                 f"lines={cangjie_first.get('lines')} "
-                f"geometry_equal={str(geometry_equivalent).lower()}"
+                f"objects={cangjie_first.get('objects')} "
+                f"geometry_equal={str(geometry_equivalent).lower()} "
+                f"object_geometry_equal="
+                f"{str(object_geometry_equivalent).lower() if requires_object_geometry else 'n/a'}"
             )
     if failures:
-        print("Cangjie/Parley output-count matrix failed:", file=sys.stderr)
+        print("Cangjie/Parley matrix failed:", file=sys.stderr)
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         return 1
-    print("Cangjie/Parley output-count matrix passed: 24 cases")
+    print("Cangjie/Parley output-count and object-geometry matrix passed: 24 cases")
     return 0
 
 

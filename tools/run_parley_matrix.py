@@ -204,8 +204,7 @@ def main() -> int:
             cangjie_ns = math.sqrt(cangjie_a * cangjie_b)
             parley_ns = math.sqrt(parley_a * parley_b)
             speedup = math.inf if cangjie_ns == 0 else parley_ns / cangjie_ns
-            enforces_performance = True
-            if args.fail_on_slower and enforces_performance and speedup <= 1.0:
+            if args.fail_on_slower and speedup <= 1.0:
                 failures.append(
                     f"{case.name}/{phase}/{style}: Cangjie slower "
                     f"({speedup:.3f}x)"
@@ -219,8 +218,7 @@ def main() -> int:
                 f"objects={cangjie_first.get('objects')} "
                 f"geometry_equal={str(geometry_equivalent).lower()} "
                 f"object_geometry_equal="
-                f"{str(object_geometry_equivalent).lower() if requires_object_geometry else 'n/a'} "
-                f"performance_gate={'enforced' if enforces_performance else 'coverage-only'}"
+                f"{str(object_geometry_equivalent).lower() if requires_object_geometry else 'n/a'}"
             )
     if failures:
         print("Cangjie/Parley matrix failed:", file=sys.stderr)

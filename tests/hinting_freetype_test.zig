@@ -436,6 +436,7 @@ fn compareFixture(
         target,
     );
     defer expected.deinit(allocator);
+    dumpHintPoints(&transaction, expected);
     errdefer |err| std.debug.print(
         "hint diff version={s} target={s} font={s} cp=U+{x} ppem={d}: {s}\n",
         .{
@@ -525,6 +526,42 @@ const Point = struct {
     x: i32,
     y: i32,
 };
+
+fn dumpHintPoints(
+    transaction: *const cangjie.font.HintingPointTransaction,
+    expected: FtOutline,
+) void {
+    if (std.c.getenv("CANGJIE_DEBUG_HINT_POINTS") == null) return;
+    const pp1 = transaction.phantomPoints()[0];
+    for (
+        transaction.points[0..transaction.real_point_count],
+        transaction.original[0..transaction.real_point_count],
+        transaction.unscaled[0..transaction.real_point_count],
+        transaction.flags[0..transaction.real_point_count],
+        0..,
+    ) |point, original, unscaled, flag, index| {
+        std.debug.print(
+            "CJH {d} {d} {d} {d} {d} {d} {d} {d} {d}\n",
+            .{
+                index,
+                point.x - pp1.x,
+                point.y - pp1.y,
+                original.x - pp1.x,
+                original.y - pp1.y,
+                unscaled.x,
+                unscaled.y,
+                @intFromBool(flag.touched_x),
+                @intFromBool(flag.touched_y),
+            },
+        );
+    }
+    for (expected.points, expected.tags, 0..) |point, tag, index| {
+        std.debug.print(
+            "FTH {d} {d} {d} {d}\n",
+            .{ index, point.x, point.y, tag & 3 },
+        );
+    }
+}
 
 fn freeTypeOutline(
     allocator: std.mem.Allocator,

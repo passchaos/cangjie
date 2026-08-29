@@ -57,9 +57,16 @@ fn validateLegacyKernTable(data: []const u8, kern: sfnt.Record, glyph_count: u16
             if (required_length > length and subtable_index + 1 == table_count) {
                 length = required_length;
             }
+            // Validate the recovered length before forming the body slice. A
+            // malformed non-final subtable can declare a length below its
+            // six-byte header while still leaving enough table bytes for the
+            // format-0 probe above; slicing that range must never trap.
+            if (length < 6) return error.BadSfnt;
             try validateFormat0(data[subtable_offset + 6 .. subtable_offset + length], glyph_count);
         }
-        if (length < 6) return error.BadSfnt;
+        // Preserve the deliberate wrapped-length recovery for a final large
+        // format-0 table, but reject every other undersized subtable before
+        // advancing the cursor.
         subtable_offset += length;
     }
     // The SFNT directory length is the unpadded kern payload length. Require
@@ -168,4 +175,17 @@ fn validateFormat2ClassTable(
 
 fn validateGlyphId(glyph_id: u32, glyph_count: u16) Error!void {
     if (glyph_id >= glyph_count) return error.BadSfnt;
+}
+
+test "legacy subtable length is checked before slicing format body" {
+    const data = [_]u8{
+        0, 0, 0, 2, // version, nTables
+        0, 0, 0, 4, 0, 1, // subtable: version, invalid length, coverage
+        0, 0, 0, 0, 0, 0, 0, 0, // enough bytes to reach format-0 parsing
+    };
+    try std.testing.expectError(error.BadSfnt, validate(
+        &data,
+        .{ .tag = "kern".*, .offset = 0, .length = data.len, .checksum = 0 },
+        1,
+    ));
 }

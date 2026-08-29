@@ -3,6 +3,7 @@
 const std = @import("std");
 const acceleration = @import("../../../accelerator/root.zig");
 const accelerated = @import("../../../execution/lookup/accelerated.zig");
+const class_context = @import("../../../../opentype/class_context.zig");
 const GlyphId = @import("../../../../glyph.zig").GlyphId;
 
 const Binding = struct {
@@ -155,6 +156,70 @@ test "accelerated GSUB fast profile records through the profiled path" {
                 .profile_fast_path = true,
                 .profile_io = std.testing.io,
             },
+            null,
+        ),
+    );
+}
+
+test "accelerated GSUB dispatch executes extension-wrapped class sidecars" {
+    const allocator = std.testing.allocator;
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 7, 8 });
+
+    // The prepared first-glyph index maps glyph 7 to the sole chaining rule.
+    // Its compact action deliberately reaches the sentinel nested binding,
+    // proving lookup type 7 was dispatched directly rather than declined.
+    const classes = [_]u16{
+        acceleration.index.class_first.sorted_encoding,
+        7,
+        0,
+    };
+    const rules = [_]class_context.Rule{.{
+        .class_set = 0,
+        .input_count = 1,
+        .lookahead_count = 0,
+        .hash = class_context.sequenceHashEmpty(),
+        .order = 0,
+        .lookup_index = 3,
+        .classes_start = 0,
+    }};
+    const groups = [_]class_context.RuleGroup{.{
+        .class_set = 0,
+        .start = 0,
+        .len = 1,
+        .max_input_count = 1,
+        .max_lookahead_count = 0,
+    }};
+    const chaining_subtables = [_]acceleration.model.ChainingClassSubtable{.{
+        .first_index_start = 0,
+        .rules = &rules,
+        .classes = &classes,
+        .groups = &groups,
+    }};
+    const sidecars = [_]acceleration.Lookup{.{
+        .lookup_offset = 12,
+        .lookup_type = 7,
+        .subtable_count = 1,
+        .extension_lookup_type = 6,
+        .chaining_class_subtables = &chaining_subtables,
+    }};
+    const view = accelerated.View{
+        .data = &.{},
+        .offset = 0,
+        .length = 0,
+        .assume_validated = true,
+    };
+    try std.testing.expectError(
+        error.BadGsub,
+        accelerated.apply(
+            Binding,
+            view,
+            12,
+            0,
+            &glyphs,
+            allocator,
+            .{ .lookup_accelerators = &sidecars },
             null,
         ),
     );

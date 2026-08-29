@@ -265,6 +265,14 @@ inline fn applyPreparedUnprofiled(
                 );
             }
         },
+        7 => if (!try applyExtensionClasses(
+            Executor,
+            view,
+            glyphs,
+            allocator,
+            run,
+            sidecar,
+        )) return false,
         else => return false,
     }
     return true;
@@ -365,17 +373,10 @@ noinline fn applyPrepared(
             }
         },
         6 => {
-            if (!sidecar.chaining_coverage_only) return false;
-            const digest = if (run_digest_cache) |cache|
-                cache.digestForRun(glyphs.items, sidecar.lookup_flag, run)
-            else
-                prefilter.digest(glyphs.items, sidecar.lookup_flag, run);
-            if (!digest.isEmpty() and
-                sidecar.chaining_input_digest.mayIntersect(digest))
-            {
-                try Executor.applyChainingLookup(
+            if (sidecar.chaining_class_subtables.len != 0) {
+                try contextual_chaining_class.acceleratedLookup(
+                    Executor,
                     view,
-                    lookup_offset,
                     sidecar.subtable_count,
                     glyphs,
                     allocator,
@@ -383,8 +384,36 @@ noinline fn applyPrepared(
                     run,
                     sidecar,
                 );
+            } else {
+                if (!sidecar.chaining_coverage_only) return false;
+                const digest = if (run_digest_cache) |cache|
+                    cache.digestForRun(glyphs.items, sidecar.lookup_flag, run)
+                else
+                    prefilter.digest(glyphs.items, sidecar.lookup_flag, run);
+                if (!digest.isEmpty() and
+                    sidecar.chaining_input_digest.mayIntersect(digest))
+                {
+                    try Executor.applyChainingLookup(
+                        view,
+                        lookup_offset,
+                        sidecar.subtable_count,
+                        glyphs,
+                        allocator,
+                        sidecar.lookup_flag,
+                        run,
+                        sidecar,
+                    );
+                }
             }
         },
+        7 => if (!try applyExtensionClasses(
+            Executor,
+            view,
+            glyphs,
+            allocator,
+            run,
+            sidecar,
+        )) return false,
         else => return false,
     }
 
@@ -396,6 +425,50 @@ noinline fn applyPrepared(
         glyph_count_before,
         glyphs.items.len,
     );
+    return true;
+}
+
+/// ExtensionSubst changes only the payload offset width. The sidecar builder
+/// has already resolved every wrapper and proved a homogeneous payload kind,
+/// so execute prepared class rules without entering the generic outer lookup
+/// dispatcher first.
+inline fn applyExtensionClasses(
+    comptime Executor: type,
+    view: View,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    run: Options,
+    sidecar: *const Lookup,
+) Error!bool {
+    switch (sidecar.extension_lookup_type orelse return false) {
+        5 => {
+            if (sidecar.context_class_subtables.len == 0) return false;
+            try contextual_context.acceleratedClassLookup(
+                Executor,
+                view,
+                sidecar.subtable_count,
+                glyphs,
+                allocator,
+                sidecar.lookup_flag,
+                run,
+                sidecar,
+            );
+        },
+        6 => {
+            if (sidecar.chaining_class_subtables.len == 0) return false;
+            try contextual_chaining_class.acceleratedLookup(
+                Executor,
+                view,
+                sidecar.subtable_count,
+                glyphs,
+                allocator,
+                sidecar.lookup_flag,
+                run,
+                sidecar,
+            );
+        },
+        else => return false,
+    }
     return true;
 }
 

@@ -21,10 +21,12 @@ zig build paragraph-bench -Doptimize=ReleaseFast -- \
 ```
 
 `zig build parley-matrix -Doptimize=ReleaseFast` runs default, spacing,
-alternating-style, in-flow-object, out-of-flow-object, and mixed-font fallback boundaries over
+alternating-style, in-flow-object, ordinary/custom out-of-flow-object, and mixed-font fallback boundaries over
 Parley's Latin, Arabic, and Japanese sample paragraphs. It rejects mismatched
 source-byte, glyph, line, or object counts and requires exact normalized object
 geometry (stable id/source/line, x/y, size, and baseline) for all object rows.
+Custom object rows explicitly resume Parley's breaker with zero occupancy and
+compare the same caller-owned absolute placement used by Cangjie.
 The Parley oracle disables optional paint-time pixel quantization so both
 engines expose fractional coordinates. Optional `-- --iterations N --samples
 N --cpu CPU --fail-on-slower` arguments provide a repeatable fixed-core run

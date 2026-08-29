@@ -28,10 +28,9 @@ CORE_CASES = (
     Case("devanagari-words", "NotoSansDevanagari-Regular.ttf", "hi-words.txt", "ltr"),
 )
 
-# The mixed source-code corpus is deliberately a separate suite. A single pass
-# shapes about one million glyphs, so silently adding it to the core matrix
-# would make the commonly used 5-iteration/11-sample command prohibitively
-# expensive and could encourage users to reduce the core suite's rigor.
+# Long prose and mixed source-code corpora are separate suites. Silently adding
+# them to the core matrix would make the commonly used 5-iteration/11-sample
+# command prohibitively expensive and could encourage reducing core rigor.
 REACT_DOM_CASES = (
     Case("roboto-react-dom", "Roboto-Regular.ttf", "react-dom.txt", "ltr"),
     Case(
@@ -42,14 +41,31 @@ REACT_DOM_CASES = (
     ),
 )
 
+BROAD_CASES = (
+    Case(
+        "roboto-long",
+        "Roboto-Regular.ttf",
+        "en-thelittleprince.txt",
+        "ltr",
+    ),
+    Case(
+        "source-serif-long",
+        "SourceSerifVariable-Roman.ttf",
+        "en-thelittleprince.txt",
+        "ltr",
+    ),
+)
+
 
 def cases_for_suite(suite: str) -> tuple[Case, ...]:
     if suite == "core":
         return CORE_CASES
     if suite == "react-dom":
         return REACT_DOM_CASES
+    if suite == "broad":
+        return BROAD_CASES
     if suite == "all":
-        return CORE_CASES + REACT_DOM_CASES
+        return CORE_CASES + BROAD_CASES + REACT_DOM_CASES
     raise ValueError(f"unknown suite: {suite}")
 
 
@@ -127,7 +143,8 @@ def test_glyph_count_normalization() -> None:
 def test_case_selection() -> None:
     assert cases_for_suite("core") == CORE_CASES
     assert cases_for_suite("react-dom") == REACT_DOM_CASES
-    assert cases_for_suite("all") == CORE_CASES + REACT_DOM_CASES
+    assert cases_for_suite("broad") == BROAD_CASES
+    assert cases_for_suite("all") == CORE_CASES + BROAD_CASES + REACT_DOM_CASES
     try:
         cases_for_suite("unknown")
     except ValueError:
@@ -157,10 +174,11 @@ def main() -> int:
     parser.add_argument("--samples", type=int, default=1)
     parser.add_argument("--cpu", type=int)
     parser.add_argument(
-        "--suite", choices=("core", "react-dom", "all"), default="core",
+        "--suite", choices=("core", "broad", "react-dom", "all"), default="core",
         help=(
-            "corpus suite to run; react-dom is separate because each pass "
-            "shapes about one million glyphs"
+            "corpus suite to run; broad adds long prose, while "
+            "react-dom stays separate because each pass shapes about one "
+            "million glyphs"
         ),
     )
     parser.add_argument(

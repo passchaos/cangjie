@@ -18,6 +18,7 @@ class Case:
     font: str
     text: str
     direction: str
+    common_args: tuple[str, ...] = ()
 
 
 CORE_CASES = (
@@ -42,6 +43,24 @@ REACT_DOM_CASES = (
 )
 
 BROAD_CASES = (
+    # HarfBuzz and the in-process HarfRust oracle leave language unset, which
+    # selects DefaultLangSys. Cangjie's public API deliberately performs
+    # content-based language inference, so pin `dflt` here to compare the same
+    # lookup selection rather than Urdu/Persian policy against a default one.
+    Case(
+        "noto-nastaliq-words",
+        "NotoNastaliqUrdu-Regular.ttf",
+        "fa-words.txt",
+        "rtl",
+        ("--language", "dflt"),
+    ),
+    Case(
+        "noto-nastaliq-long",
+        "NotoNastaliqUrdu-Regular.ttf",
+        "fa-thelittleprince.txt",
+        "rtl",
+        ("--language", "dflt"),
+    ),
     Case(
         "roboto-long",
         "Roboto-Regular.ttf",
@@ -100,6 +119,7 @@ def cangjie_command(
         "--text-file", str(text), "--direction", case.direction,
         "--iterations", str(iterations), "--warmup", "2",
         "--samples", str(samples), "--timing-consumer", "summary",
+        *case.common_args,
     ]
 
 
@@ -176,7 +196,7 @@ def main() -> int:
     parser.add_argument(
         "--suite", choices=("core", "broad", "react-dom", "all"), default="core",
         help=(
-            "corpus suite to run; broad adds long prose, while "
+            "corpus suite to run; broad adds Nastaliq and long prose, while "
             "react-dom stays separate because each pass shapes about one "
             "million glyphs"
         ),

@@ -21,13 +21,15 @@ zig build paragraph-bench -Doptimize=ReleaseFast -- \
 ```
 
 `zig build parley-matrix -Doptimize=ReleaseFast` runs default, spacing,
-alternating-style, in-flow-object, and out-of-flow-object boundaries over
+alternating-style, in-flow-object, out-of-flow-object, and mixed-font fallback boundaries over
 Parley's Latin, Arabic, and Japanese sample paragraphs. It rejects mismatched
 source-byte, glyph, line, or object counts and requires exact normalized object
 geometry (stable id/source/line, x/y, size, and baseline) for all object rows.
 The Parley oracle disables optional paint-time pixel quantization so both
 engines expose fractional coordinates. Optional `-- --iterations N --samples
 N --cpu CPU --fail-on-slower` arguments provide a repeatable fixed-core run
-whose optional strict gate rejects any row without a positive Cangjie margin. The
+whose optional strict gate rejects any claimed performance row without a
+positive Cangjie margin. Retained fallback is reported as coverage-only until
+its mutable-cascade lifecycle is matched. The
 default font paths target the local Linux Noto installation and can be
 overridden with the script directly when required.

@@ -24,7 +24,13 @@ fn main() {
     let style = args.next().unwrap_or_else(|| "default".to_owned());
     let phase = args.next().unwrap_or_else(|| "layout".to_owned());
     assert!(phase == "layout" || phase == "reflow");
+    let fallback_font_path = args.next();
     assert!(args.next().is_none(), "unexpected argument");
+    assert_eq!(
+        style == "fallback",
+        fallback_font_path.is_some(),
+        "fallback style requires exactly one fallback font"
+    );
     let text_file = fs::read_to_string(text_path).unwrap();
     let source_text = text_file.lines().next().unwrap_or("");
     let owned_text;
@@ -43,6 +49,11 @@ fn main() {
         system_fonts: false,
     });
     collection.register_fonts(Blob::new(Arc::new(font_data)), None);
+    let fallback_family_name = fallback_font_path.map(|path| {
+        let bytes = fs::read(path).unwrap();
+        collection.register_fonts(Blob::new(Arc::new(bytes)), None);
+        "Noto Sans"
+    });
     assert!(collection.family_id(&family_name).is_some());
     let mut font_cx = FontContext {
         collection,
@@ -60,6 +71,7 @@ fn main() {
             &family_name,
             &direction,
             &style,
+            fallback_family_name,
         ))
     } else {
         None
@@ -82,6 +94,7 @@ fn main() {
                 width,
                 &direction,
                 &style,
+                fallback_family_name,
                 retained.as_mut(),
                 true,
             );
@@ -109,6 +122,7 @@ fn main() {
                 width,
                 &direction,
                 &style,
+                fallback_family_name,
                 retained.as_mut(),
                 false,
             );
@@ -137,6 +151,7 @@ fn run_once(
     width: f32,
     direction: &str,
     style: &str,
+    fallback_family_name: Option<&str>,
     retained: Option<&mut Layout<Brush>>,
     summarize_output: bool,
 ) -> (u64, u64, u64, usize, usize, usize) {
@@ -146,7 +161,15 @@ fn run_once(
         layout.align(Alignment::Start, AlignmentOptions::default());
         layout
     } else {
-        owned = build_layout(font_cx, layout_cx, text, family_name, direction, style);
+        owned = build_layout(
+            font_cx,
+            layout_cx,
+            text,
+            family_name,
+            direction,
+            style,
+            fallback_family_name,
+        );
         owned.break_all_lines(Some(width));
         owned.align(Alignment::Start, AlignmentOptions::default());
         &mut owned
@@ -179,14 +202,24 @@ fn build_layout(
     family_name: &str,
     direction: &str,
     style: &str,
+    fallback_family_name: Option<&str>,
 ) -> Layout<Brush> {
     // Cangjie retains fractional layout metrics. Disable Parley's optional
     // paint-time pixel snapping so both engines expose the same coordinates.
     let mut builder = layout_cx.ranged_builder(font_cx, text, 1.0, false);
-    builder.push_default(FontFamily::named(family_name));
+    let fallback_family_source;
+    if let Some(fallback) = fallback_family_name {
+        // Preserve caller order explicitly: Latin resolves in Roboto and the
+        // inserted Arabic segment must continue into Noto Sans.
+        fallback_family_source = format!("'{family_name}', '{fallback}'");
+        builder.push_default(FontFamily::from(fallback_family_source.as_str()));
+    } else {
+        builder.push_default(FontFamily::named(family_name));
+    }
     builder.push_default(StyleProperty::FontSize(16.0));
     match style {
         "default" => {}
+        "fallback" => {}
         "spacing" => {
             builder.push_default(StyleProperty::LetterSpacing(0.75));
             builder.push_default(StyleProperty::WordSpacing(2.0));
@@ -214,7 +247,7 @@ fn build_layout(
             baseline: Some(15.0),
         }),
         _ => panic!(
-            "style must be default, spacing, alternating, inline-object, or out-of-flow-object"
+            "style must be default, spacing, alternating, fallback, inline-object, or out-of-flow-object"
         ),
     }
     builder.set_base_direction(match direction {

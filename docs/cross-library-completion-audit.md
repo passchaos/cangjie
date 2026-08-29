@@ -13,7 +13,7 @@ one benchmark. The claim remains **open** until every row below is closed.
 | HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: all five maintained core rows now lead (`1.052x--1.145x` in the latest strict run) and `react-dom.txt` leads by more than `1.50x`; broader font/script coverage remains incomplete |
 | Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; all 25 maintained rows, including variable-CFF2 default/axis-endpoint owning and reuse outlines, lead; broader semantic differentials remain open |
 | FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `hinted-outline-matrix`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 75 maintained grayscale raster rows, all 10 native-strike bitmap rows, the shared COLRv0 layer/CPAL row, all five matched face-open rows, and the expanded 100-row hinted-outline matrix lead. Complete eager validation is separately reported and remains slower, COLRv1/SVG have no FreeType built-in renderer for direct performance comparison, and broader glyph/platform coverage remains incomplete |
-| Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the maintained 24-row matrix covers three scripts, three construction styles, retained reflow, and matched in-flow plus ordinary out-of-flow objects. All 12 object rows now prove identical id/source/line/position/size/baseline geometry at fractional coordinates, and logical-line normalization proves 9/24 text-geometry rows equivalent. The latest fixed-core A/B/B/A run leads every performance row (`1.013x--1.874x`), though Arabic object reflow remains near noise; vertical, fallback, custom out-of-flow, and the remaining structural geometry differences are open |
+| Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the maintained 26-row matrix covers three scripts, three construction styles, retained reflow, matched in-flow/ordinary out-of-flow objects, and a mixed Roboto→Noto Sans fallback paragraph. All 12 object rows prove identical id/source/line/position/size/baseline geometry at fractional coordinates, and logical-line normalization proves the fallback rows plus 9/24 original text-geometry rows equivalent. The latest fixed-core A/B/B/A run leads every enforced performance row, though Arabic object reflow remains near noise; retained fallback is coverage-only and materially slower, while vertical, custom out-of-flow, and remaining structural differences are open |
 | Robustness | Malformed supported inputs fail atomically under safety checks and sustained coverage-guided fuzzing | `font-fuzz-smoke`, `font-fuzz`, regression fixtures | Open: the retained 100K campaign is useful evidence, not exhaustive format coverage |
 | Platform scope | Results reproduced on each supported target or the performance claim explicitly scoped to named hardware/OS/toolchain versions | benchmark documentation | Open: current performance evidence is primarily one Linux x86-64 host |
 
@@ -40,7 +40,8 @@ x86-64, pinned to CPU 30 where the harness supports it:
   (`1.317x`/`1.336x`). Caller-owned reuse at those endpoints leads by
   `13.865x`/`13.763x`.
 - `zig build parley-matrix -Doptimize=ReleaseFast -- --iterations 1000 --samples
-  7 --cpu 30 --fail-on-slower`: 24/24 count/stability/performance rows passed,
+  7 --cpu 30 --fail-on-slower`: 26/26 count/stability rows passed and all 25
+  enforced performance rows passed,
   including exact normalized
   object geometry in all 12 object rows. The added six rows use the
   same 24x20 object as the in-flow cases but select Parley's `OutOfFlow` and
@@ -51,7 +52,8 @@ x86-64, pinned to CPU 30 where the harness supports it:
   narrow open regressions: Arabic in-flow and out-of-flow retained reflow.
   Deriving both the logical and final visual marker indices from retained run
   and line ranges removed two whole-paragraph scans; the latest run led those
-  rows at `1.013x` and `1.017x` and every row overall (`1.013x--1.874x`). The
+  rows at `1.014x` and `1.002x` in the latest expanded strict run and every
+  enforced row overall. The
   margin remains near noise and needs continued monitoring. After removing Parley's
   timed O(n) semantic-summary walk to match Cangjie's O(1) timed consumer,
   Cangjie had led the preceding 18-row run. Default Latin, Arabic, and Japanese retained reflow
@@ -66,6 +68,11 @@ x86-64, pinned to CPU 30 where the harness supports it:
   Object geometry is compared independently at the fractional-coordinate
   boundary (Parley pixel quantization disabled), including stable id, source
   byte, owning line, x/y, width/height, and baseline.
+  The mixed Roboto→Noto Sans Latin/Arabic fallback rows also have identical
+  normalized geometry. Construction leads, while retained fallback is
+  explicitly coverage-only because Cangjie currently revalidates mutable
+  cascade geometry and measured about `0.42x` against Parley's already-resolved
+  font assignment; closing that lifecycle/performance gap remains open.
 - `zig build font-fuzz-smoke -Doptimize=ReleaseSafe -- ...`: six retained
   bitmap/color/container seeds and 3,084 deterministic mutations passed in the
   latest bitmap-audit rerun.

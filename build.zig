@@ -2903,6 +2903,8 @@ pub fn build(b: *std.Build) void {
         "/usr/share/fonts/truetype/noto/NotoKufiArabic-Regular.ttf",
         "--japanese-font",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "--fallback-font",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
     });
     if (b.args) |args| parley_matrix_cmd.addArgs(args);
     parley_matrix_step.dependOn(&parley_matrix_cmd.step);

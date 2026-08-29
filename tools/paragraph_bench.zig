@@ -17,11 +17,15 @@ pub fn main(init: std.process.Init) !void {
     const phase = if (args.next()) |value| try parsePhase(value) else Phase.layout;
     const direction = if (args.next()) |value| try parseDirection(value) else Direction.auto;
     const style = if (args.next()) |value| try parseStyle(value) else Style.default;
+    const fallback_font_path = args.next();
     if (args.next() != null) return usage();
+    if ((style == .fallback) != (fallback_font_path != null))
+        return error.InvalidArguments;
     if (phase == .reflow and
         style != .default and
         style != .inline_object and
-        style != .out_of_flow_object)
+        style != .out_of_flow_object and
+        style != .fallback)
     {
         return error.InvalidArguments;
     }
@@ -62,8 +66,29 @@ pub fn main(init: std.process.Init) !void {
         source_text;
     defer if (style.hasInlineObject()) allocator.free(text);
     if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
-    const faces = [_]*const cangjie.font.Face{&face};
-    const cascade = cangjie.font.Cascade.init(&faces);
+    const fallback_bytes: ?[]u8 = if (fallback_font_path) |path|
+        try std.Io.Dir.cwd().readFileAlloc(
+            init.io,
+            path,
+            allocator,
+            .limited(256 * 1024 * 1024),
+        )
+    else
+        null;
+    defer if (fallback_bytes) |bytes_value| allocator.free(bytes_value);
+    var fallback_face: ?cangjie.font.Face = if (fallback_bytes) |bytes_value|
+        try cangjie.font.Face.parse(allocator, bytes_value)
+    else
+        null;
+    defer if (fallback_face) |*face_value| face_value.deinit();
+    const single_faces = [_]*const cangjie.font.Face{&face};
+    const fallback_faces = if (fallback_face) |*face_value|
+        [_]*const cangjie.font.Face{ &face, face_value }
+    else
+        undefined;
+    const cascade = cangjie.font.Cascade.init(
+        if (fallback_face != null) &fallback_faces else &single_faces,
+    );
     var engine = cangjie.shaping.Engine.init(allocator, .{});
     defer engine.deinit();
     const paragraph_direction = try resolvedDirection(direction, text);
@@ -172,6 +197,7 @@ const Style = enum {
     alternating,
     inline_object,
     out_of_flow_object,
+    fallback,
 
     fn hasInlineObject(self: Style) bool {
         return self == .inline_object or self == .out_of_flow_object;
@@ -475,6 +501,7 @@ fn parseStyle(value: []const u8) !Style {
     if (std.mem.eql(u8, value, "alternating")) return .alternating;
     if (std.mem.eql(u8, value, "inline-object")) return .inline_object;
     if (std.mem.eql(u8, value, "out-of-flow-object")) return .out_of_flow_object;
+    if (std.mem.eql(u8, value, "fallback")) return .fallback;
     return error.InvalidArguments;
 }
 
@@ -502,7 +529,7 @@ fn resolvedDirection(
 
 fn usage() error{InvalidArguments} {
     std.debug.print(
-        "usage: paragraph-bench FONT TEXT ITERATIONS SAMPLES [WIDTH] [layout|reflow] [auto|ltr|rtl] [default|spacing|alternating]\n",
+        "usage: paragraph-bench FONT TEXT ITERATIONS SAMPLES [WIDTH] [layout|reflow] [auto|ltr|rtl] [default|spacing|alternating|inline-object|out-of-flow-object|fallback] [FALLBACK_FONT]\n",
         .{},
     );
     return error.InvalidArguments;

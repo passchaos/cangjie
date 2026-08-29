@@ -173,8 +173,8 @@ pub fn matchesSourceSyllable(
     run: Options,
 ) bool {
     if (run.match_source_syllable) return true;
-    const index = lookup_index orelse return false;
     const lookups = run.match_source_syllable_lookups orelse return false;
+    const index = lookup_index orelse return false;
     for (lookups) |candidate| {
         if (candidate == index) return true;
     }

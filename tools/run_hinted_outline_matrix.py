@@ -16,6 +16,7 @@ class Case:
     name: str
     font: Path
     codepoint: str
+    system_213_v40_mono_compatible: bool = True
 
 
 def run(command: list[str], cpu: int | None) -> dict[str, str]:
@@ -70,11 +71,21 @@ def main() -> int:
             Case("serif-cyrillic", Path("/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"), "U+0416"),
             Case("freesans-latin", Path("/usr/share/fonts/truetype/freefont/FreeSans.ttf"), "U+0058"),
             Case("annapurna-devanagari", Path("/usr/share/fonts/truetype/annapurna/AnnapurnaSIL-Regular.ttf"), "U+0915"),
-            Case("liberation-compound", Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"), "U+00C2"),
+            Case(
+                "liberation-compound",
+                Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+                "U+00C2",
+                False,
+            ),
             Case("cascadia-latin", Path("/usr/share/fonts/truetype/cascadia-code/CascadiaCode.ttf"), "U+0058"),
             Case("noto-bengali", Path("/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf"), "U+0995"),
             Case("noto-tamil", Path("/usr/share/fonts/truetype/noto/NotoSansTamil-Regular.ttf"), "U+0B95"),
-            Case("noto-telugu", Path("/usr/share/fonts/truetype/noto/NotoSansTelugu-Regular.ttf"), "U+0C15"),
+            Case(
+                "noto-telugu",
+                Path("/usr/share/fonts/truetype/noto/NotoSansTelugu-Regular.ttf"),
+                "U+0C15",
+                False,
+            ),
             Case("noto-kannada", Path("/usr/share/fonts/truetype/noto/NotoSansKannada-Regular.ttf"), "U+0C95"),
             Case("noto-malayalam", Path("/usr/share/fonts/truetype/noto/NotoSansMalayalam-Regular.ttf"), "U+0D15"),
             Case("noto-gujarati", Path("/usr/share/fonts/truetype/noto/NotoSansGujarati-Regular.ttf"), "U+0A95"),
@@ -88,10 +99,6 @@ def main() -> int:
     # The system oracle is FreeType 2.13.2. FreeType 2.14 deliberately changed
     # v40 monochrome compound placement; these rows are gated separately by
     # `hinting-freetype-test` when a current FreeType is available.
-    system_version_exclusions = {
-        ("liberation-compound", "cleartype", "mono"),
-        ("noto-telugu", "cleartype", "mono"),
-    }
     failures: list[str] = []
     rows = 0
     for case in cases:
@@ -100,7 +107,11 @@ def main() -> int:
         for size in sizes:
             for interpreter in interpreters:
                 for target in targets:
-                    if (case.name, interpreter, target) in system_version_exclusions:
+                    if (
+                        not case.system_213_v40_mono_compatible
+                        and interpreter == "cleartype"
+                        and target == "mono"
+                    ):
                         continue
                     base = [
                         str(args.glyph_bench), "--mode", "hinted-outline",

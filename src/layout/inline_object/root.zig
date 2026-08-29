@@ -362,49 +362,37 @@ pub fn positionSingleRetained(
     std.debug.assert(object.kind != .custom_out_of_flow);
     std.debug.assert(buffer.inline_objects.capacity >= 1);
     buffer.inline_objects.clearRetainingCapacity();
-    for (buffer.lines.items, 0..) |*line, line_index| {
-        line.inline_object_start = buffer.inline_objects.items.len;
-        line.inline_object_len = 0;
-        var pen_inline: f32 = if (writing_mode.isVertical()) line.y else line.x;
-        const glyph_end = line.glyph_start + line.glyph_len;
-        for (buffer.glyphs.items[line.glyph_start..glyph_end]) |glyph| {
-            if (glyph.isInlineObject()) {
-                std.debug.assert(glyph.cluster == object.byte_index);
-                const baseline = object.resolvedBaseline();
-                buffer.inline_objects.appendAssumeCapacity(.{
-                    .id = object.id,
-                    .kind = object.kind,
-                    .byte_index = object.byte_index,
-                    .line_index = line_index,
-                    .x = if (writing_mode.isVertical())
-                        line.x + (line.width - object.width) / 2
-                    else
-                        pen_inline,
-                    .y = if (writing_mode.isVertical())
-                        pen_inline
-                    else
-                        line.y + line.baseline + glyph.y_offset - baseline,
-                    .width = object.width,
-                    .height = object.height,
-                    .baseline = baseline,
-                    .anchor_x = if (writing_mode.isVertical())
-                        line.x + (line.width - object.width) / 2
-                    else
-                        pen_inline,
-                    .anchor_y = if (writing_mode.isVertical())
-                        pen_inline
-                    else
-                        line.y + line.baseline + glyph.y_offset - baseline,
-                });
-                line.inline_object_len = 1;
-                return;
-            }
-            pen_inline += if (writing_mode.isVertical())
-                glyph.y_advance
-            else
-                glyph.x_advance;
-        }
-    }
+    const location = singleObjectLocation(
+        buffer,
+        object.byte_index,
+        writing_mode,
+    ) orelse return;
+    const line = &buffer.lines.items[location.line_index];
+    line.inline_object_start = 0;
+    line.inline_object_len = 1;
+    const baseline = object.resolvedBaseline();
+    const anchor_x = if (writing_mode.isVertical())
+        line.x + (line.width - object.width) / 2
+    else
+        location.pen_inline;
+    const anchor_y = if (writing_mode.isVertical())
+        location.pen_inline
+    else
+        line.y + line.baseline +
+            buffer.glyphs.items[location.glyph_index].y_offset - baseline;
+    buffer.inline_objects.appendAssumeCapacity(.{
+        .id = object.id,
+        .kind = object.kind,
+        .byte_index = object.byte_index,
+        .line_index = location.line_index,
+        .x = anchor_x,
+        .y = anchor_y,
+        .width = object.width,
+        .height = object.height,
+        .baseline = baseline,
+        .anchor_x = anchor_x,
+        .anchor_y = anchor_y,
+    });
 }
 
 /// Position one pre-resolved custom object in the retained simple path. The
@@ -420,44 +408,79 @@ pub fn positionSingleResolvedRetained(
     std.debug.assert(placement.byte_index == object.byte_index);
     std.debug.assert(buffer.inline_objects.capacity >= 1);
     buffer.inline_objects.clearRetainingCapacity();
+    const location = singleObjectLocation(
+        buffer,
+        object.byte_index,
+        writing_mode,
+    ) orelse return;
+    const line = &buffer.lines.items[location.line_index];
+    line.inline_object_start = 0;
+    line.inline_object_len = 1;
+    const baseline = object.resolvedBaseline();
+    const anchor_x = if (writing_mode.isVertical())
+        line.x + (line.width - object.width) / 2
+    else
+        location.pen_inline;
+    const anchor_y = if (writing_mode.isVertical())
+        location.pen_inline
+    else
+        line.y + line.baseline +
+            buffer.glyphs.items[location.glyph_index].y_offset - baseline;
+    buffer.inline_objects.appendAssumeCapacity(.{
+        .id = object.id,
+        .kind = object.kind,
+        .byte_index = object.byte_index,
+        .line_index = location.line_index,
+        .x = placement.geometry.x,
+        .y = placement.geometry.y,
+        .width = placement.geometry.width,
+        .height = placement.geometry.height,
+        .baseline = placement.geometry.resolvedBaseline(),
+        .anchor_x = anchor_x,
+        .anchor_y = anchor_y,
+    });
+}
+
+const SingleObjectLocation = struct {
+    line_index: usize,
+    glyph_index: usize,
+    pen_inline: f32,
+};
+
+/// Locate the sole retained object from its source anchor. Line source ranges
+/// rule out every other line without walking their glyphs; only the owning
+/// line contributes advances before the marker. This is especially important
+/// after pure-RTL permutation, where the marker is near the visual start but
+/// its source byte remains near the paragraph midpoint.
+fn singleObjectLocation(
+    buffer: anytype,
+    byte_index: usize,
+    writing_mode: @import("../../shaping/pipeline/types.zig").WritingMode,
+) ?SingleObjectLocation {
     for (buffer.lines.items, 0..) |*line, line_index| {
-        line.inline_object_start = buffer.inline_objects.items.len;
+        line.inline_object_start = 0;
         line.inline_object_len = 0;
+        if (byte_index < line.byte_start or
+            byte_index - line.byte_start >= line.byte_len) continue;
+
         var pen_inline: f32 = if (writing_mode.isVertical()) line.y else line.x;
         const glyph_end = line.glyph_start + line.glyph_len;
-        for (buffer.glyphs.items[line.glyph_start..glyph_end]) |glyph| {
-            if (glyph.isInlineObject()) {
-                const baseline = object.resolvedBaseline();
-                const anchor_x = if (writing_mode.isVertical())
-                    line.x + (line.width - object.width) / 2
-                else
-                    pen_inline;
-                const anchor_y = if (writing_mode.isVertical())
-                    pen_inline
-                else
-                    line.y + line.baseline + glyph.y_offset - baseline;
-                buffer.inline_objects.appendAssumeCapacity(.{
-                    .id = object.id,
-                    .kind = object.kind,
-                    .byte_index = object.byte_index,
+        for (buffer.glyphs.items[line.glyph_start..glyph_end], line.glyph_start..) |glyph, glyph_index| {
+            if (glyph.cluster == byte_index and glyph.isInlineObject()) {
+                return .{
                     .line_index = line_index,
-                    .x = placement.geometry.x,
-                    .y = placement.geometry.y,
-                    .width = placement.geometry.width,
-                    .height = placement.geometry.height,
-                    .baseline = placement.geometry.resolvedBaseline(),
-                    .anchor_x = anchor_x,
-                    .anchor_y = anchor_y,
-                });
-                line.inline_object_len = 1;
-                return;
+                    .glyph_index = glyph_index,
+                    .pen_inline = pen_inline,
+                };
             }
             pen_inline += if (writing_mode.isVertical())
                 glyph.y_advance
             else
                 glyph.x_advance;
         }
+        return null;
     }
+    return null;
 }
 
 test "single resolved retained positioning keeps absolute geometry and anchor" {

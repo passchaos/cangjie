@@ -108,6 +108,11 @@ def glyphs_per_iteration(
     return glyphs // measured_runs
 
 
+def is_strict_win(speedup: float) -> bool:
+    """Require a positive margin; equality and invalid ratios do not pass."""
+    return not math.isnan(speedup) and speedup > 1.0
+
+
 def test_glyph_count_normalization() -> None:
     assert glyphs_per_iteration({"glyphs": "120"}, 3, 4, True) == 10
     assert glyphs_per_iteration({"glyphs": "10"}, 3, 4, False) == 10
@@ -131,9 +136,18 @@ def test_case_selection() -> None:
         raise AssertionError("unknown suites must be rejected")
 
 
+def test_strict_speedup_boundary() -> None:
+    assert is_strict_win(1.001)
+    assert is_strict_win(math.inf)
+    assert not is_strict_win(1.0)
+    assert not is_strict_win(0.999)
+    assert not is_strict_win(math.nan)
+
+
 def main() -> int:
     test_glyph_count_normalization()
     test_case_selection()
+    test_strict_speedup_boundary()
     parser = argparse.ArgumentParser()
     parser.add_argument("--cangjie", required=True, type=Path)
     parser.add_argument("--harfbuzz", required=True, type=Path)
@@ -149,6 +163,11 @@ def main() -> int:
             "shapes about one million glyphs"
         ),
     )
+    parser.add_argument(
+        "--fail-on-slower",
+        action="store_true",
+        help="fail when Cangjie is not faster than the best reference",
+    )
     args = parser.parse_args()
     if args.iterations <= 0 or args.samples <= 0:
         parser.error("iterations and samples must be positive")
@@ -160,6 +179,7 @@ def main() -> int:
     )
     harfrust = args.harfrust_manifest.parent / "target/release/harfrust-shape-oracle"
     cases = cases_for_suite(args.suite)
+    failures: list[str] = []
     for case in cases:
         font = args.corpus_root / "fonts" / case.font
         text = args.corpus_root / "texts" / case.text
@@ -203,13 +223,21 @@ def main() -> int:
         )
         means = tuple(math.sqrt(a * b) for a, b in values)
         strongest = min(means[1:])
+        speedup = strongest / means[0]
+        if args.fail_on_slower and not is_strict_win(speedup):
+            failures.append(f"{case.name}: Cangjie slower ({speedup:.3f}x)")
         print(
             f"{case.name}: cangjie={values[0][0]:.3f}/{values[0][1]:.3f} "
             f"harfbuzz={values[1][0]:.3f}/{values[1][1]:.3f} "
             f"harfrust={values[2][0]:.3f}/{values[2][1]:.3f} "
-            f"speedup_vs_best={strongest / means[0]:.3f}x "
+            f"speedup_vs_best={speedup:.3f}x "
             f"glyphs={glyphs_per_iteration(cangjie_a, args.iterations, args.samples, True)}"
         )
+    if failures:
+        print("Cangjie shaping performance matrix failed:", file=sys.stderr)
+        for failure in failures:
+            print(f"- {failure}", file=sys.stderr)
+        return 1
     print(
         f"Cangjie/HarfBuzz/HarfRust shaping matrix completed: {len(cases)} corpora"
     )

@@ -13,7 +13,7 @@ one benchmark. The claim remains **open** until every row below is closed.
 | HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: all five maintained core rows now lead (`1.052x--1.145x` in the latest strict run) and `react-dom.txt` leads by more than `1.50x`; broader font/script coverage remains incomplete |
 | Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; all 25 maintained rows, including variable-CFF2 default/axis-endpoint owning and reuse outlines, lead; broader semantic differentials remain open |
 | FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `hinted-outline-matrix`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 75 maintained grayscale raster rows, all 10 native-strike bitmap rows, the shared COLRv0 layer/CPAL row, all five matched face-open rows, and the expanded 100-row hinted-outline matrix lead. Complete eager validation is separately reported and remains slower, COLRv1/SVG have no FreeType built-in renderer for direct performance comparison, and broader glyph/platform coverage remains incomplete |
-| Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the maintained 32-row matrix covers three scripts, three construction styles, retained reflow, matched in-flow/ordinary/custom out-of-flow objects, and mixed Roboto→Noto Sans Devanagari fallback. All 18 object rows prove identical id/source/line/position/size/baseline geometry at fractional coordinates. Custom construction leads, but retained custom placement still trails on Latin/Arabic and is near noise on Japanese; vertical and remaining structural differences are open |
+| Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the maintained 32-row matrix covers three scripts, three construction styles, retained reflow, matched in-flow/ordinary/custom out-of-flow objects, and mixed Roboto→Noto Sans Devanagari fallback. All 18 object rows prove identical id/source/line/position/size/baseline geometry at fractional coordinates. Custom and ordinary out-of-flow reflow now lead in the latest full run; Arabic in-flow retained reflow remains a noise-sensitive `0.978x`, and vertical comparison remains unavailable because the pinned Parley API has no writing-mode input |
 | Robustness | Malformed supported inputs fail atomically under safety checks and sustained coverage-guided fuzzing | `font-fuzz-smoke`, `font-fuzz`, regression fixtures | Open: the retained 100K campaign is useful evidence, not exhaustive format coverage |
 | Platform scope | Results reproduced on each supported target or the performance claim explicitly scoped to named hardware/OS/toolchain versions | benchmark documentation | Open: current performance evidence is primarily one Linux x86-64 host |
 
@@ -43,6 +43,13 @@ x86-64, pinned to CPU 30 where the harness supports it:
   buffer rather than replacing its allocation before publishing the coordinate
   cache key. A post-change strict `100000 * 7` run kept all 25 maintained rows
   green; CFF2 default/`+1`/`-1` reuse measured `13.835x`/`13.552x`/`13.531x`.
+- The owning Fontations outline oracle now materializes Skrifa output into its
+  public owned `Vec<PathElement>` before hashing, matching Cangjie's owned
+  command-array lifecycle rather than comparing an owning result with an
+  allocation-free callback pen. The maintained strict matrix remains green;
+  the corrected `100000 * 7` CFF2 owning/reuse rows led by
+  `1.200x`/`3.163x` at default coordinates and `1.209x--1.225x`/
+  `3.207x--3.219x` at the two endpoints.
 - The optional Fontations `--extended` outline corpus now includes all ten
   selected semantically identical glyphs from the larger two-axis
   `AdobeVFPrototype.otf`, in both owning and caller-storage modes. The original
@@ -52,10 +59,12 @@ x86-64, pinned to CPU 30 where the harness supports it:
   matching Skrifa and admitting glyphs 20, 64, 128, and 192 to the matrix.
   Raising the CFF2 operand stack to the format's 513-entry limit also admits
   glyph 2's large blend program. A `1000 * 7` semantic/performance run of the
-  resulting 125-row extended matrix confirmed every checksum. All CFF2 reuse
-  rows led; owning glyphs 20 and 128 remained slower, alongside existing glyf
-  owning deficits, so this extended corpus is not yet a strict performance
-  pass.
+  resulting 125-row extended matrix confirmed every checksum. Under the
+  corrected owned lifecycle, fixed-CPU-30 `1000 * 11` reruns moved the former
+  Adobe CFF2 blockers ahead: glyph 20 measured `1.008x`, glyph 128 `1.052x`,
+  and all ten selected Adobe owning/reuse pairs led. Several extended
+  production glyf owning rows still trail, so the full optional matrix remains
+  red.
 - `zig build parley-matrix -Doptimize=ReleaseFast -- --iterations 1000 --samples
   7 --cpu 30 --fail-on-slower`: the 26-row matrix passed before custom
   placement was added. The current 32-row semantic matrix passes, including

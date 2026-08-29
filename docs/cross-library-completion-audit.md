@@ -57,7 +57,9 @@ x86-64, pinned to CPU 30 where the harness supports it:
   `1.713x`/`18.144x` at default coordinates and `1.701x--1.753x`/
   `18.146x--18.253x` at the two endpoints. Debug command tracing is resolved
   once outside the measured loop, so an unset diagnostic environment variable
-  does not distort these results.
+  does not distort these results. A later fixed-CPU-30
+  `1000 * 11 --extended --fail-on-slower` run passed all 125 semantic and
+  performance rows.
 - The optional Fontations `--extended` outline corpus now includes all ten
   selected semantically identical glyphs from the larger two-axis
   `AdobeVFPrototype.otf`, in both owning and caller-storage modes. The original
@@ -71,14 +73,15 @@ x86-64, pinned to CPU 30 where the harness supports it:
   corrected owned and reusable lifecycles, a fixed-CPU-30 `1000 * 11` rerun
   measured glyph 20 at `1.008x` and glyph 128 at `1.052x`; a subsequent rerun
   measured them at `1.128x` and `1.321x`. All ten selected Adobe owning/reuse
-  pairs now lead. Several extended production glyf owning rows still trail, so
-  the full optional matrix remains red.
+  pairs now lead. In the final strict 125-row rerun the production-glyf owning
+  rows that had previously trailed led by `2.194x--4.508x`, and their reuse
+  rows led by `3.126x--28.240x`.
 - Parsed-face static `glyf` decoding now uses the grammar proof established by
   `Face.parse` instead of repeating the per-expanded-flag predicate for every
   owning outline. Fixed-CPU-30 A/B/B/A probes kept checksums unchanged and
   improved the representative owning rows by roughly 1--2% (Roboto gid10/128,
-  DejaVu gid133, and Noto Arabic compound gid20/200). This narrows, but does
-  not yet close, every extended production-glyf owning deficit.
+  DejaVu gid133, and Noto Arabic compound gid20/200). The later matched-lifecycle
+  strict run closes every currently retained extended production-glyf row.
 - `zig build parley-matrix -Doptimize=ReleaseFast -- --iterations 1000 --samples
   7 --cpu 30 --fail-on-slower`: the 26-row matrix passed before custom
   placement was added. The current 32-row semantic matrix passes, including

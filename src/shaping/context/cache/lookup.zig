@@ -74,6 +74,7 @@ pub const LookupSelectionCache = struct {
     last_gsub_accelerator: ?usize = null,
     last_gpos_accelerator: ?usize = null,
     last_script_selection: ?usize = null,
+    last_lookup: ?usize = null,
     hits: usize = 0,
     misses: usize = 0,
 
@@ -124,6 +125,7 @@ pub const LookupSelectionCache = struct {
         self.last_gsub_accelerator = null;
         self.last_gpos_accelerator = null;
         self.last_script_selection = null;
+        self.last_lookup = null;
         self.hits = 0;
         self.misses = 0;
     }
@@ -138,7 +140,8 @@ pub const LookupSelectionCache = struct {
         const features = try self.allocator.dupe(unicode.FeatureOverride, options.features);
         errdefer self.allocator.free(features);
         try self.entries.append(self.allocator, .{ .key = key, .features = features, .lookups = lookups });
-        return self.entries.items[self.entries.items.len - 1].lookups;
+        self.last_lookup = self.entries.items.len - 1;
+        return self.entries.items[self.last_lookup.?].lookups;
     }
 
     pub fn gsubLookupAccelerators(self: *LookupSelectionCache, font: *const Font) ![]const gsub.acceleration.Lookup {
@@ -359,7 +362,8 @@ pub const LookupSelectionCache = struct {
         const features = try self.allocator.dupe(unicode.FeatureOverride, options.features);
         errdefer self.allocator.free(features);
         try self.entries.append(self.allocator, .{ .key = key, .features = features, .lookups = lookups });
-        return self.entries.items[self.entries.items.len - 1].lookups;
+        self.last_lookup = self.entries.items.len - 1;
+        return self.entries.items[self.last_lookup.?].lookups;
     }
 
     pub fn layoutScripts(
@@ -397,9 +401,19 @@ pub const LookupSelectionCache = struct {
     }
 
     fn lookup(self: *LookupSelectionCache, key: LookupSelectionKey, features: []const unicode.FeatureOverride) ?[]const u16 {
-        for (self.entries.items) |entry| {
+        if (self.last_lookup) |index| {
+            const entry = self.entries.items[index];
+            if (lookupSelectionKeysEqual(entry.key, key) and
+                featureOverridesEqual(entry.features, features))
+            {
+                self.hits += 1;
+                return entry.lookups;
+            }
+        }
+        for (self.entries.items, 0..) |entry, index| {
             if (!lookupSelectionKeysEqual(entry.key, key)) continue;
             if (!featureOverridesEqual(entry.features, features)) continue;
+            self.last_lookup = index;
             self.hits += 1;
             return entry.lookups;
         }

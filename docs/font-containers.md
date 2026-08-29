@@ -259,9 +259,11 @@ manual commands. It builds the pinned local Skrifa oracle, generates all test
 fonts into build-owned scratch storage, and compares deterministic semantic
 checksums for attributes, axes/instances, palettes, bitmap strikes and glyph
 selection, COLRv0/v1 source selection, post/CFF/synthesized glyph names, plus
-Roboto cmap, metrics, bounds, and global metrics. Outline timings are included
-while geometry correctness remains owned by the stronger HarfBuzz/FreeType
-differentials. The gate
+Roboto cmap, metrics, bounds, and global metrics. Outline timings use matched
+ownership: owning rows materialize Skrifa's public `Vec<PathElement>`, while
+reuse rows retain that vector and Skrifa's temporary draw memory across
+iterations just as Cangjie retains `OutlineBuffer`. Geometry correctness remains
+owned by the stronger HarfBuzz/FreeType differentials. The gate
 also reports per-engine medians; callers doing performance work should pass a
 substantial `--iterations`/`--samples` pair and pin the process externally.
 This still does not convert the table-inventory manifest into a claim that

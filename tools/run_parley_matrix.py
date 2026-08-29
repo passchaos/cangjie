@@ -204,10 +204,7 @@ def main() -> int:
             cangjie_ns = math.sqrt(cangjie_a * cangjie_b)
             parley_ns = math.sqrt(parley_a * parley_b)
             speedup = math.inf if cangjie_ns == 0 else parley_ns / cangjie_ns
-            # Retained fallback is currently a coverage row rather than a
-            # performance claim: Cangjie validates mutable cascade geometry
-            # while Parley reuses an already-resolved font assignment.
-            enforces_performance = not (case.name == "fallback" and phase == "reflow")
+            enforces_performance = True
             if args.fail_on_slower and enforces_performance and speedup <= 1.0:
                 failures.append(
                     f"{case.name}/{phase}/{style}: Cangjie slower "

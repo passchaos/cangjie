@@ -42,13 +42,17 @@ pub fn applySimpleRetained(
             try bidi_reorder.applyLinesResolved(buffer, paragraph)
         else
             unreachable;
+        // Visual permutation changes which glyph ranges each retained run
+        // owns. Rebuild their absolute pens only in that case; the LTR simple
+        // path restored already-correct immutable run offsets and changed no
+        // advances, spacing, tabs, justification, or punctuation.
+        bidi_reorder.recomputeRunOffsets(buffer);
     }
     // The strict builder already accumulated RTL widths in final visual order.
     // Hanging is excluded by its option proof, so no post-permutation line
     // scan is needed here.
     // The proof keeps run ownership fixed. Only absolute pens change after
     // line-local permutation; no run rebuilding is needed.
-    bidi_reorder.recomputeRunOffsets(buffer);
     if (options.inline_objects.len == 1 and
         options.inline_objects[0].kind != .custom_out_of_flow)
     {

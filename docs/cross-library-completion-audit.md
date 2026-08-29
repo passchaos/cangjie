@@ -54,8 +54,8 @@ x86-64, pinned to CPU 30 where the harness supports it:
   command-array lifecycle rather than comparing an owning result with an
   allocation-free callback pen. The maintained strict matrix remains green;
   the final corrected `100000 * 7` CFF2 owning/reuse rows led by
-  `1.742x`/`19.091x` at default coordinates and `1.735x--1.741x`/
-  `18.928x--19.182x` at the two endpoints. Debug command tracing is resolved
+  `1.713x`/`18.144x` at default coordinates and `1.701x--1.753x`/
+  `18.146x--18.253x` at the two endpoints. Debug command tracing is resolved
   once outside the measured loop, so an unset diagnostic environment variable
   does not distort these results.
 - The optional Fontations `--extended` outline corpus now includes all ten

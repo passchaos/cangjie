@@ -697,19 +697,25 @@ fn outline_reuse_at_location(
         .outline_glyphs()
         .get(GlyphId::new(glyph_id))
         .unwrap_or_else(|| fail("missing outline glyph"));
-    // Exercise Skrifa's documented caller-owned temporary-memory contract.
-    // HashPen itself is allocation-free and is reset per iteration just like
-    // Cangjie's reusable command buffer is logically cleared before a draw.
+    // Exercise Skrifa's documented caller-owned temporary-memory contract and
+    // retain the caller-owned path allocation across draws, matching Cangjie's
+    // reusable command buffer rather than an allocation-free callback sink.
     let mut memory = vec![0_u8; glyph.draw_memory_size(Hinting::None)];
+    let mut path = Vec::<PathElement>::new();
     let mut values = Vec::with_capacity(samples);
     let mut checksum = 0_u64;
     let mut commands = 0_usize;
     for _ in 0..samples {
         for _ in 0..3 {
             let mut pen = HashPen::default();
+            path.clear();
             glyph
-                .draw(unscaled_settings_with_memory(coords, &mut memory), &mut pen)
+                .draw(
+                    unscaled_settings_with_memory(coords, &mut memory),
+                    &mut path,
+                )
                 .unwrap_or_else(|_| fail("cannot draw outline"));
+            hash_path(&path, &mut pen);
             checksum = pen.hash;
             commands = pen.commands;
         }
@@ -717,9 +723,14 @@ fn outline_reuse_at_location(
         let mut batch_hash = 0_u64;
         for _ in 0..iterations {
             let mut pen = HashPen::default();
+            path.clear();
             glyph
-                .draw(unscaled_settings_with_memory(coords, &mut memory), &mut pen)
+                .draw(
+                    unscaled_settings_with_memory(coords, &mut memory),
+                    &mut path,
+                )
                 .unwrap_or_else(|_| fail("cannot draw outline"));
+            hash_path(&path, &mut pen);
             batch_hash = batch_hash.wrapping_add(pen.hash);
         }
         values.push(start.elapsed().as_nanos() as f64 / iterations as f64);

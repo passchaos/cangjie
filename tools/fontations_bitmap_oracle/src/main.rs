@@ -46,6 +46,10 @@ fn main() {
     }
 }
 
+fn debug_outline_enabled() -> bool {
+    env::var_os("FONTATIONS_DEBUG_OUTLINE").is_some()
+}
+
 fn color_glyph(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {
     let (iterations, samples) = repeated_args(args);
     let gid = GlyphId::new(glyph_id);
@@ -720,6 +724,13 @@ struct HashPen {
 
 impl HashPen {
     fn command(&mut self, tag: u8, values: &[f32]) {
+        if debug_outline_enabled() {
+            eprint!("SK {tag}");
+            for value in values {
+                eprint!(" {:08x}", value.to_bits());
+            }
+            eprintln!();
+        }
         self.hash ^= u64::from(tag);
         self.hash = self.hash.wrapping_mul(0x100000001b3);
         for value in values {

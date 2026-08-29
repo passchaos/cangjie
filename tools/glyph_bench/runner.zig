@@ -799,6 +799,9 @@ fn outlineChecksum(outline: cangjie.font.Outline) u64 {
     // made the outline row compare different downstream work.
     var hash: u64 = 0;
     for (outline.commands.items) |command| {
+        if (std.c.getenv("CANGJIE_DEBUG_OUTLINE")) |_| {
+            printOutlineCommand(command);
+        }
         switch (command) {
             .move_to => |point| hashOutlineCommand(&hash, 1, &.{ point.x, point.y }),
             .line_to => |point| hashOutlineCommand(&hash, 2, &.{ point.x, point.y }),
@@ -816,6 +819,40 @@ fn outlineChecksum(outline: cangjie.font.Outline) u64 {
         }
     }
     return hash;
+}
+
+fn printOutlineCommand(command: cangjie.font.OutlineCommand) void {
+    switch (command) {
+        .move_to => |point| std.debug.print("CJ 1 {x:0>8} {x:0>8}\n", .{
+            @as(u32, @bitCast(point.x)),
+            @as(u32, @bitCast(point.y)),
+        }),
+        .line_to => |point| std.debug.print("CJ 2 {x:0>8} {x:0>8}\n", .{
+            @as(u32, @bitCast(point.x)),
+            @as(u32, @bitCast(point.y)),
+        }),
+        .quad_to => |curve| std.debug.print(
+            "CJ 3 {x:0>8} {x:0>8} {x:0>8} {x:0>8}\n",
+            .{
+                @as(u32, @bitCast(curve.control.x)),
+                @as(u32, @bitCast(curve.control.y)),
+                @as(u32, @bitCast(curve.end.x)),
+                @as(u32, @bitCast(curve.end.y)),
+            },
+        ),
+        .cubic_to => |curve| std.debug.print(
+            "CJ 4 {x:0>8} {x:0>8} {x:0>8} {x:0>8} {x:0>8} {x:0>8}\n",
+            .{
+                @as(u32, @bitCast(curve.c0.x)),
+                @as(u32, @bitCast(curve.c0.y)),
+                @as(u32, @bitCast(curve.c1.x)),
+                @as(u32, @bitCast(curve.c1.y)),
+                @as(u32, @bitCast(curve.end.x)),
+                @as(u32, @bitCast(curve.end.y)),
+            },
+        ),
+        .close => std.debug.print("CJ 5\n", .{}),
+    }
 }
 
 fn hashOutlineCommand(hash: *u64, tag: u8, values: []const f32) void {

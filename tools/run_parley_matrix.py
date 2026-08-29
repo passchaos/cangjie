@@ -91,6 +91,10 @@ def main() -> int:
     args = parser.parse_args()
     if args.iterations <= 0 or args.samples <= 0:
         parser.error("iterations and samples must be positive")
+    # Parley 0.7's public Layout/Builder surface is horizontal-only: it has no
+    # writing-mode or vertical-flow input. Keep vertical Cangjie evidence in
+    # its conformance suite rather than fabricating a rotated horizontal row.
+    parley_vertical_api = False
 
     subprocess.run(
         ["cargo", "build", "--release", "--quiet",
@@ -232,6 +236,7 @@ def main() -> int:
             print(f"- {failure}", file=sys.stderr)
         return 1
     print("Cangjie/Parley output-count and object-geometry matrix passed: 32 cases")
+    print(f"parley_vertical_api={str(parley_vertical_api).lower()}")
     return 0
 
 

@@ -17,6 +17,12 @@ one benchmark. The claim remains **open** until every row below is closed.
 | Robustness | Malformed supported inputs fail atomically under safety checks and sustained coverage-guided fuzzing | `font-fuzz-smoke`, `font-fuzz`, regression fixtures | Open: the retained 100K campaign is useful evidence, not exhaustive format coverage |
 | Platform scope | Results reproduced on each supported target or the performance claim explicitly scoped to named hardware/OS/toolchain versions | benchmark documentation | Open: current performance evidence is primarily one Linux x86-64 host |
 
+Parley 0.7's public builder/layout API has no writing-mode or vertical-flow
+input. The matrix emits `parley_vertical_api=false` to make that capability
+boundary machine-visible; rotating horizontal coordinates would not constitute
+a vertical-layout differential. Cangjie's vertical conformance remains covered
+independently, but no cross-library vertical performance claim is made.
+
 ## Reproducible audit snapshot
 
 The following checks were rerun for the audited state described below on Linux

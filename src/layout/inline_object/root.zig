@@ -407,6 +407,132 @@ pub fn positionSingleRetained(
     }
 }
 
+/// Position one pre-resolved custom object in the retained simple path. The
+/// absolute paint geometry is caller-owned, so only the marker's line index
+/// and fallback anchor need to be recovered from the final visual glyphs.
+pub fn positionSingleResolvedRetained(
+    buffer: anytype,
+    object: Object,
+    placement: Placement,
+    writing_mode: @import("../../shaping/pipeline/types.zig").WritingMode,
+) void {
+    std.debug.assert(object.kind == .custom_out_of_flow);
+    std.debug.assert(placement.byte_index == object.byte_index);
+    std.debug.assert(buffer.inline_objects.capacity >= 1);
+    buffer.inline_objects.clearRetainingCapacity();
+    for (buffer.lines.items, 0..) |*line, line_index| {
+        line.inline_object_start = buffer.inline_objects.items.len;
+        line.inline_object_len = 0;
+        var pen_inline: f32 = if (writing_mode.isVertical()) line.y else line.x;
+        const glyph_end = line.glyph_start + line.glyph_len;
+        for (buffer.glyphs.items[line.glyph_start..glyph_end]) |glyph| {
+            if (glyph.isInlineObject()) {
+                const baseline = object.resolvedBaseline();
+                const anchor_x = if (writing_mode.isVertical())
+                    line.x + (line.width - object.width) / 2
+                else
+                    pen_inline;
+                const anchor_y = if (writing_mode.isVertical())
+                    pen_inline
+                else
+                    line.y + line.baseline + glyph.y_offset - baseline;
+                buffer.inline_objects.appendAssumeCapacity(.{
+                    .id = object.id,
+                    .kind = object.kind,
+                    .byte_index = object.byte_index,
+                    .line_index = line_index,
+                    .x = placement.geometry.x,
+                    .y = placement.geometry.y,
+                    .width = placement.geometry.width,
+                    .height = placement.geometry.height,
+                    .baseline = placement.geometry.resolvedBaseline(),
+                    .anchor_x = anchor_x,
+                    .anchor_y = anchor_y,
+                });
+                line.inline_object_len = 1;
+                return;
+            }
+            pen_inline += if (writing_mode.isVertical())
+                glyph.y_advance
+            else
+                glyph.x_advance;
+        }
+    }
+}
+
+test "single resolved retained positioning keeps absolute geometry and anchor" {
+    const GlyphPosition = @import("../glyph_position.zig").GlyphPosition;
+    const ParagraphLine = @import("../types/paragraph.zig").ParagraphLine;
+    const Buffer = struct {
+        allocator: std.mem.Allocator,
+        glyphs: std.ArrayList(GlyphPosition) = .empty,
+        lines: std.ArrayList(ParagraphLine) = .empty,
+        inline_objects: std.ArrayList(Positioned) = .empty,
+    };
+    var buffer = Buffer{ .allocator = std.testing.allocator };
+    defer buffer.glyphs.deinit(buffer.allocator);
+    defer buffer.lines.deinit(buffer.allocator);
+    defer buffer.inline_objects.deinit(buffer.allocator);
+    try buffer.glyphs.append(buffer.allocator, .{
+        .glyph_id = 0,
+        .codepoint = object_replacement_character,
+        .cluster = 4,
+        .source_byte_len = object_replacement_utf8.len,
+        .x_advance = 0,
+        .flags = .{ .inline_object = true },
+    });
+    try buffer.lines.append(buffer.allocator, .{
+        .glyph_start = 0,
+        .glyph_len = 1,
+        .run_start = 0,
+        .run_len = 0,
+        .byte_start = 4,
+        .byte_len = object_replacement_utf8.len,
+        .x = 7,
+        .y = 9,
+        .width = 0,
+        .height = 20,
+        .baseline = 15,
+        .ascent = 15,
+        .descent = 5,
+        .leading = 0,
+    });
+    try buffer.inline_objects.ensureTotalCapacity(buffer.allocator, 1);
+    const object = Object{
+        .id = 8,
+        .kind = .custom_out_of_flow,
+        .byte_index = 4,
+        .width = 10,
+        .height = 12,
+        .baseline = 8,
+    };
+    const placement = Placement{
+        .byte_index = 4,
+        .geometry = .{
+            .x = 31,
+            .y = 41,
+            .width = 13,
+            .height = 17,
+            .baseline = 11,
+        },
+    };
+    positionSingleResolvedRetained(
+        &buffer,
+        object,
+        placement,
+        .horizontal_tb,
+    );
+    try std.testing.expectEqual(@as(usize, 1), buffer.inline_objects.items.len);
+    const positioned = buffer.inline_objects.items[0];
+    try std.testing.expectEqual(@as(f32, 31), positioned.x);
+    try std.testing.expectEqual(@as(f32, 41), positioned.y);
+    try std.testing.expectEqual(@as(f32, 13), positioned.width);
+    try std.testing.expectEqual(@as(f32, 17), positioned.height);
+    try std.testing.expectEqual(@as(f32, 11), positioned.baseline);
+    try std.testing.expectEqual(@as(f32, 7), positioned.anchor_x);
+    try std.testing.expectEqual(@as(f32, 16), positioned.anchor_y);
+}
+
 fn findPlacement(
     placements: []const Placement,
     byte_index: usize,

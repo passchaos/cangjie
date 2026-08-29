@@ -246,7 +246,6 @@ pub fn supports(options: paragraph_options.Options) bool {
         options.line_break_policy_ranges.len == 0 and
         options.exclusions.len == 0 and
         options.line_regions.len == 0 and
-        options.out_of_flow_placements.len == 0 and
         options.tab_stops.len == 0 and
         options.word_break_dictionary == null and
         options.hyphenation.dictionary == null and

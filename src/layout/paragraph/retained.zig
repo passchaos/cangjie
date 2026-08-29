@@ -298,7 +298,6 @@ fn simpleOptionsNeedNoDeepValidation(options: paragraph_options.Options) bool {
     return options.line_break_policy_ranges.len == 0 and
         options.exclusions.len == 0 and
         options.line_regions.len == 0 and
-        options.out_of_flow_placements.len == 0 and
         options.tab_stops.len == 0 and
         options.features.len == 0 and
         options.normalized_variation_coords.len == 0 and

@@ -54,13 +54,22 @@ pub fn applySimpleRetained(
     // The proof keeps run ownership fixed. Only absolute pens change after
     // line-local permutation; no run rebuilding is needed.
     if (options.inline_objects.len == 1 and
-        options.inline_objects[0].kind != .custom_out_of_flow)
+        (options.inline_objects[0].kind != .custom_out_of_flow or
+            options.out_of_flow_placements.len == 1))
     {
-        inline_object.positionSingleRetained(
-            buffer,
-            options.inline_objects[0],
-            options.writing_mode,
-        );
+        if (options.inline_objects[0].kind == .custom_out_of_flow)
+            inline_object.positionSingleResolvedRetained(
+                buffer,
+                options.inline_objects[0],
+                options.out_of_flow_placements[0],
+                options.writing_mode,
+            )
+        else
+            inline_object.positionSingleRetained(
+                buffer,
+                options.inline_objects[0],
+                options.writing_mode,
+            );
     } else {
         try inline_object.position(
             buffer,

@@ -274,3 +274,42 @@ test "accelerated GSUB dispatch executes extension-wrapped ligatures" {
     ));
     try std.testing.expectEqualSlices(GlyphId, &.{ 42, 9 }, glyphs.items);
 }
+
+test "accelerated GSUB dispatch executes extension-wrapped multiple substitution" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 16;
+    std.mem.writeInt(u16, bytes[4..6], 2, .big);
+    std.mem.writeInt(u16, bytes[6..8], 9, .big);
+    std.mem.writeInt(u16, bytes[8..10], 10, .big);
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 7, 8 });
+    const entries = [_]acceleration.model.MultipleEntry{.{
+        .glyph = 7,
+        .sequence_offset = 4,
+        .glyph_count = 2,
+    }};
+    const sidecars = [_]acceleration.Lookup{.{
+        .lookup_offset = 12,
+        .lookup_type = 7,
+        .subtable_count = 1,
+        .extension_lookup_type = 2,
+        .multiple_subst = .{ .entries = &entries },
+    }};
+    try std.testing.expect(try accelerated.apply(
+        Binding,
+        .{
+            .data = &bytes,
+            .offset = 0,
+            .length = bytes.len,
+            .assume_validated = true,
+        },
+        12,
+        0,
+        &glyphs,
+        allocator,
+        .{ .lookup_accelerators = &sidecars },
+        null,
+    ));
+    try std.testing.expectEqualSlices(GlyphId, &.{ 9, 10, 8 }, glyphs.items);
+}

@@ -165,6 +165,15 @@ pub fn one(
         lookup.extension_lookup_type =
             try extension.commonType(view, lookup_offset, subtable_count);
         if (lookup.extension_lookup_type) |wrapped_type| {
+            if (wrapped_type == 2 and subtable_count == 1) {
+                const wrapper = try requiredSubtable(view, lookup_offset, 0);
+                lookup.multiple_subst = try multiple.build(
+                    view,
+                    try extension.payload(view, wrapper, 2),
+                    allocator,
+                );
+                if (lookup.multiple_subst.entries.len != 0) return lookup;
+            }
             if (wrapped_type == 4 and subtable_count == 1) {
                 const wrapper = try requiredSubtable(view, lookup_offset, 0);
                 lookup.ligature_subst = try ligature.build(

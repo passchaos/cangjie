@@ -11,6 +11,7 @@ const contextual_context =
 const contextual_chaining_class =
     @import("../contextual/chaining/class/root.zig");
 const direct_ligature = @import("../direct/ligature/root.zig");
+const direct_multiple = @import("../direct/multiple/root.zig");
 const filtering = @import("../../runtime/filtering.zig");
 const options = @import("../../runtime/options.zig");
 const prefilter = @import("../../runtime/prefilter/root.zig");
@@ -168,6 +169,15 @@ inline fn applyPreparedUnprofiled(
     sidecar: *const Lookup,
 ) Error!bool {
     switch (sidecar.lookup_type) {
+        2 => {
+            if (!try applyMultiple(
+                view,
+                glyphs,
+                allocator,
+                run,
+                sidecar,
+            )) return false;
+        },
         4 => {
             if (!try applyLigature(
                 glyphs,
@@ -263,6 +273,15 @@ noinline fn applyPrepared(
     glyph_count_before: usize,
 ) Error!bool {
     switch (sidecar.lookup_type) {
+        2 => {
+            if (!try applyMultiple(
+                view,
+                glyphs,
+                allocator,
+                run,
+                sidecar,
+            )) return false;
+        },
         4 => {
             if (!try applyLigature(
                 glyphs,
@@ -369,6 +388,13 @@ inline fn applyExtensionClasses(
     sidecar: *const Lookup,
 ) Error!bool {
     switch (sidecar.extension_lookup_type orelse return false) {
+        2 => return applyMultiple(
+            view,
+            glyphs,
+            allocator,
+            run,
+            sidecar,
+        ),
         4 => return applyLigature(
             glyphs,
             allocator,
@@ -404,6 +430,26 @@ inline fn applyExtensionClasses(
         },
         else => return false,
     }
+    return true;
+}
+
+inline fn applyMultiple(
+    view: View,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    run: Options,
+    sidecar: *const Lookup,
+) Error!bool {
+    if (sidecar.subtable_count != 1 or
+        sidecar.multiple_subst.entries.len == 0) return false;
+    try direct_multiple.accelerated(
+        view,
+        sidecar.multiple_subst,
+        glyphs,
+        allocator,
+        sidecar.lookup_flag,
+        run,
+    );
     return true;
 }
 

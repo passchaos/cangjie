@@ -23,7 +23,7 @@ pub fn apply(
     subtable: Parsed,
     glyphs: *std.ArrayList(GlyphId),
     position: usize,
-    regions: *const matching.Regions,
+    regions: anytype,
     allocator: std.mem.Allocator,
     run: Options,
 ) Error!model.ApplyResult {

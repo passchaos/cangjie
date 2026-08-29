@@ -126,7 +126,9 @@ pub fn acceleratedNoContextAt(
     run: Options,
 ) Error!model.ApplyResult {
     if (parsed.input_count == 0 or parsed.input_count > 3) return .{};
-    var regions = matching.Regions{ .input_count = parsed.input_count };
+    var regions = matching.InputOnlyRegions{
+        .input_count = parsed.input_count,
+    };
     regions.input[0] = position;
     if (parsed.input_count > 1) {
         regions.input[1] = second orelse return .{};

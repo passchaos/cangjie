@@ -34,6 +34,27 @@ pub const Regions = struct {
     }
 };
 
+/// Compact region storage for format-3 rules whose accelerator proved that
+/// backtrack/lookahead are empty and at most three input glyphs participate.
+/// Keeping this distinct avoids reserving the general 192-index scratch frame
+/// in the dominant short Arabic chaining path.
+pub const InputOnlyRegions = struct {
+    input: [3]usize = undefined,
+    input_count: usize = 0,
+
+    pub fn inputSlice(self: *const InputOnlyRegions) []const usize {
+        return self.input[0..self.input_count];
+    }
+
+    pub fn backtrackSlice(_: *const InputOnlyRegions) []const usize {
+        return &.{};
+    }
+
+    pub fn lookaheadSlice(_: *const InputOnlyRegions) []const usize {
+        return &.{};
+    }
+};
+
 /// Match every format-3 region. `skip_first_input_coverage` consumes the proof
 /// supplied by the lookup's exact first-input group index.
 pub fn full(

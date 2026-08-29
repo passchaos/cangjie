@@ -25,6 +25,7 @@ pub fn main(init: std.process.Init) !void {
         style != .default and
         style != .inline_object and
         style != .out_of_flow_object and
+        style != .custom_out_of_flow_object and
         style != .fallback)
     {
         return error.InvalidArguments;
@@ -99,7 +100,25 @@ pub fn main(init: std.process.Init) !void {
             .width = 24,
             .height = 20,
             .baseline = 15,
-            .kind = if (style == .inline_object) .in_flow else .out_of_flow,
+            .kind = switch (style) {
+                .inline_object => .in_flow,
+                .out_of_flow_object => .out_of_flow,
+                .custom_out_of_flow_object => .custom_out_of_flow,
+                else => unreachable,
+            },
+        }}
+    else
+        &.{};
+    const object_placements = if (style == .custom_out_of_flow_object)
+        &[_]cangjie.paragraph.OutOfFlowPlacement{.{
+            .byte_index = inline_object_index,
+            .geometry = .{
+                .x = 11,
+                .y = 13,
+                .width = 24,
+                .height = 20,
+                .baseline = 15,
+            },
         }}
     else
         &.{};
@@ -107,7 +126,12 @@ pub fn main(init: std.process.Init) !void {
         try engine.prepareParagraph(cascade, .{
             .text = text,
             .font_size = 16,
-            .options = .{ .max_width = width, .direction = paragraph_direction, .inline_objects = inline_objects },
+            .options = .{
+                .max_width = width,
+                .direction = paragraph_direction,
+                .inline_objects = inline_objects,
+                .out_of_flow_placements = object_placements,
+            },
         })
     else
         null;
@@ -134,6 +158,7 @@ pub fn main(init: std.process.Init) !void {
                 paragraph_direction,
                 style,
                 inline_objects,
+                object_placements,
                 if (retained) |*paragraph| paragraph else null,
                 &reflow,
             );
@@ -163,6 +188,7 @@ pub fn main(init: std.process.Init) !void {
                 paragraph_direction,
                 style,
                 inline_objects,
+                object_placements,
                 if (retained) |*paragraph| paragraph else null,
                 &reflow,
             );
@@ -197,10 +223,13 @@ const Style = enum {
     alternating,
     inline_object,
     out_of_flow_object,
+    custom_out_of_flow_object,
     fallback,
 
     fn hasInlineObject(self: Style) bool {
-        return self == .inline_object or self == .out_of_flow_object;
+        return self == .inline_object or
+            self == .out_of_flow_object or
+            self == .custom_out_of_flow_object;
     }
 };
 
@@ -213,6 +242,7 @@ fn benchmarkOnce(
     paragraph_direction: cangjie.shaping.Direction,
     style: Style,
     inline_objects: []const cangjie.paragraph.InlineObject,
+    object_placements: []const cangjie.paragraph.OutOfFlowPlacement,
     retained: ?*const cangjie.paragraph.Shaped,
     reflow: *cangjie.paragraph.ReflowBuffer,
 ) !cangjie.paragraph.Layout {
@@ -225,11 +255,13 @@ fn benchmarkOnce(
             paragraph_direction,
             style,
             inline_objects,
+            object_placements,
         ),
         .reflow => retained.?.layout(reflow, .{
             .max_width = width,
             .direction = paragraph_direction,
             .inline_objects = inline_objects,
+            .out_of_flow_placements = object_placements,
         }),
     };
 }
@@ -242,6 +274,7 @@ fn layoutOnce(
     direction: cangjie.shaping.Direction,
     style: Style,
     inline_objects: []const cangjie.paragraph.InlineObject,
+    object_placements: []const cangjie.paragraph.OutOfFlowPlacement,
 ) !cangjie.paragraph.Layout {
     if (style == .spacing) {
         const spans = [_]cangjie.paragraph.StyledSpan{.{
@@ -303,7 +336,12 @@ fn layoutOnce(
     return engine.layout(cascade, .{
         .text = text,
         .font_size = 16,
-        .options = .{ .max_width = width, .direction = direction, .inline_objects = inline_objects },
+        .options = .{
+            .max_width = width,
+            .direction = direction,
+            .inline_objects = inline_objects,
+            .out_of_flow_placements = object_placements,
+        },
     });
 }
 
@@ -501,6 +539,8 @@ fn parseStyle(value: []const u8) !Style {
     if (std.mem.eql(u8, value, "alternating")) return .alternating;
     if (std.mem.eql(u8, value, "inline-object")) return .inline_object;
     if (std.mem.eql(u8, value, "out-of-flow-object")) return .out_of_flow_object;
+    if (std.mem.eql(u8, value, "custom-out-of-flow-object"))
+        return .custom_out_of_flow_object;
     if (std.mem.eql(u8, value, "fallback")) return .fallback;
     return error.InvalidArguments;
 }
@@ -529,7 +569,7 @@ fn resolvedDirection(
 
 fn usage() error{InvalidArguments} {
     std.debug.print(
-        "usage: paragraph-bench FONT TEXT ITERATIONS SAMPLES [WIDTH] [layout|reflow] [auto|ltr|rtl] [default|spacing|alternating|inline-object|out-of-flow-object|fallback] [FALLBACK_FONT]\n",
+        "usage: paragraph-bench FONT TEXT ITERATIONS SAMPLES [WIDTH] [layout|reflow] [auto|ltr|rtl] [default|spacing|alternating|inline-object|out-of-flow-object|custom-out-of-flow-object|fallback] [FALLBACK_FONT]\n",
         .{},
     );
     return error.InvalidArguments;

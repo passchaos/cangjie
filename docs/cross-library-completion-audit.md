@@ -68,11 +68,11 @@ x86-64, pinned to CPU 30 where the harness supports it:
   Raising the CFF2 operand stack to the format's 513-entry limit also admits
   glyph 2's large blend program. A `1000 * 7` semantic/performance run of the
   resulting 125-row extended matrix confirmed every checksum. Under the
-  corrected owned lifecycle, fixed-CPU-30 `1000 * 11` reruns moved the former
-  Adobe CFF2 blockers ahead: glyph 20 measured `1.008x`, glyph 128 `1.052x`,
-  and all ten selected Adobe owning/reuse pairs led. Several extended
-  production glyf owning rows still trail, so the full optional matrix remains
-  red.
+  corrected owned and reusable lifecycles, a fixed-CPU-30 `1000 * 11` rerun
+  measured glyph 20 at `1.008x` and glyph 128 at `1.052x`; a subsequent rerun
+  measured them at `1.128x` and `1.321x`. All ten selected Adobe owning/reuse
+  pairs now lead. Several extended production glyf owning rows still trail, so
+  the full optional matrix remains red.
 - Parsed-face static `glyf` decoding now uses the grammar proof established by
   `Face.parse` instead of repeating the per-expanded-flag predicate for every
   owning outline. Fixed-CPU-30 A/B/B/A probes kept checksums unchanged and

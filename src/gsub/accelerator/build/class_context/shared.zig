@@ -156,6 +156,25 @@ pub fn finishChainingRuleGroups(
             opentype_class_context.chainingRuleHashLessThan,
         );
         group.hash_sorted = true;
+        var shape_start: usize = 0;
+        while (shape_start < group.len) {
+            const first = rules.items[group.start + shape_start];
+            var shape_end = shape_start + 1;
+            while (shape_end < group.len) : (shape_end += 1) {
+                const candidate = rules.items[group.start + shape_end];
+                if (candidate.backtrack_count != first.backtrack_count or
+                    candidate.input_count != first.input_count or
+                    candidate.lookahead_count != first.lookahead_count)
+                {
+                    break;
+                }
+            }
+            group.max_shape_len = @max(
+                group.max_shape_len,
+                shape_end - shape_start,
+            );
+            shape_start = shape_end;
+        }
     }
 }
 

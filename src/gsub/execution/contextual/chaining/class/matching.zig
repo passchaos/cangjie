@@ -90,7 +90,12 @@ pub fn acceleratedGroup(
         run,
     );
     const rules = parsed.rules[group.start .. group.start + group.len];
-    if (group.hash_sorted) {
+    // For a shape with one or two rules, hashing the entire candidate costs
+    // more class loads than an authored-order early mismatch. Large groups in
+    // production Nastaliq fonts often contain a mix of both dense and unique
+    // shapes, so record the largest shape bucket separately from total group
+    // size and avoid the indexed path when no bucket can amortize it.
+    if (group.hash_sorted and group.max_shape_len >= 3) {
         var matched_index: ?usize = null;
         var shape_start: usize = 0;
         while (shape_start < rules.len) {

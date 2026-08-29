@@ -196,3 +196,60 @@ test "accelerated chaining class applies complete multi-record actions" {
     try std.testing.expectEqual(@as(usize, 2), result.next_pos);
     try std.testing.expectEqualSlices(u16, &.{ 15, 14 }, glyphs.items);
 }
+
+test "accelerated chaining class ignores unprofitable hash metadata" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 64;
+    support.writeClassDef1(&bytes, 0, 1, &.{ 3, 5, 7 });
+    const classes = [_]u16{
+        5,                                             7,
+        accelerator.index.class_first.sorted_encoding, 1,
+        0,
+    };
+    const rules = [_]class_context.Rule{
+        .{
+            .class_set = 3,
+            .input_count = 2,
+            .lookahead_count = 1,
+            .hash = class_context.sequenceHash(classes[0..2]),
+            .order = 0,
+            .lookup_index = 2,
+            .classes_start = 0,
+        },
+    };
+    const groups = [_]class_context.RuleGroup{.{
+        .class_set = 3,
+        .start = 0,
+        .len = rules.len,
+        .max_input_count = 2,
+        .max_lookahead_count = 1,
+        // The builder may sort a large overall group, but it deliberately
+        // leaves isolated shapes on the cheaper exact-match path.
+        .hash_sorted = true,
+        .max_shape_len = 1,
+    }};
+    const parsed = accelerator.model.ChainingClassSubtable{
+        .first_index_start = 2,
+        .input_class_def = 0,
+        .lookahead_class_def = 0,
+        .rules = &rules,
+        .classes = &classes,
+        .groups = &groups,
+    };
+    var glyphs = std.ArrayList(u16).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 1, 2, 3 });
+
+    const result = try chaining_class.acceleratedAt(
+        support.Executor,
+        support.validatedView(&bytes),
+        parsed,
+        &glyphs,
+        0,
+        allocator,
+        0,
+        .{},
+    );
+    try std.testing.expect(result.matched);
+    try std.testing.expectEqualSlices(u16, &.{ 13, 2, 3 }, glyphs.items);
+}

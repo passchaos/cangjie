@@ -44,6 +44,10 @@ pub const RuleGroup = struct {
     /// matching may binary-search each shape while retaining authored-order
     /// precedence across matching shapes.
     hash_sorted: bool = false,
+    /// Largest number of equal-shaped rules in this group. Computing a hash
+    /// pays off only when it replaces several exact class comparisons; a
+    /// group can be large while every shape is unique.
+    max_shape_len: usize = 0,
 };
 
 pub fn sequenceHashEmpty() u64 {

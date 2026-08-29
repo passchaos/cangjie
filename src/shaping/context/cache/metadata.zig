@@ -16,6 +16,7 @@ pub const GdefMetadataCache = struct {
 
     allocator: std.mem.Allocator,
     entries: std.ArrayList(Entry) = .empty,
+    last_entry: ?usize = null,
     hits: usize = 0,
     misses: usize = 0,
 
@@ -34,14 +35,23 @@ pub const GdefMetadataCache = struct {
             entry.metadata.deinit(self.allocator);
         }
         self.entries.clearRetainingCapacity();
+        self.last_entry = null;
         self.hits = 0;
         self.misses = 0;
     }
 
     pub fn metadata(self: *GdefMetadataCache, font: *const Font) !*const GdefLookupMetadata {
         const key = GdefMetadataCacheKey{ .font_addr = @intFromPtr(font) };
-        for (self.entries.items) |*entry| {
+        if (self.last_entry) |index| {
+            const entry = &self.entries.items[index];
             if (entry.key.font_addr == key.font_addr) {
+                self.hits += 1;
+                return &entry.metadata;
+            }
+        }
+        for (self.entries.items, 0..) |*entry, index| {
+            if (entry.key.font_addr == key.font_addr) {
+                self.last_entry = index;
                 self.hits += 1;
                 return &entry.metadata;
             }
@@ -54,7 +64,8 @@ pub const GdefMetadataCache = struct {
             .key = key,
             .metadata = metadata_value,
         });
-        return &self.entries.items[self.entries.items.len - 1].metadata;
+        self.last_entry = self.entries.items.len - 1;
+        return &self.entries.items[self.last_entry.?].metadata;
     }
 };
 

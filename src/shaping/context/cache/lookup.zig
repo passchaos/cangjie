@@ -69,7 +69,11 @@ pub const LookupSelectionCache = struct {
     script_selection_entries: std.ArrayList(ScriptSelectionEntry) = .empty,
     gsub_feature_plan_entries: std.ArrayList(FeaturePlanEntry) = .empty,
     gsub_merged_feature_plan_entries: std.ArrayList(MergedFeaturePlanEntry) = .empty,
-    last_gsub_merged_feature_plan: ?usize = null,
+    gsub_feature_plan_slots: [8]?usize = .{null} ** 8,
+    gsub_merged_feature_plan_slots: [8]?usize = .{null} ** 8,
+    last_gsub_accelerator: ?usize = null,
+    last_gpos_accelerator: ?usize = null,
+    last_script_selection: ?usize = null,
     hits: usize = 0,
     misses: usize = 0,
 
@@ -115,7 +119,11 @@ pub const LookupSelectionCache = struct {
             entry.plan.deinit(self.allocator);
         }
         self.gsub_merged_feature_plan_entries.clearRetainingCapacity();
-        self.last_gsub_merged_feature_plan = null;
+        self.gsub_feature_plan_slots = .{null} ** 8;
+        self.gsub_merged_feature_plan_slots = .{null} ** 8;
+        self.last_gsub_accelerator = null;
+        self.last_gpos_accelerator = null;
+        self.last_script_selection = null;
         self.hits = 0;
         self.misses = 0;
     }
@@ -135,8 +143,16 @@ pub const LookupSelectionCache = struct {
 
     pub fn gsubLookupAccelerators(self: *LookupSelectionCache, font: *const Font) ![]const gsub.acceleration.Lookup {
         const font_addr = @intFromPtr(font);
-        for (self.gsub_accelerator_entries.items) |entry| {
+        if (self.last_gsub_accelerator) |index| {
+            const entry = self.gsub_accelerator_entries.items[index];
+            if (entry.font_addr == font_addr) {
+                self.hits += 1;
+                return entry.accelerators;
+            }
+        }
+        for (self.gsub_accelerator_entries.items, 0..) |entry, index| {
             if (entry.font_addr != font_addr) continue;
+            self.last_gsub_accelerator = index;
             self.hits += 1;
             return entry.accelerators;
         }
@@ -152,15 +168,30 @@ pub const LookupSelectionCache = struct {
             .font_addr = font_addr,
             .accelerators = accelerators,
         });
-        return self.gsub_accelerator_entries.items[self.gsub_accelerator_entries.items.len - 1].accelerators;
+        self.last_gsub_accelerator = self.gsub_accelerator_entries.items.len - 1;
+        return self.gsub_accelerator_entries.items[
+            self.last_gsub_accelerator.?
+        ].accelerators;
     }
 
     pub fn gsubFeatureLookupPlan(self: *LookupSelectionCache, font: *const Font, applications: []const gsub.feature.Application, options: gsub.runtime.Options, gdef_metadata: GdefLookupMetadata) !gsub.feature.LookupPlan {
         const key = lookupSelectionKey(font, .gsub, options.script_tag, options.language_tag, options.features, options.vertical, null);
-        for (self.gsub_feature_plan_entries.items) |entry| {
+        const slot = featureApplicationSlot(applications);
+        if (self.gsub_feature_plan_slots[slot]) |index| {
+            const entry = self.gsub_feature_plan_entries.items[index];
+            if (lookupSelectionKeysEqual(entry.key, key) and
+                featureOverridesEqual(entry.features, options.features) and
+                featureApplicationsEqual(entry.applications, applications))
+            {
+                self.hits += 1;
+                return entry.plan;
+            }
+        }
+        for (self.gsub_feature_plan_entries.items, 0..) |entry, index| {
             if (!lookupSelectionKeysEqual(entry.key, key)) continue;
             if (!featureOverridesEqual(entry.features, options.features)) continue;
             if (!featureApplicationsEqual(entry.applications, applications)) continue;
+            self.gsub_feature_plan_slots[slot] = index;
             self.hits += 1;
             return entry.plan;
         }
@@ -181,7 +212,11 @@ pub const LookupSelectionCache = struct {
             .applications = applications_copy,
             .plan = plan,
         });
-        return self.gsub_feature_plan_entries.items[self.gsub_feature_plan_entries.items.len - 1].plan;
+        self.gsub_feature_plan_slots[slot] =
+            self.gsub_feature_plan_entries.items.len - 1;
+        return self.gsub_feature_plan_entries.items[
+            self.gsub_feature_plan_slots[slot].?
+        ].plan;
     }
 
     /// Resolve several script stages in one pass over the feature-plan cache.
@@ -242,7 +277,8 @@ pub const LookupSelectionCache = struct {
 
     pub fn gsubMergedFeatureLookupPlan(self: *LookupSelectionCache, font: *const Font, applications: []const gsub.feature.Application, options: gsub.runtime.Options, gdef_metadata: GdefLookupMetadata) !gsub.feature.MergedLookupPlan {
         const key = lookupSelectionKey(font, .gsub, options.script_tag, options.language_tag, options.features, options.vertical, null);
-        if (self.last_gsub_merged_feature_plan) |index| {
+        const slot = featureApplicationSlot(applications);
+        if (self.gsub_merged_feature_plan_slots[slot]) |index| {
             const entry = self.gsub_merged_feature_plan_entries.items[index];
             if (lookupSelectionKeysEqual(entry.key, key) and
                 featureOverridesEqual(entry.features, options.features) and
@@ -256,7 +292,7 @@ pub const LookupSelectionCache = struct {
             if (!lookupSelectionKeysEqual(entry.key, key)) continue;
             if (!featureOverridesEqual(entry.features, options.features)) continue;
             if (!featureApplicationsEqual(entry.applications, applications)) continue;
-            self.last_gsub_merged_feature_plan = index;
+            self.gsub_merged_feature_plan_slots[slot] = index;
             self.hits += 1;
             return entry.plan;
         }
@@ -277,17 +313,25 @@ pub const LookupSelectionCache = struct {
             .applications = applications_copy,
             .plan = plan,
         });
-        self.last_gsub_merged_feature_plan =
+        self.gsub_merged_feature_plan_slots[slot] =
             self.gsub_merged_feature_plan_entries.items.len - 1;
         return self.gsub_merged_feature_plan_entries.items[
-            self.last_gsub_merged_feature_plan.?
+            self.gsub_merged_feature_plan_slots[slot].?
         ].plan;
     }
 
     pub fn gposLookupAccelerators(self: *LookupSelectionCache, font: *const Font) ![]const gpos.LookupAccelerator {
         const font_addr = @intFromPtr(font);
-        for (self.gpos_accelerator_entries.items) |entry| {
+        if (self.last_gpos_accelerator) |index| {
+            const entry = self.gpos_accelerator_entries.items[index];
+            if (entry.font_addr == font_addr) {
+                self.hits += 1;
+                return entry.accelerators;
+            }
+        }
+        for (self.gpos_accelerator_entries.items, 0..) |entry, index| {
             if (entry.font_addr != font_addr) continue;
+            self.last_gpos_accelerator = index;
             self.hits += 1;
             return entry.accelerators;
         }
@@ -299,7 +343,10 @@ pub const LookupSelectionCache = struct {
             .font_addr = font_addr,
             .accelerators = accelerators,
         });
-        return self.gpos_accelerator_entries.items[self.gpos_accelerator_entries.items.len - 1].accelerators;
+        self.last_gpos_accelerator = self.gpos_accelerator_entries.items.len - 1;
+        return self.gpos_accelerator_entries.items[
+            self.last_gpos_accelerator.?
+        ].accelerators;
     }
 
     pub fn gposLookups(self: *LookupSelectionCache, font: *const Font, options: gpos.LookupOptions, gdef_metadata: GdefLookupMetadata) ![]const u16 {
@@ -322,8 +369,18 @@ pub const LookupSelectionCache = struct {
         explicit_tag: ?unicode.OpenTypeScriptTag,
     ) !LayoutScriptSelections {
         const font_addr = @intFromPtr(font);
-        for (self.script_selection_entries.items) |entry| {
+        if (self.last_script_selection) |index| {
+            const entry = self.script_selection_entries.items[index];
+            if (entry.font_addr == font_addr and
+                entry.script == script and
+                entry.explicit_tag == explicit_tag)
+            {
+                return .{ .gsub = entry.gsub, .gpos = entry.gpos };
+            }
+        }
+        for (self.script_selection_entries.items, 0..) |entry, index| {
             if (entry.font_addr == font_addr and entry.script == script and entry.explicit_tag == explicit_tag) {
+                self.last_script_selection = index;
                 return .{ .gsub = entry.gsub, .gpos = entry.gpos };
             }
         }
@@ -335,6 +392,7 @@ pub const LookupSelectionCache = struct {
             .gpos = try font_shaping.selectGposScriptForShaping(font, script, explicit_tag),
         };
         try self.script_selection_entries.append(self.allocator, entry);
+        self.last_script_selection = self.script_selection_entries.items.len - 1;
         return .{ .gsub = entry.gsub, .gpos = entry.gpos };
     }
 
@@ -348,6 +406,12 @@ pub const LookupSelectionCache = struct {
         return null;
     }
 };
+
+fn featureApplicationSlot(applications: []const gsub.feature.Application) usize {
+    if (applications.len == 0) return 0;
+    const tag = applications[0].tag;
+    return @intCast((tag ^ (tag >> 16) ^ applications.len) & 7);
+}
 
 fn lookupSelectionKey(font: *const Font, table: LookupTableKind, script_tag: unicode.OpenTypeScriptTag, language_tag: unicode.OpenTypeLanguageTag, features: []const unicode.FeatureOverride, vertical: bool, run_may_have_mark_attachments: ?bool) LookupSelectionKey {
     return .{

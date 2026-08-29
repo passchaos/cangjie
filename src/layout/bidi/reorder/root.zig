@@ -485,6 +485,7 @@ fn applyPureRtlLinesWithObjectAfterProofImpl(
 
     const font = run_types.fontForBackend(leading_run);
     var visual_start: usize = 0;
+    var visual_object_index: ?usize = null;
     for (buffer.lines.items) |*line| {
         const logical_start = line.glyph_start;
         const logical_end = logical_start + line.glyph_len;
@@ -492,6 +493,12 @@ fn applyPureRtlLinesWithObjectAfterProofImpl(
         if (gap_len != 0 and line.glyph_len != 0) {
             const Glyph = @TypeOf(glyphs[0]);
             rotateRecords(Glyph, glyphs[visual_start..logical_end], gap_len);
+        }
+        if (logical_object_index >= logical_start and
+            logical_object_index < logical_end)
+        {
+            visual_object_index = visual_start + logical_end -
+                logical_object_index - 1;
         }
         if (may_mirror)
             bidi.applyPureRtlVisualOrderSlice(
@@ -508,20 +515,18 @@ fn applyPureRtlLinesWithObjectAfterProofImpl(
 
     // The sole logical run covered every non-object glyph. Rebuild only its
     // one or two ranges around the marker now that line reversals placed it.
-    const visual_object_index = for (glyphs, 0..) |glyph, index| {
-        if (glyph.isInlineObject()) break index;
-    } else return false;
+    const object_index = visual_object_index orelse return false;
     buffer.runs.clearRetainingCapacity();
     try buffer.runs.ensureTotalCapacity(buffer.allocator, 2);
-    if (visual_object_index != 0) {
+    if (object_index != 0) {
         var leading = leading_run;
         leading.glyph_start = 0;
-        leading.glyph_len = visual_object_index;
+        leading.glyph_len = object_index;
         buffer.runs.appendAssumeCapacity(leading);
     }
-    if (visual_object_index + 1 < glyphs.len) {
+    if (object_index + 1 < glyphs.len) {
         var trailing = leading_run;
-        trailing.glyph_start = visual_object_index + 1;
+        trailing.glyph_start = object_index + 1;
         trailing.glyph_len = glyphs.len - trailing.glyph_start;
         buffer.runs.appendAssumeCapacity(trailing);
     }

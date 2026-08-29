@@ -12,7 +12,7 @@ one benchmark. The claim remains **open** until every row below is closed.
 | HarfBuzz | Exact glyph IDs, clusters, advances, offsets, and relevant flags across retained upstream and production-font corpora | `shaping-parity-smoke`, `shaping-corpus-parity-smoke`, `tests/data/`, `docs/shaping-parity.md` | Strong retained coverage, not exhaustive |
 | HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: all five maintained core rows now lead (`1.052x--1.145x` in the latest strict run) and `react-dom.txt` leads by more than `1.50x`; broader font/script coverage remains incomplete |
 | Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; all 25 maintained rows, including variable-CFF2 default/axis-endpoint owning and reuse outlines, lead; broader semantic differentials remain open |
-| FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `hinted-outline-matrix`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 75 maintained grayscale raster rows, all 10 native-strike bitmap rows, the shared COLRv0 layer/CPAL row, all five matched face-open rows, and the expanded 100-row hinted-outline matrix lead. Complete eager validation is separately reported and remains slower, COLRv1/SVG have no FreeType built-in renderer for direct performance comparison, and broader glyph/platform coverage remains incomplete |
+| FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `hinted-outline-matrix`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 75 maintained grayscale raster rows, all 10 native-strike bitmap rows, the shared COLRv0 layer/CPAL row, all five matched face-open rows, and the expanded 120-row hinted-outline matrix lead. Complete eager validation is separately reported and remains slower, COLRv1/SVG have no FreeType built-in renderer for direct performance comparison, and broader glyph/platform coverage remains incomplete |
 | Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the maintained 32-row matrix covers three scripts, three construction styles, retained reflow, matched in-flow/ordinary/custom out-of-flow objects, and mixed Roboto→Noto Sans Devanagari fallback. All 18 object rows prove identical id/source/line/position/size/baseline geometry at fractional coordinates. Custom and ordinary out-of-flow reflow now lead in the latest full run; Arabic in-flow retained reflow remains a noise-sensitive `0.978x`, and vertical comparison remains unavailable because the pinned Parley API has no writing-mode input |
 | Robustness | Malformed supported inputs fail atomically under safety checks and sustained coverage-guided fuzzing | `font-fuzz-smoke`, `font-fuzz`, regression fixtures | Open: the retained 100K campaign is useful evidence, not exhaustive format coverage |
 | Platform scope | Results reproduced on each supported target or the performance claim explicitly scoped to named hardware/OS/toolchain versions | benchmark documentation | Open: current performance evidence is primarily one Linux x86-64 host |
@@ -384,13 +384,18 @@ x86-64, pinned to CPU 30 where the harness supports it:
   five targets, 396 system-FreeType semantic rows pass. Two v40 monochrome
   compound rows whose output changed in FreeType 2.14 are excluded from the
   system-2.13 matrix and remain gated by the version-aware differential.
-- Probing beyond that retained corpus found two further compatibility edges.
+- Probing beyond that retained corpus found further compatibility edges.
   DejaVu U+00B2 uses `SLOOP[0]`; matching FreeType requires accepting zero
   (and clamping oversized values to the 16-bit loop counter) rather than
-  rejecting it. That behavior is now fixed and gated. A separate experimental
-  U+00C3 sweep was not retained because it mixed parent compound-IUP coordinate
-  domains and regressed existing cases; broader multilingual coverage remains
-  open.
+  rejecting it. That behavior is now fixed and gated. DejaVu U+00C3 exposed a
+  separate signed-rounding bug in its parent compound program: `ROUND[00]`
+  incorrectly rounded `-96` to `-64`, so function 7's two `MSIRP` operations
+  moved point 35 instead of point 20 before `IUP[X]`. Grid, half-grid, and
+  double-grid modes now round a negative magnitude and restore its sign, as
+  FreeType does. U+00C3 is retained in both the direct differential and the
+  maintained performance matrix. A fixed-CPU-2 `1000 * 3` semantic smoke
+  matched all ten 9 ppem v35/v40 target checksums; that sample count is not
+  used as performance evidence. Broader multilingual coverage remains open.
 - Parsed `gvar` header and glyph-offset metadata is now retained by `Font` and
   threaded into immutable simple-glyph hint loads. This removes a whole-table
   offset scan per glyph. Against the independent pre-change binary, fixed-CPU-

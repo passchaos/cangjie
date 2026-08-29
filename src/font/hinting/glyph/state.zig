@@ -27,9 +27,14 @@ pub const GraphicsState = struct {
     pub fn round(self: GraphicsState, value: i32) i32 {
         return switch (self.round_mode) {
             .off => value,
-            .grid => (value +| 32) & ~@as(i32, 63),
-            .half_grid => (value & ~@as(i32, 63)) +| 32,
-            .double_grid => (value +| 16) & ~@as(i32, 31),
+            // TrueType distance rounding is symmetric around zero. Applying
+            // the positive bit-mask formula directly to negative values
+            // rounds ties toward negative infinity; FreeType instead rounds
+            // the magnitude and restores the sign. This is observable in
+            // compound programs that ROUND a negative inter-component span.
+            .grid => roundSigned(value, 64, 32, 0),
+            .half_grid => roundSigned(value, 64, 0, 32),
+            .double_grid => roundSigned(value, 32, 16, 0),
             // TrueType's RDTG/RUTG round the magnitude and restore the sign;
             // they are not mathematical floor/ceil for negative distances.
             .down_to_grid => if (value >= 0)
@@ -54,6 +59,32 @@ pub const GraphicsState = struct {
         };
     }
 };
+
+fn roundSigned(value: i32, period: i32, threshold: i32, phase: i32) i32 {
+    const magnitude: i64 = if (value < 0)
+        -@as(i64, value)
+    else
+        value;
+    const rounded = @divTrunc(
+        magnitude + @as(i64, threshold),
+        @as(i64, period),
+    ) * period + phase;
+    return fixed.clampI64(if (value < 0) -rounded else rounded);
+}
+
+test "grid rounding is symmetric for negative distances" {
+    const std = @import("std");
+
+    var state = GraphicsState{};
+    try std.testing.expectEqual(@as(i32, 64), state.round(63));
+    try std.testing.expectEqual(@as(i32, -64), state.round(-63));
+    try std.testing.expectEqual(@as(i32, 128), state.round(96));
+    try std.testing.expectEqual(@as(i32, -128), state.round(-96));
+
+    state.round_mode = .double_grid;
+    try std.testing.expectEqual(@as(i32, 32), state.round(16));
+    try std.testing.expectEqual(@as(i32, -32), state.round(-16));
+}
 
 pub const Zone = struct {
     current: []outline.Point,

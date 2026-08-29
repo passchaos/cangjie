@@ -5007,7 +5007,7 @@ shaping-performance superiority.
   its checked reader. Relative to `d7edc2ef`, fixed-CPU-30 A/B/B/A
   instructions/branches/cycles fell `1.51%`/`2.01%`/`1.57%` for `A` and
   `2.15%`/`3.52%`/`2.09%` for `X`.
-- A final fixed-CPU-30 `30000 * 7` run passed all 100 maintained hinted-outline
+- A final fixed-CPU-30 `30000 * 7` run passed all 100 then-maintained hinted-outline
   semantic rows and led every performance row. The minimum lead was `1.011x`
   for DejaVu `A` at 9 ppem/v40/LCD; all `X` rows led by at least `1.045x`.
 - Differential hinting coverage now includes DejaVu Serif Cyrillic, FreeSans
@@ -5021,7 +5021,13 @@ shaping-performance superiority.
 - A wider exploratory DejaVu sweep found and closed FreeType-compatible
   `SLOOP[0]` handling, now retained with U+00B2 v35/v40 tests. A separate
   experimental compound-IUP change was reverted after it regressed existing
-  cases; broader multilingual coverage remains open.
+  cases. The actual U+00C3 cause was earlier in its parent program: signed
+  `ROUND[00]` had used a positive-only mask and mapped `-96` to `-64` rather
+  than FreeType's `-128`, causing function 7's paired `MSIRP` operations to
+  move the wrong reference endpoint before `IUP[X]`. Sign-symmetric grid,
+  half-grid, and double-grid rounding fixes the glyph without changing IUP's
+  coordinate domain. U+00C3 is now a direct v35/v40 differential fixture and
+  a maintained matrix case, expanding that matrix from 100 to 120 rows.
 - Parsed `gvar` metadata is retained for immutable hinted glyph loads instead
   of rescanning the complete glyph-offset array per glyph. Default-instance
   Cascadia `X` retired instructions/branches/cycles fell

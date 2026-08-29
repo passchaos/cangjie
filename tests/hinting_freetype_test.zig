@@ -69,6 +69,11 @@ const fixtures = [_]Fixture{
         .ppem = 20,
     },
     .{
+        .path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        .codepoint = 0x00c3,
+        .ppem = 9,
+    },
+    .{
         .path = "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
         .codepoint = 0x0915,
         .ppem = 16,

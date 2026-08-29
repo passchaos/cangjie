@@ -63,6 +63,7 @@ def main() -> int:
         Case("latin-a", Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"), "U+0041"),
         Case("latin-x", Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"), "U+0058"),
         Case("latin-compound", Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"), "U+00C2"),
+        Case("latin-compound-negative-round", Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"), "U+00C3"),
         Case("devanagari", Path("/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf"), "U+0915"),
         Case("arabic", Path("/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"), "U+0627"),
     ]

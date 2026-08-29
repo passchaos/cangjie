@@ -84,7 +84,37 @@ pub fn acceleratedGroup(
         lookup_flag,
         run,
     );
-    for (parsed.rules[group.start .. group.start + group.len]) |rule| {
+    const rules = parsed.rules[group.start .. group.start + group.len];
+    if (group.hash_sorted) {
+        const first = rules[0];
+        const hash = (try candidateHash(
+            &candidate_window,
+            first.backtrack_count,
+            first.input_count,
+            first.lookahead_count,
+        )) orelse return false;
+        var low: usize = 0;
+        var high: usize = rules.len;
+        while (low < high) {
+            const middle = low + (high - low) / 2;
+            if (rules[middle].hash < hash) {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        var index = low;
+        while (index < rules.len and rules[index].hash == hash) : (index += 1) {
+            if (try acceleratedCandidate(
+                parsed,
+                rules[index],
+                &candidate_window,
+                result,
+            )) return true;
+        }
+        return false;
+    }
+    for (rules) |rule| {
         if (rule.input_count > group.max_input_count or
             rule.lookahead_count > group.max_lookahead_count)
         {
@@ -98,6 +128,44 @@ pub fn acceleratedGroup(
         )) return true;
     }
     return false;
+}
+
+fn candidateHash(
+    candidate_window: *window.Window,
+    backtrack_count: usize,
+    input_count: usize,
+    lookahead_count: usize,
+) Error!?u64 {
+    if (input_count == 0 or
+        backtrack_count > window.max_region_glyphs or
+        input_count > window.max_region_glyphs or
+        lookahead_count > window.max_region_glyphs)
+    {
+        return null;
+    }
+    var hash = class_context.sequenceHashEmpty();
+    for (0..backtrack_count) |index| {
+        hash = class_context.sequenceHashAppend(
+            hash,
+            (try candidate_window.backtrackClassAt(index)) orelse return null,
+        );
+    }
+    for (1..input_count) |index| {
+        hash = class_context.sequenceHashAppend(
+            hash,
+            (try candidate_window.inputClassAt(index)) orelse return null,
+        );
+    }
+    for (0..lookahead_count) |index| {
+        hash = class_context.sequenceHashAppend(
+            hash,
+            (try candidate_window.lookaheadClassAt(
+                input_count,
+                index,
+            )) orelse return null,
+        );
+    }
+    return hash;
 }
 
 fn acceleratedAdjacentGroup(

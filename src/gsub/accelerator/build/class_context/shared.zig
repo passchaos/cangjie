@@ -75,6 +75,40 @@ pub fn finishHashRuleGroups(
     );
 }
 
+/// Preserve authored order for general chaining groups, but hash-index the
+/// large homogeneous groups common in Arabic fonts. With fixed region lengths
+/// the runtime can hash the concrete window once and binary-search candidates
+/// without changing first-match semantics among duplicate rules.
+pub fn finishChainingRuleGroups(
+    rules: *std.ArrayList(opentype_class_context.Rule),
+    groups: *std.ArrayList(opentype_class_context.RuleGroup),
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!void {
+    try finishRuleGroups(rules, groups, allocator);
+    for (groups.items) |*group| {
+        if (group.len < 8) continue;
+        const first = rules.items[group.start];
+        var homogeneous = true;
+        for (rules.items[group.start + 1 .. group.start + group.len]) |rule| {
+            if (rule.backtrack_count != first.backtrack_count or
+                rule.input_count != first.input_count or
+                rule.lookahead_count != first.lookahead_count)
+            {
+                homogeneous = false;
+                break;
+            }
+        }
+        if (!homogeneous) continue;
+        std.sort.heap(
+            opentype_class_context.Rule,
+            rules.items[group.start .. group.start + group.len],
+            {},
+            opentype_class_context.ruleHashLessThan,
+        );
+        group.hash_sorted = true;
+    }
+}
+
 fn finishRuleGroupsWithOrder(
     rules: *std.ArrayList(opentype_class_context.Rule),
     groups: *std.ArrayList(opentype_class_context.RuleGroup),

@@ -178,7 +178,7 @@ fn buildSubtable(
     }
     if (rules.items.len == 0) return null;
 
-    try shared.finishRuleGroups(&rules, &groups, allocator);
+    try shared.finishChainingRuleGroups(&rules, &groups, allocator);
     const first_index_start = try first_index.appendClassIndex(
         view,
         coverage_offset,

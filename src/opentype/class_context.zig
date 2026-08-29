@@ -40,6 +40,9 @@ pub const RuleGroup = struct {
     len: usize,
     max_input_count: u16,
     max_lookahead_count: u16,
+    /// Rules in this group have identical region lengths and are ordered by
+    /// `Rule.hash`, then authored order.
+    hash_sorted: bool = false,
 };
 
 pub fn sequenceHashEmpty() u64 {

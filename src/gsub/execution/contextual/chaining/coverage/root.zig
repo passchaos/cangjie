@@ -80,7 +80,9 @@ pub fn at(
     );
 }
 
-pub fn acceleratedAt(
+// Keep the general 192-index Regions scratch out of the common no-context
+// caller's frame. Short input-only rules use `acceleratedNoContextAt` below.
+pub noinline fn acceleratedAt(
     comptime Executor: type,
     view: View,
     parsed: Parsed,

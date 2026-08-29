@@ -87,8 +87,12 @@ x86-64, pinned to CPU 30 where the harness supports it:
   byte, owning line, x/y, width/height, and baseline.
   The six custom-object rows model a pre-resolved absolute 24x20 placement and
   explicitly drive Parley's resumable custom-box breaker. Construction leads
-  in Latin/Arabic/Japanese, while retained custom placement measured
-  `0.877x`/`0.725x`/`1.011x`; the strict gate therefore remains red.
+  in Latin/Arabic/Japanese. Retained single-object positioning now narrows its
+  search to the source-containing line, and out-of-flow line metrics skip an
+  inapplicable object scan. A fixed-CPU-30 `10000 * 11` run measured custom
+  reflow at `1.420x`/`1.048x`/`1.406x`; ordinary out-of-flow reflow measured
+  `1.413x`/`1.013x`/`1.381x`. The in-flow Arabic object row remains just behind
+  at `0.978x`, so the strict gate is still red.
   The mixed Roboto→Noto Sans Devanagari fallback rows also have identical
   normalized geometry. Extending the retained simple-path proof to adjacent
   multi-glyph clusters moved fallback construction/reflow to `1.664x`/`1.718x`

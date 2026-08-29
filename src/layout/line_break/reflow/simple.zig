@@ -108,7 +108,7 @@ pub fn tryBuild(
             const run_info = geometry.resolvedLineInfo(
                 buffer.runs.items,
                 glyphs,
-                options.inline_objects,
+                inFlowObjects(options.inline_objects),
                 line_start,
                 break_end,
                 default_metrics,
@@ -141,7 +141,7 @@ pub fn tryBuild(
         const run_info = geometry.resolvedLineInfo(
             buffer.runs.items,
             glyphs,
-            options.inline_objects,
+            inFlowObjects(options.inline_objects),
             line_start,
             glyphs.len,
             default_metrics,
@@ -166,6 +166,13 @@ pub fn tryBuild(
         break;
     }
     return true;
+}
+
+inline fn inFlowObjects(
+    objects: []const @import("../../inline_object/root.zig").Object,
+) []const @import("../../inline_object/root.zig").Object {
+    if (objects.len == 1 and objects[0].kind != .in_flow) return &.{};
+    return objects;
 }
 
 fn finalLineWidth(

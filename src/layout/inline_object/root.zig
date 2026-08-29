@@ -362,12 +362,17 @@ pub fn positionSingleRetained(
     std.debug.assert(object.kind != .custom_out_of_flow);
     std.debug.assert(buffer.inline_objects.capacity >= 1);
     buffer.inline_objects.clearRetainingCapacity();
-    const location = singleObjectLocation(
-        buffer,
+    const line_index = singleObjectLineIndex(
+        buffer.lines.items,
+        object.byte_index,
+    ) orelse return;
+    const line = &buffer.lines.items[line_index];
+    const location = singleObjectLocationInLine(
+        buffer.glyphs.items,
+        line.*,
         object.byte_index,
         writing_mode,
     ) orelse return;
-    const line = &buffer.lines.items[location.line_index];
     line.inline_object_start = 0;
     line.inline_object_len = 1;
     const baseline = object.resolvedBaseline();
@@ -384,7 +389,7 @@ pub fn positionSingleRetained(
         .id = object.id,
         .kind = object.kind,
         .byte_index = object.byte_index,
-        .line_index = location.line_index,
+        .line_index = line_index,
         .x = anchor_x,
         .y = anchor_y,
         .width = object.width,
@@ -408,12 +413,17 @@ pub fn positionSingleResolvedRetained(
     std.debug.assert(placement.byte_index == object.byte_index);
     std.debug.assert(buffer.inline_objects.capacity >= 1);
     buffer.inline_objects.clearRetainingCapacity();
-    const location = singleObjectLocation(
-        buffer,
+    const line_index = singleObjectLineIndex(
+        buffer.lines.items,
+        object.byte_index,
+    ) orelse return;
+    const line = &buffer.lines.items[line_index];
+    const location = singleObjectLocationInLine(
+        buffer.glyphs.items,
+        line.*,
         object.byte_index,
         writing_mode,
     ) orelse return;
-    const line = &buffer.lines.items[location.line_index];
     line.inline_object_start = 0;
     line.inline_object_len = 1;
     const baseline = object.resolvedBaseline();
@@ -430,7 +440,7 @@ pub fn positionSingleResolvedRetained(
         .id = object.id,
         .kind = object.kind,
         .byte_index = object.byte_index,
-        .line_index = location.line_index,
+        .line_index = line_index,
         .x = placement.geometry.x,
         .y = placement.geometry.y,
         .width = placement.geometry.width,
@@ -442,7 +452,6 @@ pub fn positionSingleResolvedRetained(
 }
 
 const SingleObjectLocation = struct {
-    line_index: usize,
     glyph_index: usize,
     pen_inline: f32,
 };
@@ -452,35 +461,60 @@ const SingleObjectLocation = struct {
 /// line contributes advances before the marker. This is especially important
 /// after pure-RTL permutation, where the marker is near the visual start but
 /// its source byte remains near the paragraph midpoint.
-fn singleObjectLocation(
-    buffer: anytype,
+fn singleObjectLineIndex(
+    lines: anytype,
+    byte_index: usize,
+) ?usize {
+    var low: usize = 0;
+    var high = lines.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (lines[mid].byte_start <= byte_index)
+            low = mid + 1
+        else
+            high = mid;
+    }
+    if (low == 0) return null;
+    const index = low - 1;
+    const line = lines[index];
+    if (byte_index - line.byte_start >= line.byte_len) return null;
+    return index;
+}
+
+fn singleObjectLocationInLine(
+    glyphs: anytype,
+    line: anytype,
     byte_index: usize,
     writing_mode: @import("../../shaping/pipeline/types.zig").WritingMode,
 ) ?SingleObjectLocation {
-    for (buffer.lines.items, 0..) |*line, line_index| {
-        line.inline_object_start = 0;
-        line.inline_object_len = 0;
-        if (byte_index < line.byte_start or
-            byte_index - line.byte_start >= line.byte_len) continue;
-
-        var pen_inline: f32 = if (writing_mode.isVertical()) line.y else line.x;
-        const glyph_end = line.glyph_start + line.glyph_len;
-        for (buffer.glyphs.items[line.glyph_start..glyph_end], line.glyph_start..) |glyph, glyph_index| {
-            if (glyph.cluster == byte_index and glyph.isInlineObject()) {
-                return .{
-                    .line_index = line_index,
-                    .glyph_index = glyph_index,
-                    .pen_inline = pen_inline,
-                };
-            }
-            pen_inline += if (writing_mode.isVertical())
-                glyph.y_advance
-            else
-                glyph.x_advance;
+    var pen_inline: f32 = if (writing_mode.isVertical()) line.y else line.x;
+    const glyph_end = line.glyph_start + line.glyph_len;
+    if (line.glyph_start >= glyph_end) return null;
+    const ascending = glyphs[line.glyph_start].cluster <=
+        glyphs[glyph_end - 1].cluster;
+    var low = line.glyph_start;
+    var high = glyph_end;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const cluster = glyphs[mid].cluster;
+        if ((ascending and cluster < byte_index) or
+            (!ascending and cluster > byte_index))
+        {
+            low = mid + 1;
+        } else {
+            high = mid;
         }
-        return null;
     }
-    return null;
+    if (low >= glyph_end or glyphs[low].cluster != byte_index or
+        !glyphs[low].isInlineObject()) return null;
+
+    for (glyphs[line.glyph_start..low]) |glyph| {
+        pen_inline += if (writing_mode.isVertical())
+            glyph.y_advance
+        else
+            glyph.x_advance;
+    }
+    return .{ .glyph_index = low, .pen_inline = pen_inline };
 }
 
 test "single resolved retained positioning keeps absolute geometry and anchor" {

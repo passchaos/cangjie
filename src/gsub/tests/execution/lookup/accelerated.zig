@@ -313,3 +313,37 @@ test "accelerated GSUB dispatch executes extension-wrapped multiple substitution
     ));
     try std.testing.expectEqualSlices(GlyphId, &.{ 9, 10, 8 }, glyphs.items);
 }
+
+test "accelerated GSUB dispatch executes extension-wrapped single substitution" {
+    const allocator = std.testing.allocator;
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 7, 8 });
+    const entries = [_]acceleration.model.SingleEntry{.{
+        .from = 7,
+        .to = 42,
+    }};
+    const sidecars = [_]acceleration.Lookup{.{
+        .lookup_offset = 12,
+        .lookup_type = 7,
+        .subtable_count = 1,
+        .extension_lookup_type = 1,
+        .single_subst_entries = &entries,
+    }};
+    try std.testing.expect(try accelerated.apply(
+        Binding,
+        .{
+            .data = &.{},
+            .offset = 0,
+            .length = 0,
+            .assume_validated = true,
+        },
+        12,
+        0,
+        &glyphs,
+        allocator,
+        .{ .lookup_accelerators = &sidecars },
+        null,
+    ));
+    try std.testing.expectEqualSlices(GlyphId, &.{ 42, 8 }, glyphs.items);
+}

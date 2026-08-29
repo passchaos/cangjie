@@ -12,6 +12,7 @@ const contextual_chaining_class =
     @import("../contextual/chaining/class/root.zig");
 const direct_ligature = @import("../direct/ligature/root.zig");
 const direct_multiple = @import("../direct/multiple/root.zig");
+const direct_single = @import("../direct/single/root.zig");
 const filtering = @import("../../runtime/filtering.zig");
 const options = @import("../../runtime/options.zig");
 const prefilter = @import("../../runtime/prefilter/root.zig");
@@ -169,6 +170,15 @@ inline fn applyPreparedUnprofiled(
     sidecar: *const Lookup,
 ) Error!bool {
     switch (sidecar.lookup_type) {
+        1 => {
+            if (sidecar.single_subst_entries.len == 0) return false;
+            direct_single.entries(
+                sidecar.single_subst_entries,
+                glyphs,
+                sidecar.lookup_flag,
+                run,
+            );
+        },
         2 => {
             if (!try applyMultiple(
                 view,
@@ -273,6 +283,15 @@ noinline fn applyPrepared(
     glyph_count_before: usize,
 ) Error!bool {
     switch (sidecar.lookup_type) {
+        1 => {
+            if (sidecar.single_subst_entries.len == 0) return false;
+            direct_single.entries(
+                sidecar.single_subst_entries,
+                glyphs,
+                sidecar.lookup_flag,
+                run,
+            );
+        },
         2 => {
             if (!try applyMultiple(
                 view,
@@ -388,6 +407,15 @@ inline fn applyExtensionClasses(
     sidecar: *const Lookup,
 ) Error!bool {
     switch (sidecar.extension_lookup_type orelse return false) {
+        1 => {
+            if (sidecar.single_subst_entries.len == 0) return false;
+            direct_single.entries(
+                sidecar.single_subst_entries,
+                glyphs,
+                sidecar.lookup_flag,
+                run,
+            );
+        },
         2 => return applyMultiple(
             view,
             glyphs,

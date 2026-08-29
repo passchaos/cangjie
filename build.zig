@@ -2904,7 +2904,7 @@ pub fn build(b: *std.Build) void {
         "--japanese-font",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "--fallback-font",
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        b.fmt("{s}/harfrust/harfrust/benches/fonts/NotoSansDevanagari-Regular.ttf", .{parity_work_root orelse ""}),
     });
     if (b.args) |args| parley_matrix_cmd.addArgs(args);
     parley_matrix_step.dependOn(&parley_matrix_cmd.step);

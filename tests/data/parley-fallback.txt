@@ -1,1 +1,1 @@
-Latin text then Arabic fallback: مرحبا بالعالم ثم Latin again.
+Latin text then Devanagari fallback: नमस्ते दुनिया then Latin again.

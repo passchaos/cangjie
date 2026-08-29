@@ -78,7 +78,7 @@ def main() -> int:
     parser.add_argument(
         "--fallback-font",
         type=Path,
-        default=Path("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"),
+        default=Path("/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf"),
     )
     parser.add_argument("--iterations", type=int, default=1)
     parser.add_argument("--samples", type=int, default=1)

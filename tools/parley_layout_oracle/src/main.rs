@@ -52,7 +52,7 @@ fn main() {
     let fallback_family_name = fallback_font_path.map(|path| {
         let bytes = fs::read(path).unwrap();
         collection.register_fonts(Blob::new(Arc::new(bytes)), None);
-        "Noto Sans"
+        "Noto Sans Devanagari"
     });
     assert!(collection.family_id(&family_name).is_some());
     let mut font_cx = FontContext {
@@ -210,7 +210,7 @@ fn build_layout(
     let fallback_family_source;
     if let Some(fallback) = fallback_family_name {
         // Preserve caller order explicitly: Latin resolves in Roboto and the
-        // inserted Arabic segment must continue into Noto Sans.
+        // inserted Devanagari segment must continue into Noto Sans Devanagari.
         fallback_family_source = format!("'{family_name}', '{fallback}'");
         builder.push_default(FontFamily::from(fallback_family_source.as_str()));
     } else {

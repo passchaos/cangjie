@@ -62,6 +62,48 @@ pub fn append(
     transform: Transform,
     variation: ?Variation,
 ) Error!?gvar.PhantomPointDeltas {
+    return appendImpl(
+        outline,
+        transformed_points,
+        data,
+        contour_count,
+        transform,
+        variation,
+        false,
+    );
+}
+
+/// Decode bytes whose complete `glyf` grammar was proved by `Face.parse`.
+/// Bounds checks required for slicing remain below; only the redundant flag
+/// grammar predicate is omitted from the hot immutable-face path.
+pub fn appendParsed(
+    outline: *glyph.GlyphOutline,
+    transformed_points: ?*std.ArrayList(glyph.Point),
+    data: []const u8,
+    contour_count: u16,
+    transform: Transform,
+    variation: ?Variation,
+) Error!?gvar.PhantomPointDeltas {
+    return appendImpl(
+        outline,
+        transformed_points,
+        data,
+        contour_count,
+        transform,
+        variation,
+        true,
+    );
+}
+
+fn appendImpl(
+    outline: *glyph.GlyphOutline,
+    transformed_points: ?*std.ArrayList(glyph.Point),
+    data: []const u8,
+    contour_count: u16,
+    transform: Transform,
+    variation: ?Variation,
+    comptime parsed: bool,
+) Error!?gvar.PhantomPointDeltas {
     if (contour_count == 0) {
         // A contourless simple glyph can still vary its four metric phantom
         // points. Do not require real contours merely to preserve its advance
@@ -133,14 +175,14 @@ pub fn append(
     var point_index: usize = 0;
     while (point_index < total_points) : (point_index += 1) {
         const flag = try reader.readU8();
-        try glyf.validateSimpleFlag(flag, point_index);
+        if (!parsed) try glyf.validateSimpleFlag(flag, point_index);
         points[point_index].flags = flag;
         if ((flag & 0x08) != 0) {
             const repeat = try reader.readU8();
             for (0..repeat) |_| {
                 point_index += 1;
                 if (point_index >= total_points) return error.InvalidGlyph;
-                try glyf.validateSimpleFlag(flag, point_index);
+                if (!parsed) try glyf.validateSimpleFlag(flag, point_index);
                 points[point_index].flags = flag;
             }
         }

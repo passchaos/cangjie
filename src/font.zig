@@ -7034,7 +7034,7 @@ pub const Font = struct {
                 if (data.len != 0) {
                     const contour_count = try bin.readI16At(data, 0);
                     if (contour_count >= 0) {
-                        _ = try truetype_outline.simple.append(
+                        _ = try truetype_outline.simple.appendParsed(
                             outline,
                             null,
                             data,
@@ -7360,7 +7360,7 @@ pub const Font = struct {
         if (data.len == 0) return;
         const contour_count = try bin.readI16At(data, 0);
         if (contour_count >= 0) {
-            _ = try truetype_outline.simple.append(
+            _ = try truetype_outline.simple.appendParsed(
                 outline,
                 null,
                 data,
@@ -7408,7 +7408,7 @@ pub const Font = struct {
         if (contour_count >= 0) {
             // Simple glyf outlines store contour end points plus compressed
             // point deltas. Compound outlines recurse into component glyphs.
-            _ = try truetype_outline.simple.append(outline, points, data, @intCast(contour_count), transform, null);
+            _ = try truetype_outline.simple.appendParsed(outline, points, data, @intCast(contour_count), transform, null);
         } else if (points) |compound_points| {
             try self.appendCompoundGlyph(outline, compound_points, data, transform, depth + 1);
         } else {

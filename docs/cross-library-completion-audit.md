@@ -73,6 +73,12 @@ x86-64, pinned to CPU 30 where the harness supports it:
   and all ten selected Adobe owning/reuse pairs led. Several extended
   production glyf owning rows still trail, so the full optional matrix remains
   red.
+- Parsed-face static `glyf` decoding now uses the grammar proof established by
+  `Face.parse` instead of repeating the per-expanded-flag predicate for every
+  owning outline. Fixed-CPU-30 A/B/B/A probes kept checksums unchanged and
+  improved the representative owning rows by roughly 1--2% (Roboto gid10/128,
+  DejaVu gid133, and Noto Arabic compound gid20/200). This narrows, but does
+  not yet close, every extended production-glyf owning deficit.
 - `zig build parley-matrix -Doptimize=ReleaseFast -- --iterations 1000 --samples
   7 --cpu 30 --fail-on-slower`: the 26-row matrix passed before custom
   placement was added. The current 32-row semantic matrix passes, including

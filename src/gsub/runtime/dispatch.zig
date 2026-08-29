@@ -118,6 +118,15 @@ pub fn singleEntries(
     return cached.single_subst_entries;
 }
 
+pub fn single(
+    lookup_index: ?u16,
+    run: Options,
+) ?*const accelerator.model.SingleSubstitution {
+    const cached = any(lookup_index, run) orelse return null;
+    if (!cached.single_subst.enabled) return null;
+    return &cached.single_subst;
+}
+
 pub fn ligature(
     lookup_index: ?u16,
     run: Options,

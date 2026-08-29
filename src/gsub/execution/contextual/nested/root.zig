@@ -19,6 +19,7 @@ const limits = @import("../../../runtime/limits.zig");
 const lookup_order = @import("../../../../opentype/lookup_order.zig");
 const mutation = @import("../../../runtime/mutation.zig");
 const options = @import("../../../runtime/options.zig");
+const runtime_dispatch = @import("../../../runtime/dispatch.zig");
 const table = @import("../../../table/root.zig");
 const GlyphId = @import("../../../../glyph.zig").GlyphId;
 
@@ -67,6 +68,17 @@ pub fn apply(
             lookup_offset + 6 + @as(usize, subtable_count) * 2,
         );
         try filtering.validateMarkFilteringSetIndex(lookup_run);
+    }
+
+    if (runtime_dispatch.single(lookup_index, lookup_run)) |single| {
+        _ = try direct_single.acceleratedAt(
+            view,
+            single.*,
+            glyphs,
+            glyph_index,
+            lookup_run,
+        );
+        return .{};
     }
 
     switch (lookup_type) {

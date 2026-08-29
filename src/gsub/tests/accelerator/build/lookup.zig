@@ -211,6 +211,39 @@ test "lookup builder prepares extension-wrapped multiple substitution" {
     try std.testing.expectEqual(@as(u16, 2), lookup.multiple_subst.entries[0].glyph_count);
 }
 
+test "lookup builder prepares extension-wrapped single substitution" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 32;
+    writeU16(&bytes, 0, 7);
+    writeU16(&bytes, 4, 1);
+    writeU16(&bytes, 6, 8);
+    writeExtensionWrapper(&bytes, 8, 1, 8);
+    const single = 16;
+    writeU16(&bytes, single, 2);
+    writeU16(&bytes, single + 2, 8);
+    writeU16(&bytes, single + 4, 1);
+    writeU16(&bytes, single + 6, 42);
+    writeCoverage1(&bytes, single + 8, 7);
+
+    const lookup = try build.lookup.one(.{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    }, 0, allocator);
+    defer {
+        const lookups = [_]@import(
+            "../../../accelerator/model.zig",
+        ).Lookup{lookup};
+        ownership.deinitContents(allocator, &lookups);
+    }
+    try std.testing.expectEqual(@as(?u16, 1), lookup.extension_lookup_type);
+    try std.testing.expectEqual(@as(usize, 1), lookup.single_subst_entries.len);
+    try std.testing.expect(lookup.single_subst.enabled);
+    try std.testing.expectEqual(@as(u16, 7), lookup.single_subst.single_from);
+    try std.testing.expectEqual(@as(u16, 42), lookup.single_subst.single_to);
+}
+
 fn buildTwoLookups(allocator: std.mem.Allocator) !void {
     var bytes = [_]u8{0} ** 80;
     writeU32(&bytes, 0, 0x00010000);

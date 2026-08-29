@@ -88,7 +88,15 @@ test "dispatch selects only populated accelerator capabilities" {
         .{ .glyph = 2, .sequence_offset = 8, .glyph_count = 1 },
     };
     const lookups = [_]accelerator.Lookup{
-        .{ .single_subst_entries = &entries },
+        .{
+            .single_subst_entries = &entries,
+            .single_subst = .{
+                .enabled = true,
+                .single_mapping = true,
+                .single_from = 1,
+                .single_to = 2,
+            },
+        },
         .{ .multiple_subst = .{ .entries = &multiple } },
         .{ .chaining_coverage_only = true },
     };
@@ -99,6 +107,8 @@ test "dispatch selects only populated accelerator capabilities" {
         &entries,
         runtime.dispatch.singleEntries(0, run).?,
     );
+    try std.testing.expect(runtime.dispatch.single(0, run) != null);
+    try std.testing.expect(runtime.dispatch.single(1, run) == null);
     try std.testing.expect(
         runtime.dispatch.multiple(1, run).?.entries.ptr == multiple[0..].ptr,
     );

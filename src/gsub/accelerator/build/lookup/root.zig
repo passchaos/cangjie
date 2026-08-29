@@ -165,6 +165,17 @@ pub fn one(
         lookup.extension_lookup_type =
             try extension.commonType(view, lookup_offset, subtable_count);
         if (lookup.extension_lookup_type) |wrapped_type| {
+            if (wrapped_type == 1 and subtable_count == 1) {
+                const wrapper = try requiredSubtable(view, lookup_offset, 0);
+                const payload = try extension.payload(view, wrapper, 1);
+                lookup.single_subst_entries =
+                    try single.entries(view, payload, allocator);
+                if (lookup_flag == 0) {
+                    lookup.single_subst = try single.compact(view, payload);
+                }
+                errdefer allocator.free(lookup.single_subst_entries);
+                return lookup;
+            }
             if (wrapped_type == 2 and subtable_count == 1) {
                 const wrapper = try requiredSubtable(view, lookup_offset, 0);
                 lookup.multiple_subst = try multiple.build(

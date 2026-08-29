@@ -455,8 +455,9 @@ report-only result.
 
 Cangjie is already ahead in the maintained 25-case Fontations/Skrifa matrix
 and complete maintained 75-row FreeType grayscale lifecycle matrix, plus most
-of the five-corpus shaping matrix. The corrected Parley timing matrix now leads
-all 18 rows, including all six retained-reflow rows. This evidence is
+of the five-corpus shaping matrix. The earlier corrected Parley matrix led all
+18 original rows; the expanded 32-row matrix currently retains one narrow
+Arabic in-flow reflow deficit while both out-of-flow modes lead. This evidence is
 substantial but does not satisfy the stronger overall claim. In particular,
 the latest shaping runs lead all five maintained rows, but Amiri words and
 Devanagari remain narrow single-font/corpus results. The

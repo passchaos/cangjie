@@ -395,7 +395,11 @@ x86-64, pinned to CPU 30 where the harness supports it:
   FreeType does. U+00C3 is retained in both the direct differential and the
   maintained performance matrix. A fixed-CPU-2 `1000 * 3` semantic smoke
   matched all ten 9 ppem v35/v40 target checksums; that sample count is not
-  used as performance evidence. Broader multilingual coverage remains open.
+  used as performance evidence. A full fixed-CPU-2 `30000 * 7` strict run
+  matched all 120 maintained checksums, but two U+00C3 v40 rows were perturbed
+  by host noise and failed the timing gate. Dedicated fixed-CPU-30 A/B/B/A
+  `30000 * 11` reruns then led reproducibly: `1.138x--1.151x` for normal and
+  `1.130x--1.146x` for light. Broader multilingual coverage remains open.
 - Parsed `gvar` header and glyph-offset metadata is now retained by `Font` and
   threaded into immutable simple-glyph hint loads. This removes a whole-table
   offset scan per glyph. Against the independent pre-change binary, fixed-CPU-

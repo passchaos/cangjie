@@ -86,33 +86,52 @@ pub fn acceleratedGroup(
     );
     const rules = parsed.rules[group.start .. group.start + group.len];
     if (group.hash_sorted) {
-        const first = rules[0];
-        const hash = (try candidateHash(
-            &candidate_window,
-            first.backtrack_count,
-            first.input_count,
-            first.lookahead_count,
-        )) orelse return false;
-        var low: usize = 0;
-        var high: usize = rules.len;
-        while (low < high) {
-            const middle = low + (high - low) / 2;
-            if (rules[middle].hash < hash) {
-                low = middle + 1;
-            } else {
-                high = middle;
-            }
-        }
-        var index = low;
-        while (index < rules.len and rules[index].hash == hash) : (index += 1) {
-            if (try acceleratedCandidate(
-                parsed,
-                rules[index],
+        var matched_index: ?usize = null;
+        var shape_start: usize = 0;
+        while (shape_start < rules.len) {
+            const first = rules[shape_start];
+            var shape_end = shape_start + 1;
+            while (shape_end < rules.len and sameShape(
+                first,
+                rules[shape_end],
+            )) : (shape_end += 1) {}
+            const hash = (try candidateHash(
                 &candidate_window,
-                result,
-            )) return true;
+                first.backtrack_count,
+                first.input_count,
+                first.lookahead_count,
+            )) orelse {
+                shape_start = shape_end;
+                continue;
+            };
+            var low = shape_start;
+            var high = shape_end;
+            while (low < high) {
+                const middle = low + (high - low) / 2;
+                if (rules[middle].hash < hash) {
+                    low = middle + 1;
+                } else {
+                    high = middle;
+                }
+            }
+            var index = low;
+            while (index < shape_end and rules[index].hash == hash) : (index += 1) {
+                if (!try candidateClassesMatch(
+                    parsed,
+                    rules[index],
+                    &candidate_window,
+                )) continue;
+                if (matched_index == null or
+                    rules[index].order < rules[matched_index.?].order)
+                {
+                    matched_index = index;
+                }
+            }
+            shape_start = shape_end;
         }
-        return false;
+        const index = matched_index orelse return false;
+        setMatchedRule(rules[index], &candidate_window, result);
+        return true;
     }
     for (rules) |rule| {
         if (rule.input_count > group.max_input_count or
@@ -166,6 +185,12 @@ fn candidateHash(
         );
     }
     return hash;
+}
+
+fn sameShape(lhs: class_context.Rule, rhs: class_context.Rule) bool {
+    return lhs.backtrack_count == rhs.backtrack_count and
+        lhs.input_count == rhs.input_count and
+        lhs.lookahead_count == rhs.lookahead_count;
 }
 
 fn acceleratedAdjacentGroup(
@@ -289,6 +314,20 @@ fn acceleratedCandidate(
     candidate_window: *window.Window,
     result: *match.Match,
 ) Error!bool {
+    if (!try candidateClassesMatch(
+        parsed,
+        rule,
+        candidate_window,
+    )) return false;
+    setMatchedRule(rule, candidate_window, result);
+    return true;
+}
+
+fn candidateClassesMatch(
+    parsed: Subtable,
+    rule: class_context.Rule,
+    candidate_window: *window.Window,
+) Error!bool {
     const backtrack_count: usize = rule.backtrack_count;
     if (backtrack_count > window.max_region_glyphs or
         rule.input_count == 0 or
@@ -333,10 +372,18 @@ fn acceleratedCandidate(
         expected_index += 1;
     }
 
+    return true;
+}
+
+fn setMatchedRule(
+    rule: class_context.Rule,
+    candidate_window: *window.Window,
+    result: *match.Match,
+) void {
     result.set(
         candidate_window,
         rule.input_count,
-        backtrack_count,
+        rule.backtrack_count,
         rule.lookahead_count,
         if (rule.record_list)
             .{ .records = .{
@@ -346,7 +393,6 @@ fn acceleratedCandidate(
         else
             .{ .nested_lookup = rule.lookup_index },
     );
-    return true;
 }
 
 pub fn directRuleSet(

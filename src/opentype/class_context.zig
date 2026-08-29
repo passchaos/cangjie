@@ -40,8 +40,9 @@ pub const RuleGroup = struct {
     len: usize,
     max_input_count: u16,
     max_lookahead_count: u16,
-    /// Rules in this group have identical region lengths and are ordered by
-    /// `Rule.hash`, then authored order.
+    /// Rules are ordered by region shape, hash, then authored order. Runtime
+    /// matching may binary-search each shape while retaining authored-order
+    /// precedence across matching shapes.
     hash_sorted: bool = false,
 };
 
@@ -66,6 +67,21 @@ pub fn ruleLessThan(_: void, lhs: Rule, rhs: Rule) bool {
 
 pub fn ruleHashLessThan(_: void, lhs: Rule, rhs: Rule) bool {
     if (lhs.class_set != rhs.class_set) return lhs.class_set < rhs.class_set;
+    if (lhs.hash != rhs.hash) return lhs.hash < rhs.hash;
+    return lhs.order < rhs.order;
+}
+
+pub fn chainingRuleHashLessThan(_: void, lhs: Rule, rhs: Rule) bool {
+    if (lhs.class_set != rhs.class_set) return lhs.class_set < rhs.class_set;
+    if (lhs.backtrack_count != rhs.backtrack_count) {
+        return lhs.backtrack_count < rhs.backtrack_count;
+    }
+    if (lhs.input_count != rhs.input_count) {
+        return lhs.input_count < rhs.input_count;
+    }
+    if (lhs.lookahead_count != rhs.lookahead_count) {
+        return lhs.lookahead_count < rhs.lookahead_count;
+    }
     if (lhs.hash != rhs.hash) return lhs.hash < rhs.hash;
     return lhs.order < rhs.order;
 }

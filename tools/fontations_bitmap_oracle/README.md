@@ -64,8 +64,10 @@ Bitmap-strike enumeration uses `strikes 0 ITERATIONS SAMPLES`.
 Preferred color-glyph source lookup uses `color-glyph GLYPH_ID ITERATIONS SAMPLES`.
 For a compact semantic and timing summary across all of these boundaries, run
 `zig build fontations-matrix -Doptimize=ReleaseFast`; optional
-`-- --iterations N --samples N --cpu CPU` arguments control the repeated
-measurements and optional process affinity.
+`-- --iterations N --samples N --cpu CPU --fail-on-slower` arguments control
+the repeated measurements, optional process affinity, and strict performance
+gate. `--extended` additionally exercises production glyf/CFF outlines and a
+larger two-axis Adobe CFF2 font.
 The matrix compares deterministic semantic checksums before reporting timings.
 The matching fixtures can be generated in an explicit scratch directory with
 `zig build glyph-name-fixtures -- /tmp/cangjie-fontations-fixtures`; omitting

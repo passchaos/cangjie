@@ -63,6 +63,18 @@ pub fn applyGroup(
     {
         return error.UnsupportedGsub;
     }
+    if (lookup_flag == 0 and run.run_has_default_ignorables == false) {
+        return applyAdjacentGroup(
+            Executor,
+            view,
+            subtable,
+            group,
+            glyphs,
+            position,
+            allocator,
+            run,
+        );
+    }
 
     var input_indices_buffer: [max_input_glyphs]usize = undefined;
     const input_len = traversal.collectForwardPrefix(
@@ -164,6 +176,107 @@ pub fn applyGroup(
         );
     }
     return .{};
+}
+
+fn applyAdjacentGroup(
+    comptime Executor: type,
+    view: View,
+    subtable: Subtable,
+    group: *const class_context.RuleGroup,
+    glyphs: *std.ArrayList(GlyphId),
+    position: usize,
+    allocator: std.mem.Allocator,
+    run: Options,
+) Error!model.ApplyResult {
+    const available = glyphs.items.len - position;
+    const input_len = @min(@as(usize, group.max_input_count), available);
+    if (input_len == 0) return .{};
+
+    var input_classes: [max_input_glyphs]u16 = undefined;
+    var input_hashes: [max_input_glyphs]u64 = undefined;
+    input_hashes[0] = class_context.sequenceHashEmpty();
+    for (1..input_len) |input_index| {
+        const glyph = glyphs.items[position + input_index];
+        input_classes[input_index - 1] =
+            if (subtable.class_def == table.class_def.empty_offset)
+                glyph
+            else
+                try table.class_def.valueWithDense(
+                    view,
+                    subtable.class_def,
+                    subtable.class_values,
+                    glyph,
+                );
+        input_hashes[input_index] = class_context.sequenceHashAppend(
+            input_hashes[input_index - 1],
+            input_classes[input_index - 1],
+        );
+    }
+
+    const rules = subtable.rules[group.start .. group.start + group.len];
+    if (subtable.rules_hash_sorted) {
+        var matched_rule: ?*const class_context.Rule = null;
+        for (0..input_len) |extra_count| {
+            const target_hash = input_hashes[extra_count];
+            var low: usize = 0;
+            var high: usize = rules.len;
+            while (low < high) {
+                const middle = low + (high - low) / 2;
+                if (rules[middle].hash < target_hash) low = middle + 1 else high = middle;
+            }
+            var index = low;
+            while (index < rules.len and rules[index].hash == target_hash) : (index += 1) {
+                const rule = &rules[index];
+                if (rule.input_count != extra_count + 1) continue;
+                if (!std.mem.eql(
+                    u16,
+                    subtable.classes[rule.classes_start .. rule.classes_start + extra_count],
+                    input_classes[0..extra_count],
+                )) continue;
+                if (matched_rule == null or rule.order < matched_rule.?.order) {
+                    matched_rule = rule;
+                }
+            }
+        }
+        const rule = matched_rule orelse return .{};
+        return applyAdjacentRule(Executor, view, rule, glyphs, position, allocator, run);
+    }
+    for (rules) |*rule| {
+        if (rule.input_count == 0 or rule.input_count > input_len) continue;
+        const extra_count = @as(usize, rule.input_count) - 1;
+        if (rule.hash != input_hashes[extra_count] or !std.mem.eql(
+            u16,
+            subtable.classes[rule.classes_start .. rule.classes_start + extra_count],
+            input_classes[0..extra_count],
+        )) continue;
+        return applyAdjacentRule(Executor, view, rule, glyphs, position, allocator, run);
+    }
+    return .{};
+}
+
+fn applyAdjacentRule(
+    comptime Executor: type,
+    view: View,
+    rule: *const class_context.Rule,
+    glyphs: *std.ArrayList(GlyphId),
+    position: usize,
+    allocator: std.mem.Allocator,
+    run: Options,
+) Error!model.ApplyResult {
+    var input_indices: [max_input_glyphs]usize = undefined;
+    for (input_indices[0..rule.input_count], 0..) |*index, relative| {
+        index.* = position + relative;
+    }
+    return applyMatchedRule(
+        Executor,
+        view,
+        rule,
+        input_indices[0..rule.input_count],
+        glyphs,
+        position,
+        allocator,
+        run,
+    );
 }
 
 fn applyMatchedRule(

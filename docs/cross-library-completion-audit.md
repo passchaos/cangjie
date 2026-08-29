@@ -311,6 +311,12 @@ x86-64, pinned to CPU 30 where the harness supports it:
   extended ten-font-case matrix across 8, 9, 12, 16, and 20 ppem also passed
   all 500 semantic rows. This broadens the Linux oracle evidence, but does not
   substitute for other operating systems or arbitrary installed fonts.
+- The maintained `--extended` hinted-outline matrix now also covers ten Noto
+  script fonts (Bengali, Tamil, Telugu, Kannada, Malayalam, Gujarati, Gurmukhi,
+  Hebrew, Thai, and Khmer). At 9 and 16 ppem across both interpreters and all
+  five targets, 396 system-FreeType semantic rows pass. Two v40 monochrome
+  compound rows whose output changed in FreeType 2.14 are excluded from the
+  system-2.13 matrix and remain gated by the version-aware differential.
 - Probing beyond that retained corpus found two further compatibility edges.
   DejaVu U+00B2 uses `SLOOP[0]`; matching FreeType requires accepting zero
   (and clamping oversized values to the 16-bit loop counter) rather than

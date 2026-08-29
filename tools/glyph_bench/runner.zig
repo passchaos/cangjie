@@ -26,6 +26,7 @@ pub fn loadFontBytes(io: std.Io, allocator: std.mem.Allocator, options: options_
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.Face, options: options_mod.Options) !report.Result {
     const glyph_id = try resolveGlyphId(font, options);
+    const debug_outline = std.c.getenv("CANGJIE_DEBUG_OUTLINE") != null;
     if (options.dirty_rect) {
         return switch (options.mode) {
             .raster_reuse => runRasterReuseDirty(io, allocator, font, glyph_id, options),
@@ -35,7 +36,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.F
     }
     if (options.warmup != 0) {
         var warmup_checksum: u64 = 0;
-        try runIterations(allocator, font, glyph_id, options, options.warmup, &warmup_checksum);
+        try runIterations(allocator, font, glyph_id, options, options.warmup, debug_outline, &warmup_checksum);
     }
 
     var samples = std.ArrayList(report.Sample).empty;
@@ -46,7 +47,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, font: *const cangjie.font.F
     while (sample_index < options.samples) : (sample_index += 1) {
         var sample_checksum: u64 = 0;
         const start = std.Io.Clock.now(.awake, io).nanoseconds;
-        try runIterations(allocator, font, glyph_id, options, options.iterations, &sample_checksum);
+        try runIterations(allocator, font, glyph_id, options, options.iterations, debug_outline, &sample_checksum);
         const sample_elapsed = std.Io.Clock.now(.awake, io).nanoseconds - start;
         elapsed += sample_elapsed;
         checksum = updateChecksum(checksum, sample_checksum);
@@ -261,7 +262,7 @@ fn resolveGlyphId(font: *const cangjie.font.Face, options: options_mod.Options) 
     return try font.glyphs().index(options.codepoint);
 }
 
-fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
+fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, debug_outline: bool, checksum: *u64) !void {
     switch (options.mode) {
         .face_open, .face_validate => unreachable,
         .charmap => try runCharmapIterations(font, options, iterations, checksum),
@@ -278,9 +279,9 @@ fn runIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, g
         .color_layers => try runColorLayerIterations(allocator, font, glyph_id, iterations, checksum),
         .bitmap => try runBitmapIterations(font, glyph_id, options, iterations, checksum),
         .bitmap_render => try runBitmapRenderIterations(allocator, font, glyph_id, options, iterations, checksum),
-        .outline => try runOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
-        .outline_session => try runOutlineSessionIterations(allocator, font, glyph_id, options, iterations, checksum),
-        .outline_reuse => try runOutlineReuseIterations(allocator, font, glyph_id, options, iterations, checksum),
+        .outline => try runOutlineIterations(allocator, font, glyph_id, options, iterations, debug_outline, checksum),
+        .outline_session => try runOutlineSessionIterations(allocator, font, glyph_id, options, iterations, debug_outline, checksum),
+        .outline_reuse => try runOutlineReuseIterations(allocator, font, glyph_id, options, iterations, debug_outline, checksum),
         .hinted_outline => try runHintedOutlineIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster => try runRasterIterations(allocator, font, glyph_id, options, iterations, checksum),
         .raster_owning => try runRasterOwningIterations(allocator, font, glyph_id, options, iterations, checksum),
@@ -614,7 +615,7 @@ fn runMetricsIterations(
     }
 }
 
-fn runOutlineSessionIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
+fn runOutlineSessionIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, debug_outline: bool, checksum: *u64) !void {
     const coords = options.normalizedVariationCoords();
     const session = font.glyphs().session();
     var i: usize = 0;
@@ -623,12 +624,12 @@ fn runOutlineSessionIterations(allocator: std.mem.Allocator, font: *const cangji
             try session.outline(allocator, glyph_id)
         else
             try session.outlineAt(allocator, glyph_id, coords);
-        checksum.* +%= outlineChecksum(outline);
+        checksum.* +%= outlineChecksum(outline, debug_outline);
         outline.deinit();
     }
 }
 
-fn runOutlineReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
+fn runOutlineReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, debug_outline: bool, checksum: *u64) !void {
     const coords = options.normalizedVariationCoords();
     const session = font.glyphs().session();
     var buffer = cangjie.font.OutlineBuffer.init(allocator);
@@ -639,11 +640,11 @@ fn runOutlineReuseIterations(allocator: std.mem.Allocator, font: *const cangjie.
             try session.outlineInto(&buffer, glyph_id)
         else
             try session.outlineAtInto(&buffer, glyph_id, coords);
-        checksum.* +%= outlineChecksum(outline.*);
+        checksum.* +%= outlineChecksum(outline.*, debug_outline);
     }
 }
 
-fn runOutlineIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, checksum: *u64) !void {
+fn runOutlineIterations(allocator: std.mem.Allocator, font: *const cangjie.font.Face, glyph_id: cangjie.font.GlyphId, options: options_mod.Options, iterations: usize, debug_outline: bool, checksum: *u64) !void {
     const coords = options.normalizedVariationCoords();
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
@@ -651,7 +652,7 @@ fn runOutlineIterations(allocator: std.mem.Allocator, font: *const cangjie.font.
             try font.glyphs().outline(allocator, glyph_id)
         else
             try font.glyphs().outlineAt(allocator, glyph_id, coords);
-        checksum.* +%= outlineChecksum(outline);
+        checksum.* +%= outlineChecksum(outline, debug_outline);
         outline.deinit();
     }
 }
@@ -793,15 +794,13 @@ fn runRasterPreparedIterations(allocator: std.mem.Allocator, font: *const cangji
     }
 }
 
-fn outlineChecksum(outline: cangjie.font.Outline) u64 {
+fn outlineChecksum(outline: cangjie.font.Outline, debug_outline: bool) u64 {
     // Match the reference pen's command-stream consumer exactly. Metadata is
     // queried by independent matrix rows; charging it only on Cangjie's side
     // made the outline row compare different downstream work.
     var hash: u64 = 0;
     for (outline.commands.items) |command| {
-        if (std.c.getenv("CANGJIE_DEBUG_OUTLINE")) |_| {
-            printOutlineCommand(command);
-        }
+        if (debug_outline) printOutlineCommand(command);
         switch (command) {
             .move_to => |point| hashOutlineCommand(&hash, 1, &.{ point.x, point.y }),
             .line_to => |point| hashOutlineCommand(&hash, 2, &.{ point.x, point.y }),

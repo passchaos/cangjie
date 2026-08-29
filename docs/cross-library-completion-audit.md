@@ -53,9 +53,11 @@ x86-64, pinned to CPU 30 where the harness supports it:
   public owned `Vec<PathElement>` before hashing, matching Cangjie's owned
   command-array lifecycle rather than comparing an owning result with an
   allocation-free callback pen. The maintained strict matrix remains green;
-  the corrected `100000 * 7` CFF2 owning/reuse rows led by
-  `1.200x`/`3.163x` at default coordinates and `1.209x--1.225x`/
-  `3.207x--3.219x` at the two endpoints.
+  the final corrected `100000 * 7` CFF2 owning/reuse rows led by
+  `1.742x`/`19.091x` at default coordinates and `1.735x--1.741x`/
+  `18.928x--19.182x` at the two endpoints. Debug command tracing is resolved
+  once outside the measured loop, so an unset diagnostic environment variable
+  does not distort these results.
 - The optional Fontations `--extended` outline corpus now includes all ten
   selected semantically identical glyphs from the larger two-axis
   `AdobeVFPrototype.otf`, in both owning and caller-storage modes. The original

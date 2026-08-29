@@ -209,52 +209,7 @@ fn acceleratedAdjacentGroup(
 ) Error!bool {
     const anchor_syllable =
         filtering.sourceSyllableForGlyph(run, position);
-    const rules = parsed.rules[group.start .. group.start + group.len];
-    if (group.hash_sorted) {
-        var matched_index: ?usize = null;
-        var shape_start: usize = 0;
-        while (shape_start < rules.len) {
-            const first = rules[shape_start];
-            var shape_end = shape_start + 1;
-            while (shape_end < rules.len and sameShape(
-                first,
-                rules[shape_end],
-            )) : (shape_end += 1) {}
-            const hash = (try adjacentCandidateHash(
-                view,
-                parsed,
-                glyphs,
-                position,
-                run,
-                anchor_syllable,
-                first.backtrack_count,
-                first.input_count,
-                first.lookahead_count,
-            )) orelse {
-                shape_start = shape_end;
-                continue;
-            };
-            var low = shape_start;
-            var high = shape_end;
-            while (low < high) {
-                const middle = low + (high - low) / 2;
-                if (rules[middle].hash < hash) low = middle + 1 else high = middle;
-            }
-            var index = low;
-            while (index < shape_end and rules[index].hash == hash) : (index += 1) {
-                if (matched_index == null or
-                    rules[index].order < rules[matched_index.?].order)
-                {
-                    matched_index = index;
-                }
-            }
-            shape_start = shape_end;
-        }
-        const index = matched_index orelse return false;
-        setAdjacentRule(rules[index], position, result);
-        return true;
-    }
-    for (rules) |rule| {
+    for (parsed.rules[group.start .. group.start + group.len]) |rule| {
         const backtrack_count: usize = rule.backtrack_count;
         const input_count: usize = rule.input_count;
         const lookahead_count: usize = rule.lookahead_count;
@@ -337,108 +292,28 @@ fn acceleratedAdjacentGroup(
         }
         if (!matches) continue;
 
-        setAdjacentRule(rule, position, result);
+        result.input_count = input_count;
+        result.backtrack_count = backtrack_count;
+        result.lookahead_count = lookahead_count;
+        result.action = if (rule.record_list)
+            .{ .records = .{
+                .offset = rule.records_offset,
+                .count = rule.subst_count,
+            } }
+        else
+            .{ .nested_lookup = rule.lookup_index };
+        for (0..backtrack_count) |index| {
+            result.backtrack[index] = position - index - 1;
+        }
+        for (0..input_count) |index| {
+            result.input[index] = position + index;
+        }
+        for (0..lookahead_count) |index| {
+            result.lookahead[index] = position + input_count + index;
+        }
         return true;
     }
     return false;
-}
-
-fn adjacentCandidateHash(
-    view: View,
-    parsed: Subtable,
-    glyphs: []const GlyphId,
-    position: usize,
-    run: Options,
-    anchor_syllable: ?u8,
-    backtrack_count: usize,
-    input_count: usize,
-    lookahead_count: usize,
-) Error!?u64 {
-    if (backtrack_count > position or input_count == 0 or
-        input_count > glyphs.len - position or
-        lookahead_count > glyphs.len - position - input_count) return null;
-    var hash = class_context.sequenceHashEmpty();
-    for (0..backtrack_count) |index| {
-        const glyph_index = position - index - 1;
-        if (!filtering.sourceSyllableAllowsGlyph(
-            run,
-            anchor_syllable,
-            glyph_index,
-        )) return null;
-        hash = class_context.sequenceHashAppend(
-            hash,
-            try table.class_def.valueWithDense(
-                view,
-                parsed.backtrack_class_def,
-                parsed.backtrack_class_values,
-                glyphs[glyph_index],
-            ),
-        );
-    }
-    for (1..input_count) |index| {
-        const glyph_index = position + index;
-        if (!filtering.sourceSyllableAllowsGlyph(
-            run,
-            anchor_syllable,
-            glyph_index,
-        )) return null;
-        hash = class_context.sequenceHashAppend(
-            hash,
-            try table.class_def.valueWithDense(
-                view,
-                parsed.input_class_def,
-                parsed.input_class_values,
-                glyphs[glyph_index],
-            ),
-        );
-    }
-    for (0..lookahead_count) |index| {
-        const glyph_index = position + input_count + index;
-        if (!filtering.sourceSyllableAllowsGlyph(
-            run,
-            anchor_syllable,
-            glyph_index,
-        )) return null;
-        hash = class_context.sequenceHashAppend(
-            hash,
-            try table.class_def.valueWithDense(
-                view,
-                parsed.lookahead_class_def,
-                parsed.lookahead_class_values,
-                glyphs[glyph_index],
-            ),
-        );
-    }
-    return hash;
-}
-
-fn setAdjacentRule(
-    rule: class_context.Rule,
-    position: usize,
-    result: *match.Match,
-) void {
-    const backtrack_count: usize = rule.backtrack_count;
-    const input_count: usize = rule.input_count;
-    const lookahead_count: usize = rule.lookahead_count;
-    result.input_count = input_count;
-    result.backtrack_count = backtrack_count;
-    result.lookahead_count = lookahead_count;
-    result.action = if (rule.record_list)
-        .{ .records = .{
-            .offset = rule.records_offset,
-            .count = rule.subst_count,
-        } }
-    else
-        .{ .nested_lookup = rule.lookup_index };
-    for (0..backtrack_count) |index| {
-        result.backtrack[index] = position - index - 1;
-    }
-    for (0..input_count) |index| {
-        result.input[index] = position + index;
-    }
-    for (0..lookahead_count) |index| {
-        result.lookahead[index] = position + input_count + index;
-    }
 }
 
 fn acceleratedCandidate(

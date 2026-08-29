@@ -154,11 +154,11 @@ pub fn find(
     groups: []const model.ChainingGroup,
     slots: []const u16,
     glyph: GlyphId,
-) ?model.ChainingGroup {
+) ?*const model.ChainingGroup {
     if (slots.len != 0) {
         var slot = hashGlyph(glyph) & (slots.len - 1);
         while (slots[slot] != 0) : (slot = (slot + 1) & (slots.len - 1)) {
-            const group = groups[slots[slot] - 1];
+            const group = &groups[slots[slot] - 1];
             if (group.glyph == glyph) return group;
         }
         return null;
@@ -172,7 +172,7 @@ pub fn find(
         } else if (glyph > groups[middle].glyph) {
             low = middle + 1;
         } else {
-            return groups[middle];
+            return &groups[middle];
         }
     }
     return null;

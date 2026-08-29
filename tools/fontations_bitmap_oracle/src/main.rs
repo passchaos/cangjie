@@ -1,6 +1,6 @@
 use skrifa::{
     bitmap::BitmapData,
-    outline::{DrawSettings, Hinting, OutlinePen},
+    outline::{pen::PathElement, DrawSettings, Hinting, OutlinePen},
     prelude::{LocationRef, NormalizedCoord, Size},
     string::StringId,
     FontRef, GlyphId, MetadataProvider,
@@ -618,15 +618,21 @@ fn outline_at_location(
         .outline_glyphs()
         .get(GlyphId::new(glyph_id))
         .unwrap_or_else(|| fail("missing outline glyph"));
+    // An owning Cangjie outline retains a reusable command stream rather than
+    // requiring callers to implement a pen. Materialize Skrifa into the same
+    // owned representation before timing so allocation lifetime and output
+    // ownership are comparable.
     let mut values = Vec::with_capacity(samples);
     let mut checksum = 0_u64;
     let mut commands = 0_usize;
     for _ in 0..samples {
         for _ in 0..3 {
             let mut pen = HashPen::default();
+            let mut path = Vec::<PathElement>::new();
             glyph
-                .draw(unscaled_settings(coords), &mut pen)
+                .draw(unscaled_settings(coords), &mut path)
                 .unwrap_or_else(|_| fail("cannot draw outline"));
+            hash_path(&path, &mut pen);
             checksum = pen.hash;
             commands = pen.commands;
         }
@@ -634,9 +640,11 @@ fn outline_at_location(
         let mut batch_hash = 0_u64;
         for _ in 0..iterations {
             let mut pen = HashPen::default();
+            let mut path = Vec::<PathElement>::new();
             glyph
-                .draw(unscaled_settings(coords), &mut pen)
+                .draw(unscaled_settings(coords), &mut path)
                 .unwrap_or_else(|_| fail("cannot draw outline"));
+            hash_path(&path, &mut pen);
             batch_hash = batch_hash.wrapping_add(pen.hash);
         }
         values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
@@ -647,6 +655,25 @@ fn outline_at_location(
         "engine=skrifa\tmode=outline\titerations={iterations}\tsamples={samples}\tmedian_ns_per_iter={:.3}\tcommands={commands}\tchecksum={checksum:016x}",
         values[values.len() / 2],
     );
+}
+
+fn hash_path(path: &[PathElement], pen: &mut HashPen) {
+    for element in path {
+        match *element {
+            PathElement::MoveTo { x, y } => pen.move_to(x, y),
+            PathElement::LineTo { x, y } => pen.line_to(x, y),
+            PathElement::QuadTo { cx0, cy0, x, y } => pen.quad_to(cx0, cy0, x, y),
+            PathElement::CurveTo {
+                cx0,
+                cy0,
+                cx1,
+                cy1,
+                x,
+                y,
+            } => pen.curve_to(cx0, cy0, cx1, cy1, x, y),
+            PathElement::Close => pen.close(),
+        }
+    }
 }
 
 fn outline_reuse(font: &FontRef<'_>, glyph_id: u32, args: &mut impl Iterator<Item = String>) {

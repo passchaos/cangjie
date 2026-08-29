@@ -6,6 +6,10 @@ const Options = @import("../../../../../runtime/options.zig").Options;
 const table = @import("../../../../../table/root.zig");
 
 pub const Executor = struct {
+    // Synthetic tests use lookup indexes as observable operations rather than
+    // encoding full SingleSubst lookup tables for the production fast path.
+    pub const enable_fast_single = false;
+
     pub fn applyNested(
         _: table.View,
         glyphs: *std.ArrayList(u16),

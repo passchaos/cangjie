@@ -112,7 +112,7 @@ fn acceleratedAdjacentGroup(
     const anchor_syllable =
         filtering.sourceSyllableForGlyph(run, position);
     for (parsed.rules[group.start .. group.start + group.len]) |rule| {
-        const backtrack_count: usize = @intCast(rule.records_offset);
+        const backtrack_count: usize = rule.backtrack_count;
         const input_count: usize = rule.input_count;
         const lookahead_count: usize = rule.lookahead_count;
         if (backtrack_count > position or input_count == 0 or
@@ -194,7 +194,13 @@ fn acceleratedAdjacentGroup(
         result.input_count = input_count;
         result.backtrack_count = backtrack_count;
         result.lookahead_count = lookahead_count;
-        result.action = .{ .nested_lookup = rule.lookup_index };
+        result.action = if (rule.record_list)
+            .{ .records = .{
+                .offset = rule.records_offset,
+                .count = rule.subst_count,
+            } }
+        else
+            .{ .nested_lookup = rule.lookup_index };
         for (0..backtrack_count) |index| {
             result.backtrack[index] = position - index - 1;
         }
@@ -215,7 +221,7 @@ fn acceleratedCandidate(
     candidate_window: *window.Window,
     result: *match.Match,
 ) Error!bool {
-    const backtrack_count: usize = @intCast(rule.records_offset);
+    const backtrack_count: usize = rule.backtrack_count;
     if (backtrack_count > window.max_region_glyphs or
         rule.input_count == 0 or
         rule.lookahead_count > window.max_region_glyphs)
@@ -264,7 +270,13 @@ fn acceleratedCandidate(
         rule.input_count,
         backtrack_count,
         rule.lookahead_count,
-        .{ .nested_lookup = rule.lookup_index },
+        if (rule.record_list)
+            .{ .records = .{
+                .offset = rule.records_offset,
+                .count = rule.subst_count,
+            } }
+        else
+            .{ .nested_lookup = rule.lookup_index },
     );
     return true;
 }

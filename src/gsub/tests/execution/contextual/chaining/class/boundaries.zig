@@ -26,7 +26,7 @@ test "accelerated chaining class preserves backtrack order syllables and safety"
         .order = 0,
         .lookup_index = 0,
         .classes_start = 0,
-        .records_offset = 2,
+        .backtrack_count = 2,
     }};
     const groups = [_]class_context.RuleGroup{.{
         .class_set = 3,
@@ -118,7 +118,7 @@ test "accelerated chaining class uses physical adjacency proof" {
         .order = 0,
         .lookup_index = 2,
         .classes_start = 0,
-        .records_offset = 1,
+        .backtrack_count = 1,
     }};
     const groups = [_]class_context.RuleGroup{.{
         .class_set = 3,
@@ -199,7 +199,7 @@ test "physical adjacency fast path preserves reversed backtrack order" {
         .order = 0,
         .lookup_index = 0,
         .classes_start = 0,
-        .records_offset = 2,
+        .backtrack_count = 2,
     }};
     const groups = [_]class_context.RuleGroup{.{
         .class_set = 3,

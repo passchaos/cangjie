@@ -94,9 +94,11 @@ test "direct and extension chaining class builders preserve backtrack rules" {
         direct[0].backtrack_class_def,
     );
     try std.testing.expectEqual(
-        @as(u16, 1),
-        @as(u16, @intCast(direct[0].rules[0].records_offset)),
+        @as(u32, 0),
+        direct[0].rules[0].records_offset,
     );
+    try std.testing.expectEqual(@as(u16, 1), direct[0].rules[0].backtrack_count);
+    try std.testing.expect(!direct[0].rules[0].record_list);
     try std.testing.expectEqualSlices(u16, &.{ 2, 3 }, direct[0].classes[0..2]);
     try std.testing.expectEqualSlices(
         u16,
@@ -119,18 +121,41 @@ test "direct and extension chaining class builders preserve backtrack rules" {
         4,
     ) == null);
 
-    // Multiple nested records remain outside the deliberately narrow
-    // accelerator and must retain the generic direct path.
+    // Wider authored record lists retain their table offset instead of
+    // falling back to repeated rule parsing. Both direct and extension
+    // wrappers must construct the same accelerator representation.
     writeU16(&bytes, rule + 10, 2);
-    const unsupported = try build.class_context.chaining.build(
+    writeU16(&bytes, rule + 12, 1);
+    writeU16(&bytes, rule + 14, 3);
+    writeU16(&bytes, rule + 16, 0);
+    writeU16(&bytes, rule + 18, 4);
+    const direct_multi = try build.class_context.chaining.build(
         view,
         0,
         1,
         .direct,
         allocator,
     );
-    defer ownership.deinitChainingClassSubtables(allocator, unsupported);
-    try std.testing.expectEqual(@as(usize, 0), unsupported.len);
+    defer ownership.deinitChainingClassSubtables(allocator, direct_multi);
+    const extension_multi = try build.class_context.chaining.build(
+        view,
+        8,
+        1,
+        .extension,
+        allocator,
+    );
+    defer ownership.deinitChainingClassSubtables(allocator, extension_multi);
+    try std.testing.expectEqual(@as(usize, 1), direct_multi.len);
+    try std.testing.expectEqualSlices(
+        class_context.Rule,
+        direct_multi[0].rules,
+        extension_multi[0].rules,
+    );
+    const multi_rule = direct_multi[0].rules[0];
+    try std.testing.expect(multi_rule.record_list);
+    try std.testing.expectEqual(@as(u16, 1), multi_rule.backtrack_count);
+    try std.testing.expectEqual(@as(u16, 2), multi_rule.subst_count);
+    try std.testing.expectEqual(@as(u32, rule + 12), multi_rule.records_offset);
 }
 
 test "chaining class builder accepts optional context class definitions" {

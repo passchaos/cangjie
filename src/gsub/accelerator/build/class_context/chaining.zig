@@ -149,10 +149,13 @@ fn buildSubtable(
 
             const subst_count = try view.readU16(cursor);
             cursor += 2;
-            // This accelerator stores one direct nested lookup rather than a
-            // general record list. Wider records retain the generic executor.
-            if (subst_count != 1 or try view.readU16(cursor) != 0) return null;
-            const nested_lookup_index = try view.readU16(cursor + 2);
+            const records_offset = cursor;
+            const compact_nested = subst_count == 1 and
+                try view.readU16(cursor) == 0;
+            const nested_lookup_index = if (compact_nested)
+                try view.readU16(cursor + 2)
+            else
+                0;
 
             try rules.append(allocator, .{
                 .class_set = @intCast(set_index),
@@ -162,10 +165,13 @@ fn buildSubtable(
                 .order = order,
                 .lookup_index = nested_lookup_index,
                 .classes_start = @intCast(classes_start),
-                // This accelerator has no substitution-record offset, so the
-                // shared field intentionally retains the proven backtrack
-                // count used by the runtime matcher.
-                .records_offset = backtrack_count,
+                .subst_count = subst_count,
+                .backtrack_count = backtrack_count,
+                .record_list = !compact_nested,
+                .records_offset = if (compact_nested)
+                    0
+                else
+                    @intCast(records_offset),
             });
             order += 1;
         }

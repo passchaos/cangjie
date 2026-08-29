@@ -20,6 +20,17 @@ pub const Rule = struct {
     lookup_index: u16,
     classes_start: u32,
     subst_count: u16 = 1,
+    /// Number of preceding glyphs in a chaining rule. Context rules leave it
+    /// at zero. Keeping this independent from `records_offset` avoids
+    /// overloading a table cursor with match geometry.
+    backtrack_count: u16 = 0,
+    /// False denotes the compact one-record/sequence-zero action stored in
+    /// `lookup_index`; true denotes an authored record list at
+    /// `records_offset`.
+    record_list: bool = false,
+    /// Table-relative offset of the first authored SequenceLookupRecord. This
+    /// is meaningful only when `record_list` is true (or for context rules,
+    /// which always execute authored lists).
     records_offset: u32 = 0,
 };
 

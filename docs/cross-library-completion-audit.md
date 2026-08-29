@@ -39,6 +39,12 @@ x86-64, pinned to CPU 30 where the harness supports it:
   and owning output at normalized `wght` endpoints `+1`/`-1`
   (`1.317x`/`1.336x`). Caller-owned reuse at those endpoints leads by
   `13.865x`/`13.763x`.
+- The optional Fontations `--extended` outline corpus now includes five
+  semantically identical glyphs from the larger two-axis
+  `AdobeVFPrototype.otf`, in both owning and caller-storage modes. A fixed-CPU-
+  30 `1000 * 7` run led all ten added CFF2 rows (`1.065x--1127x`). Other
+  glyphs in that upstream test font expose real CFF2 command-stream differences
+  and remain open rather than being admitted to the performance claim.
 - `zig build parley-matrix -Doptimize=ReleaseFast -- --iterations 1000 --samples
   7 --cpu 30 --fail-on-slower`: 26/26 count/stability/performance rows passed,
   including exact normalized

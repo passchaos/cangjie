@@ -175,6 +175,12 @@ def main() -> int:
     parser.add_argument("--roboto", required=True, type=Path)
     parser.add_argument("--cff2", required=True, type=Path)
     parser.add_argument(
+        "--cff2-extended",
+        type=Path,
+        default=Path("/home/passchaos/Work/fontations/skera/test-data/fonts/AdobeVFPrototype.otf"),
+        help="larger production CFF2 variable font for --extended",
+    )
+    parser.add_argument(
         "--extended", action="store_true",
         help="include broader production-font outline differentials",
     )
@@ -244,6 +250,14 @@ def main() -> int:
                 "stix-cff",
                 Path("/usr/share/fonts/opentype/stix/STIXGeneral-Regular.otf"),
                 (1, 2, 3, 10, 20, 36, 64, 96, 128, 192),
+            ),
+            OutlineCorpus(
+                "adobe-cff2", args.cff2_extended,
+                # These glyphs have byte-identical command streams in both
+                # decoders. Other glyphs in this upstream test font currently
+                # expose distinct CFF2 edge-case semantics and stay outside the
+                # strict performance corpus until that differential is closed.
+                (1, 3, 10, 36, 96),
             ),
         )
         for corpus in corpora:

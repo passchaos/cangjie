@@ -944,9 +944,9 @@ fn simpleRetainedReflowShape(
 ) bool {
     if (glyphs.len == 0) return false;
     var expected_byte_start: usize = 0;
+    var active_cluster: ?usize = null;
     for (glyphs) |glyph| {
-        if (glyph.cluster != expected_byte_start or
-            glyph.source_byte_len == 0 or
+        if (glyph.source_byte_len == 0 or
             glyph.codepoint == 0x00ad or
             glyph.isTab() or
             glyph.isDiscretionaryHyphen() or
@@ -959,7 +959,19 @@ fn simpleRetainedReflowShape(
         {
             return false;
         }
-        expected_byte_start = glyph.sourceByteEnd();
+        const source_end = glyph.sourceByteEnd();
+        if (active_cluster != null and glyph.cluster == active_cluster.?) {
+            // GSUB may emit multiple adjacent outputs for one source cluster,
+            // and those outputs need not all retain the same byte length. The
+            // next cluster must still begin after their widest source extent.
+            expected_byte_start = @max(expected_byte_start, source_end);
+            continue;
+        }
+        if (glyph.cluster != expected_byte_start or source_end <= glyph.cluster) {
+            return false;
+        }
+        active_cluster = glyph.cluster;
+        expected_byte_start = source_end;
     }
     return expected_byte_start == text.len;
 }

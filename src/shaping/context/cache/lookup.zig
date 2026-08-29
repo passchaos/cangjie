@@ -69,6 +69,7 @@ pub const LookupSelectionCache = struct {
     script_selection_entries: std.ArrayList(ScriptSelectionEntry) = .empty,
     gsub_feature_plan_entries: std.ArrayList(FeaturePlanEntry) = .empty,
     gsub_merged_feature_plan_entries: std.ArrayList(MergedFeaturePlanEntry) = .empty,
+    last_gsub_merged_feature_plan: ?usize = null,
     hits: usize = 0,
     misses: usize = 0,
 
@@ -114,6 +115,7 @@ pub const LookupSelectionCache = struct {
             entry.plan.deinit(self.allocator);
         }
         self.gsub_merged_feature_plan_entries.clearRetainingCapacity();
+        self.last_gsub_merged_feature_plan = null;
         self.hits = 0;
         self.misses = 0;
     }
@@ -240,10 +242,21 @@ pub const LookupSelectionCache = struct {
 
     pub fn gsubMergedFeatureLookupPlan(self: *LookupSelectionCache, font: *const Font, applications: []const gsub.feature.Application, options: gsub.runtime.Options, gdef_metadata: GdefLookupMetadata) !gsub.feature.MergedLookupPlan {
         const key = lookupSelectionKey(font, .gsub, options.script_tag, options.language_tag, options.features, options.vertical, null);
-        for (self.gsub_merged_feature_plan_entries.items) |entry| {
+        if (self.last_gsub_merged_feature_plan) |index| {
+            const entry = self.gsub_merged_feature_plan_entries.items[index];
+            if (lookupSelectionKeysEqual(entry.key, key) and
+                featureOverridesEqual(entry.features, options.features) and
+                featureApplicationsEqual(entry.applications, applications))
+            {
+                self.hits += 1;
+                return entry.plan;
+            }
+        }
+        for (self.gsub_merged_feature_plan_entries.items, 0..) |entry, index| {
             if (!lookupSelectionKeysEqual(entry.key, key)) continue;
             if (!featureOverridesEqual(entry.features, options.features)) continue;
             if (!featureApplicationsEqual(entry.applications, applications)) continue;
+            self.last_gsub_merged_feature_plan = index;
             self.hits += 1;
             return entry.plan;
         }
@@ -264,7 +277,11 @@ pub const LookupSelectionCache = struct {
             .applications = applications_copy,
             .plan = plan,
         });
-        return self.gsub_merged_feature_plan_entries.items[self.gsub_merged_feature_plan_entries.items.len - 1].plan;
+        self.last_gsub_merged_feature_plan =
+            self.gsub_merged_feature_plan_entries.items.len - 1;
+        return self.gsub_merged_feature_plan_entries.items[
+            self.last_gsub_merged_feature_plan.?
+        ].plan;
     }
 
     pub fn gposLookupAccelerators(self: *LookupSelectionCache, font: *const Font) ![]const gpos.LookupAccelerator {

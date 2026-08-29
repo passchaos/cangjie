@@ -87,6 +87,11 @@ x86-64, pinned to CPU 30 where the harness supports it:
 - `zig build font-fuzz -Doptimize=ReleaseSafe --fuzz=100K`: the selected
   parser/render target completed 269,563 executions, 2,467 unique runs, and
   4,331/32,005 instrumented edges (13.53%) without a reported failure.
+- A later 100K campaign exposed an undersized legacy `kern` subtable that
+  reached a reversed slice before its declared length was rejected. The parser
+  now validates the recovered format-0 length before slicing, has a focused
+  regression test, and the replay completed 206,868 executions with 931 unique
+  runs and 5,448/32,252 edges (16.89%) without another failure.
 - `font-fuzz-smoke` over six external HarfBuzz fuzz seeds covering CFF2+COLR
   v1, CBDT, sbix, SVG, variable CFF2, and malformed CBDT PNG completed 3,084
   deterministic ReleaseSafe cases without a failure.

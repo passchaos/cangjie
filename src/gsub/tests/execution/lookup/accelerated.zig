@@ -7,6 +7,8 @@ const class_context = @import("../../../../opentype/class_context.zig");
 const GlyphId = @import("../../../../glyph.zig").GlyphId;
 
 const Binding = struct {
+    pub const enable_fast_single = false;
+
     pub fn applyNested(
         _: accelerated.View,
         _: *std.ArrayList(GlyphId),
@@ -223,4 +225,52 @@ test "accelerated GSUB dispatch executes extension-wrapped class sidecars" {
             null,
         ),
     );
+}
+
+test "accelerated GSUB dispatch executes extension-wrapped ligatures" {
+    const allocator = std.testing.allocator;
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.appendSlice(allocator, &.{ 7, 8, 9 });
+
+    var first_digest = @import("../../../../glyph_digest.zig").GlyphDigest.empty();
+    first_digest.add(7);
+    const sets = [_]acceleration.model.LigatureSet{.{
+        .glyph = 7,
+        .definition_start = 0,
+        .definition_len = 1,
+    }};
+    const definitions = [_]acceleration.model.LigatureDefinition{.{
+        .ligature = 42,
+        .component_start = 0,
+        .component_count = 2,
+    }};
+    const sidecars = [_]acceleration.Lookup{.{
+        .lookup_offset = 12,
+        .lookup_type = 7,
+        .subtable_count = 1,
+        .extension_lookup_type = 4,
+        .ligature_subst = .{
+            .sets = &sets,
+            .definitions = &definitions,
+            .components = &.{8},
+            .first_component_digest = first_digest,
+        },
+    }};
+    try std.testing.expect(try accelerated.apply(
+        Binding,
+        .{
+            .data = &.{},
+            .offset = 0,
+            .length = 0,
+            .assume_validated = true,
+        },
+        12,
+        0,
+        &glyphs,
+        allocator,
+        .{ .lookup_accelerators = &sidecars },
+        null,
+    ));
+    try std.testing.expectEqualSlices(GlyphId, &.{ 42, 9 }, glyphs.items);
 }

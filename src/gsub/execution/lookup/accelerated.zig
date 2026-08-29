@@ -169,43 +169,13 @@ inline fn applyPreparedUnprofiled(
 ) Error!bool {
     switch (sidecar.lookup_type) {
         4 => {
-            if (sidecar.subtable_count != 1 or
-                sidecar.ligature_subst.sets.len == 0) return false;
-            if (run_digest_cache) |cache| {
-                const digest = cache.digestForRun(
-                    glyphs.items,
-                    sidecar.lookup_flag,
-                    run,
-                );
-                if (digest.isEmpty() or
-                    !sidecar.ligature_subst.first_component_digest
-                        .mayIntersect(digest)) return true;
-            }
-            if (sidecar.ligature_subst.prefilter_second) {
-                try direct_ligature.acceleratedPrefiltered(
-                    sidecar.ligature_subst,
-                    glyphs,
-                    allocator,
-                    sidecar.lookup_flag,
-                    run,
-                );
-            } else if (sidecar.ligature_subst.required_second_len != 0) {
-                try direct_ligature.acceleratedRequiredSecond(
-                    sidecar.ligature_subst,
-                    glyphs,
-                    allocator,
-                    sidecar.lookup_flag,
-                    run,
-                );
-            } else {
-                try direct_ligature.accelerated(
-                    sidecar.ligature_subst,
-                    glyphs,
-                    allocator,
-                    sidecar.lookup_flag,
-                    run,
-                );
-            }
+            if (!try applyLigature(
+                glyphs,
+                allocator,
+                run,
+                run_digest_cache,
+                sidecar,
+            )) return false;
         },
         5 => {
             if (sidecar.context_class_subtables.len != 0) {
@@ -271,6 +241,7 @@ inline fn applyPreparedUnprofiled(
             glyphs,
             allocator,
             run,
+            run_digest_cache,
             sidecar,
         )) return false,
         else => return false,
@@ -293,58 +264,13 @@ noinline fn applyPrepared(
 ) Error!bool {
     switch (sidecar.lookup_type) {
         4 => {
-            if (sidecar.subtable_count != 1 or
-                sidecar.ligature_subst.sets.len == 0)
-            {
-                return false;
-            }
-            if (run_digest_cache) |cache| {
-                const digest = cache.digestForRun(
-                    glyphs.items,
-                    sidecar.lookup_flag,
-                    run,
-                );
-                if (digest.isEmpty() or
-                    !sidecar.ligature_subst.first_component_digest
-                        .mayIntersect(digest))
-                {
-                    record(
-                        run,
-                        lookup_index,
-                        sidecar.lookup_type,
-                        lookup_start,
-                        glyph_count_before,
-                        glyphs.items.len,
-                    );
-                    return true;
-                }
-            }
-            if (sidecar.ligature_subst.prefilter_second) {
-                try direct_ligature.acceleratedPrefiltered(
-                    sidecar.ligature_subst,
-                    glyphs,
-                    allocator,
-                    sidecar.lookup_flag,
-                    run,
-                );
-            } else if (sidecar.ligature_subst.required_second_len != 0) {
-                @branchHint(.unlikely);
-                try direct_ligature.acceleratedRequiredSecond(
-                    sidecar.ligature_subst,
-                    glyphs,
-                    allocator,
-                    sidecar.lookup_flag,
-                    run,
-                );
-            } else {
-                try direct_ligature.accelerated(
-                    sidecar.ligature_subst,
-                    glyphs,
-                    allocator,
-                    sidecar.lookup_flag,
-                    run,
-                );
-            }
+            if (!try applyLigature(
+                glyphs,
+                allocator,
+                run,
+                run_digest_cache,
+                sidecar,
+            )) return false;
         },
         5 => {
             if (sidecar.context_class_subtables.len != 0) {
@@ -412,6 +338,7 @@ noinline fn applyPrepared(
             glyphs,
             allocator,
             run,
+            run_digest_cache,
             sidecar,
         )) return false,
         else => return false,
@@ -438,9 +365,17 @@ inline fn applyExtensionClasses(
     glyphs: *std.ArrayList(GlyphId),
     allocator: std.mem.Allocator,
     run: Options,
+    run_digest_cache: ?*RunDigestCache,
     sidecar: *const Lookup,
 ) Error!bool {
     switch (sidecar.extension_lookup_type orelse return false) {
+        4 => return applyLigature(
+            glyphs,
+            allocator,
+            run,
+            run_digest_cache,
+            sidecar,
+        ),
         5 => {
             if (sidecar.context_class_subtables.len == 0) return false;
             try contextual_context.acceleratedClassLookup(
@@ -468,6 +403,53 @@ inline fn applyExtensionClasses(
             );
         },
         else => return false,
+    }
+    return true;
+}
+
+inline fn applyLigature(
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    run: Options,
+    run_digest_cache: ?*RunDigestCache,
+    sidecar: *const Lookup,
+) Error!bool {
+    if (sidecar.subtable_count != 1 or
+        sidecar.ligature_subst.sets.len == 0) return false;
+    if (run_digest_cache) |cache| {
+        const digest = cache.digestForRun(
+            glyphs.items,
+            sidecar.lookup_flag,
+            run,
+        );
+        if (digest.isEmpty() or
+            !sidecar.ligature_subst.first_component_digest
+                .mayIntersect(digest)) return true;
+    }
+    if (sidecar.ligature_subst.prefilter_second) {
+        try direct_ligature.acceleratedPrefiltered(
+            sidecar.ligature_subst,
+            glyphs,
+            allocator,
+            sidecar.lookup_flag,
+            run,
+        );
+    } else if (sidecar.ligature_subst.required_second_len != 0) {
+        try direct_ligature.acceleratedRequiredSecond(
+            sidecar.ligature_subst,
+            glyphs,
+            allocator,
+            sidecar.lookup_flag,
+            run,
+        );
+    } else {
+        try direct_ligature.accelerated(
+            sidecar.ligature_subst,
+            glyphs,
+            allocator,
+            sidecar.lookup_flag,
+            run,
+        );
     }
     return true;
 }

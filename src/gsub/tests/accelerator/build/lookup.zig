@@ -137,6 +137,45 @@ test "extension lookup kind proof handles homogeneous mixed and recursive wrappe
     );
 }
 
+test "lookup builder prepares extension-wrapped ligature substitution" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 48;
+    writeU16(&bytes, 0, 7);
+    writeU16(&bytes, 4, 1);
+    writeU16(&bytes, 6, 8);
+    writeExtensionWrapper(&bytes, 8, 4, 8);
+    const ligature = 16;
+    writeU16(&bytes, ligature, 1);
+    writeU16(&bytes, ligature + 2, 8);
+    writeU16(&bytes, ligature + 4, 1);
+    writeU16(&bytes, ligature + 6, 14);
+    writeCoverage1(&bytes, ligature + 8, 7);
+    writeU16(&bytes, ligature + 14, 1);
+    writeU16(&bytes, ligature + 16, 4);
+    writeU16(&bytes, ligature + 18, 42);
+    writeU16(&bytes, ligature + 20, 2);
+    writeU16(&bytes, ligature + 22, 8);
+
+    const lookup = try build.lookup.one(.{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    }, 0, allocator);
+    defer {
+        const lookups = [_]@import(
+            "../../../accelerator/model.zig",
+        ).Lookup{lookup};
+        ownership.deinitContents(allocator, &lookups);
+    }
+    try std.testing.expectEqual(@as(?u16, 4), lookup.extension_lookup_type);
+    try std.testing.expectEqual(@as(usize, 1), lookup.ligature_subst.sets.len);
+    try std.testing.expectEqual(
+        @as(u16, 42),
+        lookup.ligature_subst.definitions[0].ligature,
+    );
+}
+
 fn buildTwoLookups(allocator: std.mem.Allocator) !void {
     var bytes = [_]u8{0} ** 80;
     writeU32(&bytes, 0, 0x00010000);

@@ -91,7 +91,7 @@ x86-64, pinned to CPU 30 where the harness supports it:
   v1, CBDT, sbix, SVG, variable CFF2, and malformed CBDT PNG completed 3,084
   deterministic ReleaseSafe cases without a failure.
 - `zig build freetype-matrix -Doptimize=ReleaseFast -- --iterations 100
-  --samples 5 --sizes 8,16,32,64,128 --cpu 30`: completed 40 symmetric
+  --samples 5 --sizes 8,16,32,64,128 --cpu 30 --fail-on-slower`: completed 40 symmetric
   A/B/B/A raster rows across Latin glyf, Latin CFF1, Arabic glyf, and CJK CFF.
   It found real remaining deficits before enlarging the bounded repeated-
   geometry cache: Arabic reused-outline raster ranged from `0.599x` to
@@ -132,6 +132,9 @@ x86-64, pinned to CPU 30 where the harness supports it:
   `1.189x--1.215x` and sbix at `1.118x--2.011x`; all 75 grayscale rows also
   remained ahead. This closes the maintained embedded-bitmap matrix, but not
   cold parsing or broader COLR/SVG and hinting coverage.
+  The lifecycle runner now enforces these performance wins instead of only
+  reporting the ratios; a smaller post-change strict smoke also passed all 40
+  rows at 8/16 ppem.
 - The matrix now also includes the common COLRv0 layer/CPAL boundary exposed by
   both libraries. Cangjie retains parse-proved compact COLR/CPAL layouts and
   provides allocation-free ordered layer iteration; low-level mutation-aware

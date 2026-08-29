@@ -68,6 +68,11 @@ def main() -> int:
     parser.add_argument("--cpu", type=int)
     parser.add_argument("--sizes", default="8,16,32,64,128")
     parser.add_argument("--minimum-target-size", type=int, default=32)
+    parser.add_argument(
+        "--fail-on-slower",
+        action="store_true",
+        help="fail when Cangjie is not faster in any measured lifecycle row",
+    )
     args = parser.parse_args()
     if args.iterations <= 0 or args.samples <= 0 or args.minimum_target_size <= 0:
         parser.error("iterations, samples, and minimum target size must be positive")
@@ -145,6 +150,11 @@ def main() -> int:
             f"cangjie={cangjie_ns:.3f}ns freetype={freetype_ns:.3f}ns "
             f"speedup={speedup:.3f}x"
         )
+        if args.fail_on_slower and speedup <= 1.0:
+            failures.append(
+                f"{case.name}/face-open: performance "
+                f"{cangjie_ns:.3f}ns/{freetype_ns:.3f}ns"
+            )
         row_count += 1
         for mode in ("raster", "raster-owning", "raster-reuse"):
             for size in sizes:
@@ -188,6 +198,11 @@ def main() -> int:
                     f"cangjie={cangjie_ns:.3f}ns freetype={freetype_ns:.3f}ns "
                     f"speedup={speedup:.3f}x"
                 )
+                if args.fail_on_slower and speedup <= 1.0:
+                    failures.append(
+                        f"{case.name}/{mode}/{size}: performance "
+                        f"{cangjie_ns:.3f}ns/{freetype_ns:.3f}ns"
+                    )
                 row_count += 1
     for case in bitmap_cases:
         for size in sizes:
@@ -236,6 +251,11 @@ def main() -> int:
                 f"cangjie={cangjie_ns:.3f}ns freetype={freetype_ns:.3f}ns "
                 f"speedup={speedup:.3f}x"
             )
+            if args.fail_on_slower and speedup <= 1.0:
+                failures.append(
+                    f"{case.name}/bitmap-render/{size}: performance "
+                    f"{cangjie_ns:.3f}ns/{freetype_ns:.3f}ns"
+                )
             row_count += 1
     if args.colr_v0 is not None:
         case = Case("colr-v0-layers", args.colr_v0, "U+0041")
@@ -278,6 +298,11 @@ def main() -> int:
             f"{case.name}: cangjie={cangjie_ns:.3f}ns "
             f"freetype={freetype_ns:.3f}ns speedup={speedup:.3f}x"
         )
+        if args.fail_on_slower and speedup <= 1.0:
+            failures.append(
+                f"{case.name}: performance "
+                f"{cangjie_ns:.3f}ns/{freetype_ns:.3f}ns"
+            )
         row_count += 1
     if failures:
         print("Cangjie/FreeType lifecycle matrix failed:", file=sys.stderr)

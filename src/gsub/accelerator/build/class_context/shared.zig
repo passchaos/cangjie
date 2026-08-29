@@ -19,6 +19,69 @@ pub const Source = enum {
 /// the generic parser rather than turning accelerator construction into an
 /// implicit allocation policy.
 pub const max_region_glyphs = model.max_context_region_glyphs;
+const max_dense_class_glyphs = 8192;
+
+/// Expand a modest ClassDef into direct glyph-indexed values. Large sparse
+/// definitions stay table-backed so adversarial fonts cannot multiply memory
+/// use by the number of contextual subtables.
+pub fn denseClassValues(
+    view: View,
+    class_def_offset: usize,
+    allocator: std.mem.Allocator,
+) (Error || std.mem.Allocator.Error)![]const u16 {
+    if (class_def_offset == table.class_def.empty_offset) return &.{};
+    const format = try view.readU16(class_def_offset);
+    const glyph_count: usize = switch (format) {
+        1 => @as(usize, try view.readU16(class_def_offset + 2)) +
+            @as(usize, try view.readU16(class_def_offset + 4)),
+        2 => count: {
+            const range_count = try view.readU16(class_def_offset + 2);
+            var max_end: usize = 0;
+            for (0..range_count) |range_index| {
+                max_end = @max(
+                    max_end,
+                    try view.readU16(
+                        class_def_offset + 4 + range_index * 6 + 2,
+                    ),
+                );
+            }
+            break :count if (range_count == 0) 0 else max_end + 1;
+        },
+        else => return &.{},
+    };
+    if (glyph_count == 0 or glyph_count > max_dense_class_glyphs) {
+        return &.{};
+    }
+    const values = try allocator.alloc(u16, glyph_count);
+    errdefer allocator.free(values);
+    @memset(values, 0);
+    switch (format) {
+        1 => {
+            const start = try view.readU16(class_def_offset + 2);
+            const count = try view.readU16(class_def_offset + 4);
+            for (0..count) |index| {
+                values[@as(usize, start) + index] = try view.readU16(
+                    class_def_offset + 6 + index * 2,
+                );
+            }
+        },
+        2 => {
+            const range_count = try view.readU16(class_def_offset + 2);
+            for (0..range_count) |range_index| {
+                const record = class_def_offset + 4 + range_index * 6;
+                const start = try view.readU16(record);
+                const end = try view.readU16(record + 2);
+                if (end < start) return error.BadGsub;
+                @memset(
+                    values[@as(usize, start) .. @as(usize, end) + 1],
+                    try view.readU16(record + 4),
+                );
+            }
+        },
+        else => unreachable,
+    }
+    return values;
+}
 
 pub fn resolveSubtable(
     view: View,

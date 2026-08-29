@@ -66,6 +66,7 @@ pub fn deinitContextClassSubtableContents(
     subtables: []const model.ContextClassSubtable,
 ) void {
     for (subtables) |subtable| {
+        allocator.free(subtable.class_values);
         allocator.free(subtable.rules);
         allocator.free(subtable.classes);
         allocator.free(subtable.groups);
@@ -85,6 +86,9 @@ pub fn deinitChainingClassSubtableContents(
     subtables: []const model.ChainingClassSubtable,
 ) void {
     for (subtables) |subtable| {
+        allocator.free(subtable.backtrack_class_values);
+        allocator.free(subtable.input_class_values);
+        allocator.free(subtable.lookahead_class_values);
         allocator.free(subtable.rules);
         allocator.free(subtable.classes);
         allocator.free(subtable.groups);

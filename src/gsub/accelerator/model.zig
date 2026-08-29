@@ -151,6 +151,7 @@ pub const ContextClassSubtable = struct {
     subtable_offset: usize = 0,
     first_index_start: usize = 0,
     class_def: usize = 0,
+    class_values: []const u16 = &.{},
     /// Rules are grouped by first class, then ordered by sequence hash. This
     /// lets large class sets probe exact candidate ranges without a linear
     /// scan while the rule's authored `order` still resolves overlaps.
@@ -200,6 +201,9 @@ pub const ChainingClassSubtable = struct {
     backtrack_class_def: usize = 0,
     input_class_def: usize = 0,
     lookahead_class_def: usize = 0,
+    backtrack_class_values: []const u16 = &.{},
+    input_class_values: []const u16 = &.{},
+    lookahead_class_values: []const u16 = &.{},
     rules: []const class_context.Rule = &.{},
     classes: []const u16 = &.{},
     groups: []const class_context.RuleGroup = &.{},

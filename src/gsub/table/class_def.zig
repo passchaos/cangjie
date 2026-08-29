@@ -94,6 +94,18 @@ pub fn value(
     }
 }
 
+pub inline fn valueWithDense(
+    table: View,
+    class_def_offset: usize,
+    dense: []const u16,
+    glyph: GlyphId,
+) Error!u16 {
+    if (dense.len != 0) {
+        return if (glyph < dense.len) dense[glyph] else 0;
+    }
+    return value(table, class_def_offset, glyph);
+}
+
 /// Lookup after `validate` has already proved range ordering.
 pub fn valueAfterProof(
     table: View,

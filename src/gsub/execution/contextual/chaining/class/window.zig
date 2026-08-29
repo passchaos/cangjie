@@ -17,6 +17,12 @@ pub const ClassDefs = struct {
     lookahead: usize,
 };
 
+pub const ClassValues = struct {
+    backtrack: []const u16 = &.{},
+    input: []const u16 = &.{},
+    lookahead: []const u16 = &.{},
+};
+
 /// Rules in one class set may have different region lengths. Cache discovered
 /// physical indexes and class values incrementally so a longer later rule
 /// cannot make an earlier short rule fail at the end of a run or syllable.
@@ -24,6 +30,7 @@ pub const Window = struct {
     view: View,
     glyphs: []const GlyphId,
     class_defs: ClassDefs,
+    class_values: ClassValues,
     regions: regions_mod.Regions,
 
     input_classes: [max_region_glyphs]u16 = undefined,
@@ -44,6 +51,7 @@ pub const Window = struct {
         glyphs: []const GlyphId,
         position: usize,
         class_defs: ClassDefs,
+        class_values: ClassValues,
         lookup_flag: u16,
         run: Options,
     ) Window {
@@ -51,6 +59,7 @@ pub const Window = struct {
             .view = view,
             .glyphs = glyphs,
             .class_defs = class_defs,
+            .class_values = class_values,
             .regions = .init(glyphs, position, lookup_flag, run),
         };
     }
@@ -81,9 +90,10 @@ pub const Window = struct {
         const indices = (try self.inputIndices(index + 1)) orelse return null;
         while (self.input_class_len <= index) {
             const decoded_index = self.input_class_len;
-            self.input_classes[decoded_index] = try table.class_def.value(
+            self.input_classes[decoded_index] = try table.class_def.valueWithDense(
                 self.view,
                 self.class_defs.input,
+                self.class_values.input,
                 self.glyphs[indices[decoded_index]],
             );
             self.input_class_len += 1;
@@ -96,9 +106,10 @@ pub const Window = struct {
             (try self.backtrackIndices(index + 1)) orelse return null;
         while (self.backtrack_class_len <= index) {
             const decoded_index = self.backtrack_class_len;
-            self.backtrack_classes[decoded_index] = try table.class_def.value(
+            self.backtrack_classes[decoded_index] = try table.class_def.valueWithDense(
                 self.view,
                 self.class_defs.backtrack,
+                self.class_values.backtrack,
                 self.glyphs[indices[decoded_index]],
             );
             self.backtrack_class_len += 1;
@@ -122,9 +133,10 @@ pub const Window = struct {
         }
         while (self.lookahead_class_len <= index) {
             const decoded_index = self.lookahead_class_len;
-            self.lookahead_classes[decoded_index] = try table.class_def.value(
+            self.lookahead_classes[decoded_index] = try table.class_def.valueWithDense(
                 self.view,
                 self.class_defs.lookahead,
+                self.class_values.lookahead,
                 self.glyphs[indices[decoded_index]],
             );
             self.lookahead_class_len += 1;

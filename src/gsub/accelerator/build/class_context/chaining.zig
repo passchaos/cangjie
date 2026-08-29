@@ -192,6 +192,24 @@ fn buildSubtable(
     const classes_slice = try classes.toOwnedSlice(allocator);
     errdefer allocator.free(classes_slice);
     const groups_slice = try groups.toOwnedSlice(allocator);
+    errdefer allocator.free(groups_slice);
+    const backtrack_class_values = try shared.denseClassValues(
+        view,
+        backtrack_class_def,
+        allocator,
+    );
+    errdefer allocator.free(backtrack_class_values);
+    const input_class_values = try shared.denseClassValues(
+        view,
+        input_class_def,
+        allocator,
+    );
+    errdefer allocator.free(input_class_values);
+    const lookahead_class_values = try shared.denseClassValues(
+        view,
+        lookahead_class_def,
+        allocator,
+    );
     success = true;
 
     return .{
@@ -199,6 +217,9 @@ fn buildSubtable(
         .backtrack_class_def = backtrack_class_def,
         .input_class_def = input_class_def,
         .lookahead_class_def = lookahead_class_def,
+        .backtrack_class_values = backtrack_class_values,
+        .input_class_values = input_class_values,
+        .lookahead_class_values = lookahead_class_values,
         .rules = rules_slice,
         .classes = classes_slice,
         .groups = groups_slice,

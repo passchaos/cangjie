@@ -153,12 +153,19 @@ fn buildGlyphRules(
     const classes_slice = try classes.toOwnedSlice(allocator);
     errdefer allocator.free(classes_slice);
     const groups_slice = try groups.toOwnedSlice(allocator);
+    errdefer allocator.free(groups_slice);
+    const class_values = try shared.denseClassValues(
+        view,
+        table.class_def.empty_offset,
+        allocator,
+    );
     success = true;
 
     return .{
         .subtable_offset = subtable_offset,
         .first_index_start = first_index_start,
         .class_def = table.class_def.empty_offset,
+        .class_values = class_values,
         .rules_hash_sorted = true,
         .rules = rules_slice,
         .classes = classes_slice,
@@ -251,12 +258,19 @@ fn buildClassRules(
     const classes_slice = try classes.toOwnedSlice(allocator);
     errdefer allocator.free(classes_slice);
     const groups_slice = try groups.toOwnedSlice(allocator);
+    errdefer allocator.free(groups_slice);
+    const class_values = try shared.denseClassValues(
+        view,
+        class_def,
+        allocator,
+    );
     success = true;
 
     return .{
         .subtable_offset = subtable_offset,
         .first_index_start = first_index_start,
         .class_def = class_def,
+        .class_values = class_values,
         .rules_hash_sorted = true,
         .rules = rules_slice,
         .classes = classes_slice,

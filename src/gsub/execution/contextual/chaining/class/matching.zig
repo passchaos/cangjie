@@ -81,6 +81,11 @@ pub fn acceleratedGroup(
             .input = parsed.input_class_def,
             .lookahead = parsed.lookahead_class_def,
         },
+        .{
+            .backtrack = parsed.backtrack_class_values,
+            .input = parsed.input_class_values,
+            .lookahead = parsed.lookahead_class_values,
+        },
         lookup_flag,
         run,
     );
@@ -226,9 +231,10 @@ fn acceleratedAdjacentGroup(
                 matches = false;
                 break;
             }
-            const actual = try table.class_def.value(
+            const actual = try table.class_def.valueWithDense(
                 view,
                 parsed.backtrack_class_def,
+                parsed.backtrack_class_values,
                 glyphs[glyph_index],
             );
             if (parsed.classes[expected_index] != actual) {
@@ -248,9 +254,10 @@ fn acceleratedAdjacentGroup(
                 matches = false;
                 break;
             }
-            const actual = try table.class_def.value(
+            const actual = try table.class_def.valueWithDense(
                 view,
                 parsed.input_class_def,
+                parsed.input_class_values,
                 glyphs[glyph_index],
             );
             if (parsed.classes[expected_index] != actual) {
@@ -271,9 +278,10 @@ fn acceleratedAdjacentGroup(
                 matches = false;
                 break;
             }
-            const actual = try table.class_def.value(
+            const actual = try table.class_def.valueWithDense(
                 view,
                 parsed.lookahead_class_def,
+                parsed.lookahead_class_values,
                 glyphs[glyph_index],
             );
             if (parsed.classes[expected_index] != actual) {
@@ -411,6 +419,7 @@ pub fn directRuleSet(
         glyphs,
         position,
         class_defs,
+        .{},
         lookup_flag,
         run,
     );

@@ -84,9 +84,10 @@ pub fn applyGroup(
             if (subtable.class_def == table.class_def.empty_offset)
                 glyphs.items[input_indices[input_index]]
             else
-                try table.class_def.value(
+                try table.class_def.valueWithDense(
                     view,
                     subtable.class_def,
+                    subtable.class_values,
                     glyphs.items[input_indices[input_index]],
                 );
         // Many production format-2 class sets contain hundreds of rules of

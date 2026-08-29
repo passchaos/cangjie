@@ -312,6 +312,7 @@ fn BoundsExecutor(comptime Context: type) type {
         x: f32 = 0,
         y: f32 = 0,
         contour_open: bool = false,
+        contour_has_geometry: bool = false,
         contour_start: glyph_mod.Point = .{ .x = 0, .y = 0 },
         vs_index: u16 = 0,
         allocator: ?std.mem.Allocator = null,
@@ -717,7 +718,7 @@ fn BoundsExecutor(comptime Context: type) type {
         }
 
         fn lineBy(self: *Self, dx: f32, dy: f32) Error!void {
-            self.includePoint(self.x, self.y);
+            self.includeContourStartIfNeeded();
             self.x += dx;
             self.y += dy;
             self.includePoint(self.x, self.y);
@@ -736,7 +737,7 @@ fn BoundsExecutor(comptime Context: type) type {
             const c1_y = c0_y + dy2;
             const p3_x = c1_x + dx3;
             const p3_y = c1_y + dy3;
-            self.includePoint(p0_x, p0_y);
+            self.includeContourStartIfNeeded();
             self.includeCubicExtrema(p0_x, p0_y, c0_x, c0_y, c1_x, c1_y, p3_x, p3_y);
             self.includePoint(p3_x, p3_y);
             self.x = p3_x;
@@ -857,6 +858,7 @@ fn BoundsExecutor(comptime Context: type) type {
         fn moveTo(self: *Self) Error!void {
             self.bounds_info.move_count += 1;
             self.contour_open = true;
+            self.contour_has_geometry = false;
             self.contour_start = .{ .x = self.x, .y = self.y };
             if (self.outline) |outline| {
                 if (outline.commands.capacity == 0) {
@@ -913,6 +915,13 @@ fn BoundsExecutor(comptime Context: type) type {
                 }
             }
             self.contour_open = false;
+            self.contour_has_geometry = false;
+        }
+
+        inline fn includeContourStartIfNeeded(self: *Self) void {
+            if (self.contour_has_geometry) return;
+            self.includePoint(self.x, self.y);
+            self.contour_has_geometry = true;
         }
 
         fn push(self: *Self, value: Value) Error!void {

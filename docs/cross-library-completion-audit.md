@@ -43,12 +43,19 @@ x86-64, pinned to CPU 30 where the harness supports it:
   buffer rather than replacing its allocation before publishing the coordinate
   cache key. A post-change strict `100000 * 7` run kept all 25 maintained rows
   green; CFF2 default/`+1`/`-1` reuse measured `13.835x`/`13.552x`/`13.531x`.
-- The optional Fontations `--extended` outline corpus now includes five
-  semantically identical glyphs from the larger two-axis
-  `AdobeVFPrototype.otf`, in both owning and caller-storage modes. A fixed-CPU-
-  30 `1000 * 7` run led all ten added CFF2 rows (`1.065x--1127x`). Other
-  glyphs in that upstream test font expose real CFF2 command-stream differences
-  and remain open rather than being admitted to the performance claim.
+- The optional Fontations `--extended` outline corpus now includes all ten
+  selected semantically identical glyphs from the larger two-axis
+  `AdobeVFPrototype.otf`, in both owning and caller-storage modes. The original
+  fixed-CPU-30 `1000 * 7` run led all ten initial CFF2 rows
+  (`1.065x--1127x`). Cangjie's Type2 path builder now canonicalizes a final
+  explicit line back to the contour origin into the following close operation,
+  matching Skrifa and admitting glyphs 20, 64, 128, and 192 to the matrix.
+  Raising the CFF2 operand stack to the format's 513-entry limit also admits
+  glyph 2's large blend program. A `1000 * 7` semantic/performance run of the
+  resulting 125-row extended matrix confirmed every checksum. All CFF2 reuse
+  rows led; owning glyphs 20 and 128 remained slower, alongside existing glyf
+  owning deficits, so this extended corpus is not yet a strict performance
+  pass.
 - `zig build parley-matrix -Doptimize=ReleaseFast -- --iterations 1000 --samples
   7 --cpu 30 --fail-on-slower`: the 26-row matrix passed before custom
   placement was added. The current 32-row semantic matrix passes, including

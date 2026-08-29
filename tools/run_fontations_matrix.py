@@ -254,10 +254,11 @@ def main() -> int:
             OutlineCorpus(
                 "adobe-cff2", args.cff2_extended,
                 # These glyphs have byte-identical command streams in both
-                # decoders. Other glyphs in this upstream test font currently
-                # expose distinct CFF2 edge-case semantics and stay outside the
-                # strict performance corpus until that differential is closed.
-                (1, 3, 10, 36, 96),
+                # decoders. The explicit-closing-line cases are retained here
+                # because they previously exposed a command-stream mismatch.
+                # The CFF2 stack now uses the format's 513-entry limit, so glyph
+                # 2's large blend program is covered alongside closing-line cases.
+                (1, 2, 3, 10, 20, 36, 64, 96, 128, 192),
             ),
         )
         for corpus in corpora:

@@ -4,7 +4,9 @@ const type2_hint = @import("../../font/hinting/type2/root.zig");
 
 pub const Error = error{BadSfnt} || std.mem.Allocator.Error;
 
-const max_stack = 96;
+// CFF2 raises the Type 2 operand-stack limit from CFF1's 48 entries to 513.
+// Real variable fonts use the extra capacity to stage large blend operands.
+const max_stack = 513;
 const max_nesting_depth = 16;
 const max_operations = 1_000_000;
 // Most text glyphs emit fewer commands than this. Reserving on the first real
@@ -115,22 +117,16 @@ const Termination = enum {
 
 const Value = struct {
     number: f32,
-    integer_value: i32 = 0,
-    integer: bool,
 
     fn int(value: i32) Value {
         return .{
             .number = @as(f32, @floatFromInt(value)),
-            .integer_value = value,
-            .integer = true,
         };
     }
 
     fn fixed(raw: i32) Value {
         return .{
             .number = @as(f32, @floatFromInt(raw)) / 65536.0,
-            .integer_value = raw,
-            .integer = false,
         };
     }
 };
@@ -279,8 +275,15 @@ fn Scanner(comptime Context: type) type {
             if (self.stack_len == 0) return error.BadSfnt;
             self.stack_len -= 1;
             const value = self.stack[self.stack_len];
-            if (!value.integer) return error.BadSfnt;
-            return value.integer_value;
+            if (!std.math.isFinite(value.number) or
+                value.number != @trunc(value.number)) return error.BadSfnt;
+            const widened: f64 = value.number;
+            if (widened < @as(f64, @floatFromInt(std.math.minInt(i32))) or
+                widened > @as(f64, @floatFromInt(std.math.maxInt(i32))))
+            {
+                return error.BadSfnt;
+            }
+            return @intFromFloat(widened);
         }
 
         fn applyDefaultBlend(self: *Self) Error!void {
@@ -309,6 +312,7 @@ fn BoundsExecutor(comptime Context: type) type {
         x: f32 = 0,
         y: f32 = 0,
         contour_open: bool = false,
+        contour_start: glyph_mod.Point = .{ .x = 0, .y = 0 },
         vs_index: u16 = 0,
         allocator: ?std.mem.Allocator = null,
         outline: ?*glyph_mod.GlyphOutline = null,
@@ -709,7 +713,7 @@ fn BoundsExecutor(comptime Context: type) type {
             if (rhs == 0) return error.BadSfnt;
             const lhs = self.stack[self.stack_len - 2].number;
             self.stack_len -= 2;
-            try self.push(.{ .number = lhs / rhs, .integer = false });
+            try self.push(.{ .number = lhs / rhs });
         }
 
         fn lineBy(self: *Self, dx: f32, dy: f32) Error!void {
@@ -843,6 +847,7 @@ fn BoundsExecutor(comptime Context: type) type {
         fn moveTo(self: *Self) Error!void {
             self.bounds_info.move_count += 1;
             self.contour_open = true;
+            self.contour_start = .{ .x = self.x, .y = self.y };
             if (self.outline) |outline| {
                 if (outline.commands.capacity == 0) {
                     try outline.commands.ensureTotalCapacity(
@@ -865,6 +870,35 @@ fn BoundsExecutor(comptime Context: type) type {
         fn closeOpenContour(self: *Self) Error!void {
             if (self.contour_open) {
                 if (self.outline) |outline| {
+                    // Type2 `closepath` supplies the final edge back to the
+                    // contour origin. FreeType and Skrifa therefore suppress
+                    // an immediately preceding explicit line to that same
+                    // point. Besides producing their canonical command
+                    // stream, doing this avoids presenting two coincident
+                    // closing edges to downstream rasterizers.
+                    if (outline.commands.items.len != 0) {
+                        const last_index = outline.commands.items.len - 1;
+                        switch (outline.commands.items[last_index]) {
+                            .line_to => |point| if (std.meta.eql(
+                                point,
+                                self.contour_start,
+                            )) {
+                                outline.commands.shrinkRetainingCapacity(
+                                    last_index,
+                                );
+                                if (self.hints) |hints| {
+                                    for (hints.masks.items) |*mask| {
+                                        if (mask.path_command_index >
+                                            last_index)
+                                        {
+                                            mask.path_command_index -= 1;
+                                        }
+                                    }
+                                }
+                            },
+                            else => {},
+                        }
+                    }
                     try outline.commands.append(self.allocator.?, .close);
                 }
             }
@@ -881,8 +915,15 @@ fn BoundsExecutor(comptime Context: type) type {
             if (self.stack_len == 0) return error.BadSfnt;
             self.stack_len -= 1;
             const value = self.stack[self.stack_len];
-            if (!value.integer) return error.BadSfnt;
-            return value.integer_value;
+            if (!std.math.isFinite(value.number) or
+                value.number != @trunc(value.number)) return error.BadSfnt;
+            const widened: f64 = value.number;
+            if (widened < @as(f64, @floatFromInt(std.math.minInt(i32))) or
+                widened > @as(f64, @floatFromInt(std.math.maxInt(i32))))
+            {
+                return error.BadSfnt;
+            }
+            return @intFromFloat(widened);
         }
 
         fn applyDefaultBlend(self: *Self) Error!void {
@@ -950,7 +991,7 @@ fn applyBlend(comptime Context: type, context: *Context, stack: *[max_stack]Valu
             const delta = stack[start + target_count + target_index * region_count + region_index].number;
             value += delta * try contextBlendScalar(Context, context, vs_index, region_index);
         }
-        stack[start + target_index] = .{ .number = value, .integer = false };
+        stack[start + target_index] = .{ .number = value };
     }
     stack_len.* = start + target_count;
 }
@@ -1110,7 +1151,7 @@ test "CFF2 blend uses target-major region deltas" {
     var stack: [max_stack]Value = undefined;
     // Defaults 10,20; target 0 deltas 4,-8; target 1 deltas -60,2.
     const values = [_]f32{ 10, 20, 4, -8, -60, 2 };
-    for (values, 0..) |value, index| stack[index] = .{ .number = value, .integer = false };
+    for (values, 0..) |value, index| stack[index] = .{ .number = value };
     var len: usize = values.len;
     try applyBlend(Context, &context, &stack, &len, 2, 2, 0);
     try std.testing.expectEqual(@as(usize, 2), len);
@@ -1141,6 +1182,59 @@ test "CFF2 charstring bounds tracks moves and lines" {
     try std.testing.expectEqual(@as(usize, 2), parsed.line_count);
     try std.testing.expectEqual(@as(usize, 0), parsed.curve_count);
     try std.testing.expect(parsed.scan.has_endchar);
+}
+
+test "CFF2 outline suppresses an explicit line back to contour start" {
+    const Context = struct {
+        pub fn localSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+
+        pub fn globalSubr(_: *@This(), _: i32) Error!?[]const u8 {
+            return null;
+        }
+    };
+
+    var context = Context{};
+    var outline = glyph_mod.GlyphOutline.init(std.testing.allocator, 1, .{
+        .x_min = 0,
+        .y_min = 0,
+        .x_max = 100,
+        .y_max = 100,
+    }, 100, 0);
+    defer outline.deinit();
+
+    // rmoveto(10,20); rlineto(30,0,-30,0); endchar. The second line
+    // explicitly returns to the move point and is represented by close.
+    const parsed = try appendOutline(
+        Context,
+        &context,
+        std.testing.allocator,
+        &.{ 149, 159, 21, 169, 139, 109, 139, 5, 14 },
+        &outline,
+    );
+    // The execution summary counts the encoded line operation even though the
+    // canonical path stream lets close provide that final geometric edge.
+    try std.testing.expectEqual(@as(usize, 2), parsed.line_count);
+    try std.testing.expectEqual(@as(usize, 3), outline.commands.items.len);
+    try std.testing.expectEqual(
+        glyph_mod.Point{ .x = 10, .y = 20 },
+        switch (outline.commands.items[0]) {
+            .move_to => |point| point,
+            else => return error.TestUnexpectedResult,
+        },
+    );
+    try std.testing.expectEqual(
+        glyph_mod.Point{ .x = 40, .y = 20 },
+        switch (outline.commands.items[1]) {
+            .line_to => |point| point,
+            else => return error.TestUnexpectedResult,
+        },
+    );
+    switch (outline.commands.items[2]) {
+        .close => {},
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "CFF2 charstring bounds solves cubic extrema" {

@@ -39,6 +39,10 @@ x86-64, pinned to CPU 30 where the harness supports it:
   and owning output at normalized `wght` endpoints `+1`/`-1`
   (`1.317x`/`1.336x`). Caller-owned reuse at those endpoints leads by
   `13.865x`/`13.763x`.
+- Variable outline reuse now decodes directly into the caller-owned command
+  buffer rather than replacing its allocation before publishing the coordinate
+  cache key. A post-change strict `100000 * 7` run kept all 25 maintained rows
+  green; CFF2 default/`+1`/`-1` reuse measured `13.835x`/`13.552x`/`13.531x`.
 - The optional Fontations `--extended` outline corpus now includes five
   semantically identical glyphs from the larger two-axis
   `AdobeVFPrototype.otf`, in both owning and caller-storage modes. A fixed-CPU-

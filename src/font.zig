@@ -6685,25 +6685,145 @@ pub const Font = struct {
         }
 
         // Coordinate values belong to the cache key and therefore must be
-        // copied into caller-owned storage. Decode before replacing the old
-        // command allocation so an allocation failure leaves no borrowed
-        // coordinate slice in the buffer.
+        // copied into caller-owned storage. Decode directly into the reusable
+        // outline so variable CFF2/glyf callers retain command capacity just
+        // like the default-location path.
         glyph_mod.resetOutlineBuffer(buffer);
         errdefer glyph_mod.resetOutlineBuffer(buffer);
-        var decoded = try self.glyphOutlineForRasterAtCoords(
-            buffer.outline_storage.allocator,
+        try self.fillGlyphOutlineAtCoordsFromParsedTables(
+            &buffer.outline_storage,
+            &buffer.compound_points,
             glyph_id,
             normalized_coords,
         );
-        buffer.outline_storage.commands.deinit(buffer.outline_storage.allocator);
-        buffer.outline_storage = decoded;
-        decoded.commands = .empty;
-        return try glyph_mod.publishOutlineBufferAt(
+        return try glyph_mod.publishOutlineBufferAtDecoded(
             buffer,
             self,
             glyph_id,
             normalized_coords,
         );
+    }
+
+    fn fillGlyphOutlineAtCoordsFromParsedTables(
+        self: *const Font,
+        outline: *glyph_mod.GlyphOutline,
+        compound_points: *std.ArrayList(glyph_mod.Point),
+        glyph_id: glyph_mod.GlyphId,
+        normalized_coords: []const f32,
+    ) FontError!void {
+        if (glyph_id >= self.glyph_count) return error.InvalidGlyph;
+        if (self.varc) |varc| {
+            if (try varc_mod.glyphCoverageIndex(
+                self.data,
+                varc.offset,
+                varc.length,
+                self.glyph_count,
+                glyph_id,
+            ) != null) {
+                var decoded = try self.varcGlyphOutlineAtCoords(
+                    outline.allocator,
+                    glyph_id,
+                    normalized_coords,
+                    .parsed,
+                );
+                outline.commands.deinit(outline.allocator);
+                outline.* = decoded;
+                decoded.commands = .empty;
+                return;
+            }
+        }
+        if (self.cff2) |cff2| {
+            const metrics = try self.horizontalMetricsAtCoordsForReadMode(
+                glyph_id,
+                normalized_coords,
+                .parsed,
+            );
+            glyph_mod.configureOutline(
+                outline,
+                glyph_id,
+                .{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 },
+                metrics.advance_width,
+                metrics.left_side_bearing,
+            );
+            const bounds_info = (try cff2_mod.appendGlyphOutlineAtCoordsPrepared(
+                outline.allocator,
+                self.data[cff2.offset .. cff2.offset + cff2.length],
+                self.cff2_parsed orelse return error.BadSfnt,
+                glyph_id,
+                self.glyph_count,
+                normalized_coords,
+                outline,
+            )) orelse return error.UnsupportedGlyph;
+            outline.bounds = cff_outline.boundsFromCff2(bounds_info);
+            return;
+        }
+        if (self.format == .truetype and self.gvar != null) {
+            const data = try self.glyphData(glyph_id);
+            const metrics = try self.horizontalMetricsAtCoordsForReadMode(
+                glyph_id,
+                normalized_coords,
+                .parsed,
+            );
+            const default_bounds = try self.glyphBoundsFromParsedTables(glyph_id);
+            glyph_mod.configureOutline(
+                outline,
+                glyph_id,
+                default_bounds,
+                metrics.advance_width,
+                metrics.left_side_bearing,
+            );
+            if (data.len == 0) return;
+            const contour_count = try bin.readI16At(data, 0);
+            if (contour_count >= 0) {
+                const variation = try self.simpleGlyphVariationContext(
+                    glyph_id,
+                    normalized_coords,
+                    .parsed,
+                );
+                if (try truetype_outline.simple.append(
+                    outline,
+                    compound_points,
+                    data,
+                    @intCast(contour_count),
+                    Transform.identity(),
+                    variation,
+                )) |phantom| {
+                    truetype_outline.variation.applyMetricDeltas(
+                        outline,
+                        default_bounds,
+                        metrics,
+                        phantom,
+                    );
+                }
+            } else {
+                try self.appendCompoundGlyphAtCoords(
+                    outline,
+                    compound_points,
+                    data,
+                    Transform.identity(),
+                    1,
+                    glyph_id,
+                    normalized_coords,
+                    .parsed,
+                );
+                outline.bounds = glyph_mod.boundsForCommands(outline.commands.items);
+                if (try self.gvarPhantomPointDeltasAtCoordsPrepared(
+                    outline.allocator,
+                    glyph_id,
+                    normalized_coords,
+                    .parsed,
+                )) |phantom| {
+                    truetype_outline.variation.applyMetricDeltas(
+                        outline,
+                        default_bounds,
+                        metrics,
+                        phantom,
+                    );
+                }
+            }
+            return;
+        }
+        return error.UnsupportedGlyph;
     }
 
     fn glyphOutlineForReadMode(self: *const Font, allocator: std.mem.Allocator, glyph_id: glyph_mod.GlyphId, read_mode: OutlineReadMode) FontError!glyph_mod.GlyphOutline {

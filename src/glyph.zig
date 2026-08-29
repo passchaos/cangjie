@@ -163,6 +163,25 @@ pub fn cachedOutlineAt(
     return null;
 }
 
+/// Publish the cache key after decoding into already-configured storage.
+/// The caller must have reset the buffer and produced a complete valid outline
+/// before publication. Keeping the coordinate copy separate lets variable
+/// decoders reuse the command allocation instead of replacing the owner.
+pub fn publishOutlineBufferAtDecoded(
+    buffer: *GlyphOutlineBuffer,
+    source: *const anyopaque,
+    glyph_id: GlyphId,
+    normalized_coords: []const f32,
+) std.mem.Allocator.Error!*const GlyphOutline {
+    try buffer.cached_normalized_coords.appendSlice(
+        buffer.outline_storage.allocator,
+        normalized_coords,
+    );
+    buffer.cached_source = source;
+    buffer.cached_glyph_id = glyph_id;
+    return buffer.current();
+}
+
 pub fn publishOutlineBuffer(
     buffer: *GlyphOutlineBuffer,
     source: *const anyopaque,

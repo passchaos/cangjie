@@ -140,7 +140,7 @@ fn buildGlyphRules(
     }
     if (rules.items.len == 0) return null;
 
-    try shared.finishRuleGroups(&rules, &groups, allocator);
+    try shared.finishHashRuleGroups(&rules, &groups, allocator);
     const first_index_start = try first_index.appendGlyphIndex(
         view,
         coverage_offset,
@@ -159,6 +159,7 @@ fn buildGlyphRules(
         .subtable_offset = subtable_offset,
         .first_index_start = first_index_start,
         .class_def = table.class_def.empty_offset,
+        .rules_hash_sorted = true,
         .rules = rules_slice,
         .classes = classes_slice,
         .groups = groups_slice,
@@ -236,7 +237,7 @@ fn buildClassRules(
     }
     if (rules.items.len == 0) return null;
 
-    try shared.finishRuleGroups(&rules, &groups, allocator);
+    try shared.finishHashRuleGroups(&rules, &groups, allocator);
     const first_index_start = try first_index.appendClassIndex(
         view,
         coverage_offset,
@@ -256,6 +257,7 @@ fn buildClassRules(
         .subtable_offset = subtable_offset,
         .first_index_start = first_index_start,
         .class_def = class_def,
+        .rules_hash_sorted = true,
         .rules = rules_slice,
         .classes = classes_slice,
         .groups = groups_slice,

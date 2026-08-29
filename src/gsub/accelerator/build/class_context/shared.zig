@@ -54,11 +54,38 @@ pub fn finishRuleGroups(
     groups: *std.ArrayList(opentype_class_context.RuleGroup),
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!void {
+    return finishRuleGroupsWithOrder(
+        rules,
+        groups,
+        allocator,
+        opentype_class_context.ruleLessThan,
+    );
+}
+
+pub fn finishHashRuleGroups(
+    rules: *std.ArrayList(opentype_class_context.Rule),
+    groups: *std.ArrayList(opentype_class_context.RuleGroup),
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!void {
+    return finishRuleGroupsWithOrder(
+        rules,
+        groups,
+        allocator,
+        opentype_class_context.ruleHashLessThan,
+    );
+}
+
+fn finishRuleGroupsWithOrder(
+    rules: *std.ArrayList(opentype_class_context.Rule),
+    groups: *std.ArrayList(opentype_class_context.RuleGroup),
+    allocator: std.mem.Allocator,
+    comptime less_than: fn (void, opentype_class_context.Rule, opentype_class_context.Rule) bool,
+) std.mem.Allocator.Error!void {
     std.sort.heap(
         opentype_class_context.Rule,
         rules.items,
         {},
-        opentype_class_context.ruleLessThan,
+        less_than,
     );
     var group_start: usize = 0;
     while (group_start < rules.items.len) {

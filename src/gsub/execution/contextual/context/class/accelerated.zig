@@ -99,6 +99,47 @@ pub fn applyGroup(
     }
 
     const rules = subtable.rules[group.start .. group.start + group.len];
+    if (subtable.rules_hash_sorted) {
+        var matched_rule: ?*const class_context.Rule = null;
+        for (0..input_len) |extra_count| {
+            const target_hash = input_hashes[extra_count];
+            var low: usize = 0;
+            var high: usize = rules.len;
+            while (low < high) {
+                const middle = low + (high - low) / 2;
+                if (rules[middle].hash < target_hash) {
+                    low = middle + 1;
+                } else {
+                    high = middle;
+                }
+            }
+            var index = low;
+            while (index < rules.len and rules[index].hash == target_hash) : (index += 1) {
+                const rule = &rules[index];
+                if (rule.input_count != extra_count + 1) continue;
+                const expected = subtable.classes[rule.classes_start .. rule.classes_start + extra_count];
+                if (!std.mem.eql(
+                    u16,
+                    expected,
+                    input_classes[0..extra_count],
+                )) continue;
+                if (matched_rule == null or rule.order < matched_rule.?.order) {
+                    matched_rule = rule;
+                }
+            }
+        }
+        const rule = matched_rule orelse return .{};
+        return applyMatchedRule(
+            Executor,
+            view,
+            rule,
+            input_indices,
+            glyphs,
+            position,
+            allocator,
+            run,
+        );
+    }
     for (rules) |rule| {
         if (rule.input_count == 0 or rule.input_count > input_len) continue;
         const extra_count = @as(usize, rule.input_count) - 1;
@@ -110,30 +151,51 @@ pub fn applyGroup(
             continue;
         }
 
-        const matched_indices = input_indices[0..rule.input_count];
-        try safety.markInput(allocator, run, matched_indices);
-        const glyph_count_before = glyphs.items.len;
-        try records.apply(
+        return applyMatchedRule(
             Executor,
             view,
+            &rule,
+            input_indices,
             glyphs,
-            rule.records_offset,
-            rule.subst_count,
-            matched_indices,
+            position,
             allocator,
             run,
         );
-        const original_next =
-            input_indices[rule.input_count - 1] + 1;
-        return .{
-            .matched = true,
-            .next_pos = model.nextPositionAfterMutation(
-                original_next,
-                position,
-                glyph_count_before,
-                glyphs.items.len,
-            ),
-        };
     }
     return .{};
+}
+
+fn applyMatchedRule(
+    comptime Executor: type,
+    view: View,
+    rule: *const class_context.Rule,
+    input_indices: []const usize,
+    glyphs: *std.ArrayList(GlyphId),
+    position: usize,
+    allocator: std.mem.Allocator,
+    run: Options,
+) Error!model.ApplyResult {
+    const matched_indices = input_indices[0..rule.input_count];
+    try safety.markInput(allocator, run, matched_indices);
+    const glyph_count_before = glyphs.items.len;
+    try records.apply(
+        Executor,
+        view,
+        glyphs,
+        rule.records_offset,
+        rule.subst_count,
+        matched_indices,
+        allocator,
+        run,
+    );
+    const original_next = input_indices[rule.input_count - 1] + 1;
+    return .{
+        .matched = true,
+        .next_pos = model.nextPositionAfterMutation(
+            original_next,
+            position,
+            glyph_count_before,
+            glyphs.items.len,
+        ),
+    };
 }

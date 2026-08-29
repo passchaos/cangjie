@@ -61,6 +61,12 @@ pub fn ruleLessThan(_: void, lhs: Rule, rhs: Rule) bool {
     return lhs.order < rhs.order;
 }
 
+pub fn ruleHashLessThan(_: void, lhs: Rule, rhs: Rule) bool {
+    if (lhs.class_set != rhs.class_set) return lhs.class_set < rhs.class_set;
+    if (lhs.hash != rhs.hash) return lhs.hash < rhs.hash;
+    return lhs.order < rhs.order;
+}
+
 pub fn groupForClass(groups: []const RuleGroup, class_set: u16) ?RuleGroup {
     const index = groupIndexForClass(groups, class_set) orelse return null;
     return groups[index];

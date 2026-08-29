@@ -131,11 +131,14 @@ zig build font-fuzz-smoke -Doptimize=ReleaseSafe -- \
 
 For each seed, the harness tries the unmodified font, every prefix through byte
 256, and 256 deterministic single-byte mutations. Every successfully parsed
-case continues through public cmap lookup, glyph extents, outline decoding, and
-grayscale rasterization. Parse or table-access errors are expected; a crash,
-safety trap, or out-of-bounds access fails the command. This is a quick
-regression gate, not a replacement for coverage-guided fuzzing or the broader
-malformed-table matrix still required by the completion bar.
+case continues through public cmap lookup, glyph extents, owning and
+caller-storage outline decoding, color-palette and bitmap-strike discovery,
+and grayscale rasterization. Faces that still expose variation axes also run
+both owning and caller-storage outline decoding at non-default normalized
+coordinates. Parse or table-access errors are expected; a crash, safety trap,
+or out-of-bounds access fails the command. This is a quick regression gate,
+not a replacement for coverage-guided fuzzing or the broader malformed-table
+matrix still required by the completion bar.
 
 The same seed set also drives Zig 0.16's coverage-guided fuzzer through a
 bounded sequence of correlated byte replacements plus optional truncation. A
@@ -162,12 +165,22 @@ instrumented edges (13.53%) without a reported failure. Zig selected the
 malformed-font parsing/rendering target for that invocation; the separately
 embedded AAT target remains part of the ordinary deterministic gate and future
 coverage-guided campaigns.
+A later campaign found that a legacy format-0 `kern` subtable whose declared
+length was smaller than its six-byte header could reach a reversed slice. The
+parser now rejects that case before slicing and retains it as a focused unit
+test. After extending the driver to cover reusable outlines, non-default
+variable outlines, palettes, and bitmap strikes, a fresh ReleaseSafe 100K
+replay completed 208,224 executions, 762 unique runs, and 5,624 of 32,884
+instrumented edges (17.10%) without another failure. Allowing bitmap-only and
+color-only faces to continue after an absent conventional outline increased a
+final replay to 233,293 executions, 686 unique runs, and 5,741 of 32,892 edges
+(17.45%), again without a reported failure.
 A separate deterministic ReleaseSafe pass used six external HarfBuzz fuzz
 corpus files spanning CFF2+COLR v1, CBDT, sbix, SVG, variable CFF2, and a
 historical malformed CBDT PNG case. All 3,084 prefix/full/single-byte mutation
-cases completed without a crash, leak, or safety trap. This broadens the
-format ancestry beyond the six embedded smoke seeds without claiming
-exhaustive malformed-font coverage.
+cases completed through the expanded driver without a crash, leak, or safety
+trap. This broadens the format ancestry beyond the six embedded smoke seeds
+without claiming exhaustive malformed-font coverage.
 
 For output parity against HarfRust, build the local CLI once:
 

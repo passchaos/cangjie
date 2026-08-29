@@ -97,9 +97,18 @@ x86-64, pinned to CPU 30 where the harness supports it:
   now validates the recovered format-0 length before slicing, has a focused
   regression test, and the replay completed 206,868 executions with 931 unique
   runs and 5,448/32,252 edges (16.89%) without another failure.
+- The malformed-font driver now additionally exercises caller-owned reusable
+  outline storage, owning and reusable non-default variable outlines, color
+  palettes, and bitmap strikes. A fresh ReleaseSafe 100K campaign completed
+  208,224 executions with 762 unique runs and 5,624/32,884 edges (17.10%)
+  without a failure. Letting bitmap-only and color-only faces continue through
+  metadata access after an absent conventional outline raised the final replay
+  to 233,293 executions, 686 unique runs, and 5,741/32,892 edges (17.45%), also
+  without a reported failure.
 - `font-fuzz-smoke` over six external HarfBuzz fuzz seeds covering CFF2+COLR
   v1, CBDT, sbix, SVG, variable CFF2, and malformed CBDT PNG completed 3,084
-  deterministic ReleaseSafe cases without a failure.
+  deterministic ReleaseSafe cases through the expanded driver without a
+  failure.
 - `zig build freetype-matrix -Doptimize=ReleaseFast -- --iterations 100
   --samples 5 --sizes 8,16,32,64,128 --cpu 30 --fail-on-slower`: completed 40 symmetric
   A/B/B/A raster rows across Latin glyf, Latin CFF1, Arabic glyf, and CJK CFF.

@@ -91,8 +91,9 @@ x86-64, pinned to CPU 30 where the harness supports it:
   search to the source-containing line, and out-of-flow line metrics skip an
   inapplicable object scan. A fixed-CPU-30 `10000 * 11` run measured custom
   reflow at `1.420x`/`1.048x`/`1.406x`; ordinary out-of-flow reflow measured
-  `1.413x`/`1.013x`/`1.381x`. The in-flow Arabic object row remains just behind
-  at `0.978x`, so the strict gate is still red.
+  `1.413x`/`1.013x`/`1.381x`. A later full strict run remained red only on the
+  noise-sensitive Arabic in-flow row (`0.978x`); the other two Arabic object
+  modes narrowly led (`1.013x` and `1.048x`).
   The mixed Roboto→Noto Sans Devanagari fallback rows also have identical
   normalized geometry. Extending the retained simple-path proof to adjacent
   multi-glyph clusters moved fallback construction/reflow to `1.664x`/`1.718x`

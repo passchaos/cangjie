@@ -108,14 +108,31 @@ pub fn lineRunInfo(
         metrics.descent = @max(metrics.descent, run_metrics.descent);
         metrics.leading = @max(metrics.leading, run_metrics.leading);
     }
-    for (glyphs[glyph_start..glyph_end]) |glyph| {
-        if (!glyph.isInlineObject()) continue;
-        const object = inline_object.find(objects, glyph.cluster) orelse
-            continue;
-        if (object.kind != .in_flow) continue;
-        const object_metrics = inline_object.verticalMetrics(object);
-        metrics.ascent = @max(metrics.ascent, object_metrics.ascent);
-        metrics.descent = @max(metrics.descent, object_metrics.descent);
+    // Most lines, and every line containing only out-of-flow objects, have no
+    // object metrics to merge. Avoid walking their glyph slice solely to prove
+    // the already-known empty case.
+    if (objects.len == 1) {
+        const object = objects[0];
+        if (object.kind == .in_flow) {
+            for (glyphs[glyph_start..glyph_end]) |glyph| {
+                if (glyph.cluster != object.byte_index or
+                    !glyph.isInlineObject()) continue;
+                const object_metrics = inline_object.verticalMetrics(object);
+                metrics.ascent = @max(metrics.ascent, object_metrics.ascent);
+                metrics.descent = @max(metrics.descent, object_metrics.descent);
+                break;
+            }
+        }
+    } else if (objects.len != 0) {
+        for (glyphs[glyph_start..glyph_end]) |glyph| {
+            if (!glyph.isInlineObject()) continue;
+            const object = inline_object.find(objects, glyph.cluster) orelse
+                continue;
+            if (object.kind != .in_flow) continue;
+            const object_metrics = inline_object.verticalMetrics(object);
+            metrics.ascent = @max(metrics.ascent, object_metrics.ascent);
+            metrics.descent = @max(metrics.descent, object_metrics.descent);
+        }
     }
     const run_start_index = first_run orelse 0;
     return .{
@@ -126,6 +143,58 @@ pub fn lineRunInfo(
         else
             metrics,
     };
+}
+
+test "single out-of-flow object cannot change line metrics" {
+    const object = inline_object.Object{
+        .id = 1,
+        .kind = .out_of_flow,
+        .byte_index = 0,
+        .width = 100,
+        .height = 100,
+        .baseline = 90,
+    };
+    const glyphs = [_]GlyphPosition{.{
+        .glyph_id = 0,
+        .codepoint = inline_object.object_replacement_character,
+        .cluster = 0,
+        .source_byte_len = inline_object.object_replacement_utf8.len,
+        .x_advance = 0,
+        .flags = .{ .inline_object = true },
+    }};
+    const metrics = BaselineMetrics{ .ascent = 8, .descent = 2, .leading = 1 };
+    const info = lineRunInfo(&.{}, &glyphs, &.{object}, 0, 1, metrics, null);
+    try std.testing.expectEqual(metrics, info.metrics);
+}
+
+test "single in-flow object contributes line metrics" {
+    const object = inline_object.Object{
+        .id = 1,
+        .byte_index = 0,
+        .width = 10,
+        .height = 20,
+        .baseline = 15,
+    };
+    const glyphs = [_]GlyphPosition{.{
+        .glyph_id = 0,
+        .codepoint = inline_object.object_replacement_character,
+        .cluster = 0,
+        .source_byte_len = inline_object.object_replacement_utf8.len,
+        .x_advance = 10,
+        .flags = .{ .inline_object = true },
+    }};
+    const info = lineRunInfo(
+        &.{},
+        &glyphs,
+        &.{object},
+        0,
+        1,
+        .{ .ascent = 8, .descent = 2, .leading = 1 },
+        null,
+    );
+    try std.testing.expectEqual(@as(f32, 15), info.metrics.ascent);
+    try std.testing.expectEqual(@as(f32, 5), info.metrics.descent);
+    try std.testing.expectEqual(@as(f32, 1), info.metrics.leading);
 }
 
 pub fn resolvedAlignment(options: anytype) @TypeOf(options.alignment) {

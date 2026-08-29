@@ -71,6 +71,11 @@ def main() -> int:
     parser.add_argument("--iterations", type=int, default=1)
     parser.add_argument("--samples", type=int, default=1)
     parser.add_argument("--cpu", type=int)
+    parser.add_argument(
+        "--fail-on-slower",
+        action="store_true",
+        help="fail when Cangjie is not faster in any matrix row",
+    )
     args = parser.parse_args()
     if args.iterations <= 0 or args.samples <= 0:
         parser.error("iterations and samples must be positive")
@@ -178,6 +183,11 @@ def main() -> int:
             cangjie_ns = math.sqrt(cangjie_a * cangjie_b)
             parley_ns = math.sqrt(parley_a * parley_b)
             speedup = math.inf if cangjie_ns == 0 else parley_ns / cangjie_ns
+            if args.fail_on_slower and speedup <= 1.0:
+                failures.append(
+                    f"{case.name}/{phase}/{style}: Cangjie slower "
+                    f"({speedup:.3f}x)"
+                )
             print(
                 f"{case.name}/{phase}/{style}: "
                 f"cangjie_ns={cangjie_a:.3f}/{cangjie_b:.3f} "

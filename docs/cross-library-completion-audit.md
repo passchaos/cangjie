@@ -40,7 +40,8 @@ x86-64, pinned to CPU 30 where the harness supports it:
   (`1.317x`/`1.336x`). Caller-owned reuse at those endpoints leads by
   `13.865x`/`13.763x`.
 - `zig build parley-matrix -Doptimize=ReleaseFast -- --iterations 1000 --samples
-  7 --cpu 30`: 24/24 count/stability rows passed, including exact normalized
+  7 --cpu 30 --fail-on-slower`: 24/24 count/stability/performance rows passed,
+  including exact normalized
   object geometry in all 12 object rows. The added six rows use the
   same 24x20 object as the in-flow cases but select Parley's `OutOfFlow` and
   Cangjie's `.out_of_flow` semantics for both construction and retained

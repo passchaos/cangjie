@@ -27,6 +27,7 @@ source-byte, glyph, line, or object counts and requires exact normalized object
 geometry (stable id/source/line, x/y, size, and baseline) for all object rows.
 The Parley oracle disables optional paint-time pixel quantization so both
 engines expose fractional coordinates. Optional `-- --iterations N --samples
-N --cpu CPU` arguments provide a repeatable fixed-core performance run. The
+N --cpu CPU --fail-on-slower` arguments provide a repeatable fixed-core run
+whose optional strict gate rejects any row without a positive Cangjie margin. The
 default font paths target the local Linux Noto installation and can be
 overridden with the script directly when required.

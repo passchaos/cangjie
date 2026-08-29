@@ -34,7 +34,10 @@ fn main() {
     let text_file = fs::read_to_string(text_path).unwrap();
     let source_text = text_file.lines().next().unwrap_or("");
     let owned_text;
-    let has_inline_object = matches!(style.as_str(), "inline-object" | "out-of-flow-object");
+    let has_inline_object = matches!(
+        style.as_str(),
+        "inline-object" | "out-of-flow-object" | "custom-out-of-flow-object"
+    );
     let text = if has_inline_object {
         let split = source_text.ceil_char_boundary(source_text.len() / 2);
         owned_text = format!("{}\u{fffc}{}", &source_text[..split], &source_text[split..]);
@@ -157,7 +160,7 @@ fn run_once(
 ) -> (u64, u64, u64, usize, usize, usize) {
     let mut owned;
     let layout = if let Some(layout) = retained {
-        layout.break_all_lines(Some(width));
+        break_layout(layout, width, style);
         layout.align(Alignment::Start, AlignmentOptions::default());
         layout
     } else {
@@ -170,12 +173,12 @@ fn run_once(
             style,
             fallback_family_name,
         );
-        owned.break_all_lines(Some(width));
+        break_layout(&mut owned, width, style);
         owned.align(Alignment::Start, AlignmentOptions::default());
         &mut owned
     };
     if summarize_output {
-        summarize(layout, text)
+        summarize(layout, text, style)
     } else {
         // Match Cangjie's measured consumer: keep line breaking, alignment,
         // output ownership, and O(1) layout fields live, while the expensive
@@ -192,7 +195,31 @@ fn run_once(
 }
 
 fn object_count_hint(style: &str) -> usize {
-    usize::from(style == "inline-object" || style == "out-of-flow-object")
+    usize::from(matches!(
+        style,
+        "inline-object" | "out-of-flow-object" | "custom-out-of-flow-object"
+    ))
+}
+
+fn break_layout(layout: &mut Layout<Brush>, width: f32, style: &str) {
+    if style != "custom-out-of-flow-object" {
+        layout.break_all_lines(Some(width));
+        return;
+    }
+
+    let mut breaker = layout.break_lines();
+    breaker.state_mut().set_layout_max_advance(width);
+    breaker.state_mut().set_line_max_advance(width);
+    while let Some(yield_data) = breaker.break_next() {
+        if let parley::YieldData::InlineBoxBreak(object) = yield_data {
+            // The matched workload supplies absolute paint geometry outside
+            // the breaker, so the custom marker contributes no line occupancy.
+            breaker
+                .state_mut()
+                .append_inline_box_to_line(object.advance, 0.0, 0.0, false);
+        }
+    }
+    breaker.finish();
 }
 
 fn build_layout(
@@ -230,24 +257,25 @@ fn build_layout(
             builder.push(StyleProperty::LetterSpacing(0.75), split..);
             builder.push(StyleProperty::WordSpacing(2.0), split..);
         }
-        "inline-object" | "out-of-flow-object" => builder.push_inline_box(InlineBox {
-            id: 1,
-            kind: if style == "inline-object" {
-                InlineBoxKind::InFlow
-            } else {
-                InlineBoxKind::OutOfFlow
-            },
-            // The object source coordinate is the marker inserted into the
-            // original sample, not the midpoint of the now-three-byte-longer
-            // benchmark string. Recomputing the midpoint moved Latin and CJK
-            // objects to a later boundary and made the workloads inequivalent.
-            index: text.find('\u{fffc}').expect("inline-object marker"),
-            width: 24.0,
-            height: 20.0,
-            baseline: Some(15.0),
-        }),
+        "inline-object" | "out-of-flow-object" | "custom-out-of-flow-object" => builder
+            .push_inline_box(InlineBox {
+                id: 1,
+                kind: match style {
+                    "inline-object" => InlineBoxKind::InFlow,
+                    "out-of-flow-object" => InlineBoxKind::OutOfFlow,
+                    _ => InlineBoxKind::CustomOutOfFlow,
+                },
+                // The object source coordinate is the marker inserted into the
+                // original sample, not the midpoint of the now-three-byte-longer
+                // benchmark string. Recomputing the midpoint moved Latin and CJK
+                // objects to a later boundary and made the workloads inequivalent.
+                index: text.find('\u{fffc}').expect("inline-object marker"),
+                width: 24.0,
+                height: 20.0,
+                baseline: Some(15.0),
+            }),
         _ => panic!(
-            "style must be default, spacing, alternating, fallback, inline-object, or out-of-flow-object"
+            "style must be default, spacing, alternating, fallback, inline-object, out-of-flow-object, or custom-out-of-flow-object"
         ),
     }
     builder.set_base_direction(match direction {
@@ -259,7 +287,11 @@ fn build_layout(
     builder.build(text)
 }
 
-fn summarize(layout: &Layout<Brush>, text: &str) -> (u64, u64, u64, usize, usize, usize) {
+fn summarize(
+    layout: &Layout<Brush>,
+    text: &str,
+    style: &str,
+) -> (u64, u64, u64, usize, usize, usize) {
     let mut hash = 0xcbf29ce484222325u64;
     let mut geometry_hash = 0xcbf29ce484222325u64;
     let mut glyph_count = 0usize;
@@ -327,7 +359,7 @@ fn summarize(layout: &Layout<Brush>, text: &str) -> (u64, u64, u64, usize, usize
             }
         }
     }
-    let (object_hash, object_count) = summarize_objects(layout, text);
+    let (object_hash, object_count) = summarize_objects(layout, text, style);
     black_box(&layout);
     (
         hash,
@@ -339,7 +371,7 @@ fn summarize(layout: &Layout<Brush>, text: &str) -> (u64, u64, u64, usize, usize
     )
 }
 
-fn summarize_objects(layout: &Layout<Brush>, text: &str) -> (u64, usize) {
+fn summarize_objects(layout: &Layout<Brush>, text: &str, style: &str) -> (u64, usize) {
     // This oracle inserts at most one object. Parley's positioned record keeps
     // the id and geometry but not the source index, so recover that stable
     // input coordinate from the benchmark's replacement marker.
@@ -347,6 +379,38 @@ fn summarize_objects(layout: &Layout<Brush>, text: &str) -> (u64, usize) {
     let expected_count = usize::from(object_byte_index.is_some());
     let mut object_hash = 0xcbf29ce484222325u64;
     object_hash = bytes(object_hash, &(expected_count as u64).to_le_bytes());
+    if style == "custom-out-of-flow-object" {
+        const CUSTOM_X: f32 = 11.0;
+        const CUSTOM_Y: f32 = 13.0;
+        const CUSTOM_WIDTH: f32 = 24.0;
+        const CUSTOM_HEIGHT: f32 = 20.0;
+        const CUSTOM_BASELINE: f32 = 15.0;
+        let byte_index = object_byte_index.expect("custom object marker");
+        let line_index = layout
+            .lines()
+            .enumerate()
+            .find_map(|(line_index, line)| {
+                let range = line.text_range();
+                (byte_index >= range.start && byte_index < range.end).then_some(line_index)
+            })
+            .expect("custom object line");
+        object_hash = bytes(object_hash, &1u64.to_le_bytes());
+        object_hash = bytes(object_hash, &(byte_index as u64).to_le_bytes());
+        object_hash = bytes(object_hash, &(line_index as u64).to_le_bytes());
+        for coordinate in [
+            CUSTOM_X,
+            CUSTOM_Y,
+            CUSTOM_WIDTH,
+            CUSTOM_HEIGHT,
+            CUSTOM_BASELINE,
+        ] {
+            object_hash = bytes(
+                object_hash,
+                &canonical_inline_position(coordinate).to_le_bytes(),
+            );
+        }
+        return (object_hash, 1);
+    }
     let mut object_count = 0;
     for (line_index, line) in layout.lines().enumerate() {
         for item in line.items() {

@@ -123,6 +123,8 @@ def main() -> int:
             ("reflow", "inline-object"),
             ("layout", "out-of-flow-object"),
             ("reflow", "out-of-flow-object"),
+            ("layout", "custom-out-of-flow-object"),
+            ("reflow", "custom-out-of-flow-object"),
         )
         for phase, style in matrix_rows:
             cangjie_first = run(
@@ -153,7 +155,11 @@ def main() -> int:
             }
             if len(shapes) != 1:
                 failures.append(f"{case.name}/{phase}/{style}: output counts={sorted(shapes)}")
-            expected_objects = "1" if style in ("inline-object", "out-of-flow-object") else "0"
+            expected_objects = "1" if style in (
+                "inline-object",
+                "out-of-flow-object",
+                "custom-out-of-flow-object",
+            ) else "0"
             if any(item.get("objects") != expected_objects for item in records):
                 failures.append(
                     f"{case.name}/{phase}/{style}: expected objects={expected_objects}, "
@@ -225,7 +231,7 @@ def main() -> int:
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         return 1
-    print("Cangjie/Parley output-count and object-geometry matrix passed: 26 cases")
+    print("Cangjie/Parley output-count and object-geometry matrix passed: 32 cases")
     return 0
 
 

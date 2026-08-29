@@ -116,7 +116,9 @@ pub noinline fn acceleratedAt(
 }
 
 /// Fast path after lookup-level indexes resolved the first three input glyphs.
-pub fn acceleratedNoContextAt(
+// This still carries record-application and safety state. Keep it out of the
+// lookup's per-glyph scan frame; only exact indexed candidates pay the call.
+pub noinline fn acceleratedNoContextAt(
     comptime Executor: type,
     view: View,
     parsed: Parsed,

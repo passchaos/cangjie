@@ -95,6 +95,8 @@ pub fn accelerated(
     );
 }
 
+pub const acceleratedAt = subtable_executor.applyAcceleratedAt;
+
 pub fn at(
     view: View,
     subtable_offset: usize,

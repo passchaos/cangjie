@@ -93,6 +93,70 @@ pub noinline fn applyRequiredSecond(
     );
 }
 
+pub fn applyAt(
+    ligature: Ligature,
+    glyphs: *std.ArrayList(GlyphId),
+    glyph_index: usize,
+    allocator: std.mem.Allocator,
+    lookup_flag: u16,
+    run: Options,
+) Error!?model.Change {
+    if (glyph_index >= glyphs.items.len) return null;
+    const first = glyphs.items[glyph_index];
+    if (!ligature.first_component_digest.mayHave(first) or
+        filtering.lookupIgnoresGlyph(lookup_flag, run, first)) return null;
+    const set = matching.setForGlyph(ligature, first) orelse return null;
+    var component_offsets: [model.max_components]usize = undefined;
+    const found = tryMatch(
+        ligature,
+        set,
+        glyphs.items[glyph_index..],
+        glyph_index,
+        lookup_flag,
+        run,
+        &component_offsets,
+    ) orelse return null;
+    const info = try metadata.componentInfo(
+        allocator,
+        run,
+        glyph_index,
+        found,
+    );
+    metadata.mergeClusters(run, glyph_index, found);
+    return commit.apply(glyphs, glyph_index, found, info, run);
+}
+
+fn tryMatch(
+    ligature: Ligature,
+    set: accelerator.model.LigatureSet,
+    glyphs: []const GlyphId,
+    glyph_base: usize,
+    lookup_flag: u16,
+    run: Options,
+    component_offsets: *[model.max_components]usize,
+) ?model.Match {
+    return if (ligature.prefilter_second)
+        matching.acceleratedPrefilteredMatch(
+            ligature,
+            set,
+            glyphs,
+            glyph_base,
+            lookup_flag,
+            run,
+            component_offsets,
+        )
+    else
+        matching.acceleratedMatch(
+            ligature,
+            set,
+            glyphs,
+            glyph_base,
+            lookup_flag,
+            run,
+            component_offsets,
+        );
+}
+
 fn hasAdjacentDigestPair(
     glyphs: []const GlyphId,
     first_digest: @import("../../../../../glyph_digest.zig").GlyphDigest,

@@ -11,6 +11,8 @@ const chaining_lookup = @import("../chaining/lookup/root.zig");
 const chaining_class = @import("../chaining/class/root.zig");
 const contextual_context = @import("../context/root.zig");
 pub const direct = @import("direct.zig");
+const direct_ligature = @import("../../direct/ligature/root.zig");
+const direct_multiple = @import("../../direct/multiple/root.zig");
 const direct_single = @import("../../direct/single/root.zig");
 pub const extension = @import("extension.zig");
 const generic_lookup = @import("../../lookup/generic/root.zig");
@@ -87,6 +89,45 @@ pub fn apply(
         lookup_index,
         lookup_run,
     )) |sidecar| {
+        const effective_type = if (sidecar.lookup_type == 7)
+            sidecar.extension_lookup_type orelse 0
+        else
+            sidecar.lookup_type;
+        if (effective_type == 2 and
+            sidecar.multiple_subst.entries.len != 0)
+        {
+            const change = try direct_multiple.acceleratedAt(
+                view,
+                sidecar.multiple_subst,
+                glyphs,
+                glyph_index,
+                allocator,
+                lookup_flag,
+                lookup_run,
+            ) orelse return .{};
+            return .{
+                .removed_len = change.removed_len,
+                .inserted_len = change.inserted_len,
+            };
+        }
+        if (effective_type == 4 and
+            sidecar.ligature_subst.sets.len != 0)
+        {
+            const change = try direct_ligature.acceleratedAt(
+                sidecar.ligature_subst,
+                glyphs,
+                glyph_index,
+                allocator,
+                lookup_flag,
+                lookup_run,
+            ) orelse return .{};
+            return .{
+                .removed_len = change.removed_len,
+                .inserted_len = change.inserted_len,
+                .component_offsets = change.component_offsets,
+                .component_count = change.component_count,
+            };
+        }
         if (sidecar.context_class_subtables.len != 0) {
             for (sidecar.context_class_subtables) |subtable| {
                 if ((try contextual_context.acceleratedClassAt(

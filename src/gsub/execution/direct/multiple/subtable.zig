@@ -130,6 +130,37 @@ pub fn applyAt(
     );
 }
 
+pub fn applyAcceleratedAt(
+    view: View,
+    multiple: Multiple,
+    glyphs: *std.ArrayList(GlyphId),
+    glyph_index: usize,
+    allocator: std.mem.Allocator,
+    lookup_flag: u16,
+    run: Options,
+) Error!?replacement.Change {
+    if (glyph_index >= glyphs.items.len or
+        filtering.lookupIgnoresGlyph(
+            lookup_flag,
+            run,
+            glyphs.items[glyph_index],
+        )) return null;
+    const entry = entryForGlyph(
+        multiple.entries,
+        glyphs.items[glyph_index],
+    ) orelse return null;
+    return try replacement.applyKnown(
+        view,
+        entry.sequence_offset,
+        entry.glyph_count,
+        if (entry.glyph_count == 1) entry.single_to else null,
+        glyphs,
+        glyph_index,
+        allocator,
+        run,
+    );
+}
+
 fn applyMatchedAt(
     view: View,
     subtable_offset: usize,

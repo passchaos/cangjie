@@ -105,6 +105,8 @@ pub noinline fn acceleratedRequiredSecond(
     );
 }
 
+pub const acceleratedAt = accelerated_run.applyAt;
+
 pub const directMatch = matching.directMatch;
 pub const acceleratedMatch = matching.acceleratedMatch;
 pub const acceleratedPrefilteredMatch =

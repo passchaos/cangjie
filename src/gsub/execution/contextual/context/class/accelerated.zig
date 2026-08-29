@@ -77,6 +77,8 @@ pub fn applyGroup(
     if (input_len == 0) return .{};
     const input_indices = input_indices_buffer[0..input_len];
     var input_classes: [max_input_glyphs]u16 = undefined;
+    var input_hashes: [max_input_glyphs]u64 = undefined;
+    input_hashes[0] = class_context.sequenceHashEmpty();
     for (1..input_len) |input_index| {
         input_classes[input_index - 1] =
             if (subtable.class_def == table.class_def.empty_offset)
@@ -87,15 +89,20 @@ pub fn applyGroup(
                     subtable.class_def,
                     glyphs.items[input_indices[input_index]],
                 );
+        // Many production format-2 class sets contain hundreds of rules of
+        // the same length. Cache each input-prefix hash once instead of
+        // recomputing it independently for every candidate rule.
+        input_hashes[input_index] = class_context.sequenceHashAppend(
+            input_hashes[input_index - 1],
+            input_classes[input_index - 1],
+        );
     }
 
     const rules = subtable.rules[group.start .. group.start + group.len];
     for (rules) |rule| {
         if (rule.input_count == 0 or rule.input_count > input_len) continue;
         const extra_count = @as(usize, rule.input_count) - 1;
-        if (rule.hash !=
-            class_context.sequenceHash(input_classes[0..extra_count]))
-        {
+        if (rule.hash != input_hashes[extra_count]) {
             continue;
         }
         const expected = subtable.classes[rule.classes_start .. rule.classes_start + extra_count];

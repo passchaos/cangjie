@@ -372,6 +372,9 @@ font rows. Consecutive fixed-CPU-30 symmetric `1 * 7` and `1 * 11` runs
 measured `1.500x`/`1.522x` for Roboto and `1.525x`/`1.531x` for Source Serif
 against the faster of HarfBuzz and HarfRust. This closes the missing-workload
 instrumentation gap, but does not change the near-tie status of Amiri words.
+The latest gated `1 * 11` rerun measured `1.526x` and `1.536x`;
+`--fail-on-slower` now makes any non-winning row fail instead of remaining a
+report-only result.
 
 ## Audit rules
 

@@ -33,7 +33,27 @@ pub fn apply(
         input_indices,
         run,
     )) return true;
+    return applyParsed(
+        view,
+        glyphs,
+        records_offset,
+        record_count,
+        input_indices,
+        run,
+    );
+}
 
+// Keep generic lookup-header and subtable scratch out of the overwhelmingly
+// common accelerator-backed record path. Large Arabic contextual programs
+// invoke this helper many thousands of times per corpus.
+noinline fn applyParsed(
+    view: View,
+    glyphs: *std.ArrayList(GlyphId),
+    records_offset: usize,
+    record_count: usize,
+    input_indices: []const usize,
+    run: Options,
+) Error!bool {
     const lookup_list = try requiredLookupList(view);
     const lookup_count = try view.readU16(lookup_list);
     var targets: [max_records]usize = undefined;
@@ -145,7 +165,7 @@ fn applyAccelerated(
 ) Error!bool {
     const lookups = run.lookup_accelerators orelse return false;
     var targets: [max_records]usize = undefined;
-    var singles: [max_records]Single = undefined;
+    var singles: [max_records]*const Single = undefined;
 
     for (0..record_count) |record_index| {
         const record = records_offset + record_index * 4;
@@ -156,7 +176,7 @@ fn applyAccelerated(
         if (lookup_order.contains(run.disabled_lookups, lookup_index)) {
             return false;
         }
-        const single = lookups[lookup_index].single_subst;
+        const single = &lookups[lookup_index].single_subst;
         if (!single.enabled) return false;
         targets[record_index] = input_indices[sequence_index];
         singles[record_index] = single;
@@ -166,7 +186,7 @@ fn applyAccelerated(
         if (targets[record_index] >= glyphs.items.len) continue;
         _ = try direct_single.acceleratedAt(
             view,
-            singles[record_index],
+            singles[record_index].*,
             glyphs,
             targets[record_index],
             run,

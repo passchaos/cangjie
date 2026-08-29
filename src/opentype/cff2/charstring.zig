@@ -771,6 +771,16 @@ fn BoundsExecutor(comptime Context: type) type {
             p2: f32,
             p3: f32,
         ) void {
+            // A Bezier curve is contained by the convex hull of its control
+            // points. If both controls already lie between the endpoints, no
+            // interior point can extend this axis's bounds and solving the
+            // derivative would be pure work. This is common in production CFF
+            // curves and avoids two square-root paths per monotonic segment.
+            const endpoint_min = @min(p0, p3);
+            const endpoint_max = @max(p0, p3);
+            if (p1 >= endpoint_min and p1 <= endpoint_max and
+                p2 >= endpoint_min and p2 <= endpoint_max) return;
+
             const a = -p0 + 3.0 * p1 - 3.0 * p2 + p3;
             const b = 2.0 * (p0 - 2.0 * p1 + p2);
             const c = p1 - p0;

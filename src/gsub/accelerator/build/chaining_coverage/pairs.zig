@@ -6,7 +6,11 @@ const table = @import("../../../table/root.zig");
 
 pub const Error = table.coverage.Error;
 pub const View = table.View;
-pub const max_pair_index_pairs = 8192;
+// A few production Arabic contextual lookups have tens of thousands of
+// first/second coverage combinations. Keeping those exact pairs avoids a
+// long authored-subtable scan for every glyph; bound the retained sidecar so
+// adversarial fonts still cannot force unbounded parse-time allocation.
+pub const max_pair_index_pairs = 32768;
 
 pub fn appendFirst(
     view: View,

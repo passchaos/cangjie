@@ -457,15 +457,13 @@ fn applyPureRtlLinesWithObjectAfterProofImpl(
     if (buffer.runs.items.len != 2) return false;
     const leading_run = buffer.runs.items[0];
     const trailing_run = buffer.runs.items[1];
-    var object_index: ?usize = null;
-    for (glyphs, 0..) |glyph, index| {
-        if (!glyph.isInlineObject()) continue;
-        if (object_index != null) return false;
-        object_index = index;
-    }
-    const logical_object_index = object_index orelse return false;
+    // The shaping boundary emits one unowned object atom exactly between the
+    // two otherwise-identical font runs. Their ranges therefore identify the
+    // marker without another whole-paragraph scan on every retained reflow.
+    const logical_object_index = leading_run.glyph_start + leading_run.glyph_len;
     if (leading_run.glyph_start != 0 or
-        leading_run.glyph_len != logical_object_index or
+        logical_object_index >= glyphs.len or
+        !glyphs[logical_object_index].isInlineObject() or
         trailing_run.glyph_start != logical_object_index + 1 or
         trailing_run.glyph_start + trailing_run.glyph_len != glyphs.len or
         leading_run.font != trailing_run.font or

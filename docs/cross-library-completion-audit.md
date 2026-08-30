@@ -507,6 +507,27 @@ also improved the Amiri words endpoints from `2392.762/2434.036` to
 `2280.893/2310.760 ns/glyph`. These targeted gains do not supersede the
 strict red rows above; a later broad run remained red on both Noto cases.
 
+The next retained pair of changes records each ContextSubst group's shortest
+input window and decodes class/hash prefixes only when the corresponding rule
+length is probed (`44ac458b`), then adds an owned two-glyph ContextPos format-2
+sidecar for direct and ExtensionPos lookups (`35d64472`). The latter avoids
+reparsing the rule set, coverage, record, and nested-lookup index for Noto's
+15-rule positioning lookup. A fixed-CPU-30, 31-sample A/B/B/A run kept
+2,588,066 glyphs and checksum `512f7015bb79a7ef`; the pre-change medians were
+`3135.072/3221.161 ns/glyph` and the candidate medians were
+`3136.721/2999.310 ns/glyph`. Counter checks reduced retired instructions by
+about 8.3% and branches by about 9.8%. A proposed direct second-class map for
+one-lookahead chaining rules was not retained because its 31-sample result was
+mixed (`3012.137/3066.766` baseline versus `3049.971/2953.314` candidate).
+
+The current post-`35d64472` strict fixed-CPU-30 matrices still fail without
+weakening `--fail-on-slower`. Broad `3 * 7` reports Noto Nastaliq words at
+`0.603x` and long text at `0.504x`; Roboto long (`1.127x`) and Source Serif
+long (`1.064x`) pass. Core `5 * 11` reports Roboto at `1.302x`, but Source
+Serif words at `0.979x`, Amiri words at `0.731x`, Amiri long at `0.872x`, and
+Devanagari words at `0.918x`. These current red rows continue to rule out an
+overall shaping-performance claim.
+
 ## Audit rules
 
 1. A semantic manifest proves inventory only; it is not a differential test.

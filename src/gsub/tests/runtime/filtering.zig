@@ -41,15 +41,6 @@ test "MarkAttachmentType classifies marks without GlyphClassDef" {
     try std.testing.expect(!filtering.lookupIgnoresGlyph(0x0100, run, 8));
 }
 
-test "simple lookup flags expose a direct ignored class" {
-    try std.testing.expectEqual(@as(?u16, null), filtering.simpleIgnoredClass(0));
-    try std.testing.expectEqual(@as(?u16, 1), filtering.simpleIgnoredClass(0x0002));
-    try std.testing.expectEqual(@as(?u16, 2), filtering.simpleIgnoredClass(0x0004));
-    try std.testing.expectEqual(@as(?u16, 3), filtering.simpleIgnoredClass(0x0008));
-    try std.testing.expectEqual(@as(?u16, null), filtering.simpleIgnoredClass(0x0010));
-    try std.testing.expectEqual(@as(?u16, null), filtering.simpleIgnoredClass(0x0100));
-}
-
 test "source filtering handles raw tags compact masks and syllables" {
     var sources = std.ArrayList(usize).empty;
     defer sources.deinit(std.testing.allocator);

@@ -24,7 +24,7 @@ pub inline fn lookupIgnoresGlyph(
         if (glyph < items.len) items[glyph] else 0
     else
         0;
-    if (simpleIgnoredClass(lookup_flag)) |ignored| return class == ignored;
+    if (lookup_flag == 0x0008) return class == 3;
     if (lookup_flag == 0x0010) {
         if (class != 3) return false;
         const set_index = run.active_mark_filtering_set orelse return true;
@@ -33,17 +33,6 @@ pub inline fn lookupIgnoresGlyph(
         return !glyphInMarkFilteringSet(sets[set_index], glyph);
     }
     return lookupIgnoresGlyphComplex(lookup_flag, run, glyph, class);
-}
-
-/// Return the ignored GDEF class when the lookup uses exactly one simple
-/// Ignore* flag. Combined flags and mark selectors need the complete path.
-pub inline fn simpleIgnoredClass(lookup_flag: u16) ?u16 {
-    return switch (lookup_flag) {
-        0x0002 => 1,
-        0x0004 => 2,
-        0x0008 => 3,
-        else => null,
-    };
 }
 
 pub fn validateMarkFilteringSetIndex(run: Options) Error!void {

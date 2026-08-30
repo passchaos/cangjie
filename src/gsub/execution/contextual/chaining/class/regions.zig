@@ -13,7 +13,6 @@ pub const Regions = struct {
     lookup_flag: u16,
     run: Options,
     anchor_syllable: ?u8,
-    simple_ignore_class: ?u16,
 
     input: [max_glyphs]usize = undefined,
     input_len: usize = 0,
@@ -42,7 +41,6 @@ pub const Regions = struct {
             .lookup_flag = lookup_flag,
             .run = run,
             .anchor_syllable = filtering.sourceSyllableForGlyph(run, position),
-            .simple_ignore_class = filtering.simpleIgnoredClass(lookup_flag),
             .input_scan = position,
             .backtrack_scan = position,
         };
@@ -198,19 +196,6 @@ pub const Regions = struct {
             scan.* += 1;
             if (!self.syllableAllows(index)) return null;
             return index;
-        }
-        if (self.simple_ignore_class) |ignored_class| {
-            const classes = self.run.glyph_classes orelse return null;
-            while (scan.* < self.glyphs.len) {
-                const index = scan.*;
-                scan.* += 1;
-                const glyph = self.glyphs[index];
-                const class = if (glyph < classes.len) classes[glyph] else 0;
-                if (class == ignored_class) continue;
-                if (!self.syllableAllows(index)) return null;
-                return index;
-            }
-            return null;
         }
         while (scan.* < self.glyphs.len) {
             const index = scan.*;

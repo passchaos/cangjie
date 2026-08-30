@@ -6,9 +6,13 @@ const axes = @import("../axes.zig");
 const interaction = @import("interaction.zig");
 const records = @import("records.zig");
 const selection = @import("selection.zig");
+const unicode = @import("../../../unicode.zig");
 const visual_carets = @import("visual_carets.zig");
 const WritingMode =
     @import("../../../shaping/pipeline/types.zig").WritingMode;
+
+const Affinity = records.Affinity;
+const SelectionRange = records.SelectionRange;
 
 pub const TextGeometry = struct {
     allocator: std.mem.Allocator,
@@ -234,6 +238,83 @@ pub const TextGeometry = struct {
         return selection.build(allocator, self.geometryView(), range);
     }
 
+    /// Resolve the UAX #29 word containing `byte_offset` without allocating.
+    ///
+    /// The returned UTF-8 byte range is half-open and covers only segments
+    /// classified as words; punctuation and whitespace return null. A word
+    /// starting at an exact boundary wins. The paragraph-end boundary belongs
+    /// to the final word when that word reaches the end of the source.
+    ///
+    /// This is a source-segmentation query, so it can return a range omitted
+    /// from the visible geometry by max-lines truncation. Use `wordAt` when
+    /// visual selection fragments, and therefore visible geometry, are needed.
+    pub fn wordRangeAt(
+        self: TextGeometry,
+        byte_offset: usize,
+    ) ?SelectionRange {
+        if (byte_offset > self.source_byte_len) return null;
+        for (self.words) |range| {
+            if (byte_offset == range.byte_start or
+                (byte_offset > range.byte_start and
+                    byte_offset < range.byte_end) or
+                (byte_offset == range.byte_end and
+                    range.byte_end == self.source_byte_len))
+            {
+                return range;
+            }
+        }
+        return null;
+    }
+
+    /// Resolve the UAX #29 extended grapheme neighboring `byte_offset`.
+    ///
+    /// An offset inside a grapheme always returns that complete half-open UTF-8
+    /// byte range. At an exact boundary, upstream selects the preceding
+    /// grapheme and downstream selects the following grapheme. Paragraph start
+    /// and end normalize either affinity to their sole existing neighbor; an
+    /// empty paragraph or an offset past the paragraph returns null.
+    ///
+    /// This walks the immutable owned source and does not allocate. In
+    /// particular, it remains UAX #29-safe for graphemes omitted from visible
+    /// geometry by max-lines truncation.
+    pub fn graphemeRangeAt(
+        self: TextGeometry,
+        byte_offset: usize,
+        affinity: Affinity,
+    ) ?SelectionRange {
+        if (byte_offset > self.source_byte_len or self.source.len == 0) {
+            return null;
+        }
+
+        // TextGeometry construction validates and owns this UTF-8 source. Use
+        // the zero-allocation iterator rather than retaining a second complete
+        // source-grapheme table solely for point queries.
+        var iterator = unicode.graphemeClustersAssumeValid(self.source);
+        var previous: ?SelectionRange = null;
+        while (iterator.next()) |grapheme| {
+            const range = SelectionRange{
+                .byte_start = grapheme.byte_start,
+                .byte_end = grapheme.byte_start + grapheme.byte_len,
+            };
+            if (byte_offset == range.byte_start) {
+                return if (affinity == .upstream)
+                    previous orelse range
+                else
+                    range;
+            }
+            if (byte_offset > range.byte_start and
+                byte_offset < range.byte_end)
+            {
+                return range;
+            }
+            previous = range;
+        }
+
+        // At paragraph end there is no following grapheme, so downstream is
+        // normalized to the same final cluster selected by upstream.
+        return if (byte_offset == self.source_byte_len) previous else null;
+    }
+
     /// Resolve the UAX #29 word containing `byte_offset`.
     ///
     /// Punctuation and whitespace return null. At a boundary, the word that
@@ -246,7 +327,7 @@ pub const TextGeometry = struct {
         byte_offset: usize,
     ) !?records.WordGeometry {
         if (byte_offset > self.source_byte_len) return null;
-        const range = wordRangeAt(self, byte_offset) orelse return null;
+        const range = self.wordRangeAt(byte_offset) orelse return null;
         const fragments = selection.build(
             allocator,
             self.geometryView(),
@@ -403,19 +484,3 @@ pub const TextGeometry = struct {
         };
     }
 };
-
-fn wordRangeAt(
-    geometry: TextGeometry,
-    byte_offset: usize,
-) ?records.SelectionRange {
-    for (geometry.words) |range| {
-        if (byte_offset == range.byte_start or
-            (byte_offset > range.byte_start and byte_offset < range.byte_end) or
-            (byte_offset == range.byte_end and
-                range.byte_end == geometry.source_byte_len))
-        {
-            return range;
-        }
-    }
-    return null;
-}

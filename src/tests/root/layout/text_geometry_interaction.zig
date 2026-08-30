@@ -441,6 +441,202 @@ test "text geometry resolves UAX words and wrapped visual fragments" {
     try std.testing.expectEqual(text.len, logical_end.position.byte_offset);
 }
 
+test "text geometry exposes allocation-free word and grapheme ranges" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    // U+0301 and the emoji ZWJ sequence exercise UAX #29 clusters containing
+    // both combining scalars and several multi-byte code points.
+    const family = "👩‍💻";
+    const text = "A\u{0301} " ++ family ++ "!B";
+    const accented_end = "A\u{0301}".len;
+    const family_start = accented_end + 1;
+    const family_end = family_start + family.len;
+    const final_start = family_end + 1;
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const layout = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&fonts),
+        &layout_buffer,
+        text,
+        20,
+        .{ .max_width = 500 },
+    );
+    var geometry = try paragraph.buildGeometry(
+        allocator,
+        text,
+        layout,
+        .{},
+    );
+    defer geometry.deinit();
+
+    const accented = paragraph.TextGeometrySelectionRange{
+        .byte_start = 0,
+        .byte_end = accented_end,
+    };
+    const space = paragraph.TextGeometrySelectionRange{
+        .byte_start = accented_end,
+        .byte_end = family_start,
+    };
+    const emoji = paragraph.TextGeometrySelectionRange{
+        .byte_start = family_start,
+        .byte_end = family_end,
+    };
+    const punctuation = paragraph.TextGeometrySelectionRange{
+        .byte_start = family_end,
+        .byte_end = final_start,
+    };
+    const final = paragraph.TextGeometrySelectionRange{
+        .byte_start = final_start,
+        .byte_end = text.len,
+    };
+
+    // Paragraph start normalizes upstream to the sole following grapheme.
+    try std.testing.expectEqual(
+        accented,
+        geometry.graphemeRangeAt(0, .upstream).?,
+    );
+    try std.testing.expectEqual(
+        accented,
+        geometry.graphemeRangeAt(1, .downstream).?,
+    );
+    try std.testing.expectEqual(
+        accented,
+        geometry.graphemeRangeAt(accented_end - 1, .upstream).?,
+    );
+
+    // Affinity selects the logical neighbor only at an exact boundary.
+    try std.testing.expectEqual(
+        accented,
+        geometry.graphemeRangeAt(accented_end, .upstream).?,
+    );
+    try std.testing.expectEqual(
+        space,
+        geometry.graphemeRangeAt(accented_end, .downstream).?,
+    );
+    try std.testing.expectEqual(
+        space,
+        geometry.graphemeRangeAt(family_start, .upstream).?,
+    );
+    try std.testing.expectEqual(
+        emoji,
+        geometry.graphemeRangeAt(family_start, .downstream).?,
+    );
+    try std.testing.expectEqual(
+        emoji,
+        geometry.graphemeRangeAt(family_start + 4, .upstream).?,
+    );
+    try std.testing.expectEqual(
+        emoji,
+        geometry.graphemeRangeAt(family_end, .upstream).?,
+    );
+    try std.testing.expectEqual(
+        punctuation,
+        geometry.graphemeRangeAt(family_end, .downstream).?,
+    );
+    try std.testing.expectEqual(
+        final,
+        geometry.graphemeRangeAt(text.len, .upstream).?,
+    );
+    // Paragraph end normalizes downstream to the sole preceding grapheme.
+    try std.testing.expectEqual(
+        final,
+        geometry.graphemeRangeAt(text.len, .downstream).?,
+    );
+    try std.testing.expect(
+        geometry.graphemeRangeAt(text.len + 1, .upstream) == null,
+    );
+
+    try std.testing.expectEqual(
+        accented,
+        geometry.wordRangeAt(1).?,
+    );
+    try std.testing.expect(geometry.wordRangeAt(accented_end) == null);
+    try std.testing.expect(geometry.wordRangeAt(family_start) == null);
+    try std.testing.expect(geometry.wordRangeAt(family_end) == null);
+    try std.testing.expectEqual(final, geometry.wordRangeAt(final_start).?);
+    try std.testing.expectEqual(final, geometry.wordRangeAt(text.len).?);
+    try std.testing.expect(geometry.wordRangeAt(text.len + 1) == null);
+}
+
+test "text geometry range queries retain source omitted by truncation" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const text = "A A A";
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const layout = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&fonts),
+        &layout_buffer,
+        text,
+        20,
+        .{ .max_width = 20, .max_lines = 1 },
+    );
+    var geometry = try paragraph.buildGeometry(
+        allocator,
+        text,
+        layout,
+        .{},
+    );
+    defer geometry.deinit();
+
+    try std.testing.expectEqual(
+        paragraph.TextGeometrySelectionRange{
+            .byte_start = 4,
+            .byte_end = text.len,
+        },
+        geometry.wordRangeAt(4).?,
+    );
+    try std.testing.expectEqual(
+        paragraph.TextGeometrySelectionRange{
+            .byte_start = 4,
+            .byte_end = text.len,
+        },
+        geometry.graphemeRangeAt(4, .downstream).?,
+    );
+    // The geometry-bearing API still rejects a source-only, truncated word.
+    try std.testing.expect((try geometry.wordAt(allocator, 4)) == null);
+}
+
+test "empty text geometry has no grapheme or word range" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    const layout = try TextShaper.layoutParagraphUtf8(
+        FontCascade.init(&fonts),
+        &layout_buffer,
+        "",
+        20,
+        .{ .max_width = 100 },
+    );
+    var geometry = try paragraph.buildGeometry(
+        allocator,
+        "",
+        layout,
+        .{},
+    );
+    defer geometry.deinit();
+
+    try std.testing.expect(geometry.wordRangeAt(0) == null);
+    try std.testing.expect(geometry.graphemeRangeAt(0, .upstream) == null);
+    try std.testing.expect(geometry.graphemeRangeAt(0, .downstream) == null);
+}
+
 test "visual word navigation follows mixed-direction line order" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

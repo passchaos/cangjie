@@ -35,6 +35,7 @@ test "lookup model releases its complete nested ownership graph" {
         .cursive_subtables = try ownedCursiveSubtables(allocator),
         .mark_to_base_subtables = try ownedMarkToBaseSubtables(allocator),
         .mark_to_mark_subtables = try ownedMarkToMarkSubtables(allocator),
+        .context_class_subtables = try ownedContextClassSubtables(allocator),
         .chaining_subtables = try ownedChainingSubtables(allocator),
         .chaining_groups = try ownedGroups(allocator, 20),
         .chaining_group_slots = try allocator.dupe(u16, &.{1}),
@@ -51,6 +52,19 @@ test "lookup model releases its complete nested ownership graph" {
 
     // std.testing.allocator turns every missed nested free into a test failure.
     accelerator.model.deinitLookups(lookups, allocator);
+}
+
+fn ownedContextClassSubtables(
+    allocator: std.mem.Allocator,
+) ![]accelerator.model.ContextClassSubtable {
+    const subtables =
+        try allocator.alloc(accelerator.model.ContextClassSubtable, 1);
+    subtables[0] = .{
+        .coverage = .{ .glyphs = try allocator.dupe(u16, &.{4}) },
+        .rules = try allocator.alloc(accelerator.model.ContextClassRule, 1),
+        .groups = try allocator.alloc(class_context.RuleGroup, 1),
+    };
+    return subtables;
 }
 
 fn ownedGroups(

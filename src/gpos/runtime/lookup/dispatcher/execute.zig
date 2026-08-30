@@ -265,7 +265,30 @@ pub noinline fn collect(
                     run,
                 );
             },
-            7 => try nested.contextCollect(
+            7 => if (lookup_accelerator) |accelerator_value| {
+                if (subtable_index < accelerator_value.context_class_subtables.len) {
+                    try contextual.context_class_accelerated.collectSubtable(
+                        view,
+                        accelerator_value.context_class_subtables[subtable_index],
+                        glyphs,
+                        adjustments,
+                        allocator,
+                        lookup_flag,
+                        run,
+                        nested.apply,
+                    );
+                    continue;
+                }
+                try nested.contextCollect(
+                    view,
+                    subtable_offset,
+                    glyphs,
+                    adjustments,
+                    allocator,
+                    lookup_flag,
+                    run,
+                );
+            } else try nested.contextCollect(
                 view,
                 subtable_offset,
                 glyphs,

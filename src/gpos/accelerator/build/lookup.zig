@@ -6,6 +6,7 @@ const glyph_groups = @import("../glyph_groups.zig");
 const model = @import("../model.zig");
 const pair = @import("../pair.zig");
 const chaining = @import("chaining.zig");
+const context = @import("context.zig");
 const coverage_navigation = @import("coverage.zig");
 const positioning = @import("../../positioning/root.zig");
 const table = @import("../../table/root.zig");
@@ -285,6 +286,18 @@ pub fn one(
     result.cursive_subtables = cursive;
     result.mark_to_base_subtables = mark_bases;
     result.mark_to_mark_subtables = mark_marks;
+    result.context_class_subtables = try context.classSubtables(
+        view,
+        lookup_offset,
+        lookup_type,
+        extension_type,
+        subtable_count,
+        allocator,
+    );
+    errdefer model.deinitContextClassSubtables(
+        result.context_class_subtables,
+        allocator,
+    );
 
     if (coverage_pairs.items.len != 0) {
         result.coverage_groups =

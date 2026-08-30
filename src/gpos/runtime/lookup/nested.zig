@@ -135,6 +135,32 @@ pub fn apply(
             }
         }
     }
+    if (lookup_type == 7 or lookup_type == 9) {
+        if (runtime_dispatch.acceleratorWithCoverage(
+            lookup_index,
+            nested_run,
+        )) |accelerator| {
+            const wraps_context = lookup_type == 7 or
+                accelerator.extension_lookup_type == 7;
+            if (wraps_context and
+                accelerator.context_class_subtables.len == subtable_count)
+            {
+                _ = try @import("contextual/root.zig").context_class_accelerated
+                    .collectNestedAt(
+                    view,
+                    glyphs,
+                    target_index,
+                    adjustments,
+                    allocator,
+                    lookup_flag,
+                    nested_run,
+                    accelerator.context_class_subtables,
+                    apply,
+                );
+                return;
+            }
+        }
+    }
     if (lookup_type == 9) {
         if (runtime_dispatch.acceleratorWithCoverage(
             lookup_index,

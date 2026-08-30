@@ -89,6 +89,23 @@ pub fn collect(
                     run,
                 );
             },
+            7 => if (runtime_dispatch.acceleratorWithCoverage(
+                lookup_index,
+                run,
+            )) |accelerator| {
+                if (accelerator.context_class_subtables.len == subtable_count) {
+                    return contextual.context_class_accelerated.collectLookup(
+                        view,
+                        glyphs,
+                        adjustments,
+                        allocator,
+                        lookup_flag,
+                        run,
+                        accelerator.context_class_subtables,
+                        nested.apply,
+                    );
+                }
+            },
             // Wrapped ChainContextPos may use glyph or class formats, so only
             // the proven class accelerator bypasses generic wrapper ordering.
             8 => if (runtime_dispatch.acceleratorWithCoverage(

@@ -41,6 +41,7 @@ pub const Lookup = struct {
     cursive_subtables: []const CursivePositionSubtable = &.{},
     mark_to_base_subtables: []const MarkToBaseSubtable = &.{},
     mark_to_mark_subtables: []const MarkToMarkSubtable = &.{},
+    context_class_subtables: []const ContextClassSubtable = &.{},
     chaining_coverage_only: bool = false,
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
     chaining_groups: []const glyph_groups.Group = &.{},
@@ -149,6 +150,22 @@ pub const FastSinglePositionRecord = struct {
     lookup_flag: u16 = 0,
 };
 
+/// Decoded two-input ContextPos format-2 rules. This deliberately small
+/// specialization covers a common kerning-like pattern without making the
+/// general contextual matcher own arbitrary recursive record lists.
+pub const ContextClassSubtable = struct {
+    coverage: ?coverage.Owned = null,
+    class_def_offset: usize = 0,
+    rules: []const ContextClassRule = &.{},
+    groups: []const class_context.RuleGroup = &.{},
+};
+
+pub const ContextClassRule = struct {
+    second_class: u16,
+    sequence_index: u16,
+    lookup_index: u16,
+};
+
 pub const ChainingClassSubtable = struct {
     subtable_offset: usize = 0,
     coverage_offset: usize = 0,
@@ -187,11 +204,24 @@ pub fn deinitLookupContents(
         deinitCursiveSubtables(lookup.cursive_subtables, allocator);
         deinitMarkToBaseSubtables(lookup.mark_to_base_subtables, allocator);
         deinitMarkToMarkSubtables(lookup.mark_to_mark_subtables, allocator);
+        deinitContextClassSubtables(lookup.context_class_subtables, allocator);
         glyph_groups.deinitGroups(lookup.chaining_groups, allocator);
         allocator.free(lookup.chaining_group_slots);
         deinitChainingCoverageSubtables(lookup.chaining_subtables, allocator);
         deinitChainingClassSubtables(lookup.chaining_class_subtables, allocator);
     }
+}
+
+pub fn deinitContextClassSubtables(
+    subtables: []const ContextClassSubtable,
+    allocator: std.mem.Allocator,
+) void {
+    for (subtables) |subtable| {
+        if (subtable.coverage) |owned| owned.deinit(allocator);
+        allocator.free(subtable.rules);
+        allocator.free(subtable.groups);
+    }
+    allocator.free(subtables);
 }
 
 pub fn deinitCursiveSubtables(

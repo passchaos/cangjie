@@ -125,6 +125,10 @@ pub fn one(
         if (lookup_flag == 0) {
             lookup.single_subst = try single.compact(view, subtable);
         }
+        lookup.single_subst.dense_mapping = try single.denseMapping(
+            lookup.single_subst_entries,
+            allocator,
+        );
     }
     if (lookup_type == 2 and subtable_count == 1) {
         lookup.multiple_subst = try multiple.build(
@@ -170,10 +174,14 @@ pub fn one(
                 const payload = try extension.payload(view, wrapper, 1);
                 lookup.single_subst_entries =
                     try single.entries(view, payload, allocator);
+                errdefer allocator.free(lookup.single_subst_entries);
                 if (lookup_flag == 0) {
                     lookup.single_subst = try single.compact(view, payload);
                 }
-                errdefer allocator.free(lookup.single_subst_entries);
+                lookup.single_subst.dense_mapping = try single.denseMapping(
+                    lookup.single_subst_entries,
+                    allocator,
+                );
                 return lookup;
             }
             if (wrapped_type == 2 and subtable_count == 1) {

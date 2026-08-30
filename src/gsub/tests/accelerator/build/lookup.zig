@@ -242,6 +242,10 @@ test "lookup builder prepares extension-wrapped single substitution" {
     try std.testing.expect(lookup.single_subst.enabled);
     try std.testing.expectEqual(@as(u16, 7), lookup.single_subst.single_from);
     try std.testing.expectEqual(@as(u16, 42), lookup.single_subst.single_to);
+    try std.testing.expectEqual(
+        @as(u32, 43),
+        lookup.single_subst.dense_mapping[7],
+    );
 }
 
 fn buildTwoLookups(allocator: std.mem.Allocator) !void {

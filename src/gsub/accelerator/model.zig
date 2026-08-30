@@ -82,6 +82,8 @@ pub const FeatureIndex = struct {
 };
 
 pub const SingleSubstitution = struct {
+    pub const max_dense_glyphs = 4096;
+
     enabled: bool = false,
     subst_format: u16 = 0,
     coverage_offset: usize = 0,
@@ -91,6 +93,9 @@ pub const SingleSubstitution = struct {
     single_mapping: bool = false,
     single_from: GlyphId = 0,
     single_to: GlyphId = 0,
+    /// One-based replacement glyphs indexed by input glyph; zero is a miss.
+    /// The u32 representation can encode the full u16 replacement domain.
+    dense_mapping: []const u32 = &.{},
 };
 
 pub const SingleEntry = struct {

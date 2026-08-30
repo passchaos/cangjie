@@ -130,6 +130,15 @@ pub fn applyAcceleratedAt(
     run: Options,
 ) Error!bool {
     if (!single.enabled or glyph_index >= glyphs.items.len) return false;
+    if (single.dense_mapping.len != 0) {
+        const glyph = glyphs.items[glyph_index];
+        if (glyph >= single.dense_mapping.len) return false;
+        const encoded = single.dense_mapping[glyph];
+        if (encoded == 0) return false;
+        glyphs.items[glyph_index] = @intCast(encoded - 1);
+        mutation.markSubstituted(run, glyph_index);
+        return true;
+    }
     if (single.single_mapping) {
         if (glyphs.items[glyph_index] != single.single_from) return false;
         glyphs.items[glyph_index] = single.single_to;

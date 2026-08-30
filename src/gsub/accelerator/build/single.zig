@@ -102,6 +102,23 @@ pub fn entries(
     return result;
 }
 
+pub fn denseMapping(
+    entries_value: []const Entry,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error![]const u32 {
+    if (entries_value.len == 0) return allocator.alloc(u32, 0);
+    const max_glyph: usize = entries_value[entries_value.len - 1].from;
+    if (max_glyph >= Single.max_dense_glyphs) {
+        return allocator.alloc(u32, 0);
+    }
+    const result = try allocator.alloc(u32, max_glyph + 1);
+    @memset(result, 0);
+    for (entries_value) |entry| {
+        result[entry.from] = @as(u32, entry.to) + 1;
+    }
+    return result;
+}
+
 fn fillSingleton(
     view: View,
     coverage: usize,

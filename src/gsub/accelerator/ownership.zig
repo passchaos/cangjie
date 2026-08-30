@@ -27,6 +27,7 @@ pub fn deinitContents(
             }
         }
         allocator.free(lookup.single_subst_entries);
+        allocator.free(lookup.single_subst.dense_mapping);
         allocator.free(lookup.multiple_subst.entries);
         allocator.free(lookup.ligature_subst.sets);
         allocator.free(lookup.ligature_subst.set_slots);

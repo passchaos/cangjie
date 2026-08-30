@@ -41,9 +41,10 @@ test "accelerated chaining class tries shorter authored rule first" {
         .class_set = 3,
         .start = 0,
         .len = rules.len,
-        .min_input_count = 4,
+        .min_input_count = 2,
         .max_input_count = 4,
         .max_lookahead_count = 1,
+        .second_input_class_digest = support.classDigestBit(5),
     }};
     const parsed = accelerator.model.ChainingClassSubtable{
         .first_index_start = 5,
@@ -173,6 +174,7 @@ test "accelerated chaining class applies complete multi-record actions" {
         .min_input_count = 2,
         .max_input_count = 2,
         .max_lookahead_count = 0,
+        .second_input_class_digest = support.classDigestBit(5),
     }};
     const parsed = accelerator.model.ChainingClassSubtable{
         .first_index_start = 1,

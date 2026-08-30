@@ -1,3 +1,4 @@
+const std = @import("std");
 const GlyphId = @import("../glyph.zig").GlyphId;
 
 /// Class definition role for an OpenType chaining-context match region.
@@ -53,11 +54,37 @@ pub const RuleGroup = struct {
     /// matching may binary-search each shape while retaining authored-order
     /// precedence across matching shapes.
     hash_sorted: bool = false,
+    /// Group-local approximate set of second input classes. Zero deliberately
+    /// means "do not reject": builders leave it disabled when any rule can
+    /// match only the first input, or when the group is too small for indexed
+    /// matching. Otherwise bit `(class & 7)` is set for every rule's second
+    /// input class. Collisions are expected and may only cause extra matching.
+    second_input_class_digest: u8 = 0,
     /// Largest number of equal-shaped rules in this group. Computing a hash
     /// pays off only when it replaces several exact class comparisons; a
     /// group can be large while every shape is unique.
     max_shape_len: usize = 0,
 };
+
+comptime {
+    const LayoutWithoutSecondInputClassDigest = struct {
+        class_set: u16,
+        start: usize,
+        len: usize,
+        min_input_count: u16,
+        max_input_count: u16,
+        max_lookahead_count: u16,
+        hash_sorted: bool = false,
+        max_shape_len: usize = 0,
+    };
+    // The byte-sized digest occupies padding that already separated the bool
+    // from `max_shape_len`; keep every RuleGroup sidecar cache-neutral on all
+    // pointer widths rather than pinning this invariant to one target's size.
+    std.debug.assert(@sizeOf(RuleGroup) ==
+        @sizeOf(LayoutWithoutSecondInputClassDigest));
+    std.debug.assert(@offsetOf(RuleGroup, "max_shape_len") ==
+        @offsetOf(LayoutWithoutSecondInputClassDigest, "max_shape_len"));
+}
 
 pub fn sequenceHashEmpty() u64 {
     return 0xcbf29ce484222325;

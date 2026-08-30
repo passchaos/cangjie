@@ -3,4 +3,5 @@
 test {
     _ = @import("chaining.zig");
     _ = @import("context.zig");
+    _ = @import("second_input_digest.zig");
 }

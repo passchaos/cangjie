@@ -179,6 +179,7 @@ fn buildSubtable(
     if (rules.items.len == 0) return null;
 
     try shared.finishChainingRuleGroups(&rules, &groups, allocator);
+    fillSecondInputClassDigests(rules.items, classes.items, groups.items);
     const first_index_start = try first_index.appendClassIndex(
         view,
         coverage_offset,
@@ -224,4 +225,29 @@ fn buildSubtable(
         .classes = classes_slice,
         .groups = groups_slice,
     };
+}
+
+fn fillSecondInputClassDigests(
+    rules: []const opentype_class_context.Rule,
+    classes: []const u16,
+    groups: []opentype_class_context.RuleGroup,
+) void {
+    for (groups) |*group| {
+        // A digest lookup is useful only on the indexed path. More
+        // importantly, a one-input alternative has no second-class
+        // requirement, so rejecting on any second class would be unsound.
+        if (!group.hash_sorted or group.min_input_count < 2) continue;
+
+        var digest: u8 = 0;
+        for (rules[group.start .. group.start + group.len]) |rule| {
+            // Chaining rules store backtrack classes first, followed by
+            // input[1..] and lookahead. Therefore the first class after the
+            // backtrack prefix is always the rule's second input class.
+            const second_class =
+                classes[rule.classes_start + rule.backtrack_count];
+            const bit: u3 = @truncate(second_class);
+            digest |= @as(u8, 1) << bit;
+        }
+        group.second_input_class_digest = digest;
+    }
 }

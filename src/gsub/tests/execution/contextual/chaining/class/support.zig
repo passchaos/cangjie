@@ -25,6 +25,11 @@ pub const Executor = struct {
     pub fn validateNested(_: table.View, _: usize) !void {}
 };
 
+pub fn classDigestBit(class: u16) u8 {
+    const bit: u3 = @truncate(class);
+    return @as(u8, 1) << bit;
+}
+
 pub fn writeClassDef1(
     bytes: []u8,
     offset: usize,

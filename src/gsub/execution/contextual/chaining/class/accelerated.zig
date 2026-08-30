@@ -2,10 +2,12 @@
 
 const std = @import("std");
 const accelerator = @import("../../../../accelerator/root.zig");
+const class_context = @import("../../../../../opentype/class_context.zig");
 const shaping_sections = @import("../../../../../shaping_sections.zig");
 const filtering = @import("../../../../runtime/filtering.zig");
 const Options = @import("../../../../runtime/options.zig").Options;
 const table = @import("../../../../table/root.zig");
+const traversal = @import("../../../support/context_traversal.zig");
 const commit = @import("commit.zig");
 const match = @import("match.zig");
 const matching = @import("matching.zig");
@@ -81,10 +83,26 @@ pub fn at(
     run: Options,
 ) Error!model.ApplyResult {
     if (!eligible(glyphs.items, position, lookup_flag, run)) return .{};
-    return applyEligibleAt(
+    const group = accelerator.index.class_first.findPrepared(
+        parsed.classes,
+        parsed.first_index_start,
+        parsed.groups,
+        glyphs.items[position],
+    ) orelse return .{};
+    if (!try secondInputClassMayMatch(
+        view,
+        parsed,
+        group,
+        glyphs.items,
+        position,
+        lookup_flag,
+        run,
+    )) return .{};
+    return applyEligibleGroupAt(
         Executor,
         view,
         parsed,
+        group,
         glyphs,
         position,
         allocator,
@@ -93,42 +111,53 @@ pub fn at(
     );
 }
 
-noinline fn applyEligibleAt(
-    comptime Executor: type,
+fn secondInputClassMayMatch(
     view: View,
     parsed: Subtable,
-    glyphs: *std.ArrayList(GlyphId),
+    group: *const class_context.RuleGroup,
+    glyphs: []const GlyphId,
     position: usize,
-    allocator: std.mem.Allocator,
     lookup_flag: u16,
     run: Options,
-) linksection(shaping_sections.isolated_hotpaths) Error!model.ApplyResult {
-    var matched: match.Match = undefined;
-    if (!try matching.acceleratedSubtable(
-        view,
-        parsed,
-        glyphs.items,
+) table.class_def.Error!bool {
+    const digest = group.second_input_class_digest;
+    if (digest == 0) return true;
+
+    // The digest describes logical input[1], not the physically adjacent
+    // glyph. Resolve both logical inputs with the matcher's traversal because
+    // `position` is merely the lookup cursor: a default-ignorable such as CGJ
+    // may remain eligible there while being transparent to contextual input.
+    const first_index = traversal.nextIndex(
+        glyphs,
         position,
         lookup_flag,
         run,
-        &matched,
-    )) return .{};
-    return commit.apply(
-        Executor,
-        view,
-        glyphs,
+        false,
         position,
-        &matched,
-        allocator,
+    ) orelse return false;
+    const second_index = traversal.nextIndex(
+        glyphs,
+        first_index + 1,
+        lookup_flag,
         run,
+        false,
+        position,
+    ) orelse return false;
+    const second_class = try table.class_def.valueWithDense(
+        view,
+        parsed.input_class_def,
+        parsed.input_class_values,
+        glyphs[second_index],
     );
+    const bit: u3 = @truncate(second_class);
+    return (digest & (@as(u8, 1) << bit)) != 0;
 }
 
 noinline fn applyEligibleGroupAt(
     comptime Executor: type,
     view: View,
     parsed: Subtable,
-    group: *const @import("../../../../../opentype/class_context.zig").RuleGroup,
+    group: *const class_context.RuleGroup,
     glyphs: *std.ArrayList(GlyphId),
     position: usize,
     allocator: std.mem.Allocator,

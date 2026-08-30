@@ -547,6 +547,25 @@ Serif words at `0.979x`, Amiri words at `0.731x`, Amiri long at `0.872x`, and
 Devanagari words at `0.918x`. These current red rows continue to rule out an
 overall shaping-performance claim.
 
+A subsequent group-local second-input class digest rejects impossible nested
+ChainContextSubst format-2 candidates before entering the large noinline
+matcher. The one-byte digest occupies existing `RuleGroup` padding, is disabled
+for groups with any one-input alternative, and resolves logical inputs through
+the same LookupFlag/default-ignorable/syllable traversal as exact matching.
+Two fixed-CPU-30, 31-sample A/B/B/A plus reverse-order comparisons against the
+independent `61ed9e2f` binary kept identical aggregate glyph counts and
+checksums. Across all eight endpoints, Noto Nastaliq words improved by about
+`1.99%` and the long Persian corpus by about `2.53%`; one forward words order
+regressed by `1.49%`, so the aggregate and counter evidence—not that noisy
+single ordering—justify retention. A ten-pass A/B/B/A counter run reduced
+retired instructions by `0.59%`, branches by `0.66%`, branch misses by `0.52%`,
+and cycles by `4.18%`. Full ReleaseFast tests and the complete retained
+HarfBuzz/HarfRust corpus parity gate passed, including the Noto words and long
+rows at `83,486`/`110,143` glyphs and checksums `fc28919889b8942b`/
+`9e460d90b9034d46`. The post-change broad matrix still trails the faster
+reference on Noto (`0.638x` words, `0.521x` long), so this is a measured
+incremental gain rather than closure of the shaping-performance requirement.
+
 ## Audit rules
 
 1. A semantic manifest proves inventory only; it is not a differential test.

@@ -520,6 +520,25 @@ about 8.3% and branches by about 9.8%. A proposed direct second-class map for
 one-lookahead chaining rules was not retained because its 31-sample result was
 mixed (`3012.137/3066.766` baseline versus `3049.971/2953.314` candidate).
 
+The next retained contextual-filtering change reuses the source decoder's
+whole-run proof that no default-ignorable scalar exists. LookupFlag/GDEF
+filtering still runs first; ordinary contextual glyphs then avoid repeated
+source-index, Unicode-property, variation-selector, joiner, and substitution
+checks. On Noto Nastaliq words, two fixed-CPU-30 symmetric 31-sample matrices
+reduced the candidate median geometric mean by `3.02%` and `2.57%`
+(`2.80%` across all eight endpoints), with identical 2,588,066-glyph output
+and checksum `364f7db2b1d87607`. The long Persian corpus improved by `3.69%`
+in A/B/B/A order and was within noise (`-0.78%`) in the reverse order, for a
+`1.48%` aggregate reduction. A five-repeat counter run reduced retired
+instructions by `1.46%` and branches by `2.71%`; branch misses and cycles were
+noisy on the heavily loaded host. Full ReleaseFast tests and the retained
+HarfBuzz/HarfRust corpus parity gate passed, including Noto words and long at
+the explicit `dflt` language boundary. Two broader matcher experiments were
+not retained: a homogeneous chaining-triplet matrix changed retired work by
+less than one percent and was neutral on the long corpus, while a dedicated
+two-input ContextSubst branch left retired work effectively unchanged and
+regressed the symmetric wall-time aggregate.
+
 The current post-`35d64472` strict fixed-CPU-30 matrices still fail without
 weakening `--fail-on-slower`. Broad `3 * 7` reports Noto Nastaliq words at
 `0.603x` and long text at `0.504x`; Roboto long (`1.127x`) and Source Serif

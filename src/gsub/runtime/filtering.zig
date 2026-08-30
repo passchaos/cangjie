@@ -160,6 +160,11 @@ pub fn contextualMaySkipGlyph(
     context_match: bool,
 ) bool {
     if (lookupIgnoresGlyph(lookup_flag, run, glyphs[glyph_index])) return true;
+    // This proof is established while decoding the immutable source stream.
+    // GSUB can replace or insert glyphs, but it cannot introduce a source
+    // scalar that was absent at decode time. Once LookupFlag filtering has
+    // run, none of the Unicode-specific transparency cases below can apply.
+    if (run.run_has_default_ignorables == false) return false;
     const codepoint =
         sourceCodepointForGlyph(run, glyph_index) orelse return false;
     if (run.visible_variation_selectors and

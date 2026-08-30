@@ -210,6 +210,63 @@ test "context filtering preserves substituted joiners CGJ and Mongolian FVS rule
     );
 }
 
+test "context filtering uses whole-run proof after LookupFlag filtering" {
+    const glyphs = [_]u16{ 1, 2 };
+    var glyph_classes = [_]u16{0} ** 3;
+    glyph_classes[2] = 3;
+    const run = filtering.Options{
+        .glyph_classes = &glyph_classes,
+        .run_has_default_ignorables = false,
+    };
+
+    // The proof removes source-codepoint work for an ordinary glyph, while
+    // GDEF-based LookupFlag filtering remains authoritative and still skips
+    // the mark. Both input and lookaround iterators share this ordering.
+    try std.testing.expect(!filtering.contextualMaySkipGlyph(
+        0x0008,
+        run,
+        &glyphs,
+        0,
+        false,
+    ));
+    try std.testing.expect(!filtering.contextualMaySkipGlyph(
+        0x0008,
+        run,
+        &glyphs,
+        0,
+        true,
+    ));
+    try std.testing.expect(filtering.contextualMaySkipGlyph(
+        0x0008,
+        run,
+        &glyphs,
+        1,
+        false,
+    ));
+    try std.testing.expect(filtering.contextualMaySkipGlyph(
+        0x0008,
+        run,
+        &glyphs,
+        1,
+        true,
+    ));
+
+    var attach_classes = [_]u16{0} ** 3;
+    attach_classes[2] = 2;
+    const attached_run = filtering.Options{
+        .glyph_classes = &glyph_classes,
+        .mark_attach_classes = &attach_classes,
+        .run_has_default_ignorables = false,
+    };
+    try std.testing.expect(filtering.contextualMaySkipGlyph(
+        0x0100,
+        attached_run,
+        &glyphs,
+        1,
+        true,
+    ));
+}
+
 test "ligature filtering skips fallback VS but honors CGJ reorder barriers" {
     var sources = std.ArrayList(usize).empty;
     defer sources.deinit(std.testing.allocator);

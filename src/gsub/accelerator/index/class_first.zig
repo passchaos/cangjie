@@ -21,6 +21,9 @@ const empty_group_index = std.math.maxInt(u16);
 pub const sorted_encoding: u16 = 0;
 pub const hash_encoding: u16 = 1;
 pub const dense_encoding: u16 = 2;
+const max_dense_span = 1024;
+const max_dense_hash_ratio = 2;
+const max_dense_hash_slack = 16;
 
 pub fn appendClassIndex(
     view: View,
@@ -303,15 +306,25 @@ fn appendHash(
     }
 }
 
-/// Dense indexes are worthwhile only when they use fewer words than both the
-/// exact sorted encoding and the 50%-load hash selected for larger sets. This
-/// keeps sparse production coverages compact while making consecutive glyph
-/// classes a direct bounds check and array load.
+/// Dense indexes trade a bounded amount of memory for one subtract, bounds
+/// check, and array load. Permit modestly sparse production coverages when the
+/// span stays small and remains within a fixed multiple of the hash encoding;
+/// this avoids repeated open-addressed probes in contextual Arabic lookups
+/// without letting adversarial sparse glyph IDs inflate every sidecar.
 fn denseSpan(entries: []const Entry) ?usize {
     if (entries.len < min_entries_for_hash) return null;
     const first = entries[0].glyph;
     const span = @as(usize, entries[entries.len - 1].glyph) - first + 1;
-    return if (2 + span < 1 + entries.len * 2) span else null;
+    if (span > max_dense_span) return null;
+    const hash_slots = std.math.ceilPowerOfTwo(usize, entries.len * 2) catch
+        return null;
+    const dense_words = 2 + span;
+    const hash_words = 1 + hash_slots * 2;
+    return if (dense_words <=
+        hash_words * max_dense_hash_ratio + max_dense_hash_slack)
+        span
+    else
+        null;
 }
 
 fn appendDense(

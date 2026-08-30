@@ -173,6 +173,47 @@ test "class first dense index preserves compact consecutive runs" {
     ) == null);
 }
 
+test "class first dense index admits bounded sparse production spans" {
+    const allocator = std.testing.allocator;
+    var entries: [class_first.min_entries_for_hash]class_first.Entry = undefined;
+    var groups: [class_first.min_entries_for_hash]class_context.RuleGroup =
+        undefined;
+    for (&entries, &groups, 0..) |*entry, *item, index| {
+        entry.* = .{
+            .glyph = @intCast(100 + index * 10),
+            .group_index = @intCast(index),
+        };
+        item.* = group(@intCast(40 + index), index);
+    }
+    var classes = std.ArrayList(u16).empty;
+    defer classes.deinit(allocator);
+    const start = try class_first.appendPrepared(
+        &entries,
+        &classes,
+        allocator,
+    );
+
+    try std.testing.expectEqual(
+        class_first.dense_encoding,
+        classes.items[start],
+    );
+    try std.testing.expectEqual(
+        @as(u16, 47),
+        class_first.findPrepared(
+            classes.items,
+            start,
+            &groups,
+            entries[7].glyph,
+        ).?.class_set,
+    );
+    try std.testing.expect(class_first.findPrepared(
+        classes.items,
+        start,
+        &groups,
+        entries[3].glyph + 1,
+    ) == null);
+}
+
 test "class first defensive probe rejects malformed dense indexes" {
     const groups = [_]class_context.RuleGroup{group(1, 0)};
     try std.testing.expect(class_first.find(

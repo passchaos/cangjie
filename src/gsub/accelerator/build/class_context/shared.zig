@@ -194,11 +194,14 @@ fn finishRuleGroupsWithOrder(
     while (group_start < rules.items.len) {
         const class_set = rules.items[group_start].class_set;
         var group_end = group_start;
+        var min_input_count: u16 = std.math.maxInt(u16);
         var max_input_count: u16 = 0;
         var max_lookahead_count: u16 = 0;
         while (group_end < rules.items.len and
             rules.items[group_end].class_set == class_set) : (group_end += 1)
         {
+            min_input_count =
+                @min(min_input_count, rules.items[group_end].input_count);
             max_input_count =
                 @max(max_input_count, rules.items[group_end].input_count);
             max_lookahead_count = @max(
@@ -210,6 +213,7 @@ fn finishRuleGroupsWithOrder(
             .class_set = class_set,
             .start = group_start,
             .len = group_end - group_start,
+            .min_input_count = min_input_count,
             .max_input_count = max_input_count,
             .max_lookahead_count = max_lookahead_count,
         });

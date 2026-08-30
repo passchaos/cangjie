@@ -74,6 +74,7 @@ pub fn suite(comptime Bindings: type) type {
                 .class_set = 3,
                 .start = 0,
                 .len = rules.len,
+                .min_input_count = 3,
                 .max_input_count = 4,
                 .max_lookahead_count = 0,
             }};

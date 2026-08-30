@@ -38,6 +38,10 @@ pub const RuleGroup = struct {
     class_set: u16,
     start: usize,
     len: usize,
+    /// Smallest input window represented by this group. Runtime can reject a
+    /// truncated suffix before doing any ClassDef work and can build longer
+    /// prefix hashes lazily while it probes the represented rule lengths.
+    min_input_count: u16,
     max_input_count: u16,
     max_lookahead_count: u16,
     /// Rules are ordered by region shape, hash, then authored order. Runtime

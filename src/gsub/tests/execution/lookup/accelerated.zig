@@ -190,6 +190,7 @@ test "accelerated GSUB dispatch executes extension-wrapped class sidecars" {
         .class_set = 0,
         .start = 0,
         .len = 1,
+        .min_input_count = 1,
         .max_input_count = 1,
         .max_lookahead_count = 0,
     }};

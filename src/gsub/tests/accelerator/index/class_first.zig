@@ -194,6 +194,7 @@ fn group(class_set: u16, start: usize) class_context.RuleGroup {
         .class_set = class_set,
         .start = start,
         .len = 1,
+        .min_input_count = 1,
         .max_input_count = 1,
         .max_lookahead_count = 0,
     };

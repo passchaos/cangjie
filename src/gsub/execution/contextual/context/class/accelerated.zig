@@ -86,12 +86,12 @@ pub fn applyGroup(
         false,
         position,
     );
-    if (input_len == 0) return .{};
+    if (input_len < group.min_input_count) return .{};
     const input_indices = input_indices_buffer[0..input_len];
     var input_classes: [max_input_glyphs]u16 = undefined;
     var input_hashes: [max_input_glyphs]u64 = undefined;
     input_hashes[0] = class_context.sequenceHashEmpty();
-    for (1..input_len) |input_index| {
+    for (1..group.min_input_count) |input_index| {
         input_classes[input_index - 1] =
             if (subtable.class_def == table.class_def.empty_offset)
                 glyphs.items[input_indices[input_index]]
@@ -115,6 +115,23 @@ pub fn applyGroup(
     if (subtable.rules_hash_sorted) {
         var matched_rule: ?*const class_context.Rule = null;
         for (0..input_len) |extra_count| {
+            if (extra_count >= group.min_input_count) {
+                const glyph = glyphs.items[input_indices[extra_count]];
+                input_classes[extra_count - 1] =
+                    if (subtable.class_def == table.class_def.empty_offset)
+                        glyph
+                    else
+                        try table.class_def.valueWithDense(
+                            view,
+                            subtable.class_def,
+                            subtable.class_values,
+                            glyph,
+                        );
+                input_hashes[extra_count] = class_context.sequenceHashAppend(
+                    input_hashes[extra_count - 1],
+                    input_classes[extra_count - 1],
+                );
+            }
             const target_hash = input_hashes[extra_count];
             var low: usize = 0;
             var high: usize = rules.len;

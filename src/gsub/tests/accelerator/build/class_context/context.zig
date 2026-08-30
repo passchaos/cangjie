@@ -139,6 +139,7 @@ test "context glyph builders preserve arbitrary substitution records" {
         extension[0].rules,
     );
     try std.testing.expectEqual(@as(u16, 2), direct[0].rules[0].subst_count);
+    try std.testing.expectEqual(@as(u16, 2), direct[0].groups[0].min_input_count);
     try std.testing.expectEqual(
         @as(u32, @intCast(rule + 6)),
         direct[0].rules[0].records_offset,

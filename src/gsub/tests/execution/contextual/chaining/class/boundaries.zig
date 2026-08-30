@@ -32,6 +32,7 @@ test "accelerated chaining class preserves backtrack order syllables and safety"
         .class_set = 3,
         .start = 0,
         .len = 1,
+        .min_input_count = 1,
         .max_input_count = 1,
         .max_lookahead_count = 1,
     }};
@@ -124,6 +125,7 @@ test "accelerated chaining class uses physical adjacency proof" {
         .class_set = 3,
         .start = 0,
         .len = 1,
+        .min_input_count = 2,
         .max_input_count = 2,
         .max_lookahead_count = 1,
     }};
@@ -205,6 +207,7 @@ test "physical adjacency fast path preserves reversed backtrack order" {
         .class_set = 3,
         .start = 0,
         .len = 1,
+        .min_input_count = 1,
         .max_input_count = 1,
         .max_lookahead_count = 1,
     }};

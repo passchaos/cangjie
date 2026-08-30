@@ -41,6 +41,7 @@ test "accelerated chaining class tries shorter authored rule first" {
         .class_set = 3,
         .start = 0,
         .len = rules.len,
+        .min_input_count = 4,
         .max_input_count = 4,
         .max_lookahead_count = 1,
     }};
@@ -104,6 +105,7 @@ test "accelerated chaining class extends cached class prefixes across rules" {
         .class_set = 3,
         .start = 0,
         .len = rules.len,
+        .min_input_count = 3,
         .max_input_count = 3,
         .max_lookahead_count = 1,
     }};
@@ -168,6 +170,7 @@ test "accelerated chaining class applies complete multi-record actions" {
         .class_set = 3,
         .start = 0,
         .len = 1,
+        .min_input_count = 2,
         .max_input_count = 2,
         .max_lookahead_count = 0,
     }};
@@ -221,6 +224,7 @@ test "accelerated chaining class ignores unprofitable hash metadata" {
         .class_set = 3,
         .start = 0,
         .len = rules.len,
+        .min_input_count = 2,
         .max_input_count = 2,
         .max_lookahead_count = 1,
         // The builder may sort a large overall group, but it deliberately

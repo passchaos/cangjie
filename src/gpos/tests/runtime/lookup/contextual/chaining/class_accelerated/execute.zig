@@ -36,6 +36,7 @@ test "accelerated class chaining matches sidecar classes and nested lookup" {
         .class_set = 2,
         .start = 0,
         .len = 1,
+        .min_input_count = 2,
         .max_input_count = 2,
         .max_lookahead_count = 1,
     }};
@@ -95,6 +96,7 @@ test "accelerated class chaining keeps nonmatching sidecars inert" {
         .class_set = 2,
         .start = 0,
         .len = 1,
+        .min_input_count = 2,
         .max_input_count = 2,
         .max_lookahead_count = 1,
     }};

@@ -7,6 +7,7 @@ const metadata = @import("../../../runtime/metadata.zig");
 const options = @import("../../../runtime/options.zig");
 const lookup_order = @import("../../../../opentype/lookup_order.zig");
 const prefilter = @import("../../../runtime/prefilter/root.zig");
+const plan_prefilter = @import("prefilter.zig");
 const shared = @import("shared.zig");
 const state = @import("../../../runtime/state.zig");
 const table = @import("../../../table/root.zig");
@@ -122,6 +123,12 @@ pub fn mergedAfterPlanProof(
         selected.active_feature_value = lookup.value;
         selected.active_feature_random = lookup.random;
         if (selected.shape_profile == null) {
+            if (!plan_prefilter.mayMatch(
+                sidecar,
+                glyphs.items,
+                selected,
+                &cache,
+            )) continue;
             try Executor.applyLookupUnprofiledAfterPlanProof(
                 view,
                 offset,

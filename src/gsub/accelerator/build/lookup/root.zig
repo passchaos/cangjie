@@ -52,7 +52,6 @@ pub fn build(
     }
 
     var table_uses_run_digest_cache = false;
-    var ligature_digest_lookup_count: usize = 0;
     for (lookups, 0..) |*lookup, lookup_index| {
         const lookup_offset = try table.offset.required16(
             view,
@@ -67,16 +66,14 @@ pub fn build(
         table_uses_run_digest_cache = table_uses_run_digest_cache or
             (lookup.chaining_coverage_only and
                 !lookup.chaining_input_digest.isEmpty());
-        if (!lookup.ligature_subst.first_component_digest.isEmpty()) {
-            ligature_digest_lookup_count += 1;
-        }
+        table_uses_run_digest_cache = table_uses_run_digest_cache or
+            !lookup.ligature_subst.first_component_digest.isEmpty();
         built_count += 1;
     }
 
-    // One ligature lookup already scans the run once. Two or more amortize a
-    // shared mutation-aware digest across independent first-component sets.
-    table_uses_run_digest_cache =
-        table_uses_run_digest_cache or ligature_digest_lookup_count >= 2;
+    // Cached plans may invoke the same lookup more than once with mutations
+    // between occurrences. Provision the shared generation even for one
+    // digest-capable lookup so every reused summary is invalidated safely.
     if (lookups.len != 0) {
         lookups[0].table_uses_run_digest_cache = table_uses_run_digest_cache;
         // Detached low-level fixtures may expose only a LookupList. Feature

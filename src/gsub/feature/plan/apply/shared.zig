@@ -5,6 +5,7 @@ const model = @import("../../model.zig");
 const options = @import("../../../runtime/options.zig");
 const lookup_order = @import("../../../../opentype/lookup_order.zig");
 const prefilter = @import("../../../runtime/prefilter/root.zig");
+const plan_prefilter = @import("prefilter.zig");
 const table = @import("../../../table/root.zig");
 const GlyphId = @import("../../../../glyph.zig").GlyphId;
 
@@ -49,6 +50,12 @@ pub fn entry(
                     // branch for every lookup in release shaping.
                     std.debug.assert(sidecar.lookup_offset == offset);
                     std.debug.assert(sidecar.lookup_type != 0);
+                    if (!plan_prefilter.mayMatch(
+                        sidecar,
+                        glyphs.items,
+                        run,
+                        cache,
+                    )) continue;
                     try Executor.applyLookupUnprofiledAfterPlanProof(
                         view,
                         offset,

@@ -49,7 +49,7 @@ pub fn suite(comptime Bindings: type) type {
             try std.testing.expectEqual(generation, cache.generation);
         }
 
-        test "GSUB ligature digest state activates only for reusable tables" {
+        test "GSUB ligature digest state covers repeated cached-plan use" {
             const allocator = std.testing.allocator;
             var one = [_]u8{0} ** 46;
             writeU32(&one, 0, 0x00010000);
@@ -65,7 +65,7 @@ pub fn suite(comptime Bindings: type) type {
             );
             defer acceleration.ownership.deinit(allocator, one_sidecars);
             try std.testing.expect(
-                !one_sidecars[0].table_uses_run_digest_cache,
+                one_sidecars[0].table_uses_run_digest_cache,
             );
             var generation: usize = 0;
             const one_run = state.withDigestGeneration(
@@ -73,7 +73,7 @@ pub fn suite(comptime Bindings: type) type {
                 &generation,
             );
             try std.testing.expect(
-                one_run.glyph_mutation_generation == null,
+                one_run.glyph_mutation_generation != null,
             );
 
             var two = [_]u8{0} ** 80;

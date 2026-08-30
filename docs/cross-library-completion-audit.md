@@ -566,6 +566,27 @@ rows at `83,486`/`110,143` glyphs and checksums `fc28919889b8942b`/
 reference on Noto (`0.638x` words, `0.521x` long), so this is a measured
 incremental gain rather than closure of the shaping-performance requirement.
 
+Cached staged and merged plans now apply the already-built ligature and
+coverage-only chaining first-input digests before crossing the unprofiled
+lookup-executor boundary. The proof uses one unfiltered run-wide superset and
+invalidates it with the shared glyph-mutation generation; class-based,
+incomplete, unproved, and profiled paths remain unchanged. Production tables
+now provision that generation even for one digest-capable ligature, while a
+detached caller without an epoch conservatively bypasses the early rejection.
+Fixed-CPU-30, 31-sample A/B/B/A comparisons against `188acf6a` retained
+identical aggregate glyph counts and checksums and improved Amiri words by
+`6.76%`, Amiri long by `2.28%`, Roboto words by `6.29%`, and Devanagari words
+by `2.80%`. An earlier A/B/B/A plus reverse-order series before this final
+generation guard likewise improved all four workloads in aggregate. A ten-pass
+Amiri words counter run reduced retired instructions by `10.76%`, branches by
+`2.72%`, branch misses by `0.19%`, and cycles by `12.56%`; Devanagari
+instructions and branch misses also fell by `0.92%` and `0.98%` while branches
+were effectively flat. Full ReleaseFast tests and the complete
+HarfBuzz/HarfRust corpus parity gate passed. The subsequent strict core matrix
+improved the observed rows but remained red for Amiri words/long
+(`0.830x`/`0.870x`) and Devanagari (`0.955x`), so the cross-library
+shaping-performance claim is still open.
+
 ## Audit rules
 
 1. A semantic manifest proves inventory only; it is not a differential test.

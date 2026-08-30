@@ -15,7 +15,10 @@ pub const Span = struct {
     style_index: u32,
     font_size: f32,
     /// Optional style-resolved cascade. A null slice inherits the paragraph
-    /// cascade; a non-null slice is owned by the caller for the layout call.
+    /// cascade; a non-null slice is owned by the caller for one-shot layout and
+    /// copied by retained preparation. Retained preparation keeps inheritance
+    /// bound to the original paragraph cascade and uses a separate union only
+    /// to assign stable public run indexes.
     faces: ?[]const *const face_mod.Face = null,
     script_tag: ?unicode.OpenTypeScriptTag = null,
     language_tag: ?unicode.OpenTypeLanguageTag = null,
@@ -53,6 +56,14 @@ pub const GlyphMetadata = struct {
 /// this focused module. The context owns actual shaping, fallback, reflow, and
 /// bidi operations.
 pub fn layout(context: anytype, text: []const u8, spans: []const Span) !void {
+    try shape(context, text, spans);
+    try context.finish(spans);
+}
+
+/// Validate and shape the unified logical glyph stream without performing
+/// width-dependent paragraph presentation. Retained styled paragraphs use
+/// this boundary to snapshot the pristine glyphs and metadata once.
+pub fn shape(context: anytype, text: []const u8, spans: []const Span) !void {
     try validatePartition(text, spans);
     for (spans) |span| try context.validateSpan(span);
 
@@ -87,7 +98,6 @@ pub fn layout(context: anytype, text: []const u8, spans: []const Span) !void {
         }
         span_index = shaping_end_index;
     }
-    try context.finish(spans);
 }
 
 pub fn validatePartition(text: []const u8, spans: []const Span) !void {

@@ -130,9 +130,11 @@ Paragraph request and ownership policy is organized under
 
 - `options.zig` owns public paragraph options, validation, and the projection
   from paragraph controls to width-independent shaping controls.
-- `retained.zig` owns `ShapedParagraph` and `ReflowBuffer`, including immutable
-  source/shaping snapshots and repeatable reflow without another GSUB/GPOS
-  pass.
+- `retained.zig` owns `ShapedParagraph` and `ReflowBuffer`, while the retained
+  styled boundary owns `StyledShaped` and `StyledReflowBuffer`. Both preserve
+  immutable source/shaping snapshots for repeatable reflow without another
+  whole-paragraph GSUB/GPOS pass; the styled owner additionally preserves
+  normalized spans and glyph-parallel metadata.
 - `vertical_columns.zig` owns physical RL/LR column progression;
   `vertical_wrap/` owns positive-down source-range selection and tab fields;
   focused block-metric, inline-alignment, and ellipsis modules keep those
@@ -158,7 +160,9 @@ Post-shaping bidi output reconstruction is similarly isolated under
   glyph permutation.
 
 Styled glyph metadata keeps its separate `styled_bidi` permutation sidecar;
-ordinary shaping therefore does not pay for attributed-text state.
+ordinary shaping therefore does not pay for attributed-text state. Retained
+styled paragraphs copy that sidecar alongside their pristine glyph/run
+snapshots and rebuild it into final visual order on every reflow.
 
 Public result records are separated from shaping algorithms under
 `src/layout/types/`:
@@ -769,6 +773,14 @@ name resolution remains a separate `cangjie.font.database.Database`
 responsibility: the unified entry consumes an already selected `font.Cascade`
 and does not guess how a family name maps to loaded font bytes.
 
+The low-level styled paragraph API offers both one-shot and retained ownership
+boundaries. `Engine.layoutStyled` returns an engine-borrowed layout, metadata,
+and intrinsic widths; `layoutStyledWithoutContentWidths` skips the independent
+intrinsic-width pass. `Engine.prepareStyledParagraph` instead returns an
+owning `paragraph.StyledShaped` for repeated layout through a caller-owned
+`paragraph.StyledReflowBuffer`. The separate `text.attributed` API remains the
+higher-level owned path for paint and decoration-oriented style records.
+
 Attributed paragraph output also materializes text decorations instead of
 leaving renderers to reconstruct them from logical style ranges.
 `AttributedParagraphLayout.decorations` contains paragraph-space underline and
@@ -823,6 +835,17 @@ without another GSUB/GPOS pass and without accumulating mutations. Reflow
 rejects direction, script, language, feature, or variation changes because
 those options require reshaping.
 
+`StyledShaped` extends the same boundary to normalized style partitions. It
+owns copies of the UTF-8 source, the outer span array, every span's face-pointer
+array, feature overrides, variation coordinates, pristine shaped output, and
+glyph metadata. The referenced faces and optional dictionaries remain
+borrowed. `StyledReflowBuffer` owns mutable layout and metadata storage; a
+result's `.layout` and `.glyph_metadata` views remain valid only until that
+buffer's next layout call. Separate buffers may reflow one immutable owner
+concurrently when their allocators and the borrowed faces/dictionaries also
+support concurrent use. `contentWidths(options)` uses the same retained
+analysis.
+
 `ShapedParagraph.breakLines` exposes the retained greedy breaker as a concrete
 resumable owner. `Breaker.advance` commits at most one logical visual line or
 vertical column and may receive an `x/y/width` region for exactly that
@@ -847,10 +870,9 @@ expansion.
 
 The resumable API intentionally accepts `.greedy` only. Balanced breaking
 optimizes a complete hard-break segment and therefore still uses ordinary
-whole-paragraph retained layout. Styled one-shot layout likewise remains on
-its existing complete pipeline until it has a width-independent attributed
-owner whose glyph-parallel metadata can participate in checkpoints; neither
-case silently falls back to replay while claiming to be incremental.
+whole-paragraph retained layout. The retained styled MVP provides complete
+repeatable layout rather than a styled `breakLines` checkpoint protocol; it
+does not silently claim incremental line-at-a-time progress.
 
 `ParagraphOptions.line_break_strategy` independently selects greedy or
 balanced soft-boundary policy. Both horizontal lines and vertical columns first
@@ -1012,9 +1034,15 @@ lists. `shape` handles both ordinary runs and uncommon UTF-8 byte-scoped
 feature ranges, avoiding a second nearly identical shaping entry point.
 Cascade, script-run, retained-paragraph, one-shot layout, styled layout, and
 measurement operations share the same engine and request model.
-Returned run and layout slices borrow the engine and remain valid until its
-next shaping/layout call. Faces must outlive the engine, or the caller must
-invoke `clearCaches` before destroying them.
+`prepareStyledParagraph` consumes the same `paragraph.StyledRequest` as the
+one-shot styled methods and returns `paragraph.StyledShaped`; its layouts use
+`paragraph.StyledReflowBuffer` and return `.layout` plus glyph-parallel
+`.glyph_metadata`. One-shot run/layout slices borrow the engine until its next
+operation. Retained paragraph owners are independent of subsequent engine
+output, while each final layout view borrows its reflow buffer until that
+buffer is reused. Faces and their backing bytes must always outlive retained
+paragraphs that reference them. For one-shot use, faces must outlive the engine
+unless the caller invokes `clearCaches` before destroying engine-cached faces.
 
 The package root is intentionally small and grouped by responsibility:
 `cangjie.shaping.Engine`, `cangjie.font`, `cangjie.text`, `cangjie.shaping`, `cangjie.paragraph`,

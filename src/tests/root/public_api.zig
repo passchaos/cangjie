@@ -209,6 +209,21 @@ test "public facade uses domain names without legacy aliases" {
         @hasDecl(cangjie.paragraph.Shaped, "contentWidths"),
     );
     try std.testing.expect(
+        @typeInfo(cangjie.paragraph.StyledShaped) == .@"struct",
+    );
+    try std.testing.expect(
+        @typeInfo(cangjie.paragraph.StyledReflowBuffer) == .@"struct",
+    );
+    try std.testing.expect(
+        @hasDecl(cangjie.paragraph.StyledShaped, "contentWidths"),
+    );
+    try std.testing.expect(
+        @hasDecl(cangjie.paragraph.StyledShaped, "layout"),
+    );
+    try std.testing.expect(
+        @hasDecl(cangjie.shaping.Engine, "prepareStyledParagraph"),
+    );
+    try std.testing.expect(
         @hasDecl(cangjie.shaping.Engine, "contentWidths"),
     );
     try std.testing.expect(
@@ -1711,6 +1726,35 @@ test "shaping and paragraph domains expose reusable library workflows" {
         .{ .max_width = 15 },
     );
     try std.testing.expect(narrow.lines.len > 1);
+
+    const styled_request: cangjie.paragraph.StyledRequest = .{
+        .text = "A A",
+        .default_font_size = 20,
+        .spans = &.{.{
+            .byte_start = 0,
+            .byte_len = 3,
+            .style_index = 9,
+            .font_size = 20,
+        }},
+        .options = .{ .max_width = 100 },
+    };
+    var styled_paragraph: cangjie.paragraph.StyledShaped =
+        try engine.prepareStyledParagraph(cascade, styled_request);
+    defer styled_paragraph.deinit();
+    _ = styled_paragraph.shapedText();
+    var styled_reflow =
+        cangjie.paragraph.StyledReflowBuffer.init(allocator);
+    defer styled_reflow.deinit();
+    const styled_layout: cangjie.paragraph.StyledLayoutResult =
+        try styled_paragraph.layout(
+            &styled_reflow,
+            .{ .max_width = 20 },
+        );
+    try std.testing.expectEqual(
+        styled_layout.layout.glyphs.len,
+        styled_layout.glyph_metadata.len,
+    );
+    _ = try styled_paragraph.contentWidths(.{ .max_width = 20 });
 
     var draw_list = try cangjie.render.buildGlyphDrawList(
         allocator,

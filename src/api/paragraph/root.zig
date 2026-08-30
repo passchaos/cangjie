@@ -8,6 +8,7 @@ const text_geometry = @import(
 );
 const inline_object = @import("../../layout/inline_object/root.zig");
 const retained = @import("../../layout/paragraph/retained.zig");
+const retained_styled = @import("../../layout/paragraph/retained/styled.zig");
 const styled_buffer = @import("../../layout/styled_buffer.zig");
 const styled_paragraph = @import("../../layout/styled_paragraph.zig");
 const paragraph_types = @import("../../layout/types/paragraph.zig");
@@ -64,6 +65,8 @@ pub const object_replacement_utf8 = inline_object.object_replacement_utf8;
 
 pub const Shaped = retained.ShapedParagraph;
 pub const ReflowBuffer = retained.ReflowBuffer;
+pub const StyledShaped = retained_styled.ShapedParagraph;
+pub const StyledReflowBuffer = retained_styled.ReflowBuffer;
 pub const Breaker = retained.Breaker;
 pub const BreakerInput = retained.BreakerInput;
 pub const BreakerStep = retained.BreakerStep;

@@ -35,9 +35,13 @@ const plan_validation = @import("../../shaping/plan/validation.zig");
 const segment_pipeline = @import("../../shaping/pipeline/segment.zig");
 const pipeline_types = @import("../../shaping/pipeline/types.zig");
 const unicode = @import("../../unicode.zig");
+const shaping_plan = @import("../../shaping/plan/root.zig");
 
 pub const Input = struct {
     cascade: font_fallback.Cascade,
+    /// Optional namespace used only to publish stable `font_index` values.
+    /// Font selection still uses `cascade` or a span-local cascade.
+    font_index_cascade: ?font_fallback.Cascade = null,
     buffer: *context_output.Buffer,
     styled: *styled_buffer.Buffer,
     text: []const u8,
@@ -49,7 +53,73 @@ pub const Input = struct {
     compute_content_widths: bool = true,
 };
 
+/// Reusable metadata transaction storage for styled reflow. Keeping these
+/// lists beside the output buffer makes repeated layout allocation-stable and
+/// lets balanced/JSTF probes roll back glyphs and metadata together.
+pub const ReflowScratch = struct {
+    candidate_metadata: std.ArrayList(styled_buffer.Metadata) = .empty,
+    commit_metadata: std.ArrayList(styled_buffer.Metadata) = .empty,
+    trial_metadata: std.ArrayList(styled_buffer.Metadata) = .empty,
+
+    pub fn deinit(self: *ReflowScratch, allocator: std.mem.Allocator) void {
+        self.trial_metadata.deinit(allocator);
+        self.commit_metadata.deinit(allocator);
+        self.candidate_metadata.deinit(allocator);
+        self.* = undefined;
+    }
+
+    pub fn clear(self: *ReflowScratch) void {
+        self.candidate_metadata.clearRetainingCapacity();
+        self.commit_metadata.clearRetainingCapacity();
+        self.trial_metadata.clearRetainingCapacity();
+    }
+};
+
+pub const ReflowInput = struct {
+    cascade: font_fallback.Cascade,
+    font_index_cascade: ?font_fallback.Cascade = null,
+    buffer: *context_output.Buffer,
+    styled: *styled_buffer.Buffer,
+    scratch: *ReflowScratch,
+    text: []const u8,
+    default_font_size: f32,
+    spans: []const styled_paragraph.Span,
+    options: paragraph_options.Options,
+    grapheme_clusters: []const unicode.GraphemeCluster,
+    line_breaks: []const @import("../line_break/opportunity.zig").Opportunity,
+    needs_bidi_reorder: bool,
+    bidi_paragraph: ?unicode.BidiParagraph,
+};
+
 pub fn layout(input: Input) !paragraph_types.ParagraphLayout {
+    try paragraph_options.validateForText(input.text, input.options);
+    try plan_validation.utf8(input.text);
+    try plan_validation.fontSize(input.default_font_size);
+    if (input.cascade.fonts.len == 0) return error.EmptyFontCascade;
+    try inline_object.validate(input.text, input.options.inline_objects);
+
+    input.buffer.clear();
+    input.styled.clear();
+    var scratch: ReflowScratch = .{};
+    defer scratch.deinit(input.buffer.allocator);
+    var driver = Driver{
+        .cascade = input.cascade,
+        .buffer = input.buffer,
+        .styled = input.styled,
+        .text = input.text,
+        .default_font_size = input.default_font_size,
+        .options = input.options,
+        .compute_content_widths = input.compute_content_widths,
+        .scratch = &scratch,
+    };
+    try styled_paragraph.layout(&driver, input.text, input.spans);
+    return input.buffer.paragraphLayout(input.options.writing_mode);
+}
+
+/// Shape and build pristine styled metadata without selecting visual lines.
+/// The caller may copy these logical-order arrays into an owning retained
+/// paragraph and later invoke `reflow` without whole-paragraph shaping.
+pub fn prepare(input: Input) !void {
     try paragraph_options.validateForText(input.text, input.options);
     try plan_validation.utf8(input.text);
     try plan_validation.fontSize(input.default_font_size);
@@ -60,25 +130,97 @@ pub fn layout(input: Input) !paragraph_types.ParagraphLayout {
     input.styled.clear();
     var driver = Driver{
         .cascade = input.cascade,
+        .font_index_cascade = input.font_index_cascade,
         .buffer = input.buffer,
         .styled = input.styled,
         .text = input.text,
         .default_font_size = input.default_font_size,
         .options = input.options,
-        .compute_content_widths = input.compute_content_widths,
+        .compute_content_widths = false,
     };
-    try styled_paragraph.layout(&driver, input.text, input.spans);
+    try styled_paragraph.shape(&driver, input.text, input.spans);
+    try driver.prepareMetadata(input.spans);
+}
+
+/// Validate a styled request without shaping it. Retained preparation uses
+/// this before allocating its canonical union cascade, while one-shot layout
+/// continues to accept independently resolved style-local cascades.
+pub fn validate(input: Input) !void {
+    try paragraph_options.validateForText(input.text, input.options);
+    try plan_validation.utf8(input.text);
+    try plan_validation.fontSize(input.default_font_size);
+    if (input.cascade.fonts.len == 0) return error.EmptyFontCascade;
+    try inline_object.validate(input.text, input.options.inline_objects);
+    var driver = Driver{
+        .cascade = input.cascade,
+        .font_index_cascade = input.font_index_cascade,
+        .buffer = input.buffer,
+        .styled = input.styled,
+        .text = input.text,
+        .default_font_size = input.default_font_size,
+        .options = input.options,
+        .compute_content_widths = false,
+    };
+    try styled_paragraph.validatePartition(input.text, input.spans);
+    for (input.spans) |span| try driver.validateSpan(span);
+}
+
+/// Canonical paragraph-level shaping identity used by both initial styled
+/// preparation and retained-option validation. Styled spans own script,
+/// language, feature, and variation selection; unsupported paragraph-level
+/// duplicates are intentionally normalized away instead of pretending that
+/// they affected the shaped result.
+pub fn shapeKey(text: []const u8, options: paragraph_options.Options) shaping_plan.ShapePlanKey {
+    var shape_options = paragraph_options.shapeOptions(options);
+    shape_options.script_tag = null;
+    shape_options.language_tag = null;
+    shape_options.script_position = .normal;
+    shape_options.features = &.{};
+    shape_options.normalized_variation_coords = &.{};
+    shape_options.not_found_variation_selector_glyph = null;
+    shape_options.remove_default_ignorables = false;
+    shape_options.cluster_level = null;
+    return .fromText(text, shape_options);
+}
+
+/// Reflow an already prepared logical glyph/metadata snapshot.
+pub fn reflow(input: ReflowInput) !paragraph_types.ParagraphLayout {
+    input.scratch.clear();
+    var driver = Driver{
+        .cascade = input.cascade,
+        .font_index_cascade = input.font_index_cascade,
+        .buffer = input.buffer,
+        .styled = input.styled,
+        .text = input.text,
+        .default_font_size = input.default_font_size,
+        .options = input.options,
+        .compute_content_widths = false,
+        .scratch = input.scratch,
+        .analyzed_graphemes = input.grapheme_clusters,
+        .analyzed_line_breaks = input.line_breaks,
+        .needs_bidi_reorder = input.needs_bidi_reorder,
+        .bidi_paragraph = input.bidi_paragraph,
+        .analysis_is_retained = true,
+    };
+    try driver.finishPrepared(input.spans);
     return input.buffer.paragraphLayout(input.options.writing_mode);
 }
 
 const Driver = struct {
     cascade: font_fallback.Cascade,
+    font_index_cascade: ?font_fallback.Cascade = null,
     buffer: *context_output.Buffer,
     styled: *styled_buffer.Buffer,
     text: []const u8,
     default_font_size: f32,
     options: paragraph_options.Options,
     compute_content_widths: bool,
+    scratch: ?*ReflowScratch = null,
+    analyzed_graphemes: ?[]const unicode.GraphemeCluster = null,
+    analyzed_line_breaks: ?[]const @import("../line_break/opportunity.zig").Opportunity = null,
+    needs_bidi_reorder: ?bool = null,
+    bidi_paragraph: ?unicode.BidiParagraph = null,
+    analysis_is_retained: bool = false,
     pen: fallback_segment.Pen = .{},
 
     pub fn allocator(self: *@This()) std.mem.Allocator {
@@ -200,10 +342,7 @@ const Driver = struct {
                     .direction = self.options.direction,
                     .reorder_bidi = false,
                     .native_direction_shaping = true,
-                    .writing_mode = if (self.options.writing_mode.isVertical())
-                        .vertical_rl
-                    else
-                        .horizontal_tb,
+                    .writing_mode = normalizedWritingMode(self.options),
                     .text_orientation = self.options.text_orientation,
                     .features = span.features,
                     .normalized_variation_coords = span.normalized_variation_coords,
@@ -227,21 +366,14 @@ const Driver = struct {
         self: *@This(),
         spans: []const styled_paragraph.Span,
     ) !void {
-        const policy_ranges =
-            try styled_paragraph.resolveLineBreakPolicyRanges(
-                self.buffer.allocator,
-                self.text.len,
-                spans,
-                self.options,
-            );
-        defer self.buffer.allocator.free(policy_ranges);
-        var resolved_options = self.options;
-        resolved_options.line_break_policy_ranges = policy_ranges;
-        try paragraph_options.validateForText(
-            self.text,
-            resolved_options,
-        );
+        try self.prepareMetadata(spans);
+        try self.finishPrepared(spans);
+    }
 
+    fn prepareMetadata(
+        self: *@This(),
+        spans: []const styled_paragraph.Span,
+    ) !void {
         try bidi_reorder.normalizeLogical(self.buffer);
         try styled_buffer.rebuild(
             &self.styled.metadata,
@@ -254,8 +386,25 @@ const Driver = struct {
             self.buffer.glyphs.items,
             self.options.writing_mode,
         );
+    }
+
+    fn finishPrepared(
+        self: *@This(),
+        spans: []const styled_paragraph.Span,
+    ) !void {
+        const owned_policy_ranges =
+            try styled_paragraph.resolveLineBreakPolicyRanges(
+                self.buffer.allocator,
+                self.text.len,
+                spans,
+                self.options,
+            );
+        defer self.buffer.allocator.free(owned_policy_ranges);
+        var resolved_options = self.options;
+        resolved_options.line_break_policy_ranges = owned_policy_ranges;
+        try paragraph_options.validateForText(self.text, resolved_options);
         const simple_layout = !self.compute_content_widths and
-            policy_ranges.len == 0 and
+            owned_policy_ranges.len == 0 and
             paragraph_reflow.supportsSimpleRetained(resolved_options) and
             simpleStyledShape(
                 self.buffer.glyphs.items,
@@ -270,7 +419,10 @@ const Driver = struct {
         var intrinsic_breaks: ?[]const Opportunity = null;
         var owned_breaks: ?[]Opportunity = null;
         defer if (owned_breaks) |items| self.buffer.allocator.free(items);
-        if (simple_layout) {
+        if (self.analysis_is_retained) {
+            intrinsic_graphemes = self.analyzed_graphemes.?;
+            intrinsic_breaks = self.analyzed_line_breaks.?;
+        } else if (simple_layout) {
             // This strict path has no dictionary, hyphenation, or policy
             // ranges. Its UAX analyses therefore depend only on source bytes
             // and can be shared by repeated styled construction calls. More
@@ -327,22 +479,18 @@ const Driver = struct {
         // Build the truncated prefix first. Synthetic dots are appended after
         // the sidecar has captured the terminal visible style.
         line_options.ellipsis = false;
-        var candidate_metadata =
-            std.ArrayList(styled_buffer.Metadata).empty;
-        defer candidate_metadata.deinit(self.buffer.allocator);
-        var commit_metadata =
-            std.ArrayList(styled_buffer.Metadata).empty;
-        defer commit_metadata.deinit(self.buffer.allocator);
-        var trial_metadata =
-            std.ArrayList(styled_buffer.Metadata).empty;
-        defer trial_metadata.deinit(self.buffer.allocator);
+        var local_scratch: ReflowScratch = .{};
+        defer if (self.scratch == null)
+            local_scratch.deinit(self.buffer.allocator);
+        const scratch = self.scratch orelse &local_scratch;
         const recipe = styled_reshape.Recipe{
             .cascade = self.cascade,
+            .font_index_cascade = self.font_index_cascade,
             .allocator = self.buffer.allocator,
             .metadata = &self.styled.metadata,
-            .candidate_metadata = &candidate_metadata,
-            .commit_metadata = &commit_metadata,
-            .trial_metadata = &trial_metadata,
+            .candidate_metadata = &scratch.candidate_metadata,
+            .commit_metadata = &scratch.commit_metadata,
+            .trial_metadata = &scratch.trial_metadata,
             .text = self.text,
             .spans = spans,
             .options = resolved_options,
@@ -561,21 +709,30 @@ const Driver = struct {
         {
             return;
         }
-        if (!plan_bidi.paragraphNeedsReorder(
-            self.text,
-            options.direction,
-        )) return;
-        const scratch = &self.buffer.bidi_reorder_scratch;
-        var paragraph = try scratch.resolveParagraph(
-            self.text,
-            if (options.direction == .rtl) .rtl else .ltr,
-        );
-        defer paragraph.deinit();
-        try bidi_reorder.applyLinesResolvedRecording(
-            self.buffer,
-            paragraph,
-            true,
-        );
+        if (!(self.needs_bidi_reorder orelse
+            plan_bidi.paragraphNeedsReorder(
+                self.text,
+                options.direction,
+            ))) return;
+        if (self.bidi_paragraph) |paragraph| {
+            try bidi_reorder.applyLinesResolvedRecording(
+                self.buffer,
+                paragraph,
+                true,
+            );
+        } else {
+            const scratch = &self.buffer.bidi_reorder_scratch;
+            var paragraph = try scratch.resolveParagraph(
+                self.text,
+                if (options.direction == .rtl) .rtl else .ltr,
+            );
+            defer paragraph.deinit();
+            try bidi_reorder.applyLinesResolvedRecording(
+                self.buffer,
+                paragraph,
+                true,
+            );
+        }
         try styled_buffer.reorderByPermutation(
             &self.styled.metadata,
             self.styled.allocator,
@@ -589,8 +746,9 @@ const Driver = struct {
     ) void {
         // Style-local cascades record local indexes; the public result uses the
         // union paragraph cascade as one stable diagnostic/render index space.
+        const namespace = self.font_index_cascade orelse self.cascade;
         for (self.buffer.runs.items[run_start..]) |*run| {
-            for (self.cascade.fonts, 0..) |font, font_index| {
+            for (namespace.fonts, 0..) |font, font_index| {
                 if (font != run_types.fontForBackend(run.*)) continue;
                 run.font_index = font_index;
                 break;
@@ -625,6 +783,17 @@ fn simpleStyledShape(
         expected_byte_start = glyph.sourceByteEnd();
     }
     return expected_byte_start == text_len;
+}
+
+fn normalizedWritingMode(
+    options: paragraph_options.Options,
+) pipeline_types.WritingMode {
+    // RL/LR is a block-progression choice. OpenType shaping sees the same
+    // canonical vertical mode so retained output may switch column direction.
+    return if (options.writing_mode.isVertical())
+        .vertical_rl
+    else
+        .horizontal_tb;
 }
 
 const SegmentContext = struct {

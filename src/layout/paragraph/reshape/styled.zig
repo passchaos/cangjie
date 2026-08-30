@@ -24,6 +24,9 @@ const reshape = @import("../reshape.zig");
 
 pub const Recipe = struct {
     cascade: font_fallback.Cascade,
+    /// Optional union used only for public `CascadeRun.font_index` values.
+    /// Font selection for inherited spans continues to use `cascade`.
+    font_index_cascade: ?font_fallback.Cascade = null,
     allocator: std.mem.Allocator,
     metadata: *std.ArrayList(styled_buffer.Metadata),
     candidate_metadata: *std.ArrayList(styled_buffer.Metadata),
@@ -132,7 +135,8 @@ pub const Recipe = struct {
             '.',
         );
         const font = fonts[local_index];
-        const font_index = for (self.cascade.fonts, 0..) |candidate, index| {
+        const namespace = self.font_index_cascade orelse self.cascade;
+        const font_index = for (namespace.fonts, 0..) |candidate, index| {
             if (candidate == font) break index;
         } else if (source_run) |run|
             run.font_index
@@ -334,6 +338,8 @@ pub const Recipe = struct {
                     .direction = self.options.direction,
                     .reorder_bidi = false,
                     .native_direction_shaping = true,
+                    .writing_mode = normalizedWritingMode(self.options),
+                    .text_orientation = self.options.text_orientation,
                     .features = span.features,
                     .normalized_variation_coords = normalized_variation_coords,
                     .context_before = self.text[0..original_byte_start],
@@ -393,6 +399,8 @@ pub const Recipe = struct {
                     .direction = self.options.direction,
                     .reorder_bidi = false,
                     .native_direction_shaping = true,
+                    .writing_mode = normalizedWritingMode(self.options),
+                    .text_orientation = self.options.text_orientation,
                     .features = span.features,
                     .normalized_variation_coords = span.normalized_variation_coords,
                     .jstf_modifications = modifications,
@@ -457,6 +465,8 @@ pub const Recipe = struct {
                     .direction = self.options.direction,
                     .reorder_bidi = false,
                     .native_direction_shaping = true,
+                    .writing_mode = normalizedWritingMode(self.options),
+                    .text_orientation = self.options.text_orientation,
                     .features = span.features,
                     .normalized_variation_coords = span.normalized_variation_coords,
                     .jstf_modifications = modifications,
@@ -522,6 +532,8 @@ pub const Recipe = struct {
                     .direction = self.options.direction,
                     .reorder_bidi = false,
                     .native_direction_shaping = true,
+                    .writing_mode = normalizedWritingMode(self.options),
+                    .text_orientation = self.options.text_orientation,
                     .features = span.features,
                     .normalized_variation_coords = span.normalized_variation_coords,
                     // Prefer temporary in-line neighbors at style boundaries.
@@ -552,7 +564,7 @@ pub const Recipe = struct {
         if (span.faces != null) {
             normalizeRunFontIndices(
                 buffer.runs.items[run_start..],
-                self.cascade,
+                self.font_index_cascade orelse self.cascade,
             );
         }
         return next_pen;
@@ -696,6 +708,15 @@ fn normalizeRunFontIndices(
             break;
         }
     }
+}
+
+fn normalizedWritingMode(
+    options: paragraph_options.Options,
+) pipeline_types.WritingMode {
+    return if (options.writing_mode.isVertical())
+        .vertical_rl
+    else
+        .horizontal_tb;
 }
 
 fn sameShapingRecipe(

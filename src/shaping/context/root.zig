@@ -9,6 +9,7 @@ const std = @import("std");
 const face_mod = @import("../../font/face/root.zig");
 const paragraph_options = @import("../../layout/paragraph/options.zig");
 const retained_paragraph = @import("../../layout/paragraph/retained.zig");
+const retained_styled = @import("../../layout/paragraph/retained/styled.zig");
 const paragraph_types = @import("../../layout/types/paragraph.zig");
 const run_types = @import("../../layout/types/runs.zig");
 const styled_buffer = @import("../../layout/styled_buffer.zig");
@@ -48,8 +49,10 @@ pub const ParagraphRequest = struct {
     options: paragraph_options.Options,
 };
 
-/// Styled paragraph input. Spans and their backing style data are borrowed for
-/// the duration of the call; returned slices still follow the context lifetime.
+/// Styled paragraph input. One-shot methods borrow text, spans, and nested
+/// style slices for the call, and their returned views follow the engine
+/// lifetime. `prepareStyledParagraph` instead copies text, spans, and their
+/// nested face-pointer, feature, and variation-coordinate slices.
 pub const StyledParagraphRequest = struct {
     text: []const u8,
     default_font_size: f32,
@@ -79,10 +82,7 @@ pub const Engine = struct {
         glyph_metadata: []const styled_buffer.Metadata,
         content_widths: paragraph_types.ContentWidths,
     };
-    pub const StyledLayout = struct {
-        layout: paragraph_types.ParagraphLayout,
-        glyph_metadata: []const styled_buffer.Metadata,
-    };
+    pub const StyledLayout = retained_styled.Layout;
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -223,6 +223,27 @@ pub const Engine = struct {
             &state.output,
             request.text,
             request.font_size,
+            request.options,
+        );
+    }
+
+    /// Prepare attributed text once for repeatable width-dependent reflow.
+    /// The returned owner copies text and span backing slices; referenced font
+    /// faces and optional dictionaries retain their caller-owned lifetimes.
+    pub fn prepareStyledParagraph(
+        self: *Engine,
+        cascade: face_mod.Cascade,
+        request: StyledParagraphRequest,
+    ) !retained_styled.ShapedParagraph {
+        const state = self.getStateForWork();
+        return retained_styled.prepare(
+            state.allocator,
+            internalCascade(cascade),
+            &state.output,
+            &state.styled_output,
+            request.text,
+            request.default_font_size,
+            request.spans,
             request.options,
         );
     }

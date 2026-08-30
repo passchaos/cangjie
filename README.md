@@ -41,6 +41,56 @@ valid until its next shaping or layout call. Parsed faces borrow their source
 bytes. Faces and bytes must therefore outlive the engine, or the engine's
 font-derived caches must be cleared before a face is destroyed.
 
+## Retained styled paragraphs
+
+Prepare styled text once when the same content will be laid out at more than
+one width. The retained owner keeps independent text, span, shaping, and
+glyph-metadata snapshots, while each layout view borrows its reflow buffer:
+
+```zig
+const text = "Hello, 世界";
+const spans = [_]cangjie.paragraph.StyledSpan{
+    .{
+        .byte_start = 0,
+        .byte_len = "Hello, ".len,
+        .style_index = 0,
+        .font_size = 24,
+    },
+    .{
+        .byte_start = "Hello, ".len,
+        .byte_len = "世界".len,
+        .style_index = 1,
+        .font_size = 32,
+        .letter_spacing = 0.5,
+    },
+};
+
+var paragraph = try engine.prepareStyledParagraph(cascade, .{
+    .text = text,
+    .default_font_size = 24,
+    .spans = &spans,
+    .options = .{ .max_width = 320 },
+});
+defer paragraph.deinit();
+
+var reflow = cangjie.paragraph.StyledReflowBuffer.init(allocator);
+defer reflow.deinit();
+
+const narrow = try paragraph.layout(&reflow, .{ .max_width = 160 });
+std.debug.assert(
+    narrow.layout.glyphs.len == narrow.glyph_metadata.len,
+);
+// Copy either view before reusing `reflow`.
+const intrinsic = try paragraph.contentWidths(.{ .max_width = 160 });
+std.debug.assert(intrinsic.min <= intrinsic.max);
+```
+
+The retained paragraph deep-copies the source, span records, and the nested
+face-pointer, feature, and variation-coordinate slices in each span. The faces
+themselves and optional segmentation or hyphenation dictionaries remain
+borrowed and must outlive the paragraph. Reflow may change geometry and line
+policy, but shaping-affecting changes require preparing another paragraph.
+
 See `docs/text-pipeline.md` for the shaping/reflow architecture and
 `docs/font-containers.md` for owned web-font container loading.
 

@@ -5,7 +5,40 @@ const build = @import("../../../../accelerator/build/root.zig");
 const class_context = @import("../../../../../opentype/class_context.zig");
 const class_first = @import("../../../../accelerator/index/class_first.zig");
 const ownership = @import("../../../../accelerator/ownership.zig");
+const shared = @import("../../../../accelerator/build/class_context/shared.zig");
 const table = @import("../../../../table/root.zig");
+
+test "sparse chaining shapes retain authored order" {
+    const allocator = std.testing.allocator;
+    var rules = std.ArrayList(class_context.Rule).empty;
+    defer rules.deinit(allocator);
+    var groups = std.ArrayList(class_context.RuleGroup).empty;
+    defer groups.deinit(allocator);
+
+    // Eight rules make the group eligible for indexing, while four pairs of
+    // shapes keep every bucket below the runtime hash threshold. The temporary
+    // shape/hash sort must therefore be undone before the linear matcher sees
+    // the rules, or overlapping rules can lose OpenType's authored precedence.
+    try rules.appendSlice(allocator, &.{
+        .{ .class_set = 1, .input_count = 4, .lookahead_count = 0, .hash = 8, .order = 0, .lookup_index = 0, .classes_start = 0 },
+        .{ .class_set = 1, .input_count = 2, .lookahead_count = 1, .hash = 7, .order = 1, .lookup_index = 0, .classes_start = 0 },
+        .{ .class_set = 1, .input_count = 3, .lookahead_count = 0, .hash = 6, .order = 2, .lookup_index = 0, .classes_start = 0 },
+        .{ .class_set = 1, .input_count = 2, .lookahead_count = 0, .hash = 5, .order = 3, .lookup_index = 0, .classes_start = 0 },
+        .{ .class_set = 1, .input_count = 4, .lookahead_count = 0, .hash = 4, .order = 4, .lookup_index = 0, .classes_start = 0 },
+        .{ .class_set = 1, .input_count = 2, .lookahead_count = 1, .hash = 3, .order = 5, .lookup_index = 0, .classes_start = 0 },
+        .{ .class_set = 1, .input_count = 3, .lookahead_count = 0, .hash = 2, .order = 6, .lookup_index = 0, .classes_start = 0 },
+        .{ .class_set = 1, .input_count = 2, .lookahead_count = 0, .hash = 1, .order = 7, .lookup_index = 0, .classes_start = 0 },
+    });
+
+    try shared.finishChainingRuleGroups(&rules, &groups, allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), groups.items.len);
+    try std.testing.expectEqual(@as(usize, 2), groups.items[0].max_shape_len);
+    try std.testing.expect(!groups.items[0].hash_sorted);
+    for (rules.items, 0..) |rule, index| {
+        try std.testing.expectEqual(@as(u32, @intCast(index)), rule.order);
+    }
+}
 
 test "direct and extension chaining class builders preserve backtrack rules" {
     const allocator = std.testing.allocator;

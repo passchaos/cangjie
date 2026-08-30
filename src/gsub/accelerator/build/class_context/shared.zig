@@ -175,6 +175,20 @@ pub fn finishChainingRuleGroups(
             );
             shape_start = shape_end;
         }
+        if (group.max_shape_len < 3) {
+            // `hash_sorted` selects both the indexed matcher and the rule
+            // ordering contract. Restore authored order when no shape bucket
+            // is dense enough to justify hashing; otherwise the linear
+            // fallback would observe shape/hash order and could choose a later
+            // overlapping rule before an earlier authored rule.
+            std.sort.heap(
+                opentype_class_context.Rule,
+                rules.items[group.start .. group.start + group.len],
+                {},
+                opentype_class_context.ruleLessThan,
+            );
+            group.hash_sorted = false;
+        }
     }
 }
 

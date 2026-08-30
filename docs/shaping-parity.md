@@ -64,7 +64,9 @@ fixture under `tests/data/use/`; it defaults to `~/Work` and accepts
 `en-words`/`en-thelittleprince`, Amiri `fa-words`/`fa-thelittleprince`, and
 SourceSerifVariable `en-words`/`en-thelittleprince` corpus gates against both
 HarfBuzz and HarfRust. NotoNastaliqUrdu now retains the same two Persian
-corpora as cross-font Urdu/Nastaliq controls: `fa-words` produces 83,486
+corpora as cross-font Urdu/Nastaliq controls. These two rows explicitly select
+the OpenType default language system (`dflt`), matching the performance matrix
+instead of Cangjie's content-inferred Persian policy: `fa-words` produces 83,486
 glyphs over 10,000 lines with checksum `fc28919889b8942b`, while
 `fa-thelittleprince` produces 110,143 glyphs over 771 lines with checksum
 `9e460d90b9034d46`; both pass both references. The gate also includes a

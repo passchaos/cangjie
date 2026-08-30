@@ -173,6 +173,7 @@ const retained_corpus_parity_gates = [_]struct {
     font_file: []const u8,
     text_file: []const u8,
     direction: []const u8,
+    language: ?[]const u8 = null,
 }{
     .{
         .font_file = "fonts/Roboto-Regular.ttf",
@@ -208,11 +209,13 @@ const retained_corpus_parity_gates = [_]struct {
         .font_file = "fonts/NotoNastaliqUrdu-Regular.ttf",
         .text_file = "texts/fa-words.txt",
         .direction = "rtl",
+        .language = "dflt",
     },
     .{
         .font_file = "fonts/NotoNastaliqUrdu-Regular.ttf",
         .text_file = "texts/fa-thelittleprince.txt",
         .direction = "rtl",
+        .language = "dflt",
     },
     .{
         .font_file = "fonts/Roboto-Regular.ttf",
@@ -3084,6 +3087,9 @@ pub fn build(b: *std.Build) void {
                 "--text-file", b.fmt("{s}/{s}", .{ harfrust_benches, gate.text_file }),
                 "--direction", gate.direction,
             });
+            if (gate.language) |language| {
+                corpus_parity_cmd.addArgs(&.{ "--language", language });
+            }
             shaping_corpus_parity_smoke_step.dependOn(&corpus_parity_cmd.step);
 
             const corpus_harfrust_parity_cmd = b.addRunArtifact(shape_bench_exe);
@@ -3093,6 +3099,9 @@ pub fn build(b: *std.Build) void {
                 "--text-file", b.fmt("{s}/{s}", .{ harfrust_benches, gate.text_file }),
                 "--direction", gate.direction,
             });
+            if (gate.language) |language| {
+                corpus_harfrust_parity_cmd.addArgs(&.{ "--language", language });
+            }
             shaping_corpus_parity_smoke_step.dependOn(&corpus_harfrust_parity_cmd.step);
         }
         for (retained_aots_parity_gates) |gate| {

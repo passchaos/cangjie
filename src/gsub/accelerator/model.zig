@@ -94,7 +94,8 @@ pub const SingleSubstitution = struct {
     single_from: GlyphId = 0,
     single_to: GlyphId = 0,
     /// One-based replacement glyphs indexed by input glyph; zero is a miss.
-    /// The u32 representation can encode the full u16 replacement domain.
+    /// A u16 stores `replacement + 1`; mappings to the maximum glyph id keep
+    /// the compact table-backed representation because zero is the miss tag.
     dense_mapping: []const u16 = &.{},
 };
 

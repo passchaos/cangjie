@@ -135,7 +135,7 @@ pub fn applyAcceleratedAt(
         if (glyph >= single.dense_mapping.len) return false;
         const encoded = single.dense_mapping[glyph];
         if (encoded == 0) return false;
-        glyphs.items[glyph_index] = @intCast(encoded - 1);
+        glyphs.items[glyph_index] = encoded - 1;
         mutation.markSubstituted(run, glyph_index);
         return true;
     }

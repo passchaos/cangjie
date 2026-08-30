@@ -105,16 +105,23 @@ pub fn entries(
 pub fn denseMapping(
     entries_value: []const Entry,
     allocator: std.mem.Allocator,
-) std.mem.Allocator.Error![]const u32 {
-    if (entries_value.len == 0) return allocator.alloc(u32, 0);
+) std.mem.Allocator.Error![]const u16 {
+    if (entries_value.len == 0) return allocator.alloc(u16, 0);
     const max_glyph: usize = entries_value[entries_value.len - 1].from;
     if (max_glyph >= Single.max_dense_glyphs) {
-        return allocator.alloc(u32, 0);
+        return allocator.alloc(u16, 0);
     }
-    const result = try allocator.alloc(u32, max_glyph + 1);
+    const result = try allocator.alloc(u16, max_glyph + 1);
     @memset(result, 0);
     for (entries_value) |entry| {
-        result[entry.from] = @as(u32, entry.to) + 1;
+        // Zero cannot distinguish an uncovered slot from a mapping to gid 0.
+        // Keep that uncommon table on its already-fast singleton/coverage
+        // representation rather than widening every dense entry.
+        if (entry.to == std.math.maxInt(u16)) {
+            allocator.free(result);
+            return allocator.alloc(u16, 0);
+        }
+        result[entry.from] = entry.to + 1;
     }
     return result;
 }

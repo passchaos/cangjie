@@ -243,7 +243,7 @@ test "lookup builder prepares extension-wrapped single substitution" {
     try std.testing.expectEqual(@as(u16, 7), lookup.single_subst.single_from);
     try std.testing.expectEqual(@as(u16, 42), lookup.single_subst.single_to);
     try std.testing.expectEqual(
-        @as(u32, 43),
+        @as(u16, 43),
         lookup.single_subst.dense_mapping[7],
     );
 }

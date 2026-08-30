@@ -95,7 +95,7 @@ pub const SingleSubstitution = struct {
     single_to: GlyphId = 0,
     /// One-based replacement glyphs indexed by input glyph; zero is a miss.
     /// The u32 representation can encode the full u16 replacement domain.
-    dense_mapping: []const u32 = &.{},
+    dense_mapping: []const u16 = &.{},
 };
 
 pub const SingleEntry = struct {

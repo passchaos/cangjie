@@ -24,6 +24,11 @@ pub const Rule = struct {
     /// at zero. Keeping this independent from `records_offset` avoids
     /// overloading a table cursor with match geometry.
     backtrack_count: u16 = 0,
+    /// Number of contiguous equal-shaped rules beginning here after the
+    /// chaining builder's shape/hash sort. Only shape leaders set this; the
+    /// runtime can then jump directly between buckets without rediscovering
+    /// their boundaries at every candidate glyph.
+    shape_bucket_len: u16 = 0,
     /// False denotes the compact one-record/sequence-zero action stored in
     /// `lookup_index`; true denotes an authored record list at
     /// `records_offset`.

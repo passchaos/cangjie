@@ -37,6 +37,51 @@ test "sparse chaining shapes retain authored order" {
     try std.testing.expect(!groups.items[0].hash_sorted);
     for (rules.items, 0..) |rule, index| {
         try std.testing.expectEqual(@as(u32, @intCast(index)), rule.order);
+        try std.testing.expectEqual(@as(u16, 0), rule.shape_bucket_len);
+    }
+}
+
+test "indexed chaining groups retain explicit shape boundaries" {
+    const allocator = std.testing.allocator;
+    var rules = std.ArrayList(class_context.Rule).empty;
+    defer rules.deinit(allocator);
+    var groups = std.ArrayList(class_context.RuleGroup).empty;
+    defer groups.deinit(allocator);
+
+    for (0..5) |order| {
+        try rules.append(allocator, .{
+            .class_set = 1,
+            .input_count = 2,
+            .lookahead_count = 1,
+            .hash = @intCast(10 - order),
+            .order = @intCast(order),
+            .lookup_index = 0,
+            .classes_start = 0,
+        });
+    }
+    for (5..8) |order| {
+        try rules.append(allocator, .{
+            .class_set = 1,
+            .input_count = 3,
+            .lookahead_count = 0,
+            .hash = @intCast(10 - order),
+            .order = @intCast(order),
+            .lookup_index = 0,
+            .classes_start = 0,
+        });
+    }
+
+    try shared.finishChainingRuleGroups(&rules, &groups, allocator);
+
+    try std.testing.expect(groups.items[0].hash_sorted);
+    try std.testing.expectEqual(@as(usize, 5), groups.items[0].max_shape_len);
+    try std.testing.expectEqual(@as(u16, 5), rules.items[0].shape_bucket_len);
+    try std.testing.expectEqual(@as(u16, 3), rules.items[5].shape_bucket_len);
+    for (rules.items[1..5]) |rule| {
+        try std.testing.expectEqual(@as(u16, 0), rule.shape_bucket_len);
+    }
+    for (rules.items[6..]) |rule| {
+        try std.testing.expectEqual(@as(u16, 0), rule.shape_bucket_len);
     }
 }
 

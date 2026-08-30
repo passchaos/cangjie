@@ -173,6 +173,8 @@ pub fn finishChainingRuleGroups(
                 group.max_shape_len,
                 shape_end - shape_start,
             );
+            rules.items[group.start + shape_start].shape_bucket_len =
+                @intCast(shape_end - shape_start);
             shape_start = shape_end;
         }
         if (group.max_shape_len < 3) {
@@ -187,6 +189,9 @@ pub fn finishChainingRuleGroups(
                 {},
                 opentype_class_context.ruleLessThan,
             );
+            for (rules.items[group.start .. group.start + group.len]) |*rule| {
+                rule.shape_bucket_len = 0;
+            }
             group.hash_sorted = false;
         }
     }

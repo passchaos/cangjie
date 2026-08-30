@@ -4,6 +4,7 @@
 //! family at the class-executor level avoids a deep `matching/*` subtree while
 //! preserving the existing direct and prepared entry points.
 
+const std = @import("std");
 const accelerator = @import("../../../../accelerator/root.zig");
 const filtering = @import("../../../../runtime/filtering.zig");
 const Options = @import("../../../../runtime/options.zig").Options;
@@ -100,11 +101,10 @@ pub fn acceleratedGroup(
         var shape_start: usize = 0;
         while (shape_start < rules.len) {
             const first = rules[shape_start];
-            var shape_end = shape_start + 1;
-            while (shape_end < rules.len and sameShape(
-                first,
-                rules[shape_end],
-            )) : (shape_end += 1) {}
+            const shape_len: usize = first.shape_bucket_len;
+            std.debug.assert(shape_len != 0);
+            std.debug.assert(shape_len <= rules.len - shape_start);
+            const shape_end = shape_start + shape_len;
             const hash = (try candidateHash(
                 &candidate_window,
                 first.backtrack_count,
@@ -195,12 +195,6 @@ fn candidateHash(
         );
     }
     return hash;
-}
-
-fn sameShape(lhs: class_context.Rule, rhs: class_context.Rule) bool {
-    return lhs.backtrack_count == rhs.backtrack_count and
-        lhs.input_count == rhs.input_count and
-        lhs.lookahead_count == rhs.lookahead_count;
 }
 
 fn acceleratedAdjacentGroup(

@@ -494,6 +494,18 @@ Serif `1.062x`, Amiri words `0.675x`, Amiri long `0.793x`, and Devanagari
 absolute timings slower than several earlier snapshots, but the failures are
 too large to claim overall shaping superiority and supersede the earlier
 narrow all-core-win statement until a clean repeat proves otherwise.
+Subsequent retained work makes the chaining hash decision from the largest
+same-shape candidate bucket rather than the total class-set size
+(`57936e3e`), adds a physical-adjacency ContextSubst path for proven runs
+without default ignorables (`08d56288`), and builds bounded direct
+glyph-to-glyph maps for compact SingleSubst tables (`197dc1ba`, compacted in
+`671d5e17`). Independent fixed-CPU-30 A/B/B/A checks kept the Noto words
+glyph count and checksum unchanged. The shape-density change measured
+`3215.562/3293.985` versus `3140.760/3104.604 ns/glyph`; the compact single
+map measured `3214.239/3210.327` versus `3104.134/3199.442 ns/glyph` and
+also improved the Amiri words endpoints from `2392.762/2434.036` to
+`2280.893/2310.760 ns/glyph`. These targeted gains do not supersede the
+strict red rows above; a later broad run remained red on both Noto cases.
 
 ## Audit rules
 

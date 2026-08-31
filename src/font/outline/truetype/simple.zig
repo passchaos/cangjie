@@ -51,6 +51,10 @@ pub const Variation = struct {
     axis_count: usize,
     glyph_id: glyph.GlyphId,
     normalized_coords: []const f32,
+    /// Metadata retained by `Font.parse` for immutable session reads. Public
+    /// mutation-aware outline APIs leave this null and keep reparsing/validating
+    /// the borrowed gvar table before consuming it.
+    parsed: ?gvar.Info = null,
     validate_inactive_payloads: bool,
 };
 
@@ -109,16 +113,25 @@ fn appendImpl(
         // points. Do not require real contours merely to preserve its advance
         // and side-bearing deltas.
         const context = variation orelse return null;
-        const deltas = try gvar.accumulateSimpleGlyphPointDeltas(
-            outline.allocator,
+        const parsed_gvar = context.parsed orelse try gvar.info(
             context.data,
             context.table_offset,
             context.table_length,
             context.glyph_count,
             context.axis_count,
+        );
+        const deltas = try gvar.accumulateSimpleGlyphPointDeltasWithReaderFromParsed(
+            outline.allocator,
+            context.data,
+            context.table_offset,
+            context.table_length,
+            parsed_gvar,
             context.glyph_id,
             context.normalized_coords,
+            []const FlaggedPoint,
             &.{},
+            0,
+            flaggedPointForGvarIup,
             &.{},
             context.validate_inactive_payloads,
         );
@@ -221,13 +234,19 @@ fn appendImpl(
 
     var phantom_deltas: ?gvar.PhantomPointDeltas = null;
     if (variation) |context| {
-        const deltas = try gvar.accumulateSimpleGlyphPointDeltasWithReader(
-            outline.allocator,
+        const parsed_gvar = context.parsed orelse try gvar.info(
             context.data,
             context.table_offset,
             context.table_length,
             context.glyph_count,
             context.axis_count,
+        );
+        const deltas = try gvar.accumulateSimpleGlyphPointDeltasWithReaderFromParsed(
+            outline.allocator,
+            context.data,
+            context.table_offset,
+            context.table_length,
+            parsed_gvar,
             context.glyph_id,
             context.normalized_coords,
             []const FlaggedPoint,

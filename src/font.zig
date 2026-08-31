@@ -6607,6 +6607,7 @@ pub const Font = struct {
             .axis_count = try self.fvarAxisCountForReadMode(read_mode),
             .glyph_id = glyph_id,
             .normalized_coords = normalized_coords,
+            .parsed = if (read_mode == .parsed) self.gvar_parsed else null,
             // Public outline APIs remain defensive against malformed inactive
             // tuple payloads. Parsed raster paths already crossed Font.parse's
             // whole-table proof and may avoid decoding zero-scalar tuples.

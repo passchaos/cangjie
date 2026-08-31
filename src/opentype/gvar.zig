@@ -722,8 +722,70 @@ fn decodeTuplePointDeltasForPointCountFromTuple(
     shared_points: ?SharedPointNumbers,
     out: []PointDelta,
 ) Error!usize {
-    const payload = try tuplePayloadInfoFromTuple(table, tuple, tuple_data_offset, point_count, shared_points);
-    return try decodeTuplePointDeltasForPointCountFromPayload(table, payload, point_count, out);
+    if (tuple_data_offset > table.len or
+        tuple.variation_data_size > table.len - tuple_data_offset)
+    {
+        return error.BadSfnt;
+    }
+    const tuple_data_end = tuple_data_offset + tuple.variation_data_size;
+    var cursor = tuple_data_offset;
+
+    const points = if (tuple.private_point_numbers) blk: {
+        const point_numbers_offset = cursor;
+        const point_info = try packedPointNumbersInfo(table, cursor, tuple_data_end);
+        cursor += point_info.bytes_consumed;
+        break :blk SharedPointNumbers{
+            .offset = point_numbers_offset,
+            .info = point_info,
+        };
+    } else shared_points orelse SharedPointNumbers{
+        .offset = tuple_data_offset,
+        .info = .{
+            .all_points = true,
+            .count = 0,
+            .max_point = 0,
+            .bytes_consumed = 0,
+        },
+    };
+
+    const count = if (points.info.all_points) point_count else points.info.count;
+    if (out.len < count) return error.BadSfnt;
+    if (points.info.all_points) {
+        for (out[0..count], 0..) |*delta, index| {
+            if (index > std.math.maxInt(u16)) return error.BadSfnt;
+            delta.point = @intCast(index);
+        }
+    } else {
+        // The metadata pass above (or the once-per-glyph shared-point pass)
+        // already proved the point stream's extent. Decode that exact stream
+        // rather than reparsing it inside decodePackedPointNumbers().
+        try decodePackedPointNumbersFromInfo(
+            table,
+            points.offset,
+            points.info,
+            out[0..count],
+        );
+    }
+
+    // Decode each packed-delta stream once. The former metadata-then-decode
+    // route walked both streams twice for every active tuple; the returned
+    // byte counts retain the same exact-payload-consumption validation.
+    cursor += try decodePackedDeltasIntoPointField(
+        table,
+        cursor,
+        tuple_data_end,
+        out[0..count],
+        .x,
+    );
+    cursor += try decodePackedDeltasIntoPointField(
+        table,
+        cursor,
+        tuple_data_end,
+        out[0..count],
+        .y,
+    );
+    if (cursor != tuple_data_end) return error.BadSfnt;
+    return count;
 }
 
 fn decodeTuplePointDeltasForPointCountFromPayload(table: []const u8, payload: TuplePayloadInfo, point_count: usize, out: []PointDelta) Error!usize {
@@ -902,17 +964,26 @@ pub fn accumulateSimpleGlyphPointDeltasWithReaderFromParsed(
         return null;
     }
 
-    const raw_scratch = try allocator.alloc(PointDelta, point_count);
-    defer allocator.free(raw_scratch);
-    const tuple_scratch = try allocator.alloc(ScaledPointDelta, point_count);
-    defer allocator.free(tuple_scratch);
-    const has_delta = try allocator.alloc(bool, point_count);
-    defer allocator.free(has_delta);
-    const out = try allocator.alloc(ScaledPointDelta, point_count);
-    errdefer allocator.free(out);
-    initializeDensePointDeltas(out, point_count);
+    // Most simple glyphs fit these bounded stacks. Sparse tuples need all
+    // three work arrays, while dense all-point tuples bypass them entirely.
+    // Large glyphs retain the same allocator-backed behavior.
+    var inline_raw_scratch: [64]PointDelta = undefined;
+    var allocated_raw_scratch: ?[]PointDelta = null;
+    defer if (allocated_raw_scratch) |owned| allocator.free(owned);
+    var inline_tuple_scratch: [64]ScaledPointDelta = undefined;
+    var allocated_tuple_scratch: ?[]ScaledPointDelta = null;
+    defer if (allocated_tuple_scratch) |owned| allocator.free(owned);
+    var inline_has_delta: [64]bool = undefined;
+    var allocated_has_delta: ?[]bool = null;
+    defer if (allocated_has_delta) |owned| allocator.free(owned);
 
-    var any_active = false;
+    // Delay the only unavoidable caller-owned allocation until a tuple
+    // actually contributes. A non-default location can still be outside every
+    // support region, in which case the trusted parsed path returns null
+    // without allocating.
+    var out: ?[]ScaledPointDelta = null;
+    errdefer if (out) |owned| allocator.free(owned);
+
     var header_offset = glyph.data_offset + 4;
     const serialized_data_base = glyph.data_offset + glyph.tuple_data_offset;
     var serialized_data_bytes: usize = if (shared_points) |shared| shared.info.bytes_consumed else 0;
@@ -923,37 +994,80 @@ pub fn accumulateSimpleGlyphPointDeltasWithReaderFromParsed(
         const scalar = try tupleScalarFromTuple(table, parsed, tuple, normalized_coords);
 
         if (scalar != 0 or validate_inactive_payloads) {
-            const raw_count = try decodeTuplePointDeltasForPointCountFromTuple(
-                table,
-                tuple,
-                tuple_data_offset,
-                point_count,
-                shared_points,
-                raw_scratch,
-            );
-            if (scalar != 0) {
-                try accumulateSimpleTuple(
-                    Context,
-                    context,
-                    read_point,
-                    original_point_count,
-                    contour_ends,
-                    raw_scratch[0..raw_count],
+            if (out == null and scalar != 0) {
+                out = try allocator.alloc(ScaledPointDelta, point_count);
+                initializeDensePointDeltas(out.?, point_count);
+            }
+            const all_points = if (tuple.private_point_numbers)
+                // A private zero-count stream also denotes every point, but
+                // it occupies one byte at the front of this tuple's payload.
+                (try packedPointNumbersInfo(
+                    table,
+                    tuple_data_offset,
+                    tuple_data_offset + tuple.variation_data_size,
+                )).all_points
+            else if (shared_points) |shared|
+                shared.info.all_points
+            else
+                true;
+            if (all_points and scalar != 0) {
+                try decodeAndAccumulateAllPointTuple(
+                    table,
+                    tuple,
+                    tuple_data_offset,
+                    point_count,
                     scalar,
-                    tuple_scratch,
-                    has_delta,
-                    out,
+                    out.?,
                 );
-                any_active = true;
+            } else {
+                const raw_scratch = if (point_count <= inline_raw_scratch.len)
+                    inline_raw_scratch[0..point_count]
+                else blk: {
+                    if (allocated_raw_scratch == null)
+                        allocated_raw_scratch = try allocator.alloc(PointDelta, point_count);
+                    break :blk allocated_raw_scratch.?;
+                };
+                const raw_count = try decodeTuplePointDeltasForPointCountFromTuple(
+                    table,
+                    tuple,
+                    tuple_data_offset,
+                    point_count,
+                    shared_points,
+                    raw_scratch,
+                );
+                if (scalar != 0) {
+                    const tuple_scratch = if (point_count <= inline_tuple_scratch.len)
+                        inline_tuple_scratch[0..point_count]
+                    else blk: {
+                        if (allocated_tuple_scratch == null)
+                            allocated_tuple_scratch = try allocator.alloc(ScaledPointDelta, point_count);
+                        break :blk allocated_tuple_scratch.?;
+                    };
+                    const has_delta = if (point_count <= inline_has_delta.len)
+                        inline_has_delta[0..point_count]
+                    else blk: {
+                        if (allocated_has_delta == null)
+                            allocated_has_delta = try allocator.alloc(bool, point_count);
+                        break :blk allocated_has_delta.?;
+                    };
+                    try accumulateSimpleTuple(
+                        Context,
+                        context,
+                        read_point,
+                        original_point_count,
+                        contour_ends,
+                        raw_scratch[0..raw_count],
+                        scalar,
+                        tuple_scratch,
+                        has_delta,
+                        out.?,
+                    );
+                }
             }
         }
 
         header_offset += tuple.header_size;
         serialized_data_bytes += tuple.variation_data_size;
-    }
-    if (!any_active) {
-        allocator.free(out);
-        return null;
     }
     return out;
 }
@@ -1029,6 +1143,91 @@ fn accumulateSimpleTuple(
         result.x += tuple_delta.x;
         result.y += tuple_delta.y;
     }
+}
+
+fn decodeAndAccumulateAllPointTuple(
+    table: []const u8,
+    tuple: TupleInfo,
+    tuple_data_offset: usize,
+    point_count: usize,
+    scalar: f32,
+    out: []ScaledPointDelta,
+) Error!void {
+    if (out.len < point_count or
+        tuple_data_offset > table.len or
+        tuple.variation_data_size > table.len - tuple_data_offset)
+    {
+        return error.BadSfnt;
+    }
+    const tuple_data_end = tuple_data_offset + tuple.variation_data_size;
+    var cursor = tuple_data_offset;
+    if (tuple.private_point_numbers) {
+        const points = try packedPointNumbersInfo(
+            table,
+            cursor,
+            tuple_data_end,
+        );
+        if (!points.all_points) return error.BadSfnt;
+        cursor += points.bytes_consumed;
+    }
+    cursor += try decodeAndAccumulatePackedDeltas(
+        table,
+        cursor,
+        tuple_data_end,
+        out[0..point_count],
+        scalar,
+        .x,
+    );
+    cursor += try decodeAndAccumulatePackedDeltas(
+        table,
+        cursor,
+        tuple_data_end,
+        out[0..point_count],
+        scalar,
+        .y,
+    );
+    if (cursor != tuple_data_end) return error.BadSfnt;
+}
+
+fn decodeAndAccumulatePackedDeltas(
+    data: []const u8,
+    offset: usize,
+    limit: usize,
+    out: []ScaledPointDelta,
+    scalar: f32,
+    field: DeltaField,
+) Error!usize {
+    if (offset > data.len or limit > data.len or offset > limit) return error.BadSfnt;
+    var cursor = offset;
+    var written: usize = 0;
+    while (written < out.len) {
+        if (cursor >= limit) return error.BadSfnt;
+        const control = data[cursor];
+        cursor += 1;
+        const run_count = @as(usize, control & 0x3f) + 1;
+        if (run_count > out.len - written) return error.BadSfnt;
+        if ((control & 0x80) != 0) {
+            written += run_count;
+            continue;
+        }
+        const words = (control & 0x40) != 0;
+        const run_bytes = run_count * @as(usize, if (words) 2 else 1);
+        if (run_bytes > limit - cursor) return error.BadSfnt;
+        for (0..run_count) |index| {
+            const raw: i32 = if (words)
+                std.mem.readInt(i16, data[cursor + index * 2 ..][0..2], .big)
+            else
+                @as(i8, @bitCast(data[cursor + index]));
+            const value = @as(f32, @floatFromInt(raw)) * scalar;
+            switch (field) {
+                .x => out[written + index].x += value,
+                .y => out[written + index].y += value,
+            }
+        }
+        cursor += run_bytes;
+        written += run_count;
+    }
+    return cursor - offset;
 }
 
 pub fn accumulateGlyphPointDeltasWithFlags(data: []const u8, offset: usize, length: usize, expected_glyph_count: usize, expected_axis_count: usize, glyph_id: usize, normalized_coords: []const f32, all_points: []const u16, raw_scratch: []PointDelta, scaled_scratch: []ScaledPointDelta, out: []ScaledPointDelta, has_delta: ?[]bool) Error!usize {
@@ -1319,7 +1518,14 @@ fn readNormalizedF2Dot14(data: []const u8, offset: usize) Error!f32 {
 
 fn decodePackedPointNumbers(data: []const u8, offset: usize, limit: usize, out: []PointDelta) Error!void {
     const points_info = try packedPointNumbersInfo(data, offset, limit);
+    return decodePackedPointNumbersFromInfo(data, offset, points_info, out);
+}
+
+fn decodePackedPointNumbersFromInfo(data: []const u8, offset: usize, points_info: PointNumbersInfo, out: []PointDelta) Error!void {
     if (points_info.all_points or out.len < points_info.count) return error.BadSfnt;
+    // points_info was produced by packedPointNumbersInfo over this same byte
+    // stream, so all reads below are within its validated byte extent.
+    if (offset > data.len or points_info.bytes_consumed > data.len - offset) return error.BadSfnt;
     var cursor = offset;
     const first = data[cursor];
     cursor += 1;
@@ -2084,6 +2290,103 @@ test "parsed simple gvar skips allocation at the default location" {
             pointAt,
             &contour_ends,
             true,
+        ),
+    );
+}
+
+test "parsed simple gvar fast path accumulates all-point tuples" {
+    const bytes = [_]u8{
+        0, 1, 0, 0, // version.
+        0, 1, // axisCount.
+        0, 0, // sharedTupleCount.
+        0, 0, 0, 0, // sharedTupleOffset.
+        0, 1, // glyphCount.
+        0, 0, // short offsets.
+        0, 0, 0, 24, // glyphVariationDataArrayOffset.
+        0, 0, 0, 9, // offsets: 0, 18 bytes.
+        0, 1, 0, 10, // GlyphVariationData header.
+        0, 7, 0x80, 0x00, // Embedded peak, implicit all-points selection.
+        0x40, 0x00, // peak = 1.
+        0x04, 2, 4, 6, 8, 10, // X deltas for one real and four phantom points.
+        0x84, // Y deltas are all zero.
+        0, // short-offset alignment padding.
+    };
+    const parsed = try info(&bytes, 0, bytes.len, 1, 1);
+    const original = [_]Point{.{ .x = 10, .y = 20 }};
+    const contour_ends = [_]u16{0};
+
+    const fast = (try accumulateSimpleGlyphPointDeltasWithReaderFromParsed(
+        std.testing.allocator,
+        &bytes,
+        0,
+        bytes.len,
+        parsed,
+        0,
+        &.{0.5},
+        []const Point,
+        &original,
+        original.len,
+        pointAt,
+        &contour_ends,
+        false,
+    )).?;
+    defer std.testing.allocator.free(fast);
+    const defensive = (try accumulateSimpleGlyphPointDeltas(
+        std.testing.allocator,
+        &bytes,
+        0,
+        bytes.len,
+        1,
+        1,
+        0,
+        &.{0.5},
+        &original,
+        &contour_ends,
+        true,
+    )).?;
+    defer std.testing.allocator.free(defensive);
+
+    try std.testing.expectEqualSlices(ScaledPointDelta, defensive, fast);
+    try std.testing.expectEqual(@as(f32, 1), fast[0].x);
+    try std.testing.expectEqual(@as(f32, 3), fast[2].x);
+    try std.testing.expectEqual(@as(f32, 0), fast[4].y);
+}
+
+test "parsed simple gvar fast path rejects truncated all-point payload" {
+    const bytes = [_]u8{
+        0, 1, 0, 0, // version.
+        0, 1, // axisCount.
+        0, 0, // sharedTupleCount.
+        0, 0, 0, 0, // sharedTupleOffset.
+        0, 1, // glyphCount.
+        0, 0, // short offsets.
+        0, 0, 0, 24, // glyphVariationDataArrayOffset.
+        0, 0, 0, 7, // offsets: 0, 14 bytes.
+        0, 1, 0, 10, // GlyphVariationData header.
+        0, 3, 0x80, 0x00, // Three-byte payload, embedded peak.
+        0x40, 0x00, // peak = 1.
+        0x04, 1, 2, // X run promises five bytes but only two follow.
+        0, // short-offset alignment padding.
+    };
+    const parsed = try info(&bytes, 0, bytes.len, 1, 1);
+    const original = [_]Point{.{ .x = 10, .y = 20 }};
+    const contour_ends = [_]u16{0};
+    try std.testing.expectError(
+        error.BadSfnt,
+        accumulateSimpleGlyphPointDeltasWithReaderFromParsed(
+            std.testing.allocator,
+            &bytes,
+            0,
+            bytes.len,
+            parsed,
+            0,
+            &.{0.5},
+            []const Point,
+            &original,
+            original.len,
+            pointAt,
+            &contour_ends,
+            false,
         ),
     );
 }

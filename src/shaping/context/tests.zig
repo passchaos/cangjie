@@ -52,18 +52,21 @@ test "cached GSUB plans retain detailed lookup profiling" {
     defer engine.deinit();
     var profile = ShapeStageProfile{};
     engine.enableProfiling(&profile, std.testing.io, false);
+    const feature_ranges = [_]@import(
+        "../../unicode.zig",
+    ).GsubFeatureRange{.{
+        .tag = @import("../../unicode.zig").tag("sups"),
+        .value = 1,
+        .byte_start = 0,
+        .byte_end = 3,
+    }};
 
     _ = try engine.shape(
         face_mod.backend.face(&font),
         .{
             .text = "AAA",
             .font_size = 20,
-            .options = .{
-                .features = &.{.{
-                    .tag = @import("../../unicode.zig").tag("sups"),
-                    .enabled = true,
-                }},
-            },
+            .feature_ranges = &feature_ranges,
         },
     );
     try std.testing.expect(profile.gsub_lookup_count != 0);

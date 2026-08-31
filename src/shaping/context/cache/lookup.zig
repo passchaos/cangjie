@@ -306,8 +306,10 @@ pub const LookupSelectionCache = struct {
         font: *const Font,
         options: *gsub.runtime.Options,
     ) void {
-        const accelerators = self.existingGsubLookupAccelerators(font) orelse
+        const accelerators = self.existingGsubLookupAccelerators(font) orelse {
+            options.lookup_accelerators = null;
             return;
+        };
         options.lookup_accelerators = if (accelerators.len == 0)
             null
         else

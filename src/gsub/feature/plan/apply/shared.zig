@@ -1,6 +1,7 @@
 //! Shared lookup invocation for feature-plan application.
 
 const std = @import("std");
+const accelerator = @import("../../../accelerator/root.zig");
 const model = @import("../../model.zig");
 const options = @import("../../../runtime/options.zig");
 const lookup_order = @import("../../../../opentype/lookup_order.zig");
@@ -22,32 +23,33 @@ pub fn entry(
     view: View,
     lookup_count: u16,
     plan_entry: model.LookupPlanEntry,
+    plan_sidecars: if (plan_sidecars_proved)
+        []const accelerator.Lookup
+    else
+        void,
     glyphs: *std.ArrayList(GlyphId),
     allocator: std.mem.Allocator,
     run: Options,
     cache: *RunDigestCache,
 ) Error!void {
     if (plan_sidecars_proved) {
+        // The cached-plan boundary has already checked every tuple across all
+        // entries. This branch receives the resolved slice so it never needs
+        // to reconstruct that proof from the caller-settable Options value.
         std.debug.assert(
             plan_entry.lookup_offsets.len == plan_entry.lookups.len,
         );
     } else if (plan_entry.lookup_offsets.len != plan_entry.lookups.len) {
         return error.BadGsub;
     }
-    const plan_sidecars = if (plan_sidecars_proved)
-        run.lookup_accelerators.?
-    else
-        undefined;
     if (run.disabled_lookups.len == 0) {
         if (run.shape_profile == null) {
             for (plan_entry.lookups, plan_entry.lookup_offsets) |index, offset| {
                 if (plan_sidecars_proved) {
                     std.debug.assert(index < plan_sidecars.len);
                     const sidecar = &plan_sidecars[index];
-                    // The internal plan and sidecar slices were built from the
-                    // same validated font table. Keep a debug assertion for
-                    // that ownership contract without paying an identity
-                    // branch for every lookup in release shaping.
+                    // `cached.staged` bound the complete sidecar allocation and
+                    // preflighted every plan tuple before entering any stage.
                     std.debug.assert(sidecar.lookup_offset == offset);
                     std.debug.assert(sidecar.lookup_type != 0);
                     if (!plan_prefilter.mayMatch(
@@ -84,6 +86,17 @@ pub fn entry(
         for (plan_entry.lookups, plan_entry.lookup_offsets) |index, offset| {
             if (plan_sidecars_proved) {
                 std.debug.assert(index < plan_sidecars.len);
+                try Executor.applyLookupAfterPlanProof(
+                    view,
+                    offset,
+                    index,
+                    glyphs,
+                    allocator,
+                    run,
+                    cache,
+                    &plan_sidecars[index],
+                );
+                continue;
             } else if (index >= lookup_count) {
                 return error.BadGsub;
             }
@@ -106,6 +119,19 @@ pub fn entry(
             return error.BadGsub;
         }
         if (lookup_order.contains(run.disabled_lookups, index)) continue;
+        if (plan_sidecars_proved) {
+            try Executor.applyLookupAfterPlanProof(
+                view,
+                offset,
+                index,
+                glyphs,
+                allocator,
+                run,
+                cache,
+                &plan_sidecars[index],
+            );
+            continue;
+        }
         try Executor.applyLookup(
             view,
             offset,

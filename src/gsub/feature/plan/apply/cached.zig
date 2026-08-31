@@ -5,6 +5,7 @@ const merge = @import("../merge.zig");
 const model = @import("../../model.zig");
 const metadata = @import("../../../runtime/metadata.zig");
 const options = @import("../../../runtime/options.zig");
+const runtime_dispatch = @import("../../../runtime/dispatch.zig");
 const lookup_order = @import("../../../../opentype/lookup_order.zig");
 const prefilter = @import("../../../runtime/prefilter/root.zig");
 const plan_prefilter = @import("prefilter.zig");
@@ -30,16 +31,28 @@ pub fn staged(
     if (prove_metadata) {
         try metadata.validateLookupPlan(run, glyphs.items.len, plan);
     }
-    var storage = state.Storage{};
-    const prepared = try state.prepare(run, glyphs.items.len, &storage);
     if (try isEmpty(view)) {
         if (plan.entries.len != 0) return error.BadGsub;
         return;
     }
+    // A cached-plan proof is a claim about both the table and the accelerator
+    // allocation. Bind that claim once, then validate the complete plan before
+    // any entry can filter or mutate the run. In particular, a bad tuple in a
+    // later stage must not be discovered after an earlier stage has executed.
+    const plan_sidecars = if (plan_sidecars_proved)
+        try exactStagedSidecars(view, run, plan)
+    else {};
     const lookup_count = if (plan_sidecars_proved)
         undefined
     else
         try view.readU16(try requiredLookupList(view));
+    var storage = state.Storage{};
+    const prepared = try state.prepareForTable(
+        view,
+        run,
+        glyphs.items.len,
+        &storage,
+    );
     var cache = prefilter.Cache.init();
     for (plan.entries) |entry| {
         var selected = prepared;
@@ -60,6 +73,7 @@ pub fn staged(
             view,
             lookup_count,
             entry,
+            plan_sidecars,
             glyphs,
             allocator,
             selected,
@@ -89,8 +103,9 @@ pub fn merged(
     );
 }
 
-/// Apply a cached merged plan whose table identity, metadata, and sidecar
-/// correspondence were proved by the owning shaping context.
+/// Apply a cached merged plan after proving its metadata contract. Table,
+/// sidecar-allocation, and complete plan correspondence are rebound here so a
+/// stale cache cannot turn the caller's proof claim into unchecked mutation.
 pub fn mergedAfterPlanProof(
     comptime Executor: type,
     view: View,
@@ -99,21 +114,23 @@ pub fn mergedAfterPlanProof(
     allocator: std.mem.Allocator,
     run: Options,
 ) Error!void {
+    if (plan.lookups.len != plan.lookup_offsets.len) return error.BadGsub;
     if (plan.lookups.len == 0) return;
-    std.debug.assert(plan.lookups.len == plan.lookup_offsets.len);
-    const sidecars = run.lookup_accelerators.?;
+    const sidecars = try exactMergedSidecars(view, run, plan);
 
     var storage = state.Storage{};
-    const prepared = try state.prepare(run, glyphs.items.len, &storage);
+    const prepared = try state.prepareForTable(
+        view,
+        run,
+        glyphs.items.len,
+        &storage,
+    );
     var cache = prefilter.Cache.init();
     for (plan.lookups, plan.lookup_offsets) |lookup, offset| {
         if (lookup_order.contains(run.disabled_lookups, lookup.lookup)) {
             continue;
         }
-        std.debug.assert(lookup.lookup < sidecars.len);
         const sidecar = &sidecars[lookup.lookup];
-        std.debug.assert(sidecar.lookup_offset == offset);
-        std.debug.assert(sidecar.lookup_type != 0);
         var selected = prepared;
         selected.active_source_feature = null;
         selected.active_source_feature_mask = lookup.source_mask;
@@ -140,7 +157,7 @@ pub fn mergedAfterPlanProof(
                 sidecar,
             );
         } else {
-            try Executor.applyLookup(
+            try Executor.applyLookupAfterPlanProof(
                 view,
                 offset,
                 lookup.lookup,
@@ -148,6 +165,7 @@ pub fn mergedAfterPlanProof(
                 allocator,
                 selected,
                 &cache,
+                sidecar,
             );
         }
     }
@@ -166,7 +184,12 @@ noinline fn mergedNonEmpty(
         try metadata.validateMergedLookupPlan(run, glyphs.items.len, plan);
     }
     var storage = state.Storage{};
-    const prepared = try state.prepare(run, glyphs.items.len, &storage);
+    const prepared = try state.prepareForTable(
+        view,
+        run,
+        glyphs.items.len,
+        &storage,
+    );
     if (try isEmpty(view)) {
         if (plan.lookups.len != 0 or plan.lookup_offsets.len != 0) {
             return error.BadGsub;
@@ -207,4 +230,49 @@ fn isEmpty(view: View) Error!bool {
 
 fn requiredLookupList(view: View) Error!usize {
     return table.offset.required16(view, 0, try view.readU16(8));
+}
+
+fn exactStagedSidecars(
+    view: View,
+    run: Options,
+    plan: model.LookupPlan,
+) Error![]const runtime_dispatch.Lookup {
+    for (plan.entries) |entry| {
+        if (entry.lookups.len != entry.lookup_offsets.len) {
+            return error.BadGsub;
+        }
+    }
+    const sidecars = runtime_dispatch.exactSidecars(view, run) orelse
+        return error.InvalidShapingInput;
+    for (plan.entries) |entry| {
+        for (entry.lookups, entry.lookup_offsets) |index, offset| {
+            try validatePlanLookup(sidecars, index, offset);
+        }
+    }
+    return sidecars;
+}
+
+fn exactMergedSidecars(
+    view: View,
+    run: Options,
+    plan: model.MergedLookupPlan,
+) Error![]const runtime_dispatch.Lookup {
+    const sidecars = runtime_dispatch.exactSidecars(view, run) orelse
+        return error.InvalidShapingInput;
+    for (plan.lookups, plan.lookup_offsets) |lookup, offset| {
+        try validatePlanLookup(sidecars, lookup.lookup, offset);
+    }
+    return sidecars;
+}
+
+fn validatePlanLookup(
+    sidecars: []const runtime_dispatch.Lookup,
+    index: u16,
+    offset: usize,
+) Error!void {
+    _ = runtime_dispatch.lookupInExactSidecars(
+        sidecars,
+        offset,
+        index,
+    ) orelse return error.BadGsub;
 }

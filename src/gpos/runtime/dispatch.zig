@@ -45,6 +45,10 @@ pub inline fn withCoverage(
 
 /// Return the complete sidecar slice only when it belongs to this exact
 /// validated GPOS range and still occupies its original allocation.
+///
+/// This is an allocation/range identity check, not a content hash or a
+/// lifetime guard. The API contract requires both allocations to remain alive
+/// and immutable before this function may inspect them.
 pub inline fn exactSidecars(
     view: View,
     run: Options,

@@ -20,6 +20,12 @@ pub const AttachmentType = positioning.AttachmentType;
 
 pub const VariationStore = positioning.VariationStore;
 
+/// One entry in the allocator-owned sidecar slice returned by
+/// `buildLookupAccelerators`. The entries and their nested storage are not
+/// standalone values: keep the complete original slice alive, at the same
+/// address, and unchanged whenever it is supplied through
+/// `LookupOptions.lookup_accelerators`. Copying a slice descriptor is fine, but
+/// copying, moving, resizing, or mutating its elements breaks that contract.
 pub const LookupAccelerator = accelerator_core.model.Lookup;
 pub const LookupOptions = runtime.Options;
 
@@ -130,6 +136,18 @@ pub fn selectedLookupIndicesForOptions(data: []const u8, offset: usize, length: 
     );
 }
 
+/// Build reusable decoded sidecars for one validated GPOS table range.
+///
+/// The caller owns the returned slice and all of its nested allocations and
+/// must release them exactly once with `deinitLookupAccelerators` and the same
+/// allocator. The sidecars borrow `data`: both the backing byte allocation and
+/// the complete returned sidecar allocation must remain alive and immutable
+/// for every shaping or lookup call that uses them.
+///
+/// Runtime matching records pointer, length, table range, and sidecar-allocation
+/// identity. It is not a content hash and does not establish memory liveness:
+/// mutation at the same addresses still has the same identity, while using a
+/// sidecar or its backing bytes after free is outside the API contract.
 pub fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, allocator: std.mem.Allocator) (GposError || std.mem.Allocator.Error)![]LookupAccelerator {
     return accelerator_core.build.lookup.all(
         data,
@@ -139,6 +157,9 @@ pub fn buildLookupAccelerators(data: []const u8, offset: usize, length: usize, a
     );
 }
 
+/// Release the complete slice returned by `buildLookupAccelerators`. No copy,
+/// subslice, or nested sidecar storage may be used after this call. This does
+/// not release the separately caller-owned font bytes.
 pub fn deinitLookupAccelerators(allocator: std.mem.Allocator, accelerators: []LookupAccelerator) void {
     accelerator_core.build.lookup.deinit(allocator, accelerators);
 }

@@ -722,7 +722,11 @@ fn resolveLigatureCaretContourPoint(
 pub const Font = struct {
     /// The font is a borrowed byte slice. Table records and cmap subtable
     /// descriptors below only point back into this slice, so the caller must
-    /// keep `data` alive for the lifetime of the Font.
+    /// keep `data` alive for the lifetime of the Font. Cached shaping
+    /// sidecars derived from this Font additionally require both `data` and
+    /// their own storage to stay alive and immutable for every use. Their
+    /// exact-identity checks compare allocations and ranges, not byte content,
+    /// and cannot detect mutation or make storage safe after it is freed.
     data: []const u8,
     format: FontFormat,
     scaler_type: u32 = 0x00010000,

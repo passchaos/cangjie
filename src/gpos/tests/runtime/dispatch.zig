@@ -42,6 +42,13 @@ test "runtime dispatch requires exact table and sidecar identity" {
         run,
     ) == null);
 
+    // Identity deliberately does not hash contents. Mutation violates the
+    // accelerator API contract, but remains the same allocation/range; callers
+    // cannot use this check as a mutation detector or lifetime guard.
+    bytes[29] ^= 1;
+    try std.testing.expect(runtime.dispatch.exactSidecars(validated, run) != null);
+    bytes[29] ^= 1;
+
     // A shallow copy retains the identity pointer but not the allocation
     // address to which that identity was bound during construction.
     const copied = try allocator.dupe(accelerator.Lookup, accelerators);

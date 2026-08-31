@@ -63,9 +63,12 @@ pub const StyledParagraphRequest = struct {
 /// Owns reusable shaping output, transient arrays, and font-derived caches.
 ///
 /// Returned runs and layouts borrow the context and remain valid until its next
-/// shaping/layout call. Faces referenced by cache keys and returned runs must
-/// outlive the engine, or `clearCaches` must be called before they are freed.
-/// An engine is not thread-safe; use one engine per concurrent worker.
+/// shaping/layout call. Faces referenced by cache keys and returned runs, plus
+/// their borrowed backing bytes, must remain alive and unchanged while the
+/// engine can use them. Call `clearCaches` before deinitializing such a face or
+/// releasing its bytes. Cache identity is address-based; it is not a content
+/// hash or a safeguard against mutation, deallocation, or address reuse. An
+/// engine is not thread-safe; use one engine per concurrent worker.
 pub const Engine = struct {
     /// Source-visible implementation storage. Applications should use the
     /// methods below rather than depending on this field's evolving layout.

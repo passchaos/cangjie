@@ -40,7 +40,11 @@ pub const Options = struct {
     /// Ascending LookupList indexes suppressed by one JSTF suggestion.
     disabled_lookups: []const u16 = &.{},
     unsafe_glyphs: ?*run_metadata.UnsafeGlyphs = null,
-    /// Immutable per-lookup sidecars built for the exact validated table.
+    /// Borrowed, immutable full slice from `gpos.buildLookupAccelerators`. The
+    /// original sidecar allocation and the exact backing font-byte allocation
+    /// and table range used to build it must remain alive and unchanged for
+    /// this run. Identity checks compare addresses and ranges, not contents,
+    /// and therefore cannot make mutated or freed storage safe to use.
     lookup_accelerators: ?[]const accelerator.Lookup = null,
     assume_validated: bool = false,
     shape_profile: ?*shape_profile.ShapeStageProfile = null,

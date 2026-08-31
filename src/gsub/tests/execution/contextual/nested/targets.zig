@@ -121,25 +121,22 @@ test "nested extension single targets one glyph without scanning the run" {
 
 test "nested extension single uses prepared compact sidecar" {
     const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 24;
-    writeHeader(&bytes, 10, 1);
-    writeLookup(&bytes, 14, 7, &.{8});
+    var bytes = [_]u8{0} ** 48;
+    writeExtensionSingleTable(&bytes, 4);
+    const lookups = try acceleration.build.lookup.build(
+        &bytes,
+        0,
+        bytes.len,
+        allocator,
+    );
+    defer acceleration.ownership.deinit(allocator, lookups);
+    try std.testing.expect(lookups[0].single_subst.enabled);
+    try std.testing.expectEqual(@as(u16, 5), lookups[0].single_subst.single_from);
+    try std.testing.expectEqual(@as(u16, 9), lookups[0].single_subst.single_to);
 
     var glyphs = std.ArrayList(u16).empty;
     defer glyphs.deinit(allocator);
     try glyphs.appendSlice(allocator, &.{ 5, 5 });
-    const lookups = [_]acceleration.Lookup{.{
-        .lookup_offset = 14,
-        .lookup_type = 7,
-        .subtable_count = 1,
-        .extension_lookup_type = 1,
-        .single_subst = .{
-            .enabled = true,
-            .single_mapping = true,
-            .single_from = 5,
-            .single_to = 9,
-        },
-    }};
     _ = try nested.apply(
         Executor,
         view(&bytes),
@@ -147,9 +144,45 @@ test "nested extension single uses prepared compact sidecar" {
         1,
         0,
         allocator,
-        .{ .lookup_accelerators = &lookups },
+        .{ .lookup_accelerators = lookups },
     );
     try std.testing.expectEqualSlices(u16, &.{ 5, 9 }, glyphs.items);
+}
+
+test "nested single rejects foreign same-offset and type sidecar" {
+    const allocator = std.testing.allocator;
+    var source = [_]u8{0} ** 48;
+    var foreign = [_]u8{0} ** 48;
+    writeExtensionSingleTable(&source, 4);
+    writeExtensionSingleTable(&foreign, 7);
+    const source_lookups = try acceleration.build.lookup.build(
+        &source,
+        0,
+        source.len,
+        allocator,
+    );
+    defer acceleration.ownership.deinit(allocator, source_lookups);
+
+    // Both tables place an Extension SingleSubst at lookup index zero and
+    // offset 14. The source cache must not override the foreign payload.
+    try std.testing.expectEqual(
+        @as(usize, 14),
+        source_lookups[0].lookup_offset,
+    );
+    try std.testing.expectEqual(@as(u16, 7), source_lookups[0].lookup_type);
+    var glyphs = std.ArrayList(u16).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 5);
+    _ = try nested.apply(
+        Executor,
+        view(&foreign),
+        &glyphs,
+        0,
+        0,
+        allocator,
+        .{ .lookup_accelerators = source_lookups },
+    );
+    try std.testing.expectEqualSlices(u16, &.{12}, glyphs.items);
 }
 
 test "JSTF-disabled nested substitution lookup is skipped" {
@@ -203,6 +236,20 @@ fn writeCoverage(bytes: []u8, offset: usize, glyph: u16) void {
     writeU16(bytes, offset, 1);
     writeU16(bytes, offset + 2, 1);
     writeU16(bytes, offset + 4, glyph);
+}
+
+fn writeExtensionSingleTable(bytes: []u8, delta: i16) void {
+    writeHeader(bytes, 10, 1);
+    writeLookup(bytes, 14, 7, &.{8});
+    const wrapper = 22;
+    writeU16(bytes, wrapper, 1);
+    writeU16(bytes, wrapper + 2, 1);
+    writeU32(bytes, wrapper + 4, 8);
+    const single = wrapper + 8;
+    writeU16(bytes, single, 1);
+    writeU16(bytes, single + 2, 6);
+    writeU16(bytes, single + 4, @bitCast(delta));
+    writeCoverage(bytes, single + 6, 5);
 }
 
 fn writeU16(bytes: []u8, offset: usize, value: u16) void {

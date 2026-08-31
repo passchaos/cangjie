@@ -62,6 +62,15 @@ pub fn apply(
             lookup_list + 2 + @as(usize, lookup_index) * 2,
         ),
     );
+    // Resolve the sidecar only after parsing the real LookupList position.
+    // Matching an index, offset, and type is insufficient: a foreign table
+    // can share all three while carrying different substitution payloads.
+    const exact_sidecar = runtime_dispatch.exact(
+        view,
+        lookup_offset,
+        lookup_index,
+        run,
+    );
     const lookup_type = try view.readU16(lookup_offset);
     const lookup_flag = try view.readU16(lookup_offset + 2);
     const subtable_count = try view.readU16(lookup_offset + 4);
@@ -74,7 +83,7 @@ pub fn apply(
         try filtering.validateMarkFilteringSetIndex(lookup_run);
     }
 
-    if (runtime_dispatch.single(lookup_index, lookup_run)) |single| {
+    if (runtime_dispatch.single(exact_sidecar)) |single| {
         _ = try direct_single.acceleratedAt(
             view,
             single.*,
@@ -84,12 +93,7 @@ pub fn apply(
         );
         return .{};
     }
-    if (runtime_dispatch.exact(
-        view,
-        lookup_offset,
-        lookup_index,
-        lookup_run,
-    )) |sidecar| {
+    if (exact_sidecar) |sidecar| {
         const effective_type = if (sidecar.lookup_type == 7)
             sidecar.extension_lookup_type orelse 0
         else
@@ -294,6 +298,7 @@ pub fn apply(
         glyph_index,
         allocator,
         run,
+        exact_sidecar,
     );
 }
 
@@ -305,6 +310,7 @@ fn applyScratchFallback(
     glyph_index: usize,
     allocator: std.mem.Allocator,
     run: Options,
+    exact_sidecar: ?*const runtime_dispatch.Lookup,
 ) Error!Change {
     // Single-target lookup kinds can run on one detached glyph. Strip every
     // parallel sidecar because it describes the caller's complete run, then
@@ -330,6 +336,7 @@ fn applyScratchFallback(
         allocator,
         scratch_run,
         null,
+        exact_sidecar,
     );
     const prepared = try mutation.prepareReplacement(
         allocator,

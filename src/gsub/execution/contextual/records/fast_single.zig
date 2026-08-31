@@ -7,6 +7,7 @@ const filtering = @import("../../../runtime/filtering.zig");
 const limits = @import("../../../runtime/limits.zig");
 const lookup_order = @import("../../../../opentype/lookup_order.zig");
 const Options = @import("../../../runtime/options.zig").Options;
+const runtime_dispatch = @import("../../../runtime/dispatch.zig");
 const table = @import("../../../table/root.zig");
 const GlyphId = @import("../../../../glyph.zig").GlyphId;
 
@@ -63,6 +64,7 @@ noinline fn applyParsed(
     var subtable_counts: [max_records]u16 = undefined;
     var lookup_indices: [max_records]u16 = undefined;
     var singles: [max_records]Single = undefined;
+    const exact_lookups = runtime_dispatch.exactSidecars(view, run);
 
     for (0..record_count) |record_index| {
         const record = records_offset + record_index * 4;
@@ -81,7 +83,7 @@ noinline fn applyParsed(
         var lookup_flag: u16 = 0;
         var subtable_count: u16 = 0;
         var resolved = false;
-        if (run.lookup_accelerators) |lookups| {
+        if (exact_lookups) |lookups| {
             if (lookup_index < lookups.len and
                 lookups[lookup_index].single_subst.enabled)
             {
@@ -165,7 +167,11 @@ fn applyAccelerated(
     input_indices: []const usize,
     run: Options,
 ) Error!bool {
-    const lookups = run.lookup_accelerators orelse return false;
+    // Indexing by SequenceLookupRecord is safe only for the builder-owned
+    // sidecar slice attached to this exact table view. A foreign table may
+    // deliberately reproduce lookup indices, offsets, and types.
+    const lookups = runtime_dispatch.exactSidecars(view, run) orelse
+        return false;
     var targets: [max_records]usize = undefined;
     var singles: [max_records]*const Single = undefined;
 

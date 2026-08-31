@@ -96,16 +96,17 @@ test "zero records do not instantiate or invoke the nested executor" {
 
 test "accelerated single records obey the nested operation budget" {
     const allocator = std.testing.allocator;
-    var bytes = [_]u8{0} ** 4;
-    writeRecord(&bytes, 0, 0, 0);
-    const lookups = [_]accelerator.Lookup{.{
-        .single_subst = .{
-            .enabled = true,
-            .single_mapping = true,
-            .single_from = 5,
-            .single_to = 9,
-        },
-    }};
+    var bytes = [_]u8{0} ** 44;
+    fixture.writeLookupList(&bytes, &.{4});
+    fixture.writeSingleLookup(&bytes, 14, 5, 4);
+    fixture.writeRecord(&bytes, 40, 0, 0);
+    const lookups = try accelerator.build.lookup.build(
+        &bytes,
+        0,
+        bytes.len,
+        allocator,
+    );
+    defer accelerator.ownership.deinit(allocator, lookups);
 
     var exhausted_glyphs = std.ArrayList(u16).empty;
     defer exhausted_glyphs.deinit(allocator);
@@ -117,12 +118,12 @@ test "accelerated single records obey the nested operation budget" {
             FastExecutor,
             validatedView(&bytes),
             &exhausted_glyphs,
-            0,
+            40,
             1,
             &.{0},
             allocator,
             .{
-                .lookup_accelerators = &lookups,
+                .lookup_accelerators = lookups,
                 .operations_left = &exhausted,
             },
         ),
@@ -137,17 +138,58 @@ test "accelerated single records obey the nested operation budget" {
         FastExecutor,
         validatedView(&bytes),
         &glyphs,
-        0,
+        40,
         1,
         &.{0},
         allocator,
         .{
-            .lookup_accelerators = &lookups,
+            .lookup_accelerators = lookups,
             .operations_left = &operations_left,
         },
     );
     try std.testing.expectEqualSlices(u16, &.{9}, glyphs.items);
     try std.testing.expectEqual(@as(usize, 0), operations_left);
+}
+
+test "fast single records reject foreign same-offset and type sidecars" {
+    const allocator = std.testing.allocator;
+    var source = [_]u8{0} ** 44;
+    var foreign = [_]u8{0} ** 44;
+    fixture.writeLookupList(&source, &.{4});
+    fixture.writeSingleLookup(&source, 14, 5, 4);
+    fixture.writeRecord(&source, 40, 0, 0);
+    fixture.writeLookupList(&foreign, &.{4});
+    fixture.writeSingleLookup(&foreign, 14, 5, 7);
+    fixture.writeRecord(&foreign, 40, 0, 0);
+    const source_lookups = try accelerator.build.lookup.build(
+        &source,
+        0,
+        source.len,
+        allocator,
+    );
+    defer accelerator.ownership.deinit(allocator, source_lookups);
+
+    // Matching lookup indices, offsets, and types do not establish ownership:
+    // defensive parsing must observe the foreign table's 5 -> 12 mapping.
+    try std.testing.expectEqual(
+        @as(usize, 14),
+        source_lookups[0].lookup_offset,
+    );
+    try std.testing.expectEqual(@as(u16, 1), source_lookups[0].lookup_type);
+    var glyphs = std.ArrayList(u16).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 5);
+    try records.apply(
+        FastExecutor,
+        validatedView(&foreign),
+        &glyphs,
+        40,
+        1,
+        &.{0},
+        allocator,
+        .{ .lookup_accelerators = source_lookups },
+    );
+    try std.testing.expectEqualSlices(u16, &.{12}, glyphs.items);
 }
 
 test "parsed single records obey the nested operation budget" {

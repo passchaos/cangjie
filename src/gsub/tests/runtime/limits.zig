@@ -78,3 +78,24 @@ test "GSUB mutation budget rejects invalid removal and count overflow" {
     );
     try std.testing.expectEqual(@as(usize, 1), operations_left);
 }
+
+test "GSUB contextual nesting accepts sixteen edges and rejects the next" {
+    var operations_left: usize = 3;
+    const boundary = runtime.Options{
+        .context_depth = runtime.limits.max_context_depth - 1,
+        .operations_left = &operations_left,
+    };
+    const nested = try runtime.limits.enterContext(boundary);
+    try std.testing.expectEqual(
+        runtime.limits.max_context_depth,
+        nested.context_depth,
+    );
+
+    try std.testing.expectError(
+        error.ShapingLimitExceeded,
+        runtime.limits.enterContext(nested),
+    );
+    // Depth is checked before the separate operation charge at the dispatcher
+    // boundary, so rejecting recursion cannot consume the caller's budget.
+    try std.testing.expectEqual(@as(usize, 3), operations_left);
+}

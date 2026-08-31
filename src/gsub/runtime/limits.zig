@@ -8,6 +8,11 @@ const min_max_glyph_count = 65536;
 const max_operations_factor = 4096;
 const min_max_operations = 65536;
 
+/// Maximum number of SequenceLookupRecord edges in one contextual call stack.
+/// This deliberately caps nested GSUB calls at sixteen rather than relying on
+/// the much larger operation budget as an accidental stack-depth limit.
+pub const max_context_depth: usize = 16;
+
 pub const Error = error{
     InvalidShapingInput,
     ShapingLimitExceeded,
@@ -77,6 +82,17 @@ pub fn consumeNested(run: Options) Error!void {
     const operations_left = run.operations_left orelse return;
     if (operations_left.* == 0) return error.ShapingLimitExceeded;
     operations_left.* -= 1;
+}
+
+/// Enter one nested contextual lookup without permitting the operations
+/// budget's much larger bound to become an accidental recursion limit.
+pub fn enterContext(run: Options) Error!Options {
+    if (run.context_depth >= max_context_depth) {
+        return error.ShapingLimitExceeded;
+    }
+    var nested = run;
+    nested.context_depth = run.context_depth + 1;
+    return nested;
 }
 
 fn scaled(initial_glyph_count: usize, factor: usize, minimum: usize) Error!usize {

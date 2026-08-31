@@ -40,13 +40,14 @@ pub fn apply(
         if (lookup_order.contains(run.disabled_lookups, record.lookup_index)) {
             continue;
         }
+        const nested_run = try limits.enterContext(run);
         try limits.consumeNested(run);
         _ = try direct_single.acceleratedAt(
             view,
             record.accelerator,
             glyphs,
             target,
-            run,
+            nested_run,
         );
     }
     return true;

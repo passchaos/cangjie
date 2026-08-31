@@ -92,4 +92,7 @@ pub const Options = struct {
     shape_profile: ?*shape_profile.ShapeStageProfile = null,
     profile_fast_path: bool = false,
     profile_io: ?std.Io = null,
+    /// Number of SequenceLookupRecord edges enclosing the current lookup.
+    /// Top-level lookup execution always starts at zero.
+    context_depth: usize = 0,
 };

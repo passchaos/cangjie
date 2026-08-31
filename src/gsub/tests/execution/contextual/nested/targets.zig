@@ -3,6 +3,7 @@
 const std = @import("std");
 const acceleration = @import("../../../../accelerator/root.zig");
 const nested = @import("../../../../execution/contextual/nested/root.zig");
+const limits = @import("../../../../runtime/limits.zig");
 const Options = @import("../../../../runtime/options.zig").Options;
 const table = @import("../../../../table/root.zig");
 
@@ -44,14 +45,22 @@ const Executor = struct {
     }
 
     pub fn applyNested(
-        _: table.View,
-        _: *std.ArrayList(u16),
-        _: usize,
-        _: u16,
-        _: std.mem.Allocator,
-        _: Options,
+        table_view: table.View,
+        glyphs: *std.ArrayList(u16),
+        glyph_index: usize,
+        lookup_index: u16,
+        allocator: std.mem.Allocator,
+        options: Options,
     ) nested.Error!nested.Change {
-        return error.BadGsub;
+        return nested.apply(
+            @This(),
+            table_view,
+            glyphs,
+            glyph_index,
+            lookup_index,
+            allocator,
+            options,
+        );
     }
 
     pub fn validateNested(_: table.View, _: usize) !void {}
@@ -211,6 +220,116 @@ test "JSTF-disabled nested substitution lookup is skipped" {
     try std.testing.expectEqualSlices(u16, &.{5}, glyphs.items);
 }
 
+test "nested lookup rejects the seventeenth contextual edge before mutation" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 40;
+    writeHeader(&bytes, 10, 1);
+    writeLookup(&bytes, 14, 1, &.{8});
+    const single = 22;
+    writeU16(&bytes, single, 1);
+    writeU16(&bytes, single + 2, 6);
+    writeU16(&bytes, single + 4, 1);
+    writeCoverage(&bytes, single + 6, 5);
+
+    var glyphs = std.ArrayList(u16).empty;
+    defer glyphs.deinit(allocator);
+    try glyphs.append(allocator, 5);
+    var operations_left: usize = 2;
+    try std.testing.expectError(
+        error.ShapingLimitExceeded,
+        nested.apply(
+            Executor,
+            view(&bytes),
+            &glyphs,
+            0,
+            0,
+            allocator,
+            .{
+                .context_depth = limits.max_context_depth,
+                .operations_left = &operations_left,
+            },
+        ),
+    );
+    try std.testing.expectEqualSlices(u16, &.{5}, glyphs.items);
+    try std.testing.expectEqual(@as(usize, 2), operations_left);
+}
+
+test "nested lookup accepts the sixteenth direct and extension edge" {
+    const allocator = std.testing.allocator;
+    inline for (.{ false, true }) |extension| {
+        var bytes = [_]u8{0} ** 48;
+        if (extension) {
+            writeExtensionSingleTable(&bytes, 4);
+        } else {
+            writeHeader(&bytes, 10, 1);
+            writeLookup(&bytes, 14, 1, &.{8});
+            const single = 22;
+            writeU16(&bytes, single, 1);
+            writeU16(&bytes, single + 2, 6);
+            writeU16(&bytes, single + 4, 4);
+            writeCoverage(&bytes, single + 6, 5);
+        }
+
+        var glyphs = std.ArrayList(u16).empty;
+        defer glyphs.deinit(allocator);
+        try glyphs.append(allocator, 5);
+        var operations_left: usize = 1;
+        _ = try nested.apply(
+            Executor,
+            view(&bytes),
+            &glyphs,
+            0,
+            0,
+            allocator,
+            .{
+                .context_depth = limits.max_context_depth - 1,
+                .operations_left = &operations_left,
+            },
+        );
+        try std.testing.expectEqualSlices(u16, &.{9}, glyphs.items);
+        try std.testing.expectEqual(@as(usize, 0), operations_left);
+    }
+}
+
+test "direct and extension contextual self cycles stop at the depth limit" {
+    const allocator = std.testing.allocator;
+    inline for (.{ false, true }) |extension| {
+        var bytes = [_]u8{0} ** 64;
+        writeHeader(&bytes, 10, 1);
+        writeLookup(&bytes, 14, if (extension) 7 else 5, &.{8});
+        const context = if (extension) context: {
+            const wrapper = 22;
+            writeU16(&bytes, wrapper, 1);
+            writeU16(&bytes, wrapper + 2, 5);
+            writeU32(&bytes, wrapper + 4, 8);
+            break :context wrapper + 8;
+        } else 22;
+        writeRecursiveContext(&bytes, context, 5, 0);
+
+        var glyphs = std.ArrayList(u16).empty;
+        defer glyphs.deinit(allocator);
+        try glyphs.append(allocator, 5);
+        var operations_left: usize = 64;
+        try std.testing.expectError(
+            error.ShapingLimitExceeded,
+            nested.apply(
+                Executor,
+                view(&bytes),
+                &glyphs,
+                0,
+                0,
+                allocator,
+                .{ .operations_left = &operations_left },
+            ),
+        );
+        try std.testing.expectEqualSlices(u16, &.{5}, glyphs.items);
+        try std.testing.expectEqual(
+            @as(usize, 64 - limits.max_context_depth),
+            operations_left,
+        );
+    }
+}
+
 fn writeHeader(bytes: []u8, lookup_list: u16, lookup_count: u16) void {
     writeU32(bytes, 0, 0x00010000);
     writeU16(bytes, 8, lookup_list);
@@ -250,6 +369,21 @@ fn writeExtensionSingleTable(bytes: []u8, delta: i16) void {
     writeU16(bytes, single + 2, 6);
     writeU16(bytes, single + 4, @bitCast(delta));
     writeCoverage(bytes, single + 6, 5);
+}
+
+fn writeRecursiveContext(
+    bytes: []u8,
+    offset: usize,
+    glyph: u16,
+    lookup_index: u16,
+) void {
+    writeU16(bytes, offset, 3);
+    writeU16(bytes, offset + 2, 1);
+    writeU16(bytes, offset + 4, 1);
+    writeU16(bytes, offset + 6, 12);
+    writeU16(bytes, offset + 8, 0);
+    writeU16(bytes, offset + 10, lookup_index);
+    writeCoverage(bytes, offset + 12, glyph);
 }
 
 fn writeU16(bytes: []u8, offset: usize, value: u16) void {

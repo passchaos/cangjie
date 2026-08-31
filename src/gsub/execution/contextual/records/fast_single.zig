@@ -124,6 +124,7 @@ noinline fn applyParsed(
     for (0..record_count) |record_index| {
         const target = targets[record_index];
         if (target >= glyphs.items.len) continue;
+        const nested_run = try limits.enterContext(run);
         try limits.consumeNested(run);
         if (singles[record_index].enabled) {
             _ = try direct_single.acceleratedAt(
@@ -131,17 +132,17 @@ noinline fn applyParsed(
                 singles[record_index],
                 glyphs,
                 target,
-                run,
+                nested_run,
             );
             continue;
         }
-        var nested_run = run;
+        var nested_options = nested_run;
         if ((lookup_flags[record_index] & 0x0010) != 0) {
-            nested_run.active_mark_filtering_set = try view.readU16(
+            nested_options.active_mark_filtering_set = try view.readU16(
                 lookup_offsets[record_index] + 6 +
                     @as(usize, subtable_counts[record_index]) * 2,
             );
-            try filtering.validateMarkFilteringSetIndex(nested_run);
+            try filtering.validateMarkFilteringSetIndex(nested_options);
         }
         for (0..subtable_counts[record_index]) |subtable_index| {
             const subtable_offset = lookup_offsets[record_index] +
@@ -154,7 +155,7 @@ noinline fn applyParsed(
                 glyphs,
                 target,
                 lookup_flags[record_index],
-                nested_run,
+                nested_options,
             )) break;
         }
     }
@@ -194,13 +195,14 @@ fn applyAccelerated(
 
     for (0..record_count) |record_index| {
         if (targets[record_index] >= glyphs.items.len) continue;
+        const nested_run = try limits.enterContext(run);
         try limits.consumeNested(run);
         _ = try direct_single.acceleratedAt(
             view,
             singles[record_index].*,
             glyphs,
             targets[record_index],
-            run,
+            nested_run,
         );
     }
     return true;

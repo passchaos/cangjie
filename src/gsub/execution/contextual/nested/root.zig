@@ -47,6 +47,10 @@ pub fn apply(
     // lookups reached through SequenceLookupRecord rather than a top-level
     // feature edge.
     if (lookup_order.contains(run.disabled_lookups, lookup_index)) return .{};
+    // Bound the call stack independently from the much larger shared
+    // operation budget. Only SequenceLookupRecord dispatch crosses this
+    // boundary; ordinary top-level lookups and Extension wrappers do not.
+    var lookup_run = try limits.enterContext(run);
     try limits.consumeNested(run);
     const lookup_list = try table.offset.required16(
         view,
@@ -75,7 +79,6 @@ pub fn apply(
     const lookup_flag = try view.readU16(lookup_offset + 2);
     const subtable_count = try view.readU16(lookup_offset + 4);
 
-    var lookup_run = run;
     if ((lookup_flag & 0x0010) != 0) {
         lookup_run.active_mark_filtering_set = try view.readU16(
             lookup_offset + 6 + @as(usize, subtable_count) * 2,
@@ -297,7 +300,7 @@ pub fn apply(
         glyphs,
         glyph_index,
         allocator,
-        run,
+        lookup_run,
         exact_sidecar,
     );
 }

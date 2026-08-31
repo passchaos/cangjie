@@ -25,8 +25,11 @@ test "GSUB runtime options are concrete values with borrowed sidecars" {
     // hidden ownership through a handle.
     var stage = options;
     stage.active_feature_value = 7;
+    stage.context_depth = 3;
     try std.testing.expectEqual(@as(u32, 1), options.active_feature_value);
     try std.testing.expectEqual(@as(u32, 7), stage.active_feature_value);
+    try std.testing.expectEqual(@as(usize, 0), options.context_depth);
+    try std.testing.expectEqual(@as(usize, 3), stage.context_depth);
     try std.testing.expect(stage.operations_left == options.operations_left);
 }
 
@@ -38,5 +41,6 @@ test "GSUB runtime options default to an unscoped defensive run" {
     try std.testing.expectEqual(@as(usize, 0), options.normalized_variation_coords.len);
     try std.testing.expect(options.selected_lookups == null);
     try std.testing.expect(options.lookup_accelerators == null);
+    try std.testing.expectEqual(@as(usize, 0), options.context_depth);
     try std.testing.expect(!options.assume_validated);
 }

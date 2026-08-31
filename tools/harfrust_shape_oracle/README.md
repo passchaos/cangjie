@@ -29,4 +29,7 @@ cross-engine glyph and position parity remains the responsibility of
 Cangjie/HarfBuzz/HarfRust/HarfRust/HarfBuzz/Cangjie matrix over the retained
 Roboto, Source Serif, Amiri, and Devanagari corpora. Optional
 `-- --iterations N --samples N --cpu CPU` arguments select its measurement
-depth and CPU affinity.
+depth and CPU affinity. The matrix reports its speedup threshold even in the
+default report-only mode. Pass `--fail-on-slower` to enforce the default
+`1.01x` minimum, or add `--minimum-speedup RATIO` to declare another finite
+threshold greater than `1.0`.

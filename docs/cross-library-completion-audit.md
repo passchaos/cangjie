@@ -643,7 +643,11 @@ reference, so further optimization remains necessary.
 3. Performance rows must compare the same work and lifecycle. Cache/prepared
    paths cannot replace cold or owning rows.
 4. A row is a win only when repeated symmetric runs clear a declared noise
-   margin; a `0.997x` or `1.001x` observation is a tie, not superiority.
+   margin; a `0.997x` or `1.001x` observation is a tie, not superiority. The
+   shaping matrix makes that margin reproducible with `--minimum-speedup`
+   (default `1.01x`): `--fail-on-slower` rejects every row below the declared
+   threshold, while an exact-boundary result passes. Without the fail flag,
+   the same threshold result remains visible but report-only.
 5. Every retained optimization must preserve the full ReleaseFast suite and
    all applicable reference-parity gates.
 6. The overall claim may be made only after every open row above has concrete,

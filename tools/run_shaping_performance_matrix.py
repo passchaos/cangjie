@@ -75,6 +75,8 @@ BROAD_CASES = (
     ),
 )
 
+DEFAULT_MINIMUM_SPEEDUP = 1.01
+
 
 def cases_for_suite(suite: str) -> tuple[Case, ...]:
     if suite == "core":
@@ -144,9 +146,21 @@ def glyphs_per_iteration(
     return glyphs // measured_runs
 
 
-def is_strict_win(speedup: float) -> bool:
-    """Require a positive margin; equality and invalid ratios do not pass."""
-    return not math.isnan(speedup) and speedup > 1.0
+def valid_minimum_speedup(minimum_speedup: float) -> bool:
+    """A gate margin must be finite and strictly better than parity."""
+    return math.isfinite(minimum_speedup) and minimum_speedup > 1.0
+
+
+def meets_speedup_gate(speedup: float, minimum_speedup: float) -> bool:
+    """Return whether a measured ratio reaches the declared gate boundary."""
+    return not math.isnan(speedup) and speedup >= minimum_speedup
+
+
+def gate_failed(
+    speedup: float, minimum_speedup: float, fail_on_slower: bool
+) -> bool:
+    """Keep threshold reporting independent from opt-in gate enforcement."""
+    return fail_on_slower and not meets_speedup_gate(speedup, minimum_speedup)
 
 
 def test_glyph_count_normalization() -> None:
@@ -173,18 +187,34 @@ def test_case_selection() -> None:
         raise AssertionError("unknown suites must be rejected")
 
 
-def test_strict_speedup_boundary() -> None:
-    assert is_strict_win(1.001)
-    assert is_strict_win(math.inf)
-    assert not is_strict_win(1.0)
-    assert not is_strict_win(0.999)
-    assert not is_strict_win(math.nan)
+def test_speedup_gate_boundary() -> None:
+    minimum = DEFAULT_MINIMUM_SPEEDUP
+    assert valid_minimum_speedup(minimum)
+    assert not valid_minimum_speedup(1.0)
+    assert not valid_minimum_speedup(math.inf)
+    assert not valid_minimum_speedup(math.nan)
+    # The option names a minimum, so its exact boundary passes while the next
+    # representable lower ratio does not. This keeps the gate deterministic.
+    assert meets_speedup_gate(minimum, minimum)
+    assert not meets_speedup_gate(math.nextafter(minimum, -math.inf), minimum)
+    assert meets_speedup_gate(math.inf, minimum)
+    assert not meets_speedup_gate(math.nan, minimum)
+    assert not gate_failed(1.0, minimum, False)
+    assert not gate_failed(math.nan, minimum, False)
+    assert gate_failed(1.0, minimum, True)
+    assert gate_failed(math.nan, minimum, True)
+    assert not gate_failed(minimum, minimum, True)
+    custom_minimum = 1.125
+    assert meets_speedup_gate(custom_minimum, custom_minimum)
+    assert not meets_speedup_gate(
+        math.nextafter(custom_minimum, -math.inf), custom_minimum
+    )
 
 
 def main() -> int:
     test_glyph_count_normalization()
     test_case_selection()
-    test_strict_speedup_boundary()
+    test_speedup_gate_boundary()
     parser = argparse.ArgumentParser()
     parser.add_argument("--cangjie", required=True, type=Path)
     parser.add_argument("--harfbuzz", required=True, type=Path)
@@ -204,11 +234,32 @@ def main() -> int:
     parser.add_argument(
         "--fail-on-slower",
         action="store_true",
-        help="fail when Cangjie is not faster than the best reference",
+        help=(
+            "fail when Cangjie does not meet --minimum-speedup against "
+            "the best reference"
+        ),
+    )
+    parser.add_argument(
+        "--minimum-speedup",
+        type=float,
+        default=DEFAULT_MINIMUM_SPEEDUP,
+        help=(
+            "minimum ratio required by --fail-on-slower "
+            f"(default: {DEFAULT_MINIMUM_SPEEDUP:g}); also reported when "
+            "the gate is disabled"
+        ),
     )
     args = parser.parse_args()
     if args.iterations <= 0 or args.samples <= 0:
         parser.error("iterations and samples must be positive")
+    if not valid_minimum_speedup(args.minimum_speedup):
+        parser.error("--minimum-speedup must be finite and greater than 1")
+
+    gate_mode = "enforced" if args.fail_on_slower else "report-only"
+    print(
+        f"shaping_performance_gate={gate_mode} "
+        f"minimum_speedup={args.minimum_speedup:.6f}x"
+    )
 
     subprocess.run(
         ["cargo", "build", "--release", "--quiet",
@@ -262,22 +313,38 @@ def main() -> int:
         means = tuple(math.sqrt(a * b) for a, b in values)
         strongest = min(means[1:])
         speedup = strongest / means[0]
-        if args.fail_on_slower and not is_strict_win(speedup):
-            failures.append(f"{case.name}: Cangjie slower ({speedup:.3f}x)")
+        threshold_result = (
+            "met"
+            if meets_speedup_gate(speedup, args.minimum_speedup)
+            else "below-minimum"
+        )
+        if gate_failed(speedup, args.minimum_speedup, args.fail_on_slower):
+            failures.append(
+                f"{case.name}: speedup {speedup:.6f}x is below the "
+                f"{args.minimum_speedup:.6f}x minimum"
+            )
         print(
             f"{case.name}: cangjie={values[0][0]:.3f}/{values[0][1]:.3f} "
             f"harfbuzz={values[1][0]:.3f}/{values[1][1]:.3f} "
             f"harfrust={values[2][0]:.3f}/{values[2][1]:.3f} "
-            f"speedup_vs_best={speedup:.3f}x "
+            f"speedup_vs_best={speedup:.6f}x "
+            f"minimum_speedup={args.minimum_speedup:.6f}x "
+            f"threshold={threshold_result} gate_mode={gate_mode} "
             f"glyphs={glyphs_per_iteration(cangjie_a, args.iterations, args.samples, True)}"
         )
     if failures:
-        print("Cangjie shaping performance matrix failed:", file=sys.stderr)
+        print(
+            "Cangjie shaping performance matrix failed "
+            f"(minimum_speedup={args.minimum_speedup:.6f}x):",
+            file=sys.stderr,
+        )
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         return 1
     print(
-        f"Cangjie/HarfBuzz/HarfRust shaping matrix completed: {len(cases)} corpora"
+        f"Cangjie/HarfBuzz/HarfRust shaping matrix completed: {len(cases)} "
+        f"corpora gate_mode={gate_mode} "
+        f"minimum_speedup={args.minimum_speedup:.6f}x"
     )
     return 0
 

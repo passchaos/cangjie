@@ -102,8 +102,10 @@ default and two long mixed-code corpora with `--suite react-dom` (or all seven
 with `--suite all`) in
 symmetric Cangjie/HarfBuzz/HarfRust/HarfRust/HarfBuzz/Cangjie order and reports
 the geometric-mean speedup against the faster reference. Pass
-`--fail-on-slower` to make any row at or below `1.0x` fail the command rather
-than remain a report-only observation. The runner normalizes
+`--fail-on-slower` to enforce the reproducible `--minimum-speedup` threshold
+(default `1.01x`); a row exactly at the threshold passes and any lower row
+fails. Without the fail flag, every row remains report-only while its threshold
+result is still printed. The runner normalizes
 the Zig engines' aggregate `iterations * samples` glyph count to the HarfRust
 oracle's one-corpus count before checking output cardinality. A fixed-CPU-30
 `5 * 11` run after adjacent required-component prefiltering measured speedups

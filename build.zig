@@ -3019,7 +3019,7 @@ pub fn build(b: *std.Build) void {
     const shaping_corpus_parity_smoke_step = b.step("shaping-corpus-parity-smoke", "Run retained HarfBuzz Latin, Arabic, and variable-font corpus parity gates");
     const shaping_performance_matrix_step = b.step(
         "shaping-performance-matrix",
-        "Benchmark Cangjie against HarfBuzz and HarfRust across retained corpora",
+        "Benchmark Cangjie against HarfBuzz/HarfRust; --fail-on-slower uses a 1.01x minimum",
     );
     if (!enable_harfbuzz) {
         shaping_parity_smoke_step.dependOn(&b.addFail("shaping-parity-smoke requires -Denable-harfbuzz=true").step);

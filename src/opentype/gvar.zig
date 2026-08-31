@@ -2272,15 +2272,40 @@ test "parsed simple gvar skips allocation at the default location" {
     try std.testing.expect(deltas == null);
     try std.testing.expect(!failing.has_induced_failure);
 
-    // Defensive callers must still decode the inactive payload, retaining the
+    // Defensive callers still decode the inactive payload, retaining the
     // public validation contract rather than silently accepting bad bytes.
+    // The small scratch arrays stay on the stack, so valid small glyphs do not
+    // require an allocation merely to prove the inactive payload is sound.
+    const defensive = try accumulateSimpleGlyphPointDeltasWithReaderFromParsed(
+        failing.allocator(),
+        &bytes,
+        0,
+        bytes.len,
+        parsed,
+        0,
+        &.{0},
+        []const Point,
+        &original,
+        original.len,
+        pointAt,
+        &contour_ends,
+        true,
+    );
+    try std.testing.expect(defensive == null);
+    try std.testing.expect(!failing.has_induced_failure);
+
+    // Shorten the tuple payload by one byte while keeping the parse-time
+    // layout proof. The trusted fast mode may skip this inactive payload, but
+    // defensive mode must still walk it and reject the missing Y-delta run.
+    var malformed = bytes;
+    malformed[29] = 8;
     try std.testing.expectError(
-        error.OutOfMemory,
+        error.BadSfnt,
         accumulateSimpleGlyphPointDeltasWithReaderFromParsed(
             failing.allocator(),
-            &bytes,
+            &malformed,
             0,
-            bytes.len,
+            malformed.len,
             parsed,
             0,
             &.{0},

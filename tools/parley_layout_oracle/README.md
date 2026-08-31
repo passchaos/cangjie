@@ -7,7 +7,12 @@ and start alignment (or center alignment for the `center` style). It prints
 deterministic native, logical-geometry, absolute-placement, and object-geometry
 checksums plus median nanoseconds per complete layout so Cangjie's
 `paragraph-bench` can be run serially on the same pinned CPU without making
-cross-process timing claims from different workloads.
+cross-process timing claims from different workloads. Placement checksums use
+the resolved paragraph geometry and record the physical visible-left origin.
+This preserves alignment translation while normalizing the engines' different
+treatment of discarded wrapping whitespace, including RTL physical prefixes.
+It is a visible-content line origin, not either engine's raw line-box origin or
+the direction-dependent logical inline-start edge.
 
 The relative path pins the local Parley checkout used by this repository's
 reference audit. Rust remains optional and is not part of the normal Zig test
@@ -24,11 +29,16 @@ zig build paragraph-bench -Doptimize=ReleaseFast -- \
 `zig build parley-matrix -Doptimize=ReleaseFast` runs default, spacing,
 alternating-style, in-flow-object, ordinary/custom out-of-flow-object, and
 mixed-font fallback boundaries over Parley's Latin, Arabic, and Japanese sample
-paragraphs. One additional ordinary-Latin row uses a dedicated terminal-space-
-free fixture and center alignment. It requires exact equality for both the
-existing translation-invariant `geometry_checksum` and the new
-`placement_checksum`, which hashes each line's source range and canonicalized
-absolute x origin without removing translation. The matrix also rejects
+paragraphs. Two additional ordinary-Latin rows use a dedicated terminal-space-
+free fixture and center alignment for one-shot layout and retained reflow. The
+matrix requires exact equality for both the translation-invariant
+`geometry_checksum` and direction-aware
+`placement_checksum` on every directly proven non-object row: all Latin rows,
+the comparable Arabic rows, Japanese alternating style, and both fallback
+phases. The placement checksum hashes each line's source range and canonicalized
+visible-left origin without removing translation. It uses a 1/256-pixel grid
+for absolute positions; normalized internal geometry and object coordinates
+retain their finer 1/1024-pixel grid. The matrix also rejects
 mismatched source-byte, glyph, line, or object counts and requires exact
 normalized object geometry (stable id/source/line, x/y, size, and baseline) for
 all object rows.

@@ -22,6 +22,30 @@ class Case:
     fallback_font: Path | None = None
 
 
+# These rows have byte-addressable geometry and placement parity. Object rows
+# intentionally use their separate object-geometry contract, while the other
+# Japanese styles retain known line-breaking differences. Keeping this list
+# explicit prevents a newly added coverage row from silently becoming a false
+# semantic-equivalence claim.
+SEMANTIC_EQUALITY_ROWS = frozenset(
+    {
+        ("latin", "layout", "default"),
+        ("latin", "layout", "center"),
+        ("latin", "reflow", "center"),
+        ("latin", "layout", "spacing"),
+        ("latin", "layout", "alternating"),
+        ("latin", "reflow", "default"),
+        ("arabic", "layout", "default"),
+        ("arabic", "layout", "spacing"),
+        ("arabic", "layout", "alternating"),
+        ("arabic", "reflow", "default"),
+        ("japanese", "layout", "alternating"),
+        ("fallback", "layout", "fallback"),
+        ("fallback", "reflow", "fallback"),
+    }
+)
+
+
 def run(command: list[str], cpu: int | None) -> dict[str, str]:
     if cpu is not None:
         command = ["taskset", "-c", str(cpu), *command]
@@ -142,6 +166,7 @@ def main() -> int:
             ]
             if case.name == "latin":
                 matrix_rows.insert(1, ("layout", "center"))
+                matrix_rows.insert(2, ("reflow", "center"))
         for phase, style in matrix_rows:
             # Keep centered placement independent from the existing sample's
             # terminal-space policy; the dedicated fixture has visible edges.
@@ -194,9 +219,7 @@ def main() -> int:
             placement_equivalent = (
                 len(placement_checksums) == 1 and None not in placement_checksums
             )
-            requires_semantic_equality = (
-                case.name == "latin" and phase == "layout" and style == "center"
-            )
+            requires_semantic_equality = (case.name, phase, style) in SEMANTIC_EQUALITY_ROWS
             if requires_semantic_equality and not geometry_equivalent:
                 failures.append(
                     f"{case.name}/{phase}/{style}: geometry checksums="
@@ -270,8 +293,8 @@ def main() -> int:
             print(f"- {failure}", file=sys.stderr)
         return 1
     print(
-        "Cangjie/Parley output-count, object-geometry, and centered-placement "
-        "matrix passed: 33 cases"
+        "Cangjie/Parley output-count, proven text-semantics, and object-geometry "
+        "matrix passed: 34 cases"
     )
     print(f"parley_vertical_api={str(parley_vertical_api).lower()}")
     return 0

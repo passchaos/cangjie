@@ -123,8 +123,8 @@ pub fn main(init: std.process.Init) !void {
         }}
     else
         &.{};
-    // Retained center reflow is supported, although the cross-engine semantic
-    // gate intentionally exercises only the ordinary one-shot Latin row.
+    // Center reflow uses the same retained content as start alignment; only
+    // line placement changes at the reflow boundary.
     var retained = if (phase == .reflow)
         try engine.prepareParagraph(cascade, .{
             .text = text,
@@ -448,15 +448,15 @@ fn normalizedGeometryChecksum(
     return hash;
 }
 
-/// Hash the physical horizontal placement that the logical geometry checksum
+/// Hash the physical visible-left placement that the logical geometry checksum
 /// intentionally removes. Source ranges make the record order addressable,
-/// while 1/1024-pixel canonicalization tolerates only float accumulation noise.
+/// while 1/256-pixel canonicalization tolerates only float accumulation noise.
 fn placementChecksum(layout: cangjie.paragraph.Layout) u64 {
     var hash: u64 = 0xcbf29ce484222325;
     for (layout.lines) |line| {
         hash = hashU64(hash, line.byte_start);
         hash = hashU64(hash, line.byte_start + line.byte_len);
-        hash = hashI32(hash, canonicalInlinePosition(line.x));
+        hash = hashI32(hash, canonicalPlacementPosition(line.x));
     }
     return hash;
 }
@@ -481,11 +481,25 @@ fn canonicalInlinePosition(value: f32) i32 {
     // 1/1024 px remains four orders of magnitude below the matrix's smallest
     // glyph advance while absorbing the <1.6e-5 px accumulation drift seen
     // when equivalent RTL positions are summed from opposite physical edges.
-    const scaled = @round(value * 1024.0);
-    if (scaled <= @as(f32, @floatFromInt(std.math.minInt(i32)))) {
+    const scaled = @round(@as(f64, value) * 1024.0);
+    if (scaled <= @as(f64, @floatFromInt(std.math.minInt(i32)))) {
         return std.math.minInt(i32);
     }
-    if (scaled >= @as(f32, @floatFromInt(std.math.maxInt(i32)))) {
+    if (scaled >= @as(f64, @floatFromInt(std.math.maxInt(i32)))) {
+        return std.math.maxInt(i32);
+    }
+    return @intFromFloat(scaled);
+}
+
+fn canonicalPlacementPosition(value: f32) i32 {
+    // Absolute origins combine full-line advances in different physical orders
+    // in the two engines. Keep subpixel sensitivity while absorbing their
+    // observed one-ULP drift at a 1/1024-pixel rounding boundary.
+    const scaled = @round(@as(f64, value) * 256.0);
+    if (scaled <= @as(f64, @floatFromInt(std.math.minInt(i32)))) {
+        return std.math.minInt(i32);
+    }
+    if (scaled >= @as(f64, @floatFromInt(std.math.maxInt(i32)))) {
         return std.math.maxInt(i32);
     }
     return @intFromFloat(scaled);
@@ -603,7 +617,7 @@ fn usage() error{InvalidArguments} {
     return error.InvalidArguments;
 }
 
-test "placement checksum encodes absolute line origins" {
+test "placement checksum encodes absolute visible-left line origins" {
     const lines = [_]cangjie.paragraph.Line{
         .{
             .glyph_start = 0,
@@ -629,11 +643,16 @@ test "placement checksum encodes absolute line origins" {
         .width = 20,
         .height = 10,
     };
-    try std.testing.expectEqual(@as(u64, 0xa677645ffa7e2cbb), placementChecksum(layout));
+    try std.testing.expectEqual(
+        @as(u64, 0xa677645ffa7e2cbb),
+        placementChecksum(layout),
+    );
 
     var translated_lines = lines;
-    translated_lines[0].x += 1.0 / 1024.0;
+    translated_lines[0].x += 1.0 / 256.0;
     var translated = layout;
     translated.lines = &translated_lines;
-    try std.testing.expect(placementChecksum(layout) != placementChecksum(translated));
+    try std.testing.expect(
+        placementChecksum(layout) != placementChecksum(translated),
+    );
 }

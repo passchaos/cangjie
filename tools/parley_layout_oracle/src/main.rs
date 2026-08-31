@@ -308,6 +308,10 @@ fn summarize(
     let mut placement_hash = 0xcbf29ce484222325u64;
     let mut glyph_count = 0usize;
     let mut line_count = 0usize;
+    // `Layout::is_rtl` is the resolved paragraph level even when the builder
+    // request was Auto. It is the authority for deciding which physical edge
+    // contains logical trailing whitespace.
+    let paragraph_is_rtl = layout.is_rtl();
     for line in layout.lines() {
         line_count += 1;
         let metrics = line.metrics();
@@ -319,39 +323,46 @@ fn summarize(
             &(line.text_range().start as u64).to_le_bytes(),
         );
         geometry_hash = bytes(geometry_hash, &(line.text_range().end as u64).to_le_bytes());
-        // Preserve physical translation: unlike geometry_hash, this hashes the
-        // absolute line origin rather than subtracting a per-line origin.
-        let line_origin = metrics.inline_min_coord + metrics.offset;
-        placement_hash = hash_line_placement(
-            placement_hash,
-            line.text_range().start,
-            line.text_range().end,
-            line_origin,
-        );
         let mut records = Vec::new();
+        let mut trailing_advance = 0.0;
         for run in line.runs() {
             for cluster in run.clusters() {
                 let range = cluster.text_range();
+                let trailing = text[range.start..line.text_range().end]
+                    .bytes()
+                    .all(|byte| byte == b' ' || byte == b'\t');
+                let advance = cluster.advance();
+                if trailing {
+                    trailing_advance += advance;
+                }
                 records.push((
                     range.start,
                     range.end - range.start,
                     cluster.visual_offset().unwrap_or_default(),
-                    if text[range.start..line.text_range().end]
-                        .bytes()
-                        .all(|byte| byte == b' ' || byte == b'\t')
-                    {
-                        0.0
-                    } else {
-                        cluster.advance()
-                    },
+                    if trailing { 0.0 } else { advance },
                 ));
             }
         }
         records.sort_by_key(|record| record.0);
-        let origin = records
+        let logical_origin = records
             .iter()
-            .find_map(|record| (record.3 != 0.0).then_some(record.2))
-            .unwrap_or_default();
+            .find_map(|record| (record.3 != 0.0).then_some(record.2));
+        // Preserve absolute physical placement while excluding wrapping
+        // whitespace. In an RTL paragraph the logical suffix is the physical
+        // prefix, so advance past it using the resolved base direction.
+        let placement = visible_line_origin(
+            metrics.inline_min_coord,
+            metrics.offset,
+            trailing_advance,
+            paragraph_is_rtl,
+            logical_origin.is_some(),
+        );
+        placement_hash = hash_line_placement(
+            placement_hash,
+            line.text_range().start,
+            line.text_range().end,
+            placement,
+        );
         for (start, len, position, size) in records {
             geometry_hash = bytes(geometry_hash, &(start as u64).to_le_bytes());
             geometry_hash = bytes(geometry_hash, &(len as u64).to_le_bytes());
@@ -360,7 +371,7 @@ fn summarize(
             let logical_position = if size == 0.0 {
                 0
             } else {
-                ((position - origin) * 1024.0).round() as i32
+                ((position - logical_origin.unwrap_or_default()) * 1024.0).round() as i32
             };
             geometry_hash = bytes(geometry_hash, &logical_position.to_le_bytes());
             geometry_hash = bytes(geometry_hash, &size.to_bits().to_le_bytes());
@@ -391,6 +402,22 @@ fn summarize(
         line_count,
         object_count,
     )
+}
+
+fn visible_line_origin(
+    inline_min_coord: f32,
+    alignment_offset: f32,
+    trailing_advance: f32,
+    paragraph_is_rtl: bool,
+    has_visible_content: bool,
+) -> f32 {
+    inline_min_coord
+        + alignment_offset
+        + if paragraph_is_rtl && has_visible_content {
+            trailing_advance
+        } else {
+            0.0
+        }
 }
 
 fn summarize_objects(layout: &Layout<Brush>, text: &str, style: &str) -> (u64, usize) {
@@ -470,19 +497,26 @@ fn summarize_objects(layout: &Layout<Brush>, text: &str, style: &str) -> (u64, u
 fn canonical_inline_position(value: f32) -> i32 {
     // Keep the same 1/1024 px normalization as Cangjie. Rust's saturating
     // float-to-int cast also matches the explicit bounds in the Zig oracle.
-    (value * 1024.0).round() as i32
+    (f64::from(value) * 1024.0).round() as i32
 }
 
 fn hash_line_placement(mut hash: u64, start: usize, end: usize, x: f32) -> u64 {
     hash = bytes(hash, &(start as u64).to_le_bytes());
     hash = bytes(hash, &(end as u64).to_le_bytes());
-    bytes(hash, &canonical_inline_position(x).to_le_bytes())
+    bytes(hash, &canonical_placement_position(x).to_le_bytes())
+}
+
+fn canonical_placement_position(value: f32) -> i32 {
+    // Preserve subpixel placement while absorbing one-ULP differences caused
+    // by the engines accumulating full-line advances in different orders.
+    (f64::from(value) * 256.0).round() as i32
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         Alignment, alignment_for_style, bytes, canonical_inline_position, hash_line_placement,
+        visible_line_origin,
     };
 
     #[test]
@@ -494,8 +528,51 @@ mod tests {
     #[test]
     fn placement_hash_encoding_is_absolute_and_quantized() {
         let placement_hash = |x| hash_line_placement(0xcbf29ce484222325, 2, 7, x);
-        assert_eq!(placement_hash(12.25), 0xa677645ffa7e2cbb);
-        assert_ne!(placement_hash(12.25), placement_hash(12.25 + 1.0 / 1024.0),);
+        assert_eq!(placement_hash(12.25), 0x64a39f74d2658244);
+        assert_ne!(placement_hash(12.25), placement_hash(12.25 + 1.0 / 256.0),);
+    }
+
+    #[test]
+    fn visible_origin_uses_resolved_direction_for_trailing_whitespace() {
+        assert_eq!(visible_line_origin(2.0, -3.0, 5.0, true, true), 4.0);
+        assert_eq!(visible_line_origin(2.0, -3.0, 5.0, false, true), -1.0);
+        // Empty or zero-advance lines have no visible edge to move past.
+        assert_eq!(visible_line_origin(2.0, -3.0, 5.0, true, false), -1.0);
+        assert_eq!(visible_line_origin(2.0, -3.0, 0.0, true, true), -1.0);
+    }
+
+    #[test]
+    fn visible_origin_resolves_auto_rtl_and_survives_reflow() {
+        use super::{BaseDirection, FontContext, LayoutContext, StyleProperty};
+
+        let mut font_cx = FontContext::default();
+        let mut layout_cx = LayoutContext::new();
+        let text = "مرحبا ";
+        let mut builder = layout_cx.ranged_builder(&mut font_cx, text, 1.0, false);
+        builder.push_default(StyleProperty::FontSize(16.0));
+        builder.set_base_direction(BaseDirection::Auto);
+        let mut layout = builder.build(text);
+        assert!(layout.is_rtl());
+
+        let origin = |layout: &parley::Layout<super::Brush>| {
+            let line = layout.lines().next().expect("one line");
+            let metrics = line.metrics();
+            visible_line_origin(
+                metrics.inline_min_coord,
+                metrics.offset,
+                0.0,
+                layout.is_rtl(),
+                true,
+            )
+        };
+        layout.break_all_lines(Some(200.0));
+        layout.align(Alignment::Start, parley::AlignmentOptions::default());
+        let first = origin(&layout);
+        assert!(first > 0.0);
+
+        layout.break_all_lines(Some(200.0));
+        layout.align(Alignment::Start, parley::AlignmentOptions::default());
+        assert_eq!(origin(&layout), first);
     }
 
     #[test]

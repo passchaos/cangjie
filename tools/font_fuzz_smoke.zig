@@ -1,4 +1,4 @@
-//! Deterministic malformed-font smoke coverage for parser and renderer entry points.
+//! Deterministic malformed-font smoke coverage for parser, shaper, and renderer entry points.
 
 const std = @import("std");
 const driver = @import("font_fuzz/driver.zig");

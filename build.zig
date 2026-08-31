@@ -2736,7 +2736,7 @@ pub fn build(b: *std.Build) void {
     });
     const font_fuzz_smoke_step = b.step(
         "font-fuzz-smoke",
-        "Run deterministic malformed-font parser and renderer mutations",
+        "Run deterministic malformed-font parser, shaper, and renderer mutations",
     );
     const font_fuzz_smoke_cmd = b.addRunArtifact(font_fuzz_smoke_exe);
     font_fuzz_smoke_step.dependOn(&font_fuzz_smoke_cmd.step);
@@ -2798,7 +2798,7 @@ pub fn build(b: *std.Build) void {
     });
     const font_fuzz_step = b.step(
         "font-fuzz",
-        "Fuzz malformed font parsing and rendering with Zig's built-in fuzzer",
+        "Fuzz malformed font parsing, shaping, and rendering with Zig's built-in fuzzer",
     );
     font_fuzz_step.dependOn(&b.addRunArtifact(font_fuzz_tests).step);
 

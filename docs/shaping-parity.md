@@ -131,22 +131,33 @@ zig build font-fuzz-smoke -Doptimize=ReleaseSafe -- \
   tests/data/fontations/vorg.ttf
 ```
 
+The six repository seeds in that command currently produce 2,946 deterministic
+ReleaseSafe cases.
+
 For each seed, the harness tries the unmodified font, every prefix through byte
 256, and 256 deterministic single-byte mutations. Every successfully parsed
-case continues through public cmap lookup, glyph extents, owning and
+case shapes a fixed bounded corpus covering Latin with surrounding context,
+Arabic joining and marks, Devanagari reordering, and one UTF-8 byte-ranged
+`sups` request through a reusable public `shaping.Engine`. It also verifies that
+the same engine accepts another ordinary request after rejecting malformed
+UTF-8, then continues through public cmap lookup, glyph extents, owning and
 caller-storage outline decoding, color-palette and bitmap-strike discovery,
 and grayscale rasterization. Faces that still expose variation axes also run
 both owning and caller-storage outline decoding at non-default normalized
-coordinates. Parse or table-access errors are expected; a crash, safety trap,
-or out-of-bounds access fails the command. This is a quick regression gate,
-not a replacement for coverage-guided fuzzing or the broader malformed-table
-matrix still required by the completion bar.
+coordinates. Parse, table-access, and ordinary shaping errors are expected;
+allocator failures, leaks, crashes, and safety traps fail the command. This is
+a quick regression gate, not a replacement for coverage-guided fuzzing or the
+broader malformed-table matrix still required by the completion bar.
 
 The same seed set also drives Zig 0.16's coverage-guided fuzzer through a
 bounded sequence of correlated byte replacements plus optional truncation. A
-second fuzz target constructs valid `morx`, `mort`, `kerx`, and `trak` fonts
-before applying the same edit strategy, keeping AAT parsers reachable without
-depending on an external Apple-font corpus:
+second target constructs valid `morx`, `mort`, `kerx`, and `trak` fonts before
+applying the same edit strategy. A third constructs compact GSUB ligature,
+multiple, contextual, chaining, and ranged-feature fixtures; GPOS pair, mark,
+contextual, and cursive fixtures; and a mixed GSUB/GPOS/`kerx` fixture. The
+ordinary deterministic step exercises every constructed seed before Smith
+selects mutation lineages, so shaping-table execution does not depend on an
+external corpus:
 
 ```sh
 zig build font-fuzz --fuzz=100K
@@ -177,12 +188,13 @@ instrumented edges (17.10%) without another failure. Allowing bitmap-only and
 color-only faces to continue after an absent conventional outline increased a
 final replay to 233,293 executions, 686 unique runs, and 5,741 of 32,892 edges
 (17.45%), again without a reported failure.
-A separate deterministic ReleaseSafe pass used six external HarfBuzz fuzz
-corpus files spanning CFF2+COLR v1, CBDT, sbix, SVG, variable CFF2, and a
-historical malformed CBDT PNG case. All 3,084 prefix/full/single-byte mutation
-cases completed through the expanded driver without a crash, leak, or safety
-trap. This broadens the format ancestry beyond the six embedded smoke seeds
-without claiming exhaustive malformed-font coverage.
+An earlier, separate deterministic ReleaseSafe pass used six external
+HarfBuzz fuzz corpus files spanning CFF2+COLR v1, CBDT, sbix, SVG, variable
+CFF2, and a historical malformed CBDT PNG case. All 3,084
+prefix/full/single-byte mutation cases completed without a crash, leak, or
+safety trap. Its different case count reflects the external seeds' sizes. This
+broadens the format ancestry beyond the six embedded smoke seeds without
+claiming exhaustive malformed-font coverage.
 
 For output parity against HarfRust, build the local CLI once:
 

@@ -19,7 +19,7 @@ const max_seed_bytes = blk: {
     break :blk result;
 };
 
-test "coverage-guided malformed font parsing and rendering" {
+test "coverage-guided malformed font parsing, shaping, and rendering" {
     // Ordinary `zig build font-fuzz` remains a deterministic smoke gate for
     // every seed. `--fuzz` then lets Smith mutate the same structured inputs.
     for (seeds) |seed| {
@@ -52,29 +52,110 @@ fn fuzzOne(_: void, smith: *std.testing.Smith) !void {
 }
 
 test "coverage-guided AAT table parsing" {
+    inline for (std.enums.values(AatKind)) |kind| {
+        const seed = try buildAatSeed(std.testing.allocator, kind);
+        defer std.testing.allocator.free(seed);
+        try driver.exerciseCase(std.testing.allocator, seed);
+    }
     try std.testing.fuzz({}, fuzzAatTables, .{});
 }
 
-fn fuzzAatTables(_: void, smith: *std.testing.Smith) !void {
-    const allocator = std.testing.allocator;
-    const Kind = enum(u8) { morx, mort, kerx, trak };
-    const kind = smith.value(Kind);
-    const seed = switch (kind) {
+const AatKind = enum(u8) { morx, mort, kerx, trak };
+
+fn buildAatSeed(allocator: std.mem.Allocator, kind: AatKind) ![]u8 {
+    return switch (kind) {
         .morx => try cangjie.testing.test_font.buildMorxTtf(allocator),
         .mort => try cangjie.testing.test_font.buildMortTtf(allocator),
         .kerx => try cangjie.testing.test_font.buildKerxTtf(allocator),
         .trak => try cangjie.testing.test_font.buildTrakTtf(allocator),
     };
-    defer allocator.free(seed);
+}
 
+fn fuzzAatTables(_: void, smith: *std.testing.Smith) !void {
+    const allocator = std.testing.allocator;
+    const seed = try buildAatSeed(allocator, smith.value(AatKind));
+    defer allocator.free(seed);
+    try mutateAndExercise(allocator, seed, smith);
+}
+
+test "coverage-guided OpenType shaping tables" {
+    // Exercise every valid builder before Smith selects one mutation lineage.
+    // This keeps the deterministic build gate representative of each GSUB,
+    // GPOS, and mixed AAT table family listed below.
+    inline for (std.enums.values(OpenTypeShapingKind)) |kind| {
+        const seed = try buildOpenTypeShapingSeed(std.testing.allocator, kind);
+        defer std.testing.allocator.free(seed);
+        try driver.exerciseCase(std.testing.allocator, seed);
+    }
+    try std.testing.fuzz({}, fuzzOpenTypeShapingTables, .{});
+}
+
+const OpenTypeShapingKind = enum(u8) {
+    gsub_ligature,
+    gsub_multiple,
+    gsub_context,
+    gsub_chaining,
+    gsub_feature_range,
+    gpos_pair,
+    gpos_mark_to_ligature,
+    gpos_context,
+    gpos_cursive,
+    gsub_gpos_aat,
+};
+
+fn buildOpenTypeShapingSeed(
+    allocator: std.mem.Allocator,
+    kind: OpenTypeShapingKind,
+) ![]u8 {
+    return switch (kind) {
+        .gsub_ligature => try cangjie.testing.test_font.buildMinimalGsubTtf(allocator),
+        .gsub_multiple => try cangjie.testing.test_font.buildMultipleGsubTtf(allocator),
+        .gsub_context => try cangjie.testing.test_font.buildContextGsubTtf(allocator),
+        .gsub_chaining => try cangjie.testing.test_font.buildChainingGsubTtf(allocator),
+        .gsub_feature_range => try cangjie.testing.test_font.buildScriptFeatureGsubTtf(allocator),
+        .gpos_pair => try cangjie.testing.test_font.buildMinimalGposTtf(allocator),
+        .gpos_mark_to_ligature => try cangjie.testing.test_font
+            .buildGsubGposMarkToLigatureComponentsTtf(allocator),
+        .gpos_context => try cangjie.testing.test_font.buildMinimalGposChainingTtf(allocator),
+        .gpos_cursive => try cangjie.testing.test_font.buildMinimalGposCursiveTtf(allocator),
+        .gsub_gpos_aat => try cangjie.testing.test_font
+            .buildKerxGsubGposTtf(allocator, "kern"),
+    };
+}
+
+fn fuzzOpenTypeShapingTables(_: void, smith: *std.testing.Smith) !void {
+    const allocator = std.testing.allocator;
+    const seed = try buildOpenTypeShapingSeed(
+        allocator,
+        smith.value(OpenTypeShapingKind),
+    );
+    defer allocator.free(seed);
+    try mutateAndExercise(allocator, seed, smith);
+}
+
+fn mutateAndExercise(
+    allocator: std.mem.Allocator,
+    seed: []u8,
+    smith: *std.testing.Smith,
+) !void {
     const mutation_count = smith.valueRangeAtMost(u8, 0, 32);
     for (0..mutation_count) |_| {
         seed[smith.index(seed.len)] = smith.value(u8);
     }
     const truncate = smith.boolWeighted(8, 1);
-    const input_len = if (truncate)
-        smith.valueRangeAtMost(u16, 0, @intCast(seed.len))
-    else
-        @as(u16, @intCast(seed.len));
+    const input_len = if (truncate) smith.index(seed.len + 1) else seed.len;
     try driver.exerciseCase(allocator, seed[0..input_len]);
+}
+
+test "driver propagates allocation failures through shaping" {
+    const bytes = try cangjie.testing.test_font.buildScriptFeatureGsubTtf(
+        std.testing.allocator,
+    );
+    defer std.testing.allocator.free(bytes);
+
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        driver.exerciseCase,
+        .{bytes},
+    );
 }

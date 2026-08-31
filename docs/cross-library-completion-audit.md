@@ -133,8 +133,8 @@ x86-64, pinned to CPU 30 where the harness supports it:
   multi-glyph clusters moved fallback construction/reflow to `1.664x`/`1.718x`
   in the latest run.
 - `zig build font-fuzz-smoke -Doptimize=ReleaseSafe -- ...`: six retained
-  bitmap/color/container seeds and 3,084 deterministic mutations passed in the
-  latest bitmap-audit rerun.
+  repository seeds and 2,946 deterministic cases passed in the latest
+  shaping-expanded rerun.
 - `zig build font-fuzz -Doptimize=ReleaseSafe --fuzz=100K`: the selected
   parser/render target completed 269,563 executions, 2,467 unique runs, and
   4,331/32,005 instrumented edges (13.53%) without a reported failure.
@@ -151,10 +151,17 @@ x86-64, pinned to CPU 30 where the harness supports it:
   metadata access after an absent conventional outline raised the final replay
   to 233,293 executions, 686 unique runs, and 5,741/32,892 edges (17.45%), also
   without a reported failure.
-- `font-fuzz-smoke` over six external HarfBuzz fuzz seeds covering CFF2+COLR
-  v1, CBDT, sbix, SVG, variable CFF2, and malformed CBDT PNG completed 3,084
-  deterministic ReleaseSafe cases through the expanded driver without a
-  failure.
+- Successfully parsed fuzz inputs now also run a bounded Latin/Arabic/Indic
+  shaping corpus, including one UTF-8 byte-ranged GSUB feature request, through
+  one reusable engine. The driver retries a valid request after malformed UTF-8
+  and propagates allocator failures while tolerating ordinary malformed-table
+  and shaping errors. Generated GSUB, GPOS, and mixed OpenType/AAT fonts extend
+  the structured corpus beyond the existing `morx`/`mort`/`kerx`/`trak` seeds.
+- An earlier, separate `font-fuzz-smoke` run over six external HarfBuzz fuzz
+  seeds covering CFF2+COLR v1, CBDT, sbix, SVG, variable CFF2, and malformed
+  CBDT PNG completed 3,084 deterministic ReleaseSafe cases without a failure.
+  Its different case count reflects the external seeds' sizes: prefix coverage
+  is capped at byte 256, then each seed receives 256 mutations.
 - `zig build freetype-matrix -Doptimize=ReleaseFast -- --iterations 100
   --samples 5 --sizes 8,16,32,64,128 --cpu 30 --fail-on-slower`: completed 40 symmetric
   A/B/B/A raster rows across Latin glyf, Latin CFF1, Arabic glyf, and CJK CFF.

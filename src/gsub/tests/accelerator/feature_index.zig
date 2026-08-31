@@ -5,6 +5,35 @@ const acceleration = @import("../../accelerator/root.zig");
 const table = @import("../../table/root.zig");
 const unicode = @import("../../../unicode.zig");
 
+test "feature index represents an absent FeatureList with owned empties" {
+    var bytes = [_]u8{0} ** 10;
+    writeU32(&bytes, 0, 0x00010000);
+    const view = table.View{ .data = &bytes, .offset = 0, .length = bytes.len };
+
+    var data = try acceleration.feature_index.build(
+        view,
+        1,
+        std.testing.allocator,
+    );
+    defer data.deinit(std.testing.allocator);
+
+    try std.testing.expect(!data.has_random_feature);
+    try std.testing.expectEqual(@as(usize, 0), data.records.len);
+    try std.testing.expectEqual(@as(usize, 0), data.lookups.len);
+}
+
+test "feature index keeps nonzero FeatureList offsets strict" {
+    var bytes = [_]u8{0} ** 10;
+    writeU32(&bytes, 0, 0x00010000);
+    writeU16(&bytes, 6, 10);
+    const view = table.View{ .data = &bytes, .offset = 0, .length = bytes.len };
+
+    try std.testing.expectError(
+        error.EndOfStream,
+        acceleration.feature_index.build(view, 1, std.testing.allocator),
+    );
+}
+
 test "feature index borrows only canonical unique lookup records" {
     var bytes = [_]u8{0} ** 48;
     writeFeatureList(

@@ -37,10 +37,24 @@ pub fn build(
     lookup_count: u16,
     allocator: std.mem.Allocator,
 ) (Error || std.mem.Allocator.Error)!Data {
+    const feature_list_relative = try view.readU16(6);
+    if (feature_list_relative == 0) {
+        // A missing FeatureList is valid for detached LookupList fixtures and
+        // still needs a real index so table/sidecar identity can be proved.
+        // Keep both empty slices allocator-owned because Data.deinit and the
+        // completed FeatureIndex have one unconditional ownership contract.
+        const records = try allocator.alloc(Record, 0);
+        errdefer allocator.free(records);
+        return .{
+            .has_random_feature = false,
+            .records = records,
+            .lookups = try allocator.alloc(u16, 0),
+        };
+    }
     const feature_list_offset = try table.offset.required16(
         view,
         0,
-        try view.readU16(6),
+        feature_list_relative,
     );
     const feature_count = try view.readU16(feature_list_offset);
     try view.ensure(feature_list_offset + 2, @as(usize, feature_count) * 6);

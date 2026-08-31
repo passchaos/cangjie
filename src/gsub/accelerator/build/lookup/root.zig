@@ -77,17 +77,15 @@ pub fn build(
     // digest-capable lookup so every reused summary is invalidated safely.
     if (lookups.len != 0) {
         lookups[0].table_uses_run_digest_cache = table_uses_run_digest_cache;
-        // Detached low-level fixtures may expose only a LookupList. Feature
-        // indexing remains optional when the top-level offset is explicitly
-        // zero, while a present FeatureList is parsed strictly.
-        if (try view.readU16(6) != 0) {
-            lookups[0].feature_index = try feature_index.create(
-                view,
-                lookups,
-                lookup_count,
-                allocator,
-            );
-        }
+        // Even a table without a FeatureList needs an index attached to the
+        // exact allocated slice. Runtime callers can then distinguish an
+        // exact empty feature set from a foreign or copied accelerator.
+        lookups[0].feature_index = try feature_index.create(
+            view,
+            lookups,
+            lookup_count,
+            allocator,
+        );
     }
     return lookups;
 }

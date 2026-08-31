@@ -1,6 +1,7 @@
 //! Whole-table GSUB lookup accelerator orchestration contracts.
 
 const std = @import("std");
+const acceleration = @import("../../../accelerator/root.zig");
 const build = @import("../../../accelerator/build/root.zig");
 const ownership = @import("../../../accelerator/ownership.zig");
 const table = @import("../../../table/root.zig");
@@ -39,6 +40,26 @@ test "lookup builder records dispatch fields and direct substitution sidecars" {
     // Mark-filtering lookup flags intentionally disable the flag-free compact
     // fast path while retaining the exact sorted entry sidecar.
     try std.testing.expect(!lookups[0].single_subst.enabled);
+}
+
+test "lookup builder attaches an exact empty feature index" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 40;
+    writeHeaderAndLookupList(&bytes, 14, 1);
+    writeSingleLookup(&bytes, 14, 5, 7);
+
+    const lookups = try build.lookup.build(&bytes, 0, bytes.len, allocator);
+    defer ownership.deinit(allocator, lookups);
+
+    try std.testing.expectEqual(@as(usize, 1), lookups.len);
+    const index = lookups[0].feature_index orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(
+        index,
+        acceleration.feature_index.exact(&bytes, 0, bytes.len, lookups).?,
+    );
+    try std.testing.expect(!index.has_random_feature);
+    try std.testing.expectEqual(@as(usize, 0), index.records.len);
+    try std.testing.expectEqual(@as(usize, 0), index.lookups.len);
 }
 
 test "lookup builder derives table-wide digest policy and feature index" {

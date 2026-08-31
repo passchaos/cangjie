@@ -100,6 +100,56 @@ test "chaining coverage kind proof handles direct and extension wrappers" {
     ));
 }
 
+test "chaining coverage builder retains nested fast lookup identity" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 64;
+    writeU32(&bytes, 0, 0x00010000);
+    writeU16(&bytes, 8, 10);
+    writeU16(&bytes, 10, 2);
+    writeU16(&bytes, 12, 6);
+    writeU16(&bytes, 14, 32);
+
+    const chain_lookup = 16;
+    writeU16(&bytes, chain_lookup, 6);
+    writeU16(&bytes, chain_lookup + 2, 0);
+    writeU16(&bytes, chain_lookup + 4, 1);
+    writeU16(&bytes, chain_lookup + 6, 8);
+    const chain = 24;
+    writeU16(&bytes, chain, 3);
+    writeU16(&bytes, chain + 2, 0);
+    writeU16(&bytes, chain + 4, 1);
+    // Share the nested SingleSubst Coverage at absolute offset 56.
+    writeU16(&bytes, chain + 6, 32);
+    writeU16(&bytes, chain + 8, 0);
+    writeU16(&bytes, chain + 10, 1);
+    writeU16(&bytes, chain + 12, 0);
+    writeU16(&bytes, chain + 14, 1);
+
+    const single_lookup = 42;
+    writeU16(&bytes, single_lookup, 1);
+    writeU16(&bytes, single_lookup + 2, 0);
+    writeU16(&bytes, single_lookup + 4, 1);
+    writeU16(&bytes, single_lookup + 6, 8);
+    writeU16(&bytes, single_lookup + 8, 1);
+    writeU16(&bytes, single_lookup + 10, 6);
+    writeU16(&bytes, single_lookup + 12, 1);
+    writeCoverage1(&bytes, single_lookup + 14, 5);
+
+    const lookups = try build.lookup.build(
+        &bytes,
+        0,
+        bytes.len,
+        allocator,
+    );
+    defer ownership.deinit(allocator, lookups);
+    const subtable = lookups[0].chaining_subtables[0];
+    try std.testing.expectEqual(@as(u16, 1), subtable.fast_record_count);
+    try std.testing.expectEqual(
+        @as(u16, 1),
+        subtable.fast_records[0].lookup_index,
+    );
+}
+
 fn writeCoverage1(bytes: []u8, offset: usize, glyph: u16) void {
     writeU16(bytes, offset, 1);
     writeU16(bytes, offset + 2, 1);

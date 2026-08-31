@@ -4,12 +4,13 @@ const std = @import("std");
 const accelerator = @import("../../../accelerator/root.zig");
 const direct_single = @import("../../direct/single/root.zig");
 const filtering = @import("../../../runtime/filtering.zig");
+const limits = @import("../../../runtime/limits.zig");
 const lookup_order = @import("../../../../opentype/lookup_order.zig");
 const Options = @import("../../../runtime/options.zig").Options;
 const table = @import("../../../table/root.zig");
 const GlyphId = @import("../../../../glyph.zig").GlyphId;
 
-const Error = table.coverage.Error;
+const Error = table.coverage.Error || limits.Error;
 const Single = accelerator.model.SingleSubstitution;
 const View = table.View;
 
@@ -119,6 +120,7 @@ noinline fn applyParsed(
     for (0..record_count) |record_index| {
         const target = targets[record_index];
         if (target >= glyphs.items.len) continue;
+        try limits.consumeNested(run);
         if (singles[record_index].enabled) {
             _ = try direct_single.acceleratedAt(
                 view,
@@ -184,6 +186,7 @@ fn applyAccelerated(
 
     for (0..record_count) |record_index| {
         if (targets[record_index] >= glyphs.items.len) continue;
+        try limits.consumeNested(run);
         _ = try direct_single.acceleratedAt(
             view,
             singles[record_index].*,

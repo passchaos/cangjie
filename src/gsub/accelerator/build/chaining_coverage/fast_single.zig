@@ -51,6 +51,7 @@ pub fn fill(
         );
         records[record_index] = .{
             .sequence_index = sequence_index,
+            .lookup_index = lookup_index,
             .accelerator = try single_builder.compact(view, single_subtable),
         };
         if (!records[record_index].accelerator.enabled) return;

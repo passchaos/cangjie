@@ -200,6 +200,7 @@ pub const ChainingCoverageSubtable = struct {
 
 pub const FastSingleRecord = struct {
     sequence_index: u16 = 0,
+    lookup_index: u16 = 0,
     accelerator: SingleSubstitution = .{},
 };
 

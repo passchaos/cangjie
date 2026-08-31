@@ -31,6 +31,7 @@ pub noinline fn apply(
     allocator: std.mem.Allocator,
     run: Options,
     run_digest_cache: ?*RunDigestCache,
+    exact_sidecar: ?*const runtime_dispatch.Lookup,
 ) Error!void {
     const trace = try profile.Detailed.begin(
         allocator,
@@ -40,39 +41,38 @@ pub noinline fn apply(
     );
     defer trace.finish(allocator, glyphs.items);
 
-    // Untrusted/detached lookups still prove the fixed header here. A
-    // font-owned table with an exact accelerator sidecar already established
-    // the same header while building the cache, including lookups whose payload
-    // capability intentionally falls through to this generic executor.
-    const has_exact_header_proof =
-        runtime_dispatch.exact(view, lookup_offset, lookup_index, run) != null;
-    if (!has_exact_header_proof) {
-        // ExtensionSubst validation walks every wrapper and wrapped payload
-        // before dispatch, preserving lookup-level atomicity for mixed wrappers.
+    const resolved = if (exact_sidecar != null)
+        try runtime_dispatch.header(view, lookup_offset, exact_sidecar)
+    else parsed: {
+        // A font-owned view may still arrive with no sidecars, copied sidecars,
+        // or sidecars for another table. Without an exact identity proof, the
+        // generic path must re-establish the complete structural proof from
+        // bytes. Clearing this optimization bit is particularly important for
+        // ExtensionSubst: validateHeader then walks every wrapper and wrapped
+        // payload before any mutation.
+        var validation_view = view;
+        validation_view.assume_validated = false;
         _ = try validation.lookup.validateHeader(
             Executor,
-            view,
+            validation_view,
             lookup_offset,
         );
-    }
-    const resolved = try runtime_dispatch.header(
-        view,
-        lookup_offset,
-        lookup_index,
-        run,
-    );
-    profile.recordKind(run.shape_profile, resolved.lookup_type);
-
-    if (!view.assume_validated or run.lookup_accelerators == null) {
+        const parsed_header = try runtime_dispatch.header(
+            view,
+            lookup_offset,
+            null,
+        );
         try validation.lookup.validateSubtables(
             Executor,
-            view,
+            validation_view,
             lookup_offset,
-            resolved.lookup_type,
-            resolved.subtable_count,
+            parsed_header.lookup_type,
+            parsed_header.subtable_count,
             .strict,
         );
-    }
+        break :parsed parsed_header;
+    };
+    profile.recordKind(run.shape_profile, resolved.lookup_type);
 
     var lookup_run = run;
     if ((resolved.lookup_flag & 0x0010) != 0) {
@@ -87,7 +87,6 @@ pub noinline fn apply(
         Executor,
         view,
         lookup_offset,
-        lookup_index,
         resolved.lookup_type,
         resolved.lookup_flag,
         resolved.subtable_count,
@@ -95,6 +94,7 @@ pub noinline fn apply(
         allocator,
         lookup_run,
         run_digest_cache,
+        exact_sidecar,
     );
 }
 
@@ -125,7 +125,6 @@ pub noinline fn applyAfterPlanProof(
         Executor,
         view,
         lookup_offset,
-        lookup_index,
         sidecar.lookup_type,
         sidecar.lookup_flag,
         sidecar.subtable_count,
@@ -133,5 +132,6 @@ pub noinline fn applyAfterPlanProof(
         allocator,
         lookup_run,
         run_digest_cache,
+        sidecar,
     );
 }

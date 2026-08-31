@@ -35,7 +35,6 @@ pub fn apply(
     comptime Executor: type,
     view: View,
     lookup_offset: usize,
-    lookup_index: ?u16,
     lookup_type: u16,
     lookup_flag: u16,
     subtable_count: u16,
@@ -43,13 +42,11 @@ pub fn apply(
     allocator: std.mem.Allocator,
     run: Options,
     run_digest_cache: ?*RunDigestCache,
+    exact_sidecar: ?*const runtime_dispatch.Lookup,
 ) Error!void {
     switch (lookup_type) {
         1 => {
-            if (runtime_dispatch.singleEntries(
-                lookup_index,
-                run,
-            )) |entries| {
+            if (runtime_dispatch.singleEntries(exact_sidecar)) |entries| {
                 direct_single.entries(entries, glyphs, lookup_flag, run);
             } else {
                 try direct_single.lookup(
@@ -65,10 +62,7 @@ pub fn apply(
             return;
         },
         2 => {
-            if (runtime_dispatch.multiple(
-                lookup_index,
-                run,
-            )) |sidecar| {
+            if (runtime_dispatch.multiple(exact_sidecar)) |sidecar| {
                 try direct_multiple.accelerated(
                     view,
                     sidecar.*,
@@ -103,7 +97,7 @@ pub fn apply(
             Executor,
             view,
             lookup_offset,
-            lookup_index,
+            exact_sidecar,
             subtable_count,
             glyphs,
             allocator,
@@ -114,7 +108,7 @@ pub fn apply(
             Executor,
             view,
             lookup_offset,
-            lookup_index,
+            exact_sidecar,
             subtable_count,
             glyphs,
             allocator,
@@ -126,7 +120,7 @@ pub fn apply(
             Executor,
             view,
             lookup_offset,
-            lookup_index,
+            exact_sidecar,
             subtable_count,
             glyphs,
             allocator,
@@ -137,10 +131,7 @@ pub fn apply(
     }
 
     if (lookup_type == 4 and subtable_count == 1) {
-        if (runtime_dispatch.ligature(
-            lookup_index,
-            run,
-        )) |sidecar| {
+        if (runtime_dispatch.ligature(exact_sidecar)) |sidecar| {
             if (run_digest_cache) |cache| {
                 const digest = cache.digestForRun(
                     glyphs.items,
@@ -230,17 +221,14 @@ fn applyContext(
     comptime Executor: type,
     view: View,
     lookup_offset: usize,
-    lookup_index: ?u16,
+    exact_sidecar: ?*const runtime_dispatch.Lookup,
     subtable_count: u16,
     glyphs: *std.ArrayList(GlyphId),
     allocator: std.mem.Allocator,
     lookup_flag: u16,
     run: Options,
 ) Error!void {
-    if (runtime_dispatch.contextClass(
-        lookup_index,
-        run,
-    )) |sidecar| {
+    if (runtime_dispatch.contextClass(exact_sidecar)) |sidecar| {
         return contextual_context.acceleratedClassLookup(
             Executor,
             view,
@@ -252,10 +240,7 @@ fn applyContext(
             sidecar,
         );
     }
-    if (runtime_dispatch.contextCoverage(
-        lookup_index,
-        run,
-    )) |sidecar| {
+    if (runtime_dispatch.contextCoverage(exact_sidecar)) |sidecar| {
         return contextual_context.acceleratedCoverageLookup(
             Executor,
             view,
@@ -282,7 +267,7 @@ fn applyChaining(
     comptime Executor: type,
     view: View,
     lookup_offset: usize,
-    lookup_index: ?u16,
+    exact_sidecar: ?*const runtime_dispatch.Lookup,
     subtable_count: u16,
     glyphs: *std.ArrayList(GlyphId),
     allocator: std.mem.Allocator,
@@ -290,10 +275,7 @@ fn applyChaining(
     run: Options,
     run_digest_cache: ?*RunDigestCache,
 ) Error!void {
-    if (runtime_dispatch.chainingGlyph(
-        lookup_index,
-        run,
-    )) |sidecar| {
+    if (runtime_dispatch.chainingGlyph(exact_sidecar)) |sidecar| {
         return contextual_chaining_glyph.acceleratedLookup(
             Executor,
             view,
@@ -304,10 +286,7 @@ fn applyChaining(
             sidecar,
         );
     }
-    if (runtime_dispatch.chainingClass(
-        lookup_index,
-        run,
-    )) |sidecar| {
+    if (runtime_dispatch.chainingClass(exact_sidecar)) |sidecar| {
         return contextual_chaining_class.acceleratedLookup(
             Executor,
             view,
@@ -319,10 +298,10 @@ fn applyChaining(
             sidecar,
         );
     }
-    if (runtime_dispatch.chainingCoverage(
-        lookup_index,
-        run,
-    )) |sidecar| {
+    if (runtime_dispatch.chainingCoverage(exact_sidecar)) |sidecar| {
+        // Digest-cache generation is enabled from table-wide sidecar metadata.
+        // Reuse it only inside this exact-identity capability branch; parsed
+        // fallback below must build its own filtered digest or scan instead.
         const digest = if (run_digest_cache) |cache|
             cache.digestForRun(glyphs.items, lookup_flag, run)
         else

@@ -33,7 +33,7 @@ pub fn apply(
     comptime Executor: type,
     view: View,
     lookup_offset: usize,
-    lookup_index: ?u16,
+    exact_sidecar: ?*const runtime_dispatch.Lookup,
     subtable_count: u16,
     glyphs: *std.ArrayList(GlyphId),
     allocator: std.mem.Allocator,
@@ -41,8 +41,7 @@ pub fn apply(
     run: Options,
 ) Error!bool {
     const wrapped_type = if (runtime_dispatch.extensionType(
-        lookup_index,
-        run,
+        exact_sidecar,
     )) |sidecar|
         sidecar.extension_lookup_type orelse 0
     else
@@ -81,10 +80,7 @@ pub fn apply(
             run,
         ),
         5 => {
-            if (runtime_dispatch.contextClass(
-                lookup_index,
-                run,
-            )) |sidecar| {
+            if (runtime_dispatch.contextClass(exact_sidecar)) |sidecar| {
                 try contextual_context.acceleratedClassLookup(
                     Executor,
                     view,
@@ -109,10 +105,7 @@ pub fn apply(
             }
         },
         6 => {
-            if (runtime_dispatch.chainingGlyph(
-                lookup_index,
-                run,
-            )) |sidecar| {
+            if (runtime_dispatch.chainingGlyph(exact_sidecar)) |sidecar| {
                 try contextual_chaining_glyph.acceleratedLookup(
                     Executor,
                     view,
@@ -123,8 +116,7 @@ pub fn apply(
                     sidecar,
                 );
             } else if (runtime_dispatch.chainingClass(
-                lookup_index,
-                run,
+                exact_sidecar,
             )) |sidecar| {
                 try contextual_chaining_class.acceleratedLookup(
                     Executor,
@@ -137,8 +129,7 @@ pub fn apply(
                     sidecar,
                 );
             } else if (runtime_dispatch.chainingCoverage(
-                lookup_index,
-                run,
+                exact_sidecar,
             )) |sidecar| {
                 try Executor.applyChainingLookup(
                     view,
@@ -169,7 +160,7 @@ pub fn apply(
             glyphs,
             lookup_flag,
             run,
-            runtime_dispatch.reverseChaining(lookup_index, run),
+            runtime_dispatch.reverseChaining(exact_sidecar),
         ),
         else => return false,
     }

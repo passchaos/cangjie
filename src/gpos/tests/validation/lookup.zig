@@ -31,6 +31,34 @@ test "validation rejects truncated contextual records atomically" {
 
 test "validation rejects recursive lookup graphs at bounded depth" {
     try std.testing.expectEqual(@as(usize, 16), validation.lookup.max_context_depth);
+
+    var bytes = [_]u8{0} ** 40;
+    writeU16(&bytes, 8, 10); // LookupList.
+    writeU16(&bytes, 10, 1);
+    writeU16(&bytes, 12, 4);
+    const lookup = 14;
+    writeU16(&bytes, lookup, 7); // ContextPos.
+    writeU16(&bytes, lookup + 2, 0);
+    writeU16(&bytes, lookup + 4, 1);
+    writeU16(&bytes, lookup + 6, 8);
+    const context = lookup + 8;
+    writeU16(&bytes, context, 3);
+    writeU16(&bytes, context + 2, 1);
+    writeU16(&bytes, context + 4, 1);
+    writeU16(&bytes, context + 6, 12);
+    writeU16(&bytes, context + 8, 0);
+    writeU16(&bytes, context + 10, 0);
+    writeCoverage(&bytes, context + 12, 5);
+
+    try std.testing.expectError(
+        error.UnsupportedGpos,
+        validation.lookup.lookupSubtables(
+            .{ .data = &bytes, .offset = 0, .length = bytes.len },
+            lookup,
+            7,
+            1,
+        ),
+    );
 }
 
 test "validation checks nested mark filtering set indexes" {
@@ -63,4 +91,10 @@ test "validation checks nested mark filtering set indexes" {
 
 fn writeU16(bytes: []u8, offset: usize, value: u16) void {
     std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
+}
+
+fn writeCoverage(bytes: []u8, offset: usize, glyph: u16) void {
+    writeU16(bytes, offset, 1);
+    writeU16(bytes, offset + 2, 1);
+    writeU16(bytes, offset + 4, glyph);
 }

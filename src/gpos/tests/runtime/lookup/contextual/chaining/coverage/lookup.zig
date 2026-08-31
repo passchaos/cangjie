@@ -4,6 +4,7 @@ const std = @import("std");
 const accelerator =
     @import("../../../../../../accelerator/root.zig");
 const GlyphDigest = @import("../../../../../../../glyph_digest.zig").GlyphDigest;
+const limits = @import("../../../../../../runtime/limits.zig");
 const lookup =
     @import("../../../../../../runtime/lookup/contextual/chaining/coverage/lookup.zig");
 const model =
@@ -136,6 +137,85 @@ test "second-lookahead grouping uses the next visible glyph" {
         .{ .glyph_classes = &glyph_classes },
         &.{},
     );
+}
+
+test "fast SinglePos records reject the seventeenth contextual edge" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 80;
+    writeU32(&bytes, 0, 0x00010000);
+    writeU16(&bytes, 8, 10); // LookupList.
+    writeU16(&bytes, 10, 2);
+    writeU16(&bytes, 12, 6); // Chaining lookup at 16.
+    writeU16(&bytes, 14, 48); // SinglePos lookup at 58.
+
+    const chain_lookup = 16;
+    writeU16(&bytes, chain_lookup, 8);
+    writeU16(&bytes, chain_lookup + 2, 0);
+    writeU16(&bytes, chain_lookup + 4, 1);
+    writeU16(&bytes, chain_lookup + 6, 8);
+    const chain = chain_lookup + 8;
+    writeU16(&bytes, chain, 3);
+    writeU16(&bytes, chain + 2, 0); // No backtrack.
+    writeU16(&bytes, chain + 4, 1); // One input Coverage.
+    writeU16(&bytes, chain + 6, 16);
+    writeU16(&bytes, chain + 8, 0); // No lookahead.
+    writeU16(&bytes, chain + 10, 1); // One fast SinglePos record.
+    writeU16(&bytes, chain + 12, 0);
+    writeU16(&bytes, chain + 14, 1);
+    writeCoverage(&bytes, chain + 16, &.{5});
+
+    const single_lookup = 58;
+    writeU16(&bytes, single_lookup, 1);
+    writeU16(&bytes, single_lookup + 2, 0);
+    writeU16(&bytes, single_lookup + 4, 1);
+    writeU16(&bytes, single_lookup + 6, 8);
+    const single = single_lookup + 8;
+    writeU16(&bytes, single, 1);
+    writeU16(&bytes, single + 2, 8);
+    writeU16(&bytes, single + 4, 0x0001);
+    writeI16(&bytes, single + 6, 41);
+    writeCoverage(&bytes, single + 8, &.{5});
+
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    };
+    const sidecars = try accelerator.build.lookup.all(
+        &bytes,
+        0,
+        bytes.len,
+        allocator,
+    );
+    defer accelerator.build.lookup.deinit(allocator, sidecars);
+    try std.testing.expectEqual(
+        @as(u16, 1),
+        sidecars[0].chaining_subtables[0].fast_record_count,
+    );
+
+    var adjustments = std.ArrayList(model.Adjustment).empty;
+    defer adjustments.deinit(allocator);
+    try std.testing.expectError(
+        error.UnsupportedGpos,
+        lookup.collect(
+            view,
+            chain_lookup,
+            1,
+            &.{5},
+            &adjustments,
+            allocator,
+            0,
+            .{
+                .lookup_accelerators = sidecars,
+                .context_depth = limits.max_context_depth,
+            },
+            &sidecars[0],
+            rejectRecords,
+            captureNested,
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 0), adjustments.items.len);
 }
 
 const max_fixture_bytes = 1024;
@@ -321,6 +401,19 @@ fn captureRecords(
     }
 }
 
+fn rejectRecords(
+    _: table.View,
+    _: usize,
+    _: usize,
+    _: []const usize,
+    _: []const u16,
+    _: *std.ArrayList(model.Adjustment),
+    _: std.mem.Allocator,
+    _: model.Options,
+) model.Error!void {
+    return error.InvalidShapingInput;
+}
+
 fn captureNested(
     _: table.View,
     _: []const u16,
@@ -346,4 +439,12 @@ fn writeCoverage(bytes: []u8, offset: usize, glyphs: []const u16) void {
 
 fn writeU16(bytes: []u8, offset: usize, value: u16) void {
     std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
+}
+
+fn writeI16(bytes: []u8, offset: usize, value: i16) void {
+    std.mem.writeInt(i16, bytes[offset..][0..2], value, .big);
+}
+
+fn writeU32(bytes: []u8, offset: usize, value: u32) void {
+    std.mem.writeInt(u32, bytes[offset..][0..4], value, .big);
 }

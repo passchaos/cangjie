@@ -4,6 +4,7 @@ const std = @import("std");
 const accelerator = @import("../../../../../accelerator/root.zig");
 const GlyphId = @import("../../../../../../glyph.zig").GlyphId;
 const lookup_order = @import("../../../../../../opentype/lookup_order.zig");
+const limits = @import("../../../../limits.zig");
 const contextual_matching = @import("../../matching.zig");
 const matching = @import("matching.zig");
 const model = @import("../../model.zig");
@@ -270,8 +271,9 @@ fn applyFastSingleRecords(
             record.lookup_index,
         ) orelse return false;
         if (nested.single_pos_subtables.len == 0) return false;
-        var nested_run = run;
-        nested_run.context_depth = run.context_depth + 1;
+        // This specialized SinglePos route bypasses the generic nested
+        // dispatcher, but still crosses one authored PosLookupRecord edge.
+        const nested_run = try limits.enterContext(run);
         _ = try single.collectAtAccelerated(
             view,
             nested.single_pos_subtables,

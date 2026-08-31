@@ -12,6 +12,7 @@ const extension = @import("extension/root.zig");
 const GlyphId = @import("../../../glyph.zig").GlyphId;
 const marks = @import("marks/root.zig");
 const lookup_order = @import("../../../opentype/lookup_order.zig");
+const limits = @import("../limits.zig");
 const options = @import("../options.zig");
 const pair = @import("pair/root.zig");
 const positioning = @import("../../positioning/root.zig");
@@ -20,7 +21,6 @@ const runtime_dispatch = @import("../dispatch.zig");
 const runtime_matching = @import("../matching.zig");
 const single = @import("single.zig");
 const table = @import("../../table/root.zig");
-const validation = @import("../../validation/root.zig");
 
 pub const Adjustment = positioning.Adjustment;
 pub const Error =
@@ -66,9 +66,10 @@ pub fn apply(
     // PosLookupRecord recursion is part of the same modified JSTF plan. A
     // disabled lookup must not re-enter through an active contextual parent.
     if (lookup_order.contains(run.disabled_lookups, lookup_index)) return;
-    if (run.context_depth > validation.lookup.max_context_depth) {
-        return error.UnsupportedGpos;
-    }
+    // Only PosLookupRecord dispatch crosses this boundary. Reject before
+    // lookup parsing or adjustment mutation, and do not count ExtensionPos
+    // wrappers as an additional edge.
+    var nested_run = try limits.enterContext(run);
 
     const lookup_list = try requiredLookupList(view);
     const lookup_count = try view.readU16(lookup_list);
@@ -92,15 +93,12 @@ pub fn apply(
         ),
     );
 
-    var nested_run = run;
     if ((lookup_flag & 0x0010) != 0) {
         nested_run.active_mark_filtering_set = try view.readU16(
             lookup + 6 + @as(usize, subtable_count) * 2,
         );
         try runtime_matching.validateMarkFilteringSetIndex(nested_run);
     }
-    nested_run.context_depth = run.context_depth + 1;
-
     if (lookup_type == 1) {
         if (exact_accelerator) |accelerator| {
             if (accelerator.single_pos_subtables.len != 0) {

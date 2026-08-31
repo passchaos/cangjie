@@ -721,3 +721,18 @@ left to Skrifa's cycle-checked recursive traversal; composite callbacks use
 the emitted outer isolation layer plus inner authored mode; and the sweep
 shader receives a center-preserving y reflection to reconcile tiny-skia's
 unit-angle coordinate convention with the y-up font transform.
+
+### GPOS contextual recursion bound
+
+Runtime GPOS execution now caps every `PosLookupRecord` call stack at sixteen
+edges, matching the structural-validation boundary. The generic nested
+dispatcher and the accelerated ChainContextPos-to-SinglePos path share one
+checked entry helper, so a hostile caller-supplied depth cannot overflow and
+the seventeenth edge is rejected with the existing `UnsupportedGpos` contract
+before lookup parsing or adjustment mutation. Direct and ExtensionPos-wrapped
+self cycles, the exact sixteenth-edge boundary, the accelerated bypass, and
+recursive validation all have focused regression coverage.
+The post-change `zig test src/gpos.zig -OReleaseFast` run passed all 378 tests;
+the full ReleaseFast project suite and the 2,946-case ReleaseSafe malformed-font
+smoke harness passed as well. The retained HarfBuzz 14.3/HarfRust shaping
+parity matrix also passed with the pinned HarfBuzz prefix.

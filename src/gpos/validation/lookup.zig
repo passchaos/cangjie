@@ -5,6 +5,7 @@
 //! execution so malformed later records cannot expose partial output.
 
 const contextual = @import("contextual.zig");
+const limits = @import("../runtime/limits.zig");
 const matching = @import("../runtime/matching.zig");
 const options = @import("../runtime/options.zig");
 const positioning = @import("../positioning/root.zig");
@@ -15,7 +16,7 @@ pub const Error =
 pub const Options = options.Options;
 pub const View = table.View;
 
-pub const max_context_depth = 16;
+pub const max_context_depth = limits.max_context_depth;
 
 pub fn records(
     view: View,
@@ -210,7 +211,11 @@ fn recordReferences(
     input_count: usize,
     depth: usize,
 ) Error!void {
-    if (depth > max_context_depth) return error.UnsupportedGpos;
+    // `depth` is the number of PosLookupRecord edges already entered by the
+    // parent lookup. A contextual record at depth sixteen would be edge
+    // seventeen, while a non-contextual leaf reached by edge sixteen remains
+    // valid because it never enters this record walker.
+    if (depth >= max_context_depth) return error.UnsupportedGpos;
     const lookup_list = try requiredLookupList(view);
     const lookup_count = try readU16(view, lookup_list);
     for (0..record_count) |record_index| {

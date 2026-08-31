@@ -49,6 +49,7 @@ pub const Options = struct {
     assume_validated: bool = false,
     shape_profile: ?*shape_profile.ShapeStageProfile = null,
     profile_io: ?std.Io = null,
-    /// Nested PosLookupRecord recursion depth.
+    /// Number of PosLookupRecord edges enclosing the current lookup.
+    /// Top-level lookup execution always starts at zero.
     context_depth: usize = 0,
 };

@@ -100,3 +100,19 @@ source or binary fixture is redistributed for this test.
 - Project: <https://github.com/googlefonts/fontations>
 - Copyright: 2019 Fontations Developers
 - License: Apache License 2.0; see `licenses/Apache-2.0.txt`
+
+## Fontations COLRv1 Pixel Corpus
+
+`tests/data/fontations/colrv1-pixel-corpus.ttf` is copied verbatim from
+Fontations `font-test-data` at commit
+`bb6f87166aa8bac93ff9df5ea67d58b7091b3e2a`, source path
+`font-test-data/test_data/ttf/test_glyphs-glyf_colr_1_variable.ttf`. Its
+SHA-256 is
+`5647de2386d42946624145a43e80982978727dd27701bb38b791474b8417b91f`.
+It supplies the retained linear, radial, sweep, nested-transform, composite,
+clip-box, PaintColrGlyph, layer, and variation cases for the independent
+Skrifa/tiny-skia pixel differential.
+
+- Project: <https://github.com/googlefonts/fontations>
+- Copyright: 2019 Fontations Developers
+- License: Apache License 2.0; see `licenses/Apache-2.0.txt`

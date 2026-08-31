@@ -4024,6 +4024,36 @@ pub fn build(b: *std.Build) void {
         glyph_name_fixtures_cmd.addOutputDirectoryArg("fixtures");
     glyph_name_fixtures_step.dependOn(&glyph_name_fixtures_cmd.step);
 
+    const colrv1_pixel_exe = b.addExecutable(.{
+        .name = "cangjie-colrv1-pixel",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/colrv1_pixel_cangjie.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "cangjie", .module = mod }},
+        }),
+    });
+    const colrv1_pixel_matrix_step = b.step(
+        "colrv1-pixel-matrix",
+        "Run the Cangjie/Skrifa COLRv1 pixel differential",
+    );
+    const colrv1_pixel_matrix_cmd = b.addSystemCommand(&.{
+        "python3",
+        "tools/run_colrv1_pixel_matrix.py",
+        "--cangjie",
+    });
+    colrv1_pixel_matrix_cmd.addArtifactArg(colrv1_pixel_exe);
+    colrv1_pixel_matrix_cmd.addArgs(&.{
+        "--skrifa-manifest",
+        "tools/colrv1_pixel_oracle/Cargo.toml",
+        "--font",
+    });
+    colrv1_pixel_matrix_cmd.addFileArg(
+        b.path("tests/data/fontations/colrv1-pixel-corpus.ttf"),
+    );
+    if (b.args) |args| colrv1_pixel_matrix_cmd.addArgs(args);
+    colrv1_pixel_matrix_step.dependOn(&colrv1_pixel_matrix_cmd.step);
+
     const fontations_matrix_step = b.step(
         "fontations-matrix",
         "Run the reproducible Cangjie/Skrifa capability matrix",

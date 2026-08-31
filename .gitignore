@@ -8,3 +8,4 @@ __pycache__/
 tools/parley_layout_oracle/target/
 tools/harfrust_shape_oracle/target/
 tools/fontations_bitmap_oracle/target/
+tools/colrv1_pixel_oracle/target/

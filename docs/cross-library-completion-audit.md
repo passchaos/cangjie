@@ -662,8 +662,35 @@ rows and all 18 object-geometry rows, but has not yet received a new strict
 performance run. This evidence is
 substantial but does not satisfy the stronger overall claim. In particular,
 the latest shaping runs still trail the faster reference on Noto Nastaliq,
-both Amiri rows, and Devanagari. The
-FreeType-equivalent face opening now leads, while complete eager validation is
-reported separately. Broader hinting targets and more glyphs remain uncovered,
-and COLRv1/SVG need a separate renderer reference. Parley semantic matrices
-also remain incomplete.
+both Amiri rows, and Devanagari. The FreeType-equivalent face opening now
+leads, while complete eager validation is reported separately. Broader hinting
+targets and more glyphs remain uncovered. SVG still needs a separate renderer
+reference, and COLRv1 coverage is represented by the bounded matrix below
+rather than a broad renderer claim. Parley semantic matrices also remain
+incomplete.
+
+### COLRv1 pixel differential
+
+`zig build colrv1-pixel-matrix -Doptimize=ReleaseFast` compares ten retained
+COLRv1 scenes against an independent Skrifa 0.45.2 plus tiny-skia 0.12.0
+adapter. The corpus covers pad and repeat linear gradients, radial and sweep
+gradients, nested transforms, isolated compositing, clip-box compositing,
+PaintColrGlyph recursion, layers, and variable alpha at default and non-default
+locations. Both sides emit premultiplied RGBA8 on the same 128x128 canvas.
+
+The matrix is exact for the linear-pad and composite cases. Away from detected
+coverage/color boundaries every other case differs by at most one byte per
+channel. Because the rasterizers use independent scan conversion, the runner
+separately identifies a one-pixel neighborhood around edges in either image
+and bounds that fringe (`max <= 160`, mean absolute error `<= 8`). This keeps
+the expected AA discrepancy from masking a reversed sweep, shifted transform,
+missing recursive glyph, wrong layer order, or ignored variation: each of
+those changes a smooth interior region and fails the strict `<= 1` gate.
+
+The oracle's adapter follows Skrifa's documented painter protocol rather than
+Cangjie's paint implementation: matrix concatenation is `current * child`;
+PaintGlyph's optional brush transform is not applied twice; PaintColrGlyph is
+left to Skrifa's cycle-checked recursive traversal; composite callbacks use
+the emitted outer isolation layer plus inner authored mode; and the sweep
+shader receives a center-preserving y reflection to reconcile tiny-skia's
+unit-angle coordinate convention with the y-up font transform.

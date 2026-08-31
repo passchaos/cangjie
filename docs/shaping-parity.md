@@ -1228,6 +1228,16 @@ Current local snapshot after the Nastaliq parity work:
   reduced instructions by a further `0.27%`, branches by `0.53%`, and cycles
   by about `1.03%`; 11-sample medians improved from an average `951.001` to
   `947.829 ns/glyph`. Output checksums remained identical.
+  The table-identity check is now hoisted completely above that traversal: an
+  exact sidecar slice selects its proved lookup offset and header directly by
+  LookupList index, while copied, foreign, unvalidated, or incomplete slices
+  still take the checked table parser. Fixed-CPU-30 A/B/B/A and reverse-order
+  `3 * 21` measurements kept all checksums identical and reduced the geometric
+  mean by about `0.63%` for Devanagari words and `0.88%` for Amiri words. Noto
+  Nastaliq was noisier (`+0.57%` then `-0.54%` for words) but its long-text row
+  improved by about `0.75%`; five-repeat counters reduced instructions/branches/
+  cycles by `0.80%`/`1.53%`/`0.95%` for Devanagari and
+  `0.28%`/`0.52%`/`0.46%` for Nastaliq words.
 - Cached GSUB feature plans now carry their table-identity proof into the
   unprofiled lookup boundary. The plan already contains validated lookup
   offsets and shares the exact accelerator slice used to build it, so this

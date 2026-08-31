@@ -9,6 +9,8 @@ const std = @import("std");
 const feature = @import("../feature/root.zig");
 const GlyphId = @import("../../glyph.zig").GlyphId;
 const lookup_order = @import("../../opentype/lookup_order.zig");
+const LookupAccelerator = @import("../accelerator/model.zig").Lookup;
+const runtime_dispatch = @import("dispatch.zig");
 const lookup_dispatcher = @import("lookup/dispatcher/root.zig");
 const matching = @import("matching.zig");
 const options = @import("options.zig");
@@ -124,7 +126,7 @@ fn collectImpl(
     }
     const lookup_list = try requiredLookupList(view);
     const lookup_count = try view.readU16(lookup_list);
-    const exact_sidecars = @import("dispatch.zig").exactSidecars(view, run);
+    const exact_sidecars = runtime_dispatch.exactSidecars(view, run);
     var digest_cache = lookup_dispatcher.DigestCache.init();
     if (selected.len != 0) {
         for (selected) |lookup_index| {
@@ -189,8 +191,18 @@ fn collectLookup(
     allocator: std.mem.Allocator,
     run: Options,
     digest_cache: *lookup_dispatcher.DigestCache,
-    exact_sidecars: ?[]const @import("../accelerator/model.zig").Lookup,
+    exact_sidecars: ?[]const LookupAccelerator,
 ) (Error || std.mem.Allocator.Error)!void {
+    if (try collectExactLookup(
+        view,
+        lookup_index,
+        glyphs,
+        adjustments,
+        allocator,
+        run,
+        digest_cache,
+        exact_sidecars,
+    )) return;
     const lookup = try table.offset.required16(
         view,
         lookup_list,
@@ -200,26 +212,6 @@ fn collectLookup(
             lookup_list + 2 + @as(usize, lookup_index) * 2,
         ),
     );
-    if (exact_sidecars) |sidecars| {
-        if (@import("dispatch.zig").lookupInExactSidecars(
-            sidecars,
-            lookup,
-            try view.readU16(lookup),
-            try view.readU16(lookup + 4),
-            lookup_index,
-        )) |sidecar| {
-            return lookup_dispatcher.collectAfterAcceleratorProof(
-                view,
-                lookup_index,
-                glyphs,
-                adjustments,
-                allocator,
-                run,
-                digest_cache,
-                sidecar,
-            );
-        }
-    }
     return lookup_dispatcher.collectWithIndex(
         view,
         lookup,
@@ -230,6 +222,37 @@ fn collectLookup(
         run,
         digest_cache,
     );
+}
+
+/// Execute by LookupList index after `exactSidecars` has proved the complete
+/// sidecar allocation belongs to this validated table range. Returning false
+/// keeps missing or out-of-range sidecars on the ordinary table-parsing path.
+fn collectExactLookup(
+    view: View,
+    lookup_index: u16,
+    glyphs: []const GlyphId,
+    adjustments: *std.ArrayList(Adjustment),
+    allocator: std.mem.Allocator,
+    run: Options,
+    digest_cache: *lookup_dispatcher.DigestCache,
+    exact_sidecars: ?[]const LookupAccelerator,
+) (Error || std.mem.Allocator.Error)!bool {
+    const sidecars = exact_sidecars orelse return false;
+    if (lookup_index >= sidecars.len) return false;
+
+    // The identity proof binds sidecar order to LookupList order, so this
+    // selection intentionally does not reread the table offset or header.
+    try lookup_dispatcher.collectAfterAcceleratorProof(
+        view,
+        lookup_index,
+        glyphs,
+        adjustments,
+        allocator,
+        run,
+        digest_cache,
+        &sidecars[lookup_index],
+    );
+    return true;
 }
 
 fn tableView(

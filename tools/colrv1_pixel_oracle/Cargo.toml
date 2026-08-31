@@ -5,8 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-# This follows the same pinned local Fontations checkout as the repository's
-# metadata/outline oracle. Keeping it a path dependency makes the normal Zig
-# build independent of Cargo and the network.
-skrifa = { path = "../../../../Work/fontations/skrifa", default-features = false, features = ["std"] }
+# Skrifa 0.45.2 was not published on crates.io. Pin both the exact upstream
+# revision and its declared version so every checkout uses the reviewed source.
+skrifa = { git = "https://github.com/googlefonts/fontations", rev = "bb6f87166aa8bac93ff9df5ea67d58b7091b3e2a", version = "=0.45.2", default-features = false, features = ["std"] }
 tiny-skia = { version = "=0.12.0", default-features = false, features = ["std"] }

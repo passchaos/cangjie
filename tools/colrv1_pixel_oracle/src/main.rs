@@ -37,6 +37,7 @@ struct Opt {
     iters: usize,
     samples: usize,
     out: Option<String>,
+    edges_out: Option<String>,
 }
 fn options() -> Opt {
     let mut a = env::args().skip(1);
@@ -65,6 +66,7 @@ fn options() -> Opt {
     let iters = p(a.next(), "iterations");
     let samples = p(a.next(), "samples");
     let out = a.next();
+    let edges_out = a.next();
     if a.next().is_some() || w == 0 || h == 0 || iters == 0 || samples == 0 {
         fail("invalid arguments")
     }
@@ -81,6 +83,7 @@ fn options() -> Opt {
         iters,
         samples,
         out,
+        edges_out,
     }
 }
 fn main() {
@@ -101,6 +104,7 @@ fn main() {
     let colors = palette.colors();
     let mut times = Vec::with_capacity(o.samples);
     let mut output = vec![];
+    let mut geometry_edges = vec![];
     for _ in 0..o.samples {
         let start = Instant::now();
         for i in 0..o.iters {
@@ -117,10 +121,11 @@ fn main() {
             glyph
                 .paint(o.coords.as_slice(), &mut painter)
                 .unwrap_or_else(|e| fail(e));
-            let pixels = painter.finish().unwrap_or_else(|e| fail(e));
+            let (pixels, edges) = painter.finish().unwrap_or_else(|e| fail(e));
             black_box(hash(&pixels));
             if i + 1 == o.iters {
-                output = pixels
+                output = pixels;
+                geometry_edges = edges;
             }
         }
         times.push(start.elapsed().as_nanos() as f64 / o.iters as f64)
@@ -129,8 +134,12 @@ fn main() {
     if let Some(path) = o.out {
         fs::write(path, &output).unwrap_or_else(|e| fail(e))
     }
+    if let Some(path) = o.edges_out {
+        fs::write(path, &geometry_edges).unwrap_or_else(|e| fail(e))
+    }
     let b = bounds(&output, o.w, o.h).unwrap_or((0, 0, 0, 0));
-    println!("engine=skrifa-tiny-skia\tformat=premul-rgba8\twidth={}\theight={}\tleft={}\ttop={}\tright={}\tbottom={}\tchecksum={:016x}\tmedian_ns_per_iter={:.3}",o.w,o.h,b.0,b.1,b.2,b.3,hash(&output),times[times.len()/2]);
+    let edge_pixels = geometry_edges.iter().filter(|value| **value != 0).count();
+    println!("engine=skrifa-tiny-skia\tformat=premul-rgba8\tedge_format=geometry-u8\tedge_pixels={}\twidth={}\theight={}\tleft={}\ttop={}\tright={}\tbottom={}\tchecksum={:016x}\tmedian_ns_per_iter={:.3}",edge_pixels,o.w,o.h,b.0,b.1,b.2,b.3,hash(&output),times[times.len()/2]);
 }
 struct Layer {
     pixmap: Pixmap,
@@ -146,6 +155,7 @@ struct Painter<'a> {
     transforms: Vec<SkTransform>,
     clips: Vec<Mask>,
     layers: Vec<Layer>,
+    geometry_edges: Vec<u8>,
     error: Option<String>,
 }
 impl<'a> Painter<'a> {
@@ -172,17 +182,21 @@ impl<'a> Painter<'a> {
                 pixmap: Pixmap::new(w, h).unwrap(),
                 blend: BlendMode::SourceOver,
             }],
+            geometry_edges: vec![0; w as usize * h as usize],
             error: None,
         }
     }
-    fn finish(mut self) -> Result<Vec<u8>, String> {
+    fn finish(mut self) -> Result<(Vec<u8>, Vec<u8>), String> {
         if let Some(e) = self.error.take() {
             return Err(e);
         }
         if self.transforms.len() != 1 || !self.clips.is_empty() || self.layers.len() != 1 {
             return Err("unbalanced stack".into());
         }
-        Ok(self.layers.pop().unwrap().pixmap.take())
+        Ok((
+            self.layers.pop().unwrap().pixmap.take(),
+            self.geometry_edges,
+        ))
     }
     fn new_layer(&self, blend: BlendMode) -> Layer {
         Layer {
@@ -242,6 +256,46 @@ impl<'a> Painter<'a> {
             }
         }
         self.clips.push(m)
+    }
+    fn record_coverage_edges(&mut self, coverage: &Mask) {
+        // Record the one-pixel neighborhood of each coverage transition. This
+        // sidecar deliberately comes from rasterized geometry, before a solid
+        // color or gradient is applied: even a steep authored gradient remains
+        // semantic interior, while opaque boundaries between paint operations
+        // are still represented.
+        let width = self.w as usize;
+        let height = self.h as usize;
+        let coverage = coverage.data();
+        for y in 0..height {
+            for x in 0..width {
+                let center = coverage[y * width + x];
+                let mut boundary = false;
+                for neighbor_y in y.saturating_sub(1)..=(y + 1).min(height - 1) {
+                    for neighbor_x in x.saturating_sub(1)..=(x + 1).min(width - 1) {
+                        if coverage[neighbor_y * width + neighbor_x] != center {
+                            boundary = true;
+                            break;
+                        }
+                    }
+                    if boundary {
+                        break;
+                    }
+                }
+                if boundary {
+                    self.geometry_edges[y * width + x] = 255;
+                }
+            }
+        }
+    }
+    fn record_path_edges(&mut self, path: &Path, transform: SkTransform) {
+        let mut coverage = Mask::new(self.w, self.h).unwrap();
+        coverage.fill_path(path, FillRule::Winding, true, transform);
+        if let Some(clip) = self.clips.last() {
+            for (value, clip_value) in coverage.data_mut().iter_mut().zip(clip.data()) {
+                *value = ((*value as u16 * *clip_value as u16 + 127) / 255) as u8;
+            }
+        }
+        self.record_coverage_edges(&coverage);
     }
     fn color(&mut self, i: u16, alpha: f32) -> Option<Color> {
         let (r, g, b, a) = if i == u16::MAX {
@@ -352,6 +406,7 @@ impl<'a> Painter<'a> {
             return;
         };
         let transform = self.ctm();
+        self.record_path_edges(path, transform);
         let clip = self.clips.last();
         self.layers.last_mut().unwrap().pixmap.fill_path(
             path,
@@ -371,6 +426,11 @@ impl<'a> Painter<'a> {
             return;
         };
         let r = Rect::from_xywh(0., 0., self.w as f32, self.h as f32).unwrap();
+        // An unclipped canvas has no in-canvas geometry boundary. A clip does,
+        // and its already-combined coverage is the effective fill geometry.
+        if let Some(clip) = self.clips.last().cloned() {
+            self.record_coverage_edges(&clip);
+        }
         let clip = self.clips.last();
         self.layers
             .last_mut()

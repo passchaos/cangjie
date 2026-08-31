@@ -51,6 +51,7 @@ dependencies = [
 [[package]]
 name = "font-types"
 version = "0.12.3"
+source = "git+https://github.com/googlefonts/fontations?rev=bb6f87166aa8bac93ff9df5ea67d58b7091b3e2a#bb6f87166aa8bac93ff9df5ea67d58b7091b3e2a"
 dependencies = [
  "bytemuck",
 ]
@@ -88,6 +89,7 @@ dependencies = [
 [[package]]
 name = "read-fonts"
 version = "0.42.2"
+source = "git+https://github.com/googlefonts/fontations?rev=bb6f87166aa8bac93ff9df5ea67d58b7091b3e2a#bb6f87166aa8bac93ff9df5ea67d58b7091b3e2a"
 dependencies = [
  "bytemuck",
  "font-types",
@@ -97,6 +99,7 @@ dependencies = [
 [[package]]
 name = "skrifa"
 version = "0.45.2"
+source = "git+https://github.com/googlefonts/fontations?rev=bb6f87166aa8bac93ff9df5ea67d58b7091b3e2a#bb6f87166aa8bac93ff9df5ea67d58b7091b3e2a"
 dependencies = [
  "bytemuck",
  "read-fonts",

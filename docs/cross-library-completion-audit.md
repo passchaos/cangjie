@@ -678,14 +678,18 @@ gradients, nested transforms, isolated compositing, clip-box compositing,
 PaintColrGlyph recursion, layers, and variable alpha at default and non-default
 locations. Both sides emit premultiplied RGBA8 on the same 128x128 canvas.
 
-The matrix is exact for the linear-pad and composite cases. Away from detected
-coverage/color boundaries every other case differs by at most one byte per
-channel. Because the rasterizers use independent scan conversion, the runner
-separately identifies a one-pixel neighborhood around edges in either image
-and bounds that fringe (`max <= 160`, mean absolute error `<= 8`). This keeps
-the expected AA discrepancy from masking a reversed sweep, shifted transform,
-missing recursive glyph, wrong layer order, or ignored variation: each of
-those changes a smooth interior region and fails the strict `<= 1` gate.
+The runner enforces byte-exact full-image equality for the linear-pad and
+composite cases. Away from reference geometry-coverage boundaries every other
+case differs by at most one byte per channel. Because the rasterizers use
+independent scan conversion, the Skrifa adapter emits a sidecar mask built from
+path and clip coverage before brush shading. The runner bounds that fringe per
+pixel (`max <= 160`, mean L-infinity channel error `<= 30`); it also rejects
+masks covering over half the canvas. The 30-byte mean ceiling is just above the
+worst retained coverage disagreement (linear-repeat at `29.094`) rather than a
+whole-image tolerance. Gradient color slopes never create fringe pixels, and
+candidate output cannot expand the reference mask. Synthetic negative tests
+prove that a one-pixel geometry shift, reversed steep gradient, broad color
+error, and candidate-created hard edges all fail the strict interior gate.
 
 The oracle's adapter follows Skrifa's documented painter protocol rather than
 Cangjie's paint implementation: matrix concatenation is `current * child`;

@@ -27,6 +27,17 @@ separate Fontations checkout.
 - Copyright: 2019 Fontations Developers
 - License: Apache License 2.0; see `licenses/Apache-2.0.txt`
 
+## tiny-skia COLRv1 Oracle Dependency
+
+The opt-in COLRv1 reference adapter under `tools/colrv1_pixel_oracle/` uses
+`tiny-skia` 0.12.0 and its `tiny-skia-path` 0.12.0 dependency to rasterize
+Skrifa paint operations. No tiny-skia code is used by the Cangjie library or
+its normal Zig build.
+
+- Project: <https://github.com/linebender/tiny-skia>
+- Copyright: 2011 Google Inc.; 2020 Yevhenii Reizner
+- License: BSD 3-Clause; see `licenses/BSD-3-Clause-tiny-skia.txt`
+
 ## Fontations VARC Test Font
 
 `tests/data/fontations/varc-ac01-conditional.ttf` is copied verbatim from

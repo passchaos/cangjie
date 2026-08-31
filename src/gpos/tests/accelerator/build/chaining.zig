@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const build = @import("../../../accelerator/build/root.zig");
+const accelerator = @import("../../../accelerator/root.zig");
 const coverage_matching =
     @import("../../../runtime/lookup/contextual/chaining/coverage/matching.zig");
 const table = @import("../../../table/root.zig");
@@ -75,6 +76,36 @@ test "chaining accelerator caches every coverage region" {
         subtable.input_coverages,
         0,
     ));
+}
+
+test "second-glyph grouping admits only the exact simple shape" {
+    var bytes = [_]u8{0} ** 18;
+    writeU16(&bytes, 12, 0);
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    };
+    const simple = accelerator.model.ChainingCoverageSubtable{
+        .input_count = 1,
+        .lookahead_count = 1,
+        .pos_count = 1,
+        .records_pos = 12,
+    };
+    try std.testing.expect(build.chaining.simpleSecondEligible(view, simple));
+
+    var complex = simple;
+    complex.lookahead_count = 0;
+    try std.testing.expect(!build.chaining.simpleSecondEligible(view, complex));
+    complex = simple;
+    complex.lookahead_count = 2;
+    try std.testing.expect(!build.chaining.simpleSecondEligible(view, complex));
+    complex = simple;
+    complex.backtrack_count = 1;
+    try std.testing.expect(!build.chaining.simpleSecondEligible(view, complex));
+    writeU16(&bytes, 12, 1);
+    try std.testing.expect(!build.chaining.simpleSecondEligible(view, simple));
 }
 
 fn writeCoverage(bytes: []u8, offset: usize, glyph: u16) void {

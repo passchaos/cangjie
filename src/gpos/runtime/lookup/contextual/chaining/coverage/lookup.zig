@@ -36,8 +36,29 @@ pub fn collect(
     comptime applyRecords: ApplyRecordsFn,
     comptime applyNested: ApplyNestedFn,
 ) Error!void {
-    if (usesGlyphDigest(glyphs.len)) {
+    // Select the specialized loop once per lookup. Lookups without a sparse
+    // second index compile to the original candidate loop and pay no extra
+    // per-position or per-candidate checks.
+    if (accelerator.chaining_second_groups.len != 0) {
+        if (usesGlyphDigest(glyphs.len)) {
+            return collectImpl(
+                true,
+                true,
+                view,
+                lookup_offset,
+                subtable_count,
+                glyphs,
+                adjustments,
+                allocator,
+                lookup_flag,
+                run,
+                accelerator,
+                applyRecords,
+                applyNested,
+            );
+        }
         return collectImpl(
+            false,
             true,
             view,
             lookup_offset,
@@ -52,7 +73,25 @@ pub fn collect(
             applyNested,
         );
     }
+    if (usesGlyphDigest(glyphs.len)) {
+        return collectImpl(
+            true,
+            false,
+            view,
+            lookup_offset,
+            subtable_count,
+            glyphs,
+            adjustments,
+            allocator,
+            lookup_flag,
+            run,
+            accelerator,
+            applyRecords,
+            applyNested,
+        );
+    }
     return collectImpl(
+        false,
         false,
         view,
         lookup_offset,
@@ -69,6 +108,55 @@ pub fn collect(
 }
 
 pub fn collectNestedAt(
+    view: View,
+    lookup_offset: usize,
+    subtable_count: u16,
+    glyphs: []const GlyphId,
+    position: usize,
+    adjustments: *std.ArrayList(Adjustment),
+    allocator: std.mem.Allocator,
+    lookup_flag: u16,
+    run: Options,
+    accelerator: *const LookupAccelerator,
+    comptime applyRecords: ApplyRecordsFn,
+    comptime applyNested: ApplyNestedFn,
+) Error!bool {
+    if (accelerator.chaining_second_groups.len != 0) {
+        return collectNestedImpl(
+            true,
+            view,
+            lookup_offset,
+            subtable_count,
+            glyphs,
+            position,
+            adjustments,
+            allocator,
+            lookup_flag,
+            run,
+            accelerator,
+            applyRecords,
+            applyNested,
+        );
+    }
+    return collectNestedImpl(
+        false,
+        view,
+        lookup_offset,
+        subtable_count,
+        glyphs,
+        position,
+        adjustments,
+        allocator,
+        lookup_flag,
+        run,
+        accelerator,
+        applyRecords,
+        applyNested,
+    );
+}
+
+fn collectNestedImpl(
+    comptime use_second_index: bool,
     view: View,
     lookup_offset: usize,
     subtable_count: u16,
@@ -104,8 +192,23 @@ pub fn collectNestedAt(
         lookup_flag,
         run,
     );
+    const second_candidates: []const u16 = if (use_second_index)
+        secondCandidates(accelerator, glyphs, second_position)
+    else
+        &.{};
+    var second_cursor: usize = 0;
     for (candidates) |subtable_index| {
         if (subtable_index >= subtable_count) return error.BadGpos;
+        if (use_second_index and !candidateAllowed(
+            accelerator,
+            subtable_index,
+            second_candidates,
+            &second_cursor,
+        )) continue;
+        const second_proven = use_second_index and candidateHasSecondProof(
+            accelerator,
+            subtable_index,
+        );
         const subtable = try resolvedSubtable(
             view,
             lookup_offset,
@@ -118,25 +221,42 @@ pub fn collectNestedAt(
                 continue;
             }
         }
-        if ((try execute.collectAt(
-            true,
-            view,
-            subtable,
-            glyphs,
-            position,
-            adjustments,
-            allocator,
-            lookup_flag,
-            run,
-            applyRecords,
-            applyNested,
-        )).matched) return true;
+        const result = if (second_proven)
+            try execute.collectAt(
+                2,
+                view,
+                subtable,
+                glyphs,
+                position,
+                adjustments,
+                allocator,
+                lookup_flag,
+                run,
+                applyRecords,
+                applyNested,
+            )
+        else
+            try execute.collectAt(
+                1,
+                view,
+                subtable,
+                glyphs,
+                position,
+                adjustments,
+                allocator,
+                lookup_flag,
+                run,
+                applyRecords,
+                applyNested,
+            );
+        if (result.matched) return true;
     }
     return false;
 }
 
 fn collectImpl(
     comptime use_glyph_digest: bool,
+    comptime use_second_index: bool,
     view: View,
     lookup_offset: usize,
     subtable_count: u16,
@@ -174,7 +294,22 @@ fn collectImpl(
             lookup_flag,
             run,
         );
+        const second_candidates: []const u16 = if (use_second_index)
+            secondCandidates(accelerator, glyphs, second_position)
+        else
+            &.{};
+        var second_cursor: usize = 0;
         for (candidates) |subtable_index| {
+            if (use_second_index and !candidateAllowed(
+                accelerator,
+                subtable_index,
+                second_candidates,
+                &second_cursor,
+            )) continue;
+            const second_proven = use_second_index and candidateHasSecondProof(
+                accelerator,
+                subtable_index,
+            );
             const subtable = try resolvedSubtable(
                 view,
                 lookup_offset,
@@ -187,19 +322,34 @@ fn collectImpl(
                     continue;
                 }
             }
-            const result = try execute.collectAt(
-                true,
-                view,
-                subtable,
-                glyphs,
-                position,
-                adjustments,
-                allocator,
-                lookup_flag,
-                run,
-                applyRecords,
-                applyNested,
-            );
+            const result = if (second_proven)
+                try execute.collectAt(
+                    2,
+                    view,
+                    subtable,
+                    glyphs,
+                    position,
+                    adjustments,
+                    allocator,
+                    lookup_flag,
+                    run,
+                    applyRecords,
+                    applyNested,
+                )
+            else
+                try execute.collectAt(
+                    1,
+                    view,
+                    subtable,
+                    glyphs,
+                    position,
+                    adjustments,
+                    allocator,
+                    lookup_flag,
+                    run,
+                    applyRecords,
+                    applyNested,
+                );
             if (result.matched) {
                 next_position = @max(next_position, result.next_pos);
                 break;
@@ -207,6 +357,50 @@ fn collectImpl(
         }
         _ = subtable_count;
     }
+}
+
+fn secondCandidates(
+    accelerator: *const LookupAccelerator,
+    glyphs: []const GlyphId,
+    position: ?usize,
+) []const u16 {
+    const glyph_index = position orelse return &.{};
+    return accelerator_core.glyph_groups.find(
+        accelerator.chaining_second_groups,
+        accelerator.chaining_second_group_slots,
+        glyphs[glyph_index],
+    ) orelse &.{};
+}
+
+fn candidateAllowed(
+    accelerator: *const LookupAccelerator,
+    subtable_index: u16,
+    second_candidates: []const u16,
+    second_cursor: *usize,
+) bool {
+    if (subtable_index < accelerator.chaining_second_start or
+        subtable_index >= accelerator.chaining_second_end)
+    {
+        return true;
+    }
+    // Both the first- and second-glyph candidate slices retain authored
+    // subtable order. A monotonic merge therefore filters the indexed segment
+    // without a search per candidate or any reordering of alternatives.
+    while (second_cursor.* < second_candidates.len and
+        second_candidates[second_cursor.*] < subtable_index)
+    {
+        second_cursor.* += 1;
+    }
+    return second_cursor.* < second_candidates.len and
+        second_candidates[second_cursor.*] == subtable_index;
+}
+
+fn candidateHasSecondProof(
+    accelerator: *const LookupAccelerator,
+    subtable_index: u16,
+) bool {
+    return subtable_index >= accelerator.chaining_second_start and
+        subtable_index < accelerator.chaining_second_end;
 }
 
 fn resolvedSubtable(

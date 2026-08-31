@@ -39,6 +39,8 @@ test "lookup model releases its complete nested ownership graph" {
         .chaining_subtables = try ownedChainingSubtables(allocator),
         .chaining_groups = try ownedGroups(allocator, 20),
         .chaining_group_slots = try allocator.dupe(u16, &.{1}),
+        .chaining_second_groups = try ownedGroups(allocator, 30),
+        .chaining_second_group_slots = try allocator.dupe(u16, &.{1}),
         .chaining_class_subtables = try ownedChainingClassSubtables(allocator),
     };
     @memset(

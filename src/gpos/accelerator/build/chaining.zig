@@ -11,6 +11,7 @@ pub const Error = table.view.Error || error{UnsupportedGpos};
 pub const View = table.View;
 
 const max_region_glyphs = 64;
+pub const max_second_group_pairs = 16 * 1024;
 
 pub fn coverageSubtable(
     view: View,
@@ -59,12 +60,35 @@ pub fn coverageSubtable(
         allocator,
     );
     try fillFastSingleRecords(view, &subtable);
+    if (simpleSecondEligible(view, subtable)) {
+        subtable.simple_lookup_index = try view.readU16(
+            subtable.records_pos + 2,
+        );
+    }
     if (subtable.input_count > 1) {
         const second = try parsed.input_coverages.coverageOffset(view, 1);
         subtable.second_input_digest =
             try table.coverage.digest(view, second);
     }
     return subtable;
+}
+
+/// True when logical input[1] is exactly the first lookahead glyph and the
+/// subtable's only record targets input sequence zero. Keeping this admission
+/// narrow lets lookup-level candidate grouping prove precisely one membership
+/// without changing general ChainContextPos matching semantics.
+pub fn simpleSecondEligible(
+    view: View,
+    subtable: model.ChainingCoverageSubtable,
+) bool {
+    if (subtable.backtrack_count != 0 or
+        subtable.input_count != 1 or
+        subtable.lookahead_count != 1 or
+        subtable.pos_count != 1)
+    {
+        return false;
+    }
+    return (view.readU16(subtable.records_pos) catch return false) == 0;
 }
 
 pub fn deinitCoverageSubtables(

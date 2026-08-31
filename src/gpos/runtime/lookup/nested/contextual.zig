@@ -154,7 +154,7 @@ pub fn chainingAt(
             false
         else
             (try contextual.chaining.coverage.execute.collectAt(
-                false,
+                0,
                 view,
                 contextual.chaining.coverage.execute.fromParsed(parsed),
                 glyphs,

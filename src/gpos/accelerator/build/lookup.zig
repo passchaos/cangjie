@@ -169,6 +169,12 @@ pub fn one(
     defer coverage_pairs.deinit(allocator);
     var chaining_pairs = std.ArrayList(glyph_groups.Pair).empty;
     defer chaining_pairs.deinit(allocator);
+    var chaining_second_pairs = std.ArrayList(glyph_groups.Pair).empty;
+    defer chaining_second_pairs.deinit(allocator);
+    var chaining_second_start: ?u16 = null;
+    var chaining_second_end: u16 = 0;
+    var chaining_second_closed = false;
+    var chaining_second_glyph_count: usize = 0;
     const chaining_subtables =
         if (lookup_type == 8 and
         try chaining.coverageOnly(view, lookup_offset, subtable_count))
@@ -268,6 +274,40 @@ pub fn one(
                 &chaining_pairs,
                 allocator,
             );
+            const chained = chaining_subtables[subtable_index];
+            if (!chaining_second_closed) {
+                if (chaining.simpleSecondEligible(view, chained)) {
+                    if (chaining_second_start == null) {
+                        chaining_second_start = @intCast(subtable_index);
+                    }
+                    chaining_second_end = @intCast(subtable_index + 1);
+                    const second_coverage = chained.lookahead_coverages[0];
+                    const second_glyph_count = second_coverage.glyphCount();
+                    // Keep this auxiliary index bounded independently of font
+                    // glyph-id spans. Large authored sets retain the existing
+                    // exact Owned-Coverage fallback without construction-time
+                    // memory amplification.
+                    if (second_glyph_count >
+                        chaining.max_second_group_pairs -
+                            chaining_second_glyph_count)
+                    {
+                        chaining_second_closed = true;
+                        chaining_second_start = null;
+                        chaining_second_end = 0;
+                        chaining_second_pairs.clearRetainingCapacity();
+                        continue;
+                    }
+                    try glyph_groups.appendOwnedCoveragePairs(
+                        second_coverage,
+                        @intCast(subtable_index),
+                        &chaining_second_pairs,
+                        allocator,
+                    );
+                    chaining_second_glyph_count += second_glyph_count;
+                } else if (chaining_second_start != null) {
+                    chaining_second_closed = true;
+                }
+            }
         }
     }
 
@@ -305,22 +345,25 @@ pub fn one(
                 coverage_pairs.items,
                 allocator,
             );
+        errdefer glyph_groups.deinitGroups(
+            result.coverage_groups,
+            allocator,
+        );
         result.coverage_group_slots =
             try glyph_groups.buildSlots(
                 result.coverage_groups,
                 allocator,
             );
+        errdefer allocator.free(result.coverage_group_slots);
         result.coverage_group_direct =
             try glyph_groups.buildDirect(
                 result.coverage_groups,
                 allocator,
             );
+        errdefer allocator.free(result.coverage_group_direct);
     }
     errdefer {
-        glyph_groups.deinitGroups(
-            result.coverage_groups,
-            allocator,
-        );
+        glyph_groups.deinitGroups(result.coverage_groups, allocator);
         allocator.free(result.coverage_group_slots);
         allocator.free(result.coverage_group_direct);
     }
@@ -332,18 +375,37 @@ pub fn one(
             chaining_pairs.items,
             allocator,
         );
+        errdefer glyph_groups.deinitGroups(
+            result.chaining_groups,
+            allocator,
+        );
         result.chaining_group_slots =
             try glyph_groups.buildSlots(
                 result.chaining_groups,
                 allocator,
             );
-        errdefer {
-            glyph_groups.deinitGroups(
-                result.chaining_groups,
-                allocator,
-            );
-            allocator.free(result.chaining_group_slots);
-        }
+        errdefer allocator.free(result.chaining_group_slots);
+        result.chaining_second_groups = try glyph_groups.buildGroups(
+            chaining_second_pairs.items,
+            allocator,
+        );
+        errdefer glyph_groups.deinitGroups(
+            result.chaining_second_groups,
+            allocator,
+        );
+        result.chaining_second_group_slots = try glyph_groups.buildSlots(
+            result.chaining_second_groups,
+            allocator,
+        );
+        errdefer allocator.free(result.chaining_second_group_slots);
+        result.chaining_second_start = chaining_second_start orelse 0;
+        result.chaining_second_end = chaining_second_end;
+    }
+    errdefer {
+        glyph_groups.deinitGroups(result.chaining_groups, allocator);
+        allocator.free(result.chaining_group_slots);
+        glyph_groups.deinitGroups(result.chaining_second_groups, allocator);
+        allocator.free(result.chaining_second_group_slots);
     }
     result.chaining_class_subtables =
         try chaining.extensionClassSubtables(

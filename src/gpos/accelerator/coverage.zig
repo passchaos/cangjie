@@ -139,6 +139,26 @@ pub const Owned = union(enum) {
             },
         }
     }
+
+    /// Number of glyph memberships retained by this decoded Coverage. Direct
+    /// tables can contain holes, so their allocation length is not a count.
+    pub fn glyphCount(self: Owned) usize {
+        return switch (self) {
+            .glyphs => |glyphs| glyphs.len,
+            .ranges => |ranges| count: {
+                var total: usize = 0;
+                for (ranges) |range| {
+                    total += @as(usize, range.end) - range.start + 1;
+                }
+                break :count total;
+            },
+            .direct => |indexes| count: {
+                var total: usize = 0;
+                for (indexes) |one_based| total += @intFromBool(one_based != 0);
+                break :count total;
+            },
+        };
+    }
 };
 
 fn buildDirectFromGlyphs(

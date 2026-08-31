@@ -1,6 +1,7 @@
 //! Complete GPOS lookup-sidecar construction contracts.
 
 const std = @import("std");
+const accelerator = @import("../../../accelerator/root.zig");
 const build = @import("../../../accelerator/build/root.zig");
 const table = @import("../../../table/root.zig");
 
@@ -98,6 +99,333 @@ test "extension ContextPos class rules build compact two-glyph sidecars" {
     try std.testing.expectEqual(@as(u16, 3), subtable.rules[0].second_class);
     try std.testing.expectEqual(@as(u16, 1), subtable.rules[0].sequence_index);
     try std.testing.expectEqual(@as(u16, 9), subtable.rules[0].lookup_index);
+}
+
+test "direct chaining lookup builds one exact contiguous second-lookahead segment" {
+    var bytes = [_]u8{0} ** 256;
+    const fixture = writeSecondGroupingLookup(&bytes);
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    };
+
+    const lookup = try build.lookup.one(
+        view,
+        fixture.lookup_offset,
+        std.testing.allocator,
+    );
+    var owned = [_]build.lookup.Lookup{lookup};
+    defer build.lookup.deinitContents(std.testing.allocator, &owned);
+
+    try std.testing.expect(lookup.chaining_coverage_only);
+    try std.testing.expectEqual(@as(usize, 5), lookup.chaining_subtables.len);
+    try std.testing.expectEqual(@as(u16, 1), lookup.chaining_second_start);
+    try std.testing.expectEqual(@as(u16, 3), lookup.chaining_second_end);
+
+    // Subtable zero is a generic predecessor. Subtables one and two form the
+    // only contiguous simple segment; subtable three closes that segment, so
+    // the otherwise-eligible subtable four deliberately remains generic.
+    const first_candidates = accelerator.glyph_groups.find(
+        lookup.chaining_groups,
+        lookup.chaining_group_slots,
+        10,
+    ) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(
+        u16,
+        &.{ 0, 1, 2, 3, 4 },
+        first_candidates,
+    );
+    try std.testing.expectEqualSlices(
+        u16,
+        &.{1},
+        accelerator.glyph_groups.find(
+            lookup.chaining_second_groups,
+            lookup.chaining_second_group_slots,
+            20,
+        ) orelse return error.TestUnexpectedResult,
+    );
+    try std.testing.expectEqualSlices(
+        u16,
+        &.{ 1, 2 },
+        accelerator.glyph_groups.find(
+            lookup.chaining_second_groups,
+            lookup.chaining_second_group_slots,
+            24,
+        ) orelse return error.TestUnexpectedResult,
+    );
+    try std.testing.expectEqualSlices(
+        u16,
+        &.{2},
+        accelerator.glyph_groups.find(
+            lookup.chaining_second_groups,
+            lookup.chaining_second_group_slots,
+            34,
+        ) orelse return error.TestUnexpectedResult,
+    );
+    try std.testing.expect(accelerator.glyph_groups.find(
+        lookup.chaining_second_groups,
+        lookup.chaining_second_group_slots,
+        40,
+    ) == null);
+
+    try std.testing.expectEqual(
+        @as(u16, 3),
+        lookup.chaining_subtables[1].simple_lookup_index,
+    );
+    try std.testing.expectEqual(
+        @as(u16, 5),
+        lookup.chaining_subtables[2].simple_lookup_index,
+    );
+
+    // The exact second-membership and record target are construction-time
+    // proofs. Once admitted, the proof-level-two runtime path uses these owned
+    // values rather than trusting post-build changes in borrowed font bytes.
+    writeU16(&bytes, fixture.first_simple_record + 2, 4);
+    writeU16(&bytes, fixture.first_simple_lookahead_glyph, 99);
+    try std.testing.expectEqual(
+        @as(u16, 4),
+        try view.readU16(fixture.first_simple_record + 2),
+    );
+    try std.testing.expectEqual(
+        @as(u16, 3),
+        lookup.chaining_subtables[1].simple_lookup_index,
+    );
+    try std.testing.expect(
+        lookup.chaining_subtables[1].lookahead_coverages[0].index(20) != null,
+    );
+    try std.testing.expectEqualSlices(
+        u16,
+        &.{1},
+        accelerator.glyph_groups.find(
+            lookup.chaining_second_groups,
+            lookup.chaining_second_group_slots,
+            20,
+        ) orelse return error.TestUnexpectedResult,
+    );
+}
+
+test "extension chaining coverage stays on the generic wrapper path" {
+    var bytes = [_]u8{0} ** 80;
+    const lookup_offset = writeExtensionChainingLookup(&bytes);
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    };
+
+    const lookup = try build.lookup.one(
+        view,
+        lookup_offset,
+        std.testing.allocator,
+    );
+    var owned = [_]build.lookup.Lookup{lookup};
+    defer build.lookup.deinitContents(std.testing.allocator, &owned);
+
+    try std.testing.expectEqual(@as(u16, 9), lookup.lookup_type);
+    try std.testing.expectEqual(@as(?u16, 8), lookup.extension_lookup_type);
+    try std.testing.expect(!lookup.chaining_coverage_only);
+    try std.testing.expectEqual(@as(usize, 0), lookup.chaining_subtables.len);
+    try std.testing.expectEqual(@as(usize, 0), lookup.chaining_groups.len);
+    try std.testing.expectEqual(@as(usize, 0), lookup.chaining_second_groups.len);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        lookup.chaining_second_group_slots.len,
+    );
+    try std.testing.expectEqual(@as(u16, 0), lookup.chaining_second_start);
+    try std.testing.expectEqual(@as(u16, 0), lookup.chaining_second_end);
+
+    // The lookup-wide first-Coverage prefilter remains available, but it does
+    // not turn a wrapped format-3 subtable into the direct type-8 sidecar.
+    try std.testing.expectEqualSlices(
+        u16,
+        &.{0},
+        accelerator.glyph_groups.find(
+            lookup.coverage_groups,
+            lookup.coverage_group_slots,
+            7,
+        ) orelse return error.TestUnexpectedResult,
+    );
+}
+
+test "lookup builder releases second-lookahead groups on allocation failure" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        buildSecondGroupingLookup,
+        .{},
+    );
+}
+
+fn buildSecondGroupingLookup(allocator: std.mem.Allocator) !void {
+    var bytes = [_]u8{0} ** 256;
+    const fixture = writeSecondGroupingLookup(&bytes);
+    const view = table.View{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    };
+    const lookup = try build.lookup.one(view, fixture.lookup_offset, allocator);
+    var owned = [_]build.lookup.Lookup{lookup};
+    defer build.lookup.deinitContents(allocator, &owned);
+
+    try std.testing.expect(lookup.chaining_second_groups.len >= 8);
+    try std.testing.expect(lookup.chaining_second_group_slots.len != 0);
+}
+
+const SecondGroupingFixture = struct {
+    lookup_offset: usize,
+    first_simple_record: usize,
+    first_simple_lookahead_glyph: usize,
+};
+
+fn writeSecondGroupingLookup(bytes: []u8) SecondGroupingFixture {
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 8, 10);
+
+    // Keep every nested lookup index in range while pointing it back to this
+    // type-8 lookup. Fast SinglePos detection rejects that type, as intended.
+    const lookup_list = 10;
+    const lookup_offset = 24;
+    writeU16(bytes, lookup_list, 6);
+    for (0..6) |index| {
+        writeU16(
+            bytes,
+            lookup_list + 2 + index * 2,
+            @intCast(lookup_offset - lookup_list),
+        );
+    }
+
+    writeU16(bytes, lookup_offset, 8);
+    writeU16(bytes, lookup_offset + 2, 0);
+    writeU16(bytes, lookup_offset + 4, 5);
+
+    var cursor: usize = lookup_offset + 16;
+    for (0..5) |index| {
+        writeU16(
+            bytes,
+            lookup_offset + 6 + index * 2,
+            @intCast(cursor - lookup_offset),
+        );
+        cursor = switch (index) {
+            0, 3 => writeComplexChainingCoverage(bytes, cursor, 10, 90),
+            1 => writeSimpleChainingCoverage(
+                bytes,
+                cursor,
+                10,
+                &.{ 20, 21, 22, 23, 24, 25, 26, 27 },
+                3,
+            ),
+            2 => writeSimpleChainingCoverage(
+                bytes,
+                cursor,
+                10,
+                &.{ 24, 28, 29, 30, 31, 32, 33, 34 },
+                5,
+            ),
+            // This subtable proves that grouping stays closed after the
+            // complex residual at index three.
+            4 => writeSimpleChainingCoverage(
+                bytes,
+                cursor,
+                10,
+                &.{40},
+                4,
+            ),
+            else => unreachable,
+        };
+    }
+
+    // Index zero occupies 34 bytes, so index one starts at byte 74.
+    const first_simple = lookup_offset + 16 + 34;
+    return .{
+        .lookup_offset = lookup_offset,
+        .first_simple_record = first_simple + 14,
+        .first_simple_lookahead_glyph = first_simple + 28,
+    };
+}
+
+fn writeExtensionChainingLookup(bytes: []u8) usize {
+    writeU16(bytes, 0, 1);
+    writeU16(bytes, 8, 10);
+    writeU16(bytes, 10, 1);
+    writeU16(bytes, 12, 4);
+
+    const lookup_offset = 14;
+    writeU16(bytes, lookup_offset, 9);
+    writeU16(bytes, lookup_offset + 2, 0);
+    writeU16(bytes, lookup_offset + 4, 1);
+    writeU16(bytes, lookup_offset + 6, 10);
+
+    const wrapper = lookup_offset + 10;
+    writeU16(bytes, wrapper, 1);
+    writeU16(bytes, wrapper + 2, 8);
+    writeU32(bytes, wrapper + 4, 8);
+    _ = writeSimpleChainingCoverage(
+        bytes,
+        wrapper + 8,
+        7,
+        &.{11},
+        0,
+    );
+    return lookup_offset;
+}
+
+fn writeSimpleChainingCoverage(
+    bytes: []u8,
+    offset: usize,
+    first_glyph: u16,
+    lookahead_glyphs: []const u16,
+    lookup_index: u16,
+) usize {
+    writeU16(bytes, offset, 3);
+    writeU16(bytes, offset + 2, 0);
+    writeU16(bytes, offset + 4, 1);
+    writeU16(bytes, offset + 6, 18);
+    writeU16(bytes, offset + 8, 1);
+    writeU16(bytes, offset + 10, 24);
+    writeU16(bytes, offset + 12, 1);
+    writeU16(bytes, offset + 14, 0);
+    writeU16(bytes, offset + 16, lookup_index);
+    writeCoverage1(bytes, offset + 18, first_glyph);
+    writeCoverage1Glyphs(bytes, offset + 24, lookahead_glyphs);
+    return offset + 28 + lookahead_glyphs.len * 2;
+}
+
+fn writeComplexChainingCoverage(
+    bytes: []u8,
+    offset: usize,
+    first_glyph: u16,
+    lookahead_glyph: u16,
+) usize {
+    writeU16(bytes, offset, 3);
+    writeU16(bytes, offset + 2, 0);
+    writeU16(bytes, offset + 4, 1);
+    writeU16(bytes, offset + 6, 22);
+    writeU16(bytes, offset + 8, 1);
+    writeU16(bytes, offset + 10, 28);
+    writeU16(bytes, offset + 12, 2);
+    writeU16(bytes, offset + 14, 0);
+    writeU16(bytes, offset + 16, 0);
+    writeU16(bytes, offset + 18, 0);
+    writeU16(bytes, offset + 20, 0);
+    writeCoverage1(bytes, offset + 22, first_glyph);
+    writeCoverage1(bytes, offset + 28, lookahead_glyph);
+    return offset + 34;
+}
+
+fn writeCoverage1Glyphs(
+    bytes: []u8,
+    offset: usize,
+    glyphs: []const u16,
+) void {
+    writeU16(bytes, offset, 1);
+    writeU16(bytes, offset + 2, @intCast(glyphs.len));
+    for (glyphs, 0..) |glyph, index| {
+        writeU16(bytes, offset + 4 + index * 2, glyph);
+    }
 }
 
 fn writeCoverage1(bytes: []u8, offset: usize, glyph: u16) void {

@@ -159,6 +159,30 @@ test "Coverage pairs expand ranges and reject malformed ordering" {
     );
 }
 
+test "owned Coverage pairs preserve sparse exact membership" {
+    const allocator = std.testing.allocator;
+    var pairs = std.ArrayList(accelerator.glyph_groups.Pair).empty;
+    defer pairs.deinit(allocator);
+    const glyphs = [_]u16{ 7, 19, 4000 };
+
+    try accelerator.glyph_groups.appendOwnedCoveragePairs(
+        .{ .glyphs = &glyphs },
+        5,
+        &pairs,
+        allocator,
+    );
+
+    try std.testing.expectEqualSlices(
+        accelerator.glyph_groups.Pair,
+        &.{
+            .{ .glyph = 7, .subtable_index = 5 },
+            .{ .glyph = 19, .subtable_index = 5 },
+            .{ .glyph = 4000, .subtable_index = 5 },
+        },
+        pairs.items,
+    );
+}
+
 fn writeU16(bytes: []u8, offset: usize, value: u16) void {
     std.mem.writeInt(u16, bytes[offset..][0..2], value, .big);
 }

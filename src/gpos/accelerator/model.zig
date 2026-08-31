@@ -46,6 +46,16 @@ pub const Lookup = struct {
     chaining_subtables: []const ChainingCoverageSubtable = &.{},
     chaining_groups: []const glyph_groups.Group = &.{},
     chaining_group_slots: []const u16 = &.{},
+    /// Exact logical-lookahead glyph index for the bounded simple format-3
+    /// subset. Candidate slices contain only admitted subtables and remain in
+    /// authored subtable order.
+    chaining_second_groups: []const glyph_groups.Group = &.{},
+    chaining_second_group_slots: []const u16 = &.{},
+    /// Half-open authored subtable interval covered by the exact second index.
+    /// Restricting the index to one contiguous run prevents a sparse hit from
+    /// overtaking an earlier general-format candidate.
+    chaining_second_start: u16 = 0,
+    chaining_second_end: u16 = 0,
     chaining_class_subtables: []const ChainingClassSubtable = &.{},
 };
 
@@ -139,6 +149,7 @@ pub const ChainingCoverageSubtable = struct {
     lookahead_coverages: []const coverage.Owned = &.{},
     records_pos: usize = 0,
     pos_count: u16 = 0,
+    simple_lookup_index: u16 = 0,
     fast_record_count: u16 = 0,
     fast_records: [max_fast_records]FastSinglePositionRecord =
         [_]FastSinglePositionRecord{.{}} ** max_fast_records,
@@ -207,6 +218,8 @@ pub fn deinitLookupContents(
         deinitContextClassSubtables(lookup.context_class_subtables, allocator);
         glyph_groups.deinitGroups(lookup.chaining_groups, allocator);
         allocator.free(lookup.chaining_group_slots);
+        glyph_groups.deinitGroups(lookup.chaining_second_groups, allocator);
+        allocator.free(lookup.chaining_second_group_slots);
         deinitChainingCoverageSubtables(lookup.chaining_subtables, allocator);
         deinitChainingClassSubtables(lookup.chaining_class_subtables, allocator);
     }

@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const GlyphId = @import("../../glyph.zig").GlyphId;
+const owned_coverage = @import("coverage.zig");
 const table = @import("../table/root.zig");
 
 pub const Error = table.view.Error || error{UnsupportedGpos};
@@ -74,6 +75,41 @@ pub fn appendCoveragePairs(
             }
         },
         else => return error.UnsupportedGpos,
+    }
+}
+
+/// Append membership pairs from a Coverage already decoded by the owning
+/// sidecar. This avoids reparsing the font while building secondary indexes.
+pub fn appendOwnedCoveragePairs(
+    coverage: owned_coverage.Owned,
+    subtable_index: u16,
+    pairs: *std.ArrayList(Pair),
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!void {
+    try pairs.ensureUnusedCapacity(allocator, coverage.glyphCount());
+    switch (coverage) {
+        .glyphs => |glyphs| for (glyphs) |glyph| {
+            pairs.appendAssumeCapacity(.{
+                .glyph = glyph,
+                .subtable_index = subtable_index,
+            });
+        },
+        .ranges => |ranges| for (ranges) |range| {
+            var glyph: usize = range.start;
+            while (glyph <= range.end) : (glyph += 1) {
+                pairs.appendAssumeCapacity(.{
+                    .glyph = @intCast(glyph),
+                    .subtable_index = subtable_index,
+                });
+            }
+        },
+        .direct => |indexes| for (indexes, 0..) |one_based, glyph| {
+            if (one_based == 0) continue;
+            pairs.appendAssumeCapacity(.{
+                .glyph = @intCast(glyph),
+                .subtable_index = subtable_index,
+            });
+        },
     }
 }
 

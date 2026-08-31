@@ -61,7 +61,7 @@ pub fn collect(
     var position: usize = 0;
     while (position < glyphs.len) {
         const result = try collectAt(
-            false,
+            0,
             view,
             subtable,
             glyphs,
@@ -82,11 +82,10 @@ pub fn collect(
 
 /// Execute one format-3 subtable at a candidate input position.
 ///
-/// `first_coverage_proven` is true only after exact accelerator group lookup;
-/// it skips the already-proven first input Coverage without weakening direct
-/// or nested generic execution.
+/// `proven_coverages` is zero for generic execution, one after exact first
+/// grouping, and two after exact first-plus-lookahead grouping.
 pub fn collectAt(
-    comptime first_coverage_proven: bool,
+    comptime proven_coverages: u2,
     view: View,
     subtable: Subtable,
     glyphs: []const GlyphId,
@@ -111,7 +110,7 @@ pub fn collectAt(
         subtable.pos_count == 1)
     {
         return collectSimpleAt(
-            first_coverage_proven,
+            proven_coverages,
             view,
             subtable,
             glyphs,
@@ -136,7 +135,7 @@ pub fn collectAt(
         run,
         input,
     )) return .{};
-    if (first_coverage_proven and input[0] != position) return .{};
+    if (proven_coverages != 0 and input[0] != position) return .{};
     if (!try matching.indices(
         view,
         subtable.subtable_offset,
@@ -144,7 +143,7 @@ pub fn collectAt(
         input,
         subtable.input_offsets_pos,
         subtable.input_coverages,
-        if (first_coverage_proven) 1 else 0,
+        if (proven_coverages != 0) 1 else 0,
     )) return .{};
 
     var backtrack_buffer: [64]usize = undefined;
@@ -268,7 +267,7 @@ fn applyFastSingleRecords(
 }
 
 fn collectSimpleAt(
-    comptime first_coverage_proven: bool,
+    comptime proven_coverages: u2,
     view: View,
     subtable: Subtable,
     glyphs: []const GlyphId,
@@ -279,7 +278,7 @@ fn collectSimpleAt(
     run: Options,
     comptime applyNested: model.ApplyNestedFn,
 ) Error!Result {
-    if (!first_coverage_proven) {
+    if (proven_coverages == 0) {
         if (subtable.input_coverages.len != 0) {
             if (subtable.input_coverages[0].index(glyphs[position]) == null) {
                 return .{};
@@ -305,7 +304,9 @@ fn collectSimpleAt(
         lookup_flag,
         run,
     ) orelse return .{};
-    if (subtable.lookahead_coverages.len != 0) {
+    if (proven_coverages == 2) {
+        // The exact second-glyph group was built from this decoded Coverage.
+    } else if (subtable.lookahead_coverages.len != 0) {
         if (subtable.lookahead_coverages[0].index(
             glyphs[lookahead_index],
         ) == null) return .{};
@@ -322,12 +323,19 @@ fn collectSimpleAt(
             .membership,
         )) return .{};
     }
-    if (try view.readU16(subtable.records_pos) != 0) return .{};
+    if (proven_coverages != 2 and
+        try view.readU16(subtable.records_pos) != 0)
+    {
+        return .{};
+    }
     try applyNested(
         view,
         glyphs,
         position,
-        try view.readU16(subtable.records_pos + 2),
+        if (proven_coverages == 2)
+            subtable.simple_lookup_index
+        else
+            try view.readU16(subtable.records_pos + 2),
         adjustments,
         allocator,
         run,

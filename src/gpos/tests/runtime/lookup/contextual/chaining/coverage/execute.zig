@@ -38,7 +38,7 @@ test "simple coverage chaining applies its nested record to the first input" {
     defer adjustments.deinit(allocator);
 
     const result = try execute.collectAt(
-        false,
+        0,
         view,
         subtable,
         &glyphs,
@@ -87,7 +87,7 @@ test "accelerated coverage execution trusts only its proven first input" {
     defer adjustments.deinit(allocator);
 
     const generic = try execute.collectAt(
-        false,
+        0,
         view,
         subtable,
         &.{ 3, 5 },
@@ -102,7 +102,7 @@ test "accelerated coverage execution trusts only its proven first input" {
     try std.testing.expect(!generic.matched);
 
     const accelerated = try execute.collectAt(
-        true,
+        1,
         view,
         subtable,
         &.{ 3, 5 },

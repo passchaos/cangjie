@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const chaining_coverage = @import("../chaining_coverage/root.zig");
+const chaining_glyph = @import("../chaining_glyph.zig");
 const class_context = @import("../class_context/root.zig");
 const context_coverage = @import("../context_coverage.zig");
 pub const extension = @import("extension.zig");
@@ -200,6 +201,18 @@ pub fn one(
                 if (lookup.ligature_subst.sets.len != 0) return lookup;
             }
             if (wrapped_type == 6 and
+                subtable_count != 0)
+            {
+                lookup.chaining_glyph_subtables = try chaining_glyph.build(
+                    view,
+                    lookup_offset,
+                    subtable_count,
+                    .extension,
+                    allocator,
+                );
+                if (lookup.chaining_glyph_subtables.len != 0) return lookup;
+            }
+            if (wrapped_type == 6 and
                 try chaining_coverage.lookupUsesCoverageOnly(
                     view,
                     lookup_offset,
@@ -253,6 +266,14 @@ pub fn one(
         }
     }
     if (lookup_type == 6) {
+        lookup.chaining_glyph_subtables = try chaining_glyph.build(
+            view,
+            lookup_offset,
+            subtable_count,
+            .direct,
+            allocator,
+        );
+        if (lookup.chaining_glyph_subtables.len != 0) return lookup;
         lookup.chaining_class_subtables = try class_context.chaining.build(
             view,
             lookup_offset,

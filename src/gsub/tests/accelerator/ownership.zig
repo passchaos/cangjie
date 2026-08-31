@@ -59,6 +59,21 @@ test "ownership releases a complete nested lookup graph" {
     lookups[0].chaining_pair_groups = pair_groups;
     lookups[0].chaining_pair_group_slots = try allocator.dupe(u16, &.{1});
 
+    const glyph_subtables =
+        try allocator.alloc(acceleration.model.ChainingGlyphSubtable, 1);
+    glyph_subtables[0] = .{
+        .rules = try allocator.dupe(
+            acceleration.model.ChainingGlyphRule,
+            &.{.{
+                .first = 10,
+                .second = 11,
+                .lookahead = 0,
+                .nested_lookup = 2,
+            }},
+        ),
+    };
+    lookups[0].chaining_glyph_subtables = glyph_subtables;
+
     const chaining_subtables =
         try allocator.alloc(acceleration.model.ChainingClassSubtable, 1);
     chaining_subtables[0] = .{

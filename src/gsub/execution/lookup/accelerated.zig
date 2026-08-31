@@ -10,6 +10,8 @@ const contextual_context =
     @import("../contextual/context/root.zig");
 const contextual_chaining_class =
     @import("../contextual/chaining/class/root.zig");
+const contextual_chaining_glyph =
+    @import("../contextual/chaining/glyph/root.zig");
 const direct_ligature = @import("../direct/ligature/root.zig");
 const direct_multiple = @import("../direct/multiple/root.zig");
 const direct_single = @import("../direct/single/root.zig");
@@ -222,7 +224,17 @@ inline fn applyPreparedUnprofiled(
             } else return false;
         },
         6 => {
-            if (sidecar.chaining_class_subtables.len != 0) {
+            if (contextual_chaining_glyph.supportsAcceleratedLookup(sidecar)) {
+                try contextual_chaining_glyph.acceleratedLookup(
+                    Executor,
+                    view,
+                    glyphs,
+                    allocator,
+                    sidecar.lookup_flag,
+                    run,
+                    sidecar,
+                );
+            } else if (sidecar.chaining_class_subtables.len != 0) {
                 try contextual_chaining_class.acceleratedLookup(
                     Executor,
                     view,
@@ -233,26 +245,26 @@ inline fn applyPreparedUnprofiled(
                     run,
                     sidecar,
                 );
-                return true;
-            }
-            if (!sidecar.chaining_coverage_only) return false;
-            const digest = if (run_digest_cache) |cache|
-                cache.digestForRun(glyphs.items, sidecar.lookup_flag, run)
-            else
-                prefilter.digest(glyphs.items, sidecar.lookup_flag, run);
-            if (!digest.isEmpty() and
-                sidecar.chaining_input_digest.mayIntersect(digest))
-            {
-                try Executor.applyChainingLookup(
-                    view,
-                    lookup_offset,
-                    sidecar.subtable_count,
-                    glyphs,
-                    allocator,
-                    sidecar.lookup_flag,
-                    run,
-                    sidecar,
-                );
+            } else {
+                if (!sidecar.chaining_coverage_only) return false;
+                const digest = if (run_digest_cache) |cache|
+                    cache.digestForRun(glyphs.items, sidecar.lookup_flag, run)
+                else
+                    prefilter.digest(glyphs.items, sidecar.lookup_flag, run);
+                if (!digest.isEmpty() and
+                    sidecar.chaining_input_digest.mayIntersect(digest))
+                {
+                    try Executor.applyChainingLookup(
+                        view,
+                        lookup_offset,
+                        sidecar.subtable_count,
+                        glyphs,
+                        allocator,
+                        sidecar.lookup_flag,
+                        run,
+                        sidecar,
+                    );
+                }
             }
         },
         7 => if (!try applyExtensionClasses(
@@ -337,7 +349,17 @@ noinline fn applyPrepared(
             }
         },
         6 => {
-            if (sidecar.chaining_class_subtables.len != 0) {
+            if (contextual_chaining_glyph.supportsAcceleratedLookup(sidecar)) {
+                try contextual_chaining_glyph.acceleratedLookup(
+                    Executor,
+                    view,
+                    glyphs,
+                    allocator,
+                    sidecar.lookup_flag,
+                    run,
+                    sidecar,
+                );
+            } else if (sidecar.chaining_class_subtables.len != 0) {
                 try contextual_chaining_class.acceleratedLookup(
                     Executor,
                     view,
@@ -444,17 +466,29 @@ inline fn applyExtensionClasses(
             );
         },
         6 => {
-            if (sidecar.chaining_class_subtables.len == 0) return false;
-            try contextual_chaining_class.acceleratedLookup(
-                Executor,
-                view,
-                sidecar.subtable_count,
-                glyphs,
-                allocator,
-                sidecar.lookup_flag,
-                run,
-                sidecar,
-            );
+            if (contextual_chaining_glyph.supportsAcceleratedLookup(sidecar)) {
+                try contextual_chaining_glyph.acceleratedLookup(
+                    Executor,
+                    view,
+                    glyphs,
+                    allocator,
+                    sidecar.lookup_flag,
+                    run,
+                    sidecar,
+                );
+            } else {
+                if (sidecar.chaining_class_subtables.len == 0) return false;
+                try contextual_chaining_class.acceleratedLookup(
+                    Executor,
+                    view,
+                    sidecar.subtable_count,
+                    glyphs,
+                    allocator,
+                    sidecar.lookup_flag,
+                    run,
+                    sidecar,
+                );
+            }
         },
         else => return false,
     }

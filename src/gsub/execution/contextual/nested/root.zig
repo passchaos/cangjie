@@ -9,6 +9,7 @@
 const std = @import("std");
 const chaining_lookup = @import("../chaining/lookup/root.zig");
 const chaining_class = @import("../chaining/class/root.zig");
+const chaining_glyph = @import("../chaining/glyph/root.zig");
 const contextual_context = @import("../context/root.zig");
 pub const direct = @import("direct.zig");
 const direct_ligature = @import("../../direct/ligature/root.zig");
@@ -131,6 +132,21 @@ pub fn apply(
         if (sidecar.context_class_subtables.len != 0) {
             for (sidecar.context_class_subtables) |subtable| {
                 if ((try contextual_context.acceleratedClassAt(
+                    Executor,
+                    view,
+                    subtable,
+                    glyphs,
+                    glyph_index,
+                    allocator,
+                    lookup_flag,
+                    lookup_run,
+                )).matched) return .{};
+            }
+            return .{};
+        }
+        if (chaining_glyph.supportsAcceleratedLookup(sidecar)) {
+            for (sidecar.chaining_glyph_subtables) |subtable| {
+                if ((try chaining_glyph.acceleratedAt(
                     Executor,
                     view,
                     subtable,

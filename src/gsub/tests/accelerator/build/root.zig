@@ -2,6 +2,7 @@
 
 test {
     _ = @import("chaining_coverage.zig");
+    _ = @import("chaining_glyph.zig");
     _ = @import("class_context/root.zig");
     _ = @import("context_coverage.zig");
     _ = @import("ligature/root.zig");

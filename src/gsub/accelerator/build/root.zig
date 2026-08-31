@@ -2,6 +2,7 @@
 
 pub const context_coverage = @import("context_coverage.zig");
 pub const chaining_coverage = @import("chaining_coverage/root.zig");
+pub const chaining_glyph = @import("chaining_glyph.zig");
 pub const class_context = @import("class_context/root.zig");
 pub const ligature = @import("ligature/root.zig");
 pub const lookup = @import("lookup/root.zig");

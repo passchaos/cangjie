@@ -3,6 +3,7 @@
 const std = @import("std");
 const accelerator = @import("../../../../accelerator/root.zig");
 const chaining_coverage = @import("../coverage/root.zig");
+const chaining_glyph = @import("../glyph/root.zig");
 const extension_payload =
     @import("../../../../accelerator/build/lookup/extension.zig");
 const filtering = @import("../../../../runtime/filtering.zig");
@@ -27,6 +28,18 @@ pub fn apply(
     run: Options,
     sidecar: *const Lookup,
 ) Error!void {
+    if (chaining_glyph.supportsAcceleratedLookup(sidecar)) {
+        return chaining_glyph.acceleratedLookup(
+            Executor,
+            view,
+            glyphs,
+            allocator,
+            lookup_flag,
+            run,
+            sidecar,
+        );
+    }
+
     var position: usize = 0;
     while (position < glyphs.items.len) {
         var next_position = position + 1;

@@ -10,6 +10,8 @@ const contextual_context =
     @import("../../contextual/context/root.zig");
 const contextual_chaining_class =
     @import("../../contextual/chaining/class/root.zig");
+const contextual_chaining_glyph =
+    @import("../../contextual/chaining/glyph/root.zig");
 const direct_alternate = @import("../../direct/alternate/root.zig");
 const direct_ligature = @import("../../direct/ligature/root.zig");
 const direct_multiple = @import("../../direct/multiple/root.zig");
@@ -288,6 +290,20 @@ fn applyChaining(
     run: Options,
     run_digest_cache: ?*RunDigestCache,
 ) Error!void {
+    if (runtime_dispatch.chainingGlyph(
+        lookup_index,
+        run,
+    )) |sidecar| {
+        return contextual_chaining_glyph.acceleratedLookup(
+            Executor,
+            view,
+            glyphs,
+            allocator,
+            lookup_flag,
+            run,
+            sidecar,
+        );
+    }
     if (runtime_dispatch.chainingClass(
         lookup_index,
         run,

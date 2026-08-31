@@ -1,6 +1,7 @@
 //! ChainContextSubst format-1 glyph execution surface.
 
 const std = @import("std");
+const accelerated = @import("accelerated.zig");
 const shaping_sections = @import("../../../../../shaping_sections.zig");
 const filtering = @import("../../../../runtime/filtering.zig");
 const Options = @import("../../../../runtime/options.zig").Options;
@@ -14,6 +15,10 @@ const Error = table.coverage.Error ||
     error{ InvalidShapingInput, ShapingLimitExceeded } ||
     std.mem.Allocator.Error;
 const View = table.View;
+
+pub const acceleratedLookup = accelerated.lookup;
+pub const acceleratedAt = accelerated.at;
+pub const supportsAcceleratedLookup = accelerated.supportsLookup;
 
 pub fn subtable(
     comptime Executor: type,

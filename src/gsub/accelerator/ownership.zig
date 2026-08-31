@@ -44,6 +44,10 @@ pub fn deinitContents(
         allocator.free(lookup.chaining_group_slots);
         deinitPairGroups(allocator, lookup.chaining_pair_groups);
         allocator.free(lookup.chaining_pair_group_slots);
+        deinitChainingGlyphSubtables(
+            allocator,
+            lookup.chaining_glyph_subtables,
+        );
         deinitChainingClassSubtables(
             allocator,
             lookup.chaining_class_subtables,
@@ -72,6 +76,21 @@ pub fn deinitContextClassSubtableContents(
         allocator.free(subtable.classes);
         allocator.free(subtable.groups);
     }
+}
+
+pub fn deinitChainingGlyphSubtables(
+    allocator: std.mem.Allocator,
+    subtables: []const model.ChainingGlyphSubtable,
+) void {
+    deinitChainingGlyphSubtableContents(allocator, subtables);
+    allocator.free(subtables);
+}
+
+pub fn deinitChainingGlyphSubtableContents(
+    allocator: std.mem.Allocator,
+    subtables: []const model.ChainingGlyphSubtable,
+) void {
+    for (subtables) |subtable| allocator.free(subtable.rules);
 }
 
 pub fn deinitChainingClassSubtables(

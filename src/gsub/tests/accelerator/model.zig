@@ -13,9 +13,28 @@ test "GSUB lookup accelerator is a concrete empty sidecar by default" {
     try std.testing.expectEqual(@as(usize, 0), lookup.chaining_subtables.len);
     try std.testing.expectEqual(
         @as(usize, 0),
+        lookup.chaining_glyph_subtables.len,
+    );
+    try std.testing.expectEqual(
+        @as(usize, 0),
         lookup.reverse_chaining_exact_contexts.len,
     );
     try std.testing.expectEqual(@as(?*const acceleration.model.FeatureIndex, null), lookup.feature_index);
+}
+
+test "GSUB chaining glyph lookup preserves optional zero lookahead" {
+    const rules = [_]acceleration.model.ChainingGlyphRule{
+        .{ .first = 0, .second = 4, .lookahead = 0, .nested_lookup = 2 },
+        .{ .first = 7, .second = 8, .nested_lookup = 3 },
+    };
+    const subtable = acceleration.model.ChainingGlyphSubtable{
+        .subtable_offset = 12,
+        .rules = &rules,
+    };
+
+    try std.testing.expectEqual(@as(?u16, 0), subtable.find(0).?.lookahead);
+    try std.testing.expectEqual(@as(?u16, null), subtable.find(7).?.lookahead);
+    try std.testing.expect(subtable.find(6) == null);
 }
 
 test "GSUB ligature accelerator compact range does not widen its sidecar" {

@@ -53,6 +53,7 @@ pub const Lookup = struct {
     chaining_pair_groups: []const ChainingPairGroup = &.{},
     chaining_pair_group_slots: []const u16 = &.{},
     chaining_pair_index_complete: bool = false,
+    chaining_glyph_subtables: []const ChainingGlyphSubtable = &.{},
     chaining_class_subtables: []const ChainingClassSubtable = &.{},
     reverse_chaining_subtables: []const ReverseChainingSingleSubtable = &.{},
     reverse_chaining_groups: []const ChainingGroup = &.{},
@@ -200,6 +201,44 @@ pub const ChainingCoverageSubtable = struct {
 pub const FastSingleRecord = struct {
     sequence_index: u16 = 0,
     accelerator: SingleSubstitution = .{},
+};
+
+/// One wholly decoded, deliberately narrow ChainContextSubst format-1
+/// subtable. The outer slice retains authored subtable order, while `rules`
+/// is sorted by its unique first glyph for allocation-free lookup.
+pub const ChainingGlyphSubtable = struct {
+    subtable_offset: usize = 0,
+    rules: []const ChainingGlyphRule = &.{},
+
+    pub fn find(
+        self: ChainingGlyphSubtable,
+        first: GlyphId,
+    ) ?*const ChainingGlyphRule {
+        var low: usize = 0;
+        var high = self.rules.len;
+        while (low < high) {
+            const middle = low + (high - low) / 2;
+            const candidate = &self.rules[middle];
+            if (first < candidate.first) {
+                high = middle;
+            } else if (first > candidate.first) {
+                low = middle + 1;
+            } else {
+                return candidate;
+            }
+        }
+        return null;
+    }
+};
+
+/// A bounded format-1 rule admitted only for the common two-input, one-record
+/// shape. Optionality, rather than a glyph sentinel, distinguishes an absent
+/// lookahead because glyph zero is a valid authored value.
+pub const ChainingGlyphRule = struct {
+    first: GlyphId,
+    second: GlyphId,
+    lookahead: ?GlyphId = null,
+    nested_lookup: u16,
 };
 
 pub const ChainingClassSubtable = struct {

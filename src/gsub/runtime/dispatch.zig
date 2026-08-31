@@ -163,6 +163,20 @@ pub fn chainingClass(
     return cached;
 }
 
+pub fn chainingGlyph(
+    lookup_index: ?u16,
+    run: Options,
+) ?*const Lookup {
+    const cached = any(lookup_index, run) orelse return null;
+    if (cached.chaining_glyph_subtables.len == 0 or
+        cached.chaining_glyph_subtables.len !=
+            @as(usize, cached.subtable_count))
+    {
+        return null;
+    }
+    return cached;
+}
+
 pub fn extensionType(
     lookup_index: ?u16,
     run: Options,

@@ -587,6 +587,24 @@ improved the observed rows but remained red for Amiri words/long
 (`0.830x`/`0.870x`) and Devanagari (`0.955x`), so the cross-library
 shaping-performance claim is still open.
 
+A bounded ChainContextSubst format-1 sidecar now covers the common exact
+two-input, optional-one-lookahead, one-record shape without reparsing the
+Coverage/RuleSet/rule graph at every glyph. The accelerator is generic rather
+than script-specific, preserves position-major authored subtable order, uses
+the shared filtered traversal and safety marking, and falls back for the whole
+lookup unless every subtable is supported. Its builder also scans complete
+unsupported structures before falling back, so malformed tails cannot escape
+atomic preflight. This activates for the HarfRust benchmark corpus's 136-rule
+Noto Sans Devanagari lookup 41. Fixed-P-core-8 A/B/B/A plus reverse-order
+31-sample comparisons improved the Devanagari aggregate by about `3.00%`;
+retired instructions and branches fell `2.08%` and `1.69%` in the final
+ten-pass A/B/B/A counter run. Branch misses rose by about `10.9%`, while cycles
+improved `1.41%`; unrelated Amiri/Roboto retired work moved by less than one
+percent. Full ReleaseFast tests and the complete HarfBuzz/HarfRust corpus
+parity gate passed. A noisy concurrent core matrix is retained only as a
+diagnostic—not superiority evidence—and still left Devanagari below the faster
+reference, so further optimization remains necessary.
+
 ## Audit rules
 
 1. A semantic manifest proves inventory only; it is not a differential test.

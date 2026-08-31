@@ -92,6 +92,106 @@ pub fn suite(comptime Bindings: type) type {
             );
         }
 
+        test "GSUB chaining glyph sidecar dispatches direct and extension lookups" {
+            const allocator = std.testing.allocator;
+            inline for (.{ false, true }) |extension| {
+                var bytes = [_]u8{0} ** 112;
+                writeGlyphChainTable(&bytes, extension);
+                const sidecars = try acceleration.build.lookup.build(
+                    &bytes,
+                    0,
+                    bytes.len,
+                    allocator,
+                );
+                defer acceleration.ownership.deinit(allocator, sidecars);
+                try std.testing.expectEqual(
+                    @as(usize, 1),
+                    sidecars[0].chaining_glyph_subtables.len,
+                );
+
+                var glyphs = std.ArrayList(GlyphId).empty;
+                defer glyphs.deinit(allocator);
+                try glyphs.appendSlice(allocator, &.{ 1, 9, 2, 3 });
+                const classes = [_]u16{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 3 };
+                try Bindings.applyLookupWithIndex(
+                    table.View{
+                        .data = &bytes,
+                        .offset = 0,
+                        .length = bytes.len,
+                        .assume_validated = true,
+                    },
+                    16,
+                    0,
+                    &glyphs,
+                    allocator,
+                    .{
+                        .glyph_classes = &classes,
+                        .lookup_accelerators = sidecars,
+                        .assume_validated = true,
+                    },
+                    null,
+                );
+                try std.testing.expectEqualSlices(
+                    GlyphId,
+                    &.{ 11, 9, 2, 3 },
+                    glyphs.items,
+                );
+            }
+        }
+
+        test "unsupported chaining glyph sidecars retain direct and extension fallback" {
+            const allocator = std.testing.allocator;
+            inline for (.{ false, true }) |extension| {
+                var bytes = [_]u8{0} ** 112;
+                writeGlyphChainTable(&bytes, extension);
+                const chain: usize = if (extension) 32 else 24;
+                // SequenceIndex one lies outside the accelerated contract but
+                // remains valid for this two-input generic format-1 rule.
+                writeU16(&bytes, chain + 24, 1);
+                writeU16(&bytes, 82 + 18, 2);
+
+                const sidecars = try acceleration.build.lookup.build(
+                    &bytes,
+                    0,
+                    bytes.len,
+                    allocator,
+                );
+                defer acceleration.ownership.deinit(allocator, sidecars);
+                try std.testing.expectEqual(
+                    @as(usize, 0),
+                    sidecars[0].chaining_glyph_subtables.len,
+                );
+
+                var glyphs = std.ArrayList(GlyphId).empty;
+                defer glyphs.deinit(allocator);
+                try glyphs.appendSlice(allocator, &.{ 1, 9, 2, 3 });
+                const classes = [_]u16{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 3 };
+                try Bindings.applyLookupWithIndex(
+                    table.View{
+                        .data = &bytes,
+                        .offset = 0,
+                        .length = bytes.len,
+                        .assume_validated = true,
+                    },
+                    16,
+                    0,
+                    &glyphs,
+                    allocator,
+                    .{
+                        .glyph_classes = &classes,
+                        .lookup_accelerators = sidecars,
+                        .assume_validated = true,
+                    },
+                    null,
+                );
+                try std.testing.expectEqualSlices(
+                    GlyphId,
+                    &.{ 1, 9, 12, 3 },
+                    glyphs.items,
+                );
+            }
+        }
+
         test "GSUB source syllables block cross-syllable chaining context" {
             const allocator = std.testing.allocator;
             const bytes = try allocator.alloc(u8, 82);
@@ -294,6 +394,40 @@ fn writeCoverageChain(bytes: []u8) void {
     writeCoverage1(bytes, chain + 20, 1);
     writeCoverage1(bytes, chain + 26, 1);
     writeCoverage1(bytes, chain + 32, 1);
+}
+
+fn writeGlyphChainTable(bytes: []u8, extension: bool) void {
+    writeLookupList(bytes, 16, 82);
+    writeU16(bytes, 16, if (extension) 7 else 6);
+    writeU16(bytes, 18, 0x0008); // IgnoreMarks.
+    writeU16(bytes, 20, 1);
+    writeU16(bytes, 22, 8);
+
+    const chain: usize = if (extension) 32 else 24;
+    if (extension) {
+        const wrapper = 24;
+        writeU16(bytes, wrapper, 1);
+        writeU16(bytes, wrapper + 2, 6);
+        writeU32(bytes, wrapper + 4, @intCast(chain - wrapper));
+    }
+    writeU16(bytes, chain, 1);
+    writeU16(bytes, chain + 2, 28);
+    writeU16(bytes, chain + 4, 1);
+    writeU16(bytes, chain + 6, 8);
+    const set = chain + 8;
+    writeU16(bytes, set, 1);
+    writeU16(bytes, set + 2, 4);
+    const rule = set + 4;
+    writeU16(bytes, rule, 0);
+    writeU16(bytes, rule + 2, 2);
+    writeU16(bytes, rule + 4, 2);
+    writeU16(bytes, rule + 6, 1);
+    writeU16(bytes, rule + 8, 3);
+    writeU16(bytes, rule + 10, 1);
+    writeU16(bytes, rule + 12, 0);
+    writeU16(bytes, rule + 14, 1);
+    writeCoverage1(bytes, chain + 28, 1);
+    writeSingleDeltaLookup(bytes, 82, 1, 10);
 }
 
 fn writeCoverageAlternativeTable(bytes: []u8) void {

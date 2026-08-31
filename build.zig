@@ -4051,7 +4051,11 @@ pub fn build(b: *std.Build) void {
             "{s}/harfbuzz/test/subset/data/fonts/Cantarell-VF-ABC.otf",
             .{parity_work_root orelse ""},
         ),
+        "--varc",
     });
+    fontations_matrix_cmd.addFileArg(
+        b.path("tests/data/fontations/varc-ac01-conditional.ttf"),
+    );
     if (b.args) |args| fontations_matrix_cmd.addArgs(args);
     fontations_matrix_step.dependOn(&fontations_matrix_cmd.step);
 

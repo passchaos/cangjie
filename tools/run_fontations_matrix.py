@@ -15,7 +15,17 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
+
+
+class FontSource(Enum):
+    """Select the physical input independently of its outline format."""
+
+    GENERATED = "generated"
+    CFF2 = "cff2"
+    VARC = "varc"
+    DIRECT = "direct"
 
 
 @dataclass(frozen=True)
@@ -26,7 +36,7 @@ class Case:
     operand: int
     compare_checksum: bool = True
     font_size: str | None = None
-    fixture: bool = True
+    source: FontSource = FontSource.GENERATED
     variation: str | None = None
 
 
@@ -63,29 +73,81 @@ CASES = (
     # data that both engines accept, unlike Cangjie's parser-only fixtures.
     Case(
         "outline-cff2", "outline-session", "Cantarell-VF-ABC.otf",
-        1, fixture=False,
+        1, source=FontSource.CFF2,
     ),
     Case(
         "outline-cff2-reuse", "outline-reuse", "Cantarell-VF-ABC.otf",
-        1, fixture=False,
+        1, source=FontSource.CFF2,
     ),
     Case(
         "outline-cff2-var-max", "outline-session",
-        "Cantarell-VF-ABC.otf", 1, fixture=False, variation="1",
+        "Cantarell-VF-ABC.otf", 1, source=FontSource.CFF2, variation="1",
     ),
     Case(
         "outline-cff2-var-min", "outline-session",
-        "Cantarell-VF-ABC.otf", 1, fixture=False, variation="-1",
+        "Cantarell-VF-ABC.otf", 1, source=FontSource.CFF2, variation="-1",
     ),
     Case(
         "outline-cff2-var-max-reuse", "outline-reuse",
-        "Cantarell-VF-ABC.otf", 1, fixture=False, variation="1",
+        "Cantarell-VF-ABC.otf", 1, source=FontSource.CFF2, variation="1",
     ),
     Case(
         "outline-cff2-var-min-reuse", "outline-reuse",
-        "Cantarell-VF-ABC.otf", 1, fixture=False, variation="-1",
+        "Cantarell-VF-ABC.otf", 1, source=FontSource.CFF2, variation="-1",
+    ),
+    # This compact upstream font covers nested VARC components, component
+    # axis overrides, and the 0.5 conditional boundary. Keep both owning and
+    # caller-storage lifecycles so reuse cannot substitute for materialization.
+    Case(
+        "outline-varc-default", "outline-session",
+        "varc-ac01-conditional.ttf", 1, source=FontSource.VARC,
+    ),
+    Case(
+        "outline-varc-default-reuse", "outline-reuse",
+        "varc-ac01-conditional.ttf", 1, source=FontSource.VARC,
+    ),
+    Case(
+        "outline-varc-049", "outline-session",
+        "varc-ac01-conditional.ttf", 1, source=FontSource.VARC,
+        variation="0.49,0",
+    ),
+    Case(
+        "outline-varc-049-reuse", "outline-reuse",
+        "varc-ac01-conditional.ttf", 1, source=FontSource.VARC,
+        variation="0.49,0",
+    ),
+    Case(
+        "outline-varc-050", "outline-session",
+        "varc-ac01-conditional.ttf", 1, source=FontSource.VARC,
+        variation="0.5,0",
+    ),
+    Case(
+        "outline-varc-050-reuse", "outline-reuse",
+        "varc-ac01-conditional.ttf", 1, source=FontSource.VARC,
+        variation="0.5,0",
+    ),
+    Case(
+        "outline-varc-max", "outline-session",
+        "varc-ac01-conditional.ttf", 1, source=FontSource.VARC,
+        variation="1,0",
+    ),
+    Case(
+        "outline-varc-max-reuse", "outline-reuse",
+        "varc-ac01-conditional.ttf", 1, source=FontSource.VARC,
+        variation="1,0",
     ),
 )
+
+
+def case_font(case: Case, args: argparse.Namespace) -> Path:
+    """Resolve maintained inputs without overloading one external font path."""
+    if case.source is FontSource.GENERATED:
+        return args.fixture_dir / case.font
+    if case.source is FontSource.CFF2:
+        return args.cff2
+    if case.source is FontSource.VARC:
+        return args.varc
+    raise ValueError(f"{case.name}: direct font source requires an explicit path")
 
 
 def parse_fields(output: str) -> dict[str, str]:
@@ -174,6 +236,7 @@ def main() -> int:
     parser.add_argument("--fixture-dir", required=True, type=Path)
     parser.add_argument("--roboto", required=True, type=Path)
     parser.add_argument("--cff2", required=True, type=Path)
+    parser.add_argument("--varc", required=True, type=Path)
     parser.add_argument(
         "--cff2-extended",
         type=Path,
@@ -187,6 +250,10 @@ def main() -> int:
     parser.add_argument("--iterations", type=int, default=1)
     parser.add_argument("--samples", type=int, default=1)
     parser.add_argument("--cpu", type=int)
+    parser.add_argument(
+        "--source", choices=("all", "varc"), default="all",
+        help="run every maintained source or only the retained VARC rows",
+    )
     parser.add_argument(
         "--fail-on-slower", action="store_true",
         help="fail when any measured Cangjie row is not faster than Skrifa",
@@ -203,8 +270,11 @@ def main() -> int:
     skrifa = args.skrifa_manifest.parent / "target/release/fontations-bitmap-oracle"
     failures: list[str] = []
     measured: list[tuple[str, float, float, float, float]] = []
-    for case in CASES:
-        font = args.fixture_dir / case.font if case.fixture else args.cff2
+    cases = CASES if args.source == "all" else tuple(
+        case for case in CASES if case.source is FontSource.VARC
+    )
+    for case in cases:
+        font = case_font(case, args)
         cangjie_semantic = run(cangjie_command(args.cangjie, case, font, 1, 1), args.cpu)
         reference_semantic = run(skrifa_command(skrifa, case, font, 1, 1), args.cpu)
         if case.compare_checksum and int(cangjie_semantic.get("checksum", "-1"), 16) != int(reference_semantic.get("checksum", "-2"), 16):
@@ -230,7 +300,7 @@ def main() -> int:
             float(reference_first["median_ns_per_iter"]),
             float(reference_second["median_ns_per_iter"])))
 
-    if args.extended:
+    if args.extended and args.source == "all":
         corpora = (
             OutlineCorpus(
                 "roboto-glyf", args.roboto,
@@ -269,7 +339,8 @@ def main() -> int:
                 for mode in ("outline-session", "outline-reuse"):
                     case = Case(
                         f"{corpus.name}-gid{glyph_id}-{mode}",
-                        mode, corpus.font.name, glyph_id, fixture=False,
+                        mode, corpus.font.name, glyph_id,
+                        source=FontSource.DIRECT,
                     )
                     cangjie_semantic = run(cangjie_command(args.cangjie, case, corpus.font, 1, 1), args.cpu)
                     reference_semantic = run(skrifa_command(skrifa, case, corpus.font, 1, 1), args.cpu)
@@ -299,13 +370,14 @@ def main() -> int:
     # Production-font queries cover the immutable cmap, metrics, bounds, and
     # complete global-metrics paths that synthetic fixtures cannot represent.
     roboto = Path(args.roboto)
-    for case in (
+    production_cases = (
         Case("family-name", "family-name", roboto.name, 0),
         Case("charmap", "charmap", roboto.name, ord("A")),
         Case("metrics", "metrics", roboto.name, 38),
         Case("bounds", "bounds", roboto.name, 38),
         Case("global-metrics", "global-metrics", roboto.name, 0),
-    ):
+    ) if args.source == "all" else ()
+    for case in production_cases:
         cangjie_semantic = run(cangjie_command(args.cangjie, case, roboto, 1, 1), args.cpu)
         reference_semantic = run(skrifa_command(skrifa, case, roboto, 1, 1), args.cpu)
         if case.compare_checksum and int(cangjie_semantic.get("checksum", "-1"), 16) != int(reference_semantic.get("checksum", "-2"), 16):

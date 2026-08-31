@@ -39,6 +39,18 @@ cargo run --release --manifest-path tools/fontations_bitmap_oracle/Cargo.toml --
 Use `outline-reuse-at` with the same arguments to supply Skrifa's documented
 caller-owned draw memory for the varied outline lifecycle.
 
+The maintained matrix retains Fontations' real
+`tests/data/fontations/varc-ac01-conditional.ttf` and draws GID 1 at the
+default location plus normalized `0.49,0`, `0.5,0`, and `1,0` locations. The
+adjacent `0.49`/`0.5` rows exercise the conditional-component boundary; each
+location has separate owning and reuse rows. For example, the direct Skrifa
+check at the boundary is:
+
+```sh
+cargo run --release --manifest-path tools/fontations_bitmap_oracle/Cargo.toml -- \
+  tests/data/fontations/varc-ac01-conditional.ttf outline-at 1 0.5,0 1 1
+```
+
 Repeated unscaled glyph metrics and Unicode charmap lookups use the same final
 two arguments (`ITERATIONS SAMPLES`). `bounds` compares the complete unscaled
 glyph bounding box, including outline-derived CFF and variable-font bounds:
@@ -69,6 +81,10 @@ the repeated measurements, optional process affinity, and strict performance
 gate. `--extended` additionally exercises production glyf/CFF outlines and a
 larger two-axis Adobe CFF2 font.
 The matrix compares deterministic semantic checksums before reporting timings.
+Its `--varc PATH` argument explicitly selects the retained VARC source (the
+build target supplies the repository fixture), rather than coupling VARC rows
+to an unrelated external-font path. Pass `--source varc` to run only those
+eight retained rows for focused semantic or performance probes.
 The matching fixtures can be generated in an explicit scratch directory with
 `zig build glyph-name-fixtures -- /tmp/cangjie-fontations-fixtures`; omitting
 the argument retains the legacy current-directory behavior. It writes

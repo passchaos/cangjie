@@ -263,7 +263,12 @@ Roboto cmap, metrics, bounds, and global metrics. Outline timings use matched
 ownership: owning rows materialize Skrifa's public `Vec<PathElement>`, while
 reuse rows retain that vector and Skrifa's temporary draw memory across
 iterations just as Cangjie retains `OutlineBuffer`. Geometry correctness remains
-owned by the stronger HarfBuzz/FreeType differentials. The gate
+owned by the stronger HarfBuzz/FreeType differentials. A retained upstream
+VARC font is an exception to that general division: GID 1 is compared directly
+against Skrifa at the default location, on both sides of its normalized `0.5`
+component-condition boundary, and at the `1,0` endpoint. Each location has
+separate owning and caller-storage rows, and `--source varc` selects those
+eight focused cases. The gate
 also reports per-engine medians; callers doing performance work should pass a
 substantial `--iterations`/`--samples` pair and pin the process externally.
 This still does not convert the table-inventory manifest into a claim that

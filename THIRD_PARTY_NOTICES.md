@@ -27,6 +27,21 @@ separate Fontations checkout.
 - Copyright: 2019 Fontations Developers
 - License: Apache License 2.0; see `licenses/Apache-2.0.txt`
 
+## Fontations VARC Test Font
+
+`tests/data/fontations/varc-ac01-conditional.ttf` is copied verbatim from
+Fontations `font-test-data` at commit
+`bb6f87166aa8bac93ff9df5ea67d58b7091b3e2a`, source path
+`font-test-data/test_data/ttf/varc-ac01-conditional.ttf`. Its SHA-256 is
+`3d6ecae82b80870c4f4305fcebb520fec1b76d4c4edc7eb8adad10bfdc5433c1`.
+It provides the retained real-font input for the Cangjie/Skrifa VARC outline
+differential, including nested components, axis overrides, and conditional
+component selection.
+
+- Project: <https://github.com/googlefonts/fontations>
+- Copyright: 2019 Fontations Developers
+- License: Apache License 2.0; see `licenses/Apache-2.0.txt`
+
 ## Fontations Name Test Font
 
 `src/tests/data/fontations_names_only.ttf` is copied verbatim from Fontations

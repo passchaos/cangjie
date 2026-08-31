@@ -5,76 +5,64 @@ const accelerator = @import("../../accelerator/root.zig");
 const runtime = @import("../../runtime/root.zig");
 const table = @import("../../table/root.zig");
 
-test "runtime dispatch trusts only matching validated sidecars" {
-    var bytes = [_]u8{0} ** 12;
-    writeU16(&bytes, 0, 1);
-    writeU16(&bytes, 2, 0);
-    writeU16(&bytes, 4, 1);
-    writeU16(&bytes, 6, 10);
-    const view = table.View{
-        .data = &bytes,
-        .offset = 0,
-        .length = bytes.len,
-        .assume_validated = true,
-    };
-    const accelerators = [_]accelerator.Lookup{.{
-        .lookup_offset = 0,
-        .lookup_type = 8,
-        .subtable_count = 4,
-    }};
-
-    const cached = try runtime.dispatch.header(
-        view,
+test "runtime dispatch requires exact table and sidecar identity" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 42;
+    writeSinglePositionTable(&bytes);
+    const accelerators = try accelerator.build.lookup.all(
+        &bytes,
         0,
-        0,
-        .{ .lookup_accelerators = &accelerators },
+        bytes.len,
+        allocator,
     );
-    try std.testing.expectEqual(@as(u16, 8), cached.lookup_type);
+    defer accelerator.build.lookup.deinit(allocator, accelerators);
 
-    var stale = accelerators;
-    stale[0].lookup_offset = 2;
-    const parsed = try runtime.dispatch.header(
-        view,
+    const validated = view(&bytes, 0, bytes.len, true);
+    const run: runtime.Options = .{ .lookup_accelerators = accelerators };
+    try std.testing.expect(runtime.dispatch.exactSidecars(validated, run) != null);
+    try std.testing.expect(runtime.dispatch.exact(
+        validated,
+        14,
+        1,
+        1,
         0,
+        run,
+    ) != null);
+
+    try std.testing.expect(runtime.dispatch.exactSidecars(
+        view(&bytes, 0, bytes.len, false),
+        run,
+    ) == null);
+
+    // Equal contents in unrelated storage do not identify the table whose
+    // decoded offsets and payloads are held by the sidecars.
+    var foreign_bytes = bytes;
+    try std.testing.expect(runtime.dispatch.exactSidecars(
+        view(&foreign_bytes, 0, foreign_bytes.len, true),
+        run,
+    ) == null);
+
+    // A shallow copy retains the identity pointer but not the allocation
+    // address to which that identity was bound during construction.
+    const copied = try allocator.dupe(accelerator.Lookup, accelerators);
+    defer allocator.free(copied);
+    try std.testing.expect(runtime.dispatch.exactSidecars(
+        validated,
+        .{ .lookup_accelerators = copied },
+    ) == null);
+
+    try std.testing.expect(runtime.dispatch.exactSidecars(
+        view(&bytes, 1, bytes.len - 1, true),
+        run,
+    ) == null);
+    try std.testing.expect(runtime.dispatch.exact(
+        validated,
+        15,
+        1,
+        1,
         0,
-        .{ .lookup_accelerators = &stale },
-    );
-    try std.testing.expectEqual(@as(u16, 1), parsed.lookup_type);
-}
-
-test "runtime dispatch carries cached flags only for validated identity" {
-    var bytes = [_]u8{0} ** 12;
-    writeU16(&bytes, 0, 1);
-    writeU16(&bytes, 2, 0x0010);
-    writeU16(&bytes, 4, 1);
-    writeU16(&bytes, 6, 10);
-    writeU16(&bytes, 8, 0xffff);
-    const accelerators = [_]accelerator.Lookup{.{
-        .lookup_offset = 0,
-        .lookup_type = 8,
-        .lookup_flag = 0,
-        .subtable_count = 4,
-        .mark_filtering_set = 7,
-    }};
-
-    const cached = try runtime.dispatch.header(.{
-        .data = &bytes,
-        .offset = 0,
-        .length = bytes.len,
-        .assume_validated = true,
-    }, 0, 0, .{ .lookup_accelerators = &accelerators });
-    try std.testing.expectEqual(@as(u16, 8), cached.lookup_type);
-    try std.testing.expectEqual(@as(u16, 4), cached.subtable_count);
-    try std.testing.expectEqual(@as(?u16, 7), cached.mark_filtering_set);
-
-    const parsed = try runtime.dispatch.header(.{
-        .data = &bytes,
-        .offset = 0,
-        .length = bytes.len,
-    }, 0, 0, .{ .lookup_accelerators = &accelerators });
-    try std.testing.expectEqual(@as(u16, 1), parsed.lookup_type);
-    try std.testing.expectEqual(@as(u16, 0x0010), parsed.lookup_flag);
-    try std.testing.expectEqual(@as(?u16, 0xffff), parsed.mark_filtering_set);
+        run,
+    ) == null);
 }
 
 test "runtime ExtensionPos type cache requires validated lookup identity" {
@@ -150,4 +138,39 @@ fn writeU16(bytes: []u8, offset: usize, value: u16) void {
 
 fn writeU32(bytes: []u8, offset: usize, value: u32) void {
     std.mem.writeInt(u32, bytes[offset..][0..4], value, .big);
+}
+
+fn view(
+    bytes: []const u8,
+    offset: usize,
+    length: usize,
+    assume_validated: bool,
+) table.View {
+    return .{
+        .data = bytes,
+        .offset = offset,
+        .length = length,
+        .assume_validated = assume_validated,
+    };
+}
+
+fn writeSinglePositionTable(bytes: []u8) void {
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 38); // Empty ScriptList.
+    writeU16(bytes, 6, 40); // Empty FeatureList.
+    writeU16(bytes, 8, 10); // LookupList.
+    writeU16(bytes, 10, 1);
+    writeU16(bytes, 12, 4);
+    writeU16(bytes, 14, 1); // SinglePos lookup.
+    writeU16(bytes, 18, 1);
+    writeU16(bytes, 20, 8);
+    writeU16(bytes, 22, 1); // SinglePos format 1.
+    writeU16(bytes, 24, 8);
+    writeU16(bytes, 26, 0x0001);
+    writeU16(bytes, 28, 7);
+    writeU16(bytes, 30, 1); // Coverage format 1.
+    writeU16(bytes, 32, 1);
+    writeU16(bytes, 34, 5);
+    writeU16(bytes, 38, 0);
+    writeU16(bytes, 40, 0);
 }

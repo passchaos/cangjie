@@ -18,10 +18,9 @@ pub const Lookup = struct {
     lookup_type: u16 = 0,
     lookup_flag: u16 = 0,
     subtable_count: u16 = 0,
-    /// Offset16 resolution is completed while constructing the validated
-    /// sidecar. Whole-run shaping can then enter a lookup without rereading
-    /// the LookupList array on every source run.
-    lookup_offset_proved: bool = false,
+    /// Stored on entry zero to bind decoded lookup data to both its source
+    /// table and its original containing allocation.
+    table_identity: ?*const TableIdentity = null,
     mark_filtering_set: ?u16 = null,
     extension_lookup_type: ?u16 = null,
     coverage_digest: GlyphDigest = .{},
@@ -57,6 +56,15 @@ pub const Lookup = struct {
     chaining_second_start: u16 = 0,
     chaining_second_end: u16 = 0,
     chaining_class_subtables: []const ChainingClassSubtable = &.{},
+};
+
+pub const TableIdentity = struct {
+    data_ptr: [*]const u8,
+    data_len: usize,
+    table_offset: usize,
+    table_length: usize,
+    accelerators_addr: usize,
+    accelerator_count: usize,
 };
 
 pub const PairPositionKind = enum(u8) {
@@ -202,7 +210,12 @@ pub fn deinitLookupContents(
     lookups: []Lookup,
     allocator: std.mem.Allocator,
 ) void {
-    for (lookups) |lookup| {
+    for (lookups, 0..) |lookup, lookup_index| {
+        if (lookup_index == 0) {
+            if (lookup.table_identity) |identity| {
+                allocator.destroy(@constCast(identity));
+            }
+        }
         glyph_groups.deinitGroups(lookup.coverage_groups, allocator);
         allocator.free(lookup.coverage_group_slots);
         allocator.free(lookup.coverage_group_direct);

@@ -81,6 +81,16 @@ pub fn apply(
     const lookup_type = try view.readU16(lookup);
     const lookup_flag = try view.readU16(lookup + 2);
     const subtable_count = try view.readU16(lookup + 4);
+    const exact_accelerator = runtime_dispatch.withCoverage(
+        runtime_dispatch.exact(
+            view,
+            lookup,
+            lookup_type,
+            subtable_count,
+            lookup_index,
+            run,
+        ),
+    );
 
     var nested_run = run;
     if ((lookup_flag & 0x0010) != 0) {
@@ -92,10 +102,7 @@ pub fn apply(
     nested_run.context_depth = run.context_depth + 1;
 
     if (lookup_type == 1) {
-        if (runtime_dispatch.acceleratorWithCoverage(
-            lookup_index,
-            nested_run,
-        )) |accelerator| {
+        if (exact_accelerator) |accelerator| {
             if (accelerator.single_pos_subtables.len != 0) {
                 _ = try single.collectAtAccelerated(
                     view,
@@ -112,10 +119,7 @@ pub fn apply(
         }
     }
     if (lookup_type == 8) {
-        if (runtime_dispatch.acceleratorWithCoverage(
-            lookup_index,
-            nested_run,
-        )) |accelerator| {
+        if (exact_accelerator) |accelerator| {
             if (accelerator.chaining_coverage_only) {
                 _ = try @import("contextual/root.zig").chaining.coverage.lookup.collectNestedAt(
                     view,
@@ -136,10 +140,7 @@ pub fn apply(
         }
     }
     if (lookup_type == 7 or lookup_type == 9) {
-        if (runtime_dispatch.acceleratorWithCoverage(
-            lookup_index,
-            nested_run,
-        )) |accelerator| {
+        if (exact_accelerator) |accelerator| {
             const wraps_context = lookup_type == 7 or
                 accelerator.extension_lookup_type == 7;
             if (wraps_context and
@@ -162,10 +163,7 @@ pub fn apply(
         }
     }
     if (lookup_type == 9) {
-        if (runtime_dispatch.acceleratorWithCoverage(
-            lookup_index,
-            nested_run,
-        )) |accelerator| {
+        if (exact_accelerator) |accelerator| {
             if (accelerator.chaining_class_subtables.len != 0) {
                 _ = try @import("contextual/root.zig").chaining.class_accelerated.lookup
                     .collectNestedAt(

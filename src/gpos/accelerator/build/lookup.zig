@@ -56,6 +56,18 @@ pub fn all(
         lookup.* = try one(view, lookup_offset, allocator);
         built_count += 1;
     }
+    if (lookups.len != 0) {
+        const identity = try allocator.create(model.TableIdentity);
+        identity.* = .{
+            .data_ptr = view.data.ptr,
+            .data_len = view.data.len,
+            .table_offset = view.offset,
+            .table_length = view.length,
+            .accelerators_addr = @intFromPtr(lookups.ptr),
+            .accelerator_count = lookups.len,
+        };
+        lookups[0].table_identity = identity;
+    }
     return lookups;
 }
 
@@ -93,7 +105,6 @@ pub fn one(
         .lookup_type = lookup_type,
         .lookup_flag = lookup_flag,
         .subtable_count = subtable_count,
-        .lookup_offset_proved = true,
         .mark_filtering_set = if ((lookup_flag & 0x0010) != 0)
             try view.readU16(
                 lookup_offset + 6 + @as(usize, subtable_count) * 2,

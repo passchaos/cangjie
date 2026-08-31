@@ -5,7 +5,6 @@ const GlyphId = @import("../../../../../glyph.zig").GlyphId;
 const options = @import("../../../options.zig");
 const pair = @import("../../pair/root.zig");
 const positioning = @import("../../../../positioning/root.zig");
-const runtime_dispatch = @import("../../../dispatch.zig");
 const table = @import("../../../../table/root.zig");
 
 pub const Adjustment = positioning.Adjustment;
@@ -24,11 +23,10 @@ pub fn collect(
     allocator: std.mem.Allocator,
     lookup_flag: u16,
     run: Options,
+    lookup_accelerator: ?*const @import("../../../../accelerator/model.zig").Lookup,
 ) Error!void {
-    if (runtime_dispatch.acceleratorWithCoverage(
-        lookup_index,
-        run,
-    )) |accelerator| {
+    _ = lookup_index;
+    if (lookup_accelerator) |accelerator| {
         if (accelerator.pair_pos_subtables.len == subtable_count and
             pair.accelerated.hasNativeData(accelerator.pair_pos_subtables))
         {

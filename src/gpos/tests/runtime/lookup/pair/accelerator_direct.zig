@@ -118,34 +118,44 @@ test "GPOS pure class PairPos lookup activates native matrix without format 1 re
     writeClassDef1Test(&bytes, pair + 38, 5, 1);
     writeClassDef1Test(&bytes, pair + 46, 7, 1);
 
-    const table = Table{
-        .data = &bytes,
+    var identity_bytes = [_]u8{0} ** 78;
+    writeU32Test(&identity_bytes, 0, 0x00010000);
+    writeU16Test(&identity_bytes, 8, 10);
+    writeU16Test(&identity_bytes, 10, 1);
+    writeU16Test(&identity_bytes, 12, 4);
+    @memcpy(identity_bytes[14 .. 14 + bytes.len], &bytes);
+    const identity_table = Table{
+        .data = &identity_bytes,
         .offset = 0,
-        .length = bytes.len,
+        .length = identity_bytes.len,
         .assume_validated = true,
     };
-    const accelerator = try buildLookupAccelerator(table, 0, allocator);
-    defer deinitLookupAcceleratorContents(allocator, @constCast(&[_]LookupAccelerator{accelerator}));
-    try std.testing.expectEqual(@as(usize, 0), accelerator.pair_pos_records.len);
-    try std.testing.expect(pairPosSubtablesHaveNativeData(accelerator.pair_pos_subtables));
+    const accelerators = try accelerator_core.build.lookup.all(
+        &identity_bytes,
+        0,
+        identity_bytes.len,
+        allocator,
+    );
+    defer accelerator_core.build.lookup.deinit(allocator, accelerators);
+    try std.testing.expectEqual(@as(usize, 0), accelerators[0].pair_pos_records.len);
+    try std.testing.expect(pairPosSubtablesHaveNativeData(accelerators[0].pair_pos_subtables));
     // Distinguish actual native-matrix dispatch from a generic parser that
     // happens to produce the same result. Public Font shaping would reject
     // this post-proof mutation by checksum; this detached test deliberately
     // mutates only the borrowed matrix after the accelerator copied `-31`.
-    writeI16Test(&bytes, pair + 22, 99);
+    writeI16Test(&identity_bytes, 14 + pair + 22, 99);
 
     var adjustments = std.ArrayList(Adjustment).empty;
     defer adjustments.deinit(allocator);
-    const accelerators = [_]LookupAccelerator{accelerator};
     try collectLookupWithIndex(
-        table,
-        0,
+        identity_table,
+        14,
         0,
         &.{ 5, 7 },
         &adjustments,
         allocator,
         .{
-            .lookup_accelerators = &accelerators,
+            .lookup_accelerators = accelerators,
             .run_has_default_ignorables = false,
         },
         null,

@@ -10,6 +10,7 @@ const model = @import("../../model.zig");
 const output = @import("../../../../output/root.zig");
 const positioning = @import("../../../../../positioning/root.zig");
 const run_matching = @import("../../../../matching.zig");
+const runtime_dispatch = @import("../../../../dispatch.zig");
 const single = @import("../../../single.zig");
 const table = @import("../../../../../table/root.zig");
 
@@ -233,7 +234,13 @@ fn applyFastSingleRecords(
     run: Options,
 ) Error!bool {
     if (subtable.fast_record_count == 0) return false;
-    const accelerators = run.lookup_accelerators orelse return false;
+    const accelerators = runtime_dispatch.exactSidecars(view, run) orelse
+        return false;
+    const lookup_list = try table.offset.required16(
+        view,
+        0,
+        try view.readU16(8),
+    );
     for (subtable.fast_records[0..subtable.fast_record_count]) |record| {
         if (record.sequence_index >= input_indices.len or
             record.lookup_index >= accelerators.len)
@@ -248,7 +255,20 @@ fn applyFastSingleRecords(
         )) return false;
         const target_index = input_indices[record.sequence_index];
         if (target_index >= glyphs.len) continue;
-        const nested = accelerators[record.lookup_index];
+        const nested_lookup = try table.offset.required16(
+            view,
+            lookup_list,
+            try view.readU16(
+                lookup_list + 2 + @as(usize, record.lookup_index) * 2,
+            ),
+        );
+        const nested = runtime_dispatch.lookupInExactSidecars(
+            accelerators,
+            nested_lookup,
+            1,
+            try view.readU16(nested_lookup + 4),
+            record.lookup_index,
+        ) orelse return false;
         if (nested.single_pos_subtables.len == 0) return false;
         var nested_run = run;
         nested_run.context_depth = run.context_depth + 1;
@@ -259,7 +279,7 @@ fn applyFastSingleRecords(
             target_index,
             adjustments,
             allocator,
-            record.lookup_flag,
+            nested.lookup_flag,
             nested_run,
         );
     }
@@ -328,6 +348,13 @@ fn collectSimpleAt(
     {
         return .{};
     }
+    try output.safety.markChainingContext(
+        allocator,
+        &run,
+        &.{},
+        &.{position},
+        &.{lookahead_index},
+    );
     try applyNested(
         view,
         glyphs,

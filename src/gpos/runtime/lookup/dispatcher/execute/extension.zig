@@ -30,6 +30,7 @@ pub fn collect(
     allocator: std.mem.Allocator,
     lookup_flag: u16,
     run: Options,
+    lookup_accelerator: ?*const @import("../../../../accelerator/model.zig").Lookup,
 ) Error!void {
     // ExtensionPos only widens offsets, but a lookup remains atomic. Fixed
     // wrapper checks alone cannot prevent a later malformed payload from
@@ -58,10 +59,7 @@ pub fn collect(
                 run,
             ),
             2 => {
-                if (runtime_dispatch.acceleratorWithCoverage(
-                    lookup_index,
-                    run,
-                )) |accelerator| {
+                if (lookup_accelerator) |accelerator| {
                     if (accelerator.pair_pos_extension and
                         accelerator.pair_pos_subtables.len == subtable_count)
                     {
@@ -89,10 +87,7 @@ pub fn collect(
                     run,
                 );
             },
-            7 => if (runtime_dispatch.acceleratorWithCoverage(
-                lookup_index,
-                run,
-            )) |accelerator| {
+            7 => if (lookup_accelerator) |accelerator| {
                 if (accelerator.context_class_subtables.len == subtable_count) {
                     return contextual.context_class_accelerated.collectLookup(
                         view,
@@ -108,10 +103,7 @@ pub fn collect(
             },
             // Wrapped ChainContextPos may use glyph or class formats, so only
             // the proven class accelerator bypasses generic wrapper ordering.
-            8 => if (runtime_dispatch.acceleratorWithCoverage(
-                lookup_index,
-                run,
-            )) |accelerator| {
+            8 => if (lookup_accelerator) |accelerator| {
                 if (accelerator.chaining_class_subtables.len != 0) {
                     return contextual.chaining.class_accelerated.lookup.collect(
                         view,

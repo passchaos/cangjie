@@ -124,6 +124,7 @@ fn collectImpl(
     }
     const lookup_list = try requiredLookupList(view);
     const lookup_count = try view.readU16(lookup_list);
+    const exact_sidecars = @import("dispatch.zig").exactSidecars(view, run);
     var digest_cache = lookup_dispatcher.DigestCache.init();
     if (selected.len != 0) {
         for (selected) |lookup_index| {
@@ -137,6 +138,7 @@ fn collectImpl(
                 allocator,
                 run,
                 &digest_cache,
+                exact_sidecars,
             );
         }
         return;
@@ -151,6 +153,7 @@ fn collectImpl(
             allocator,
             run,
             &digest_cache,
+            exact_sidecars,
         );
     }
 }
@@ -186,26 +189,8 @@ fn collectLookup(
     allocator: std.mem.Allocator,
     run: Options,
     digest_cache: *lookup_dispatcher.DigestCache,
+    exact_sidecars: ?[]const @import("../accelerator/model.zig").Lookup,
 ) (Error || std.mem.Allocator.Error)!void {
-    if (run.assume_validated) {
-        if (run.lookup_accelerators) |accelerators| {
-            if (lookup_index < accelerators.len) {
-                const sidecar = &accelerators[lookup_index];
-                if (sidecar.lookup_offset_proved and sidecar.lookup_type != 0) {
-                    return lookup_dispatcher.collectAfterAcceleratorProof(
-                        view,
-                        lookup_index,
-                        glyphs,
-                        adjustments,
-                        allocator,
-                        run,
-                        digest_cache,
-                        sidecar,
-                    );
-                }
-            }
-        }
-    }
     const lookup = try table.offset.required16(
         view,
         lookup_list,
@@ -215,6 +200,26 @@ fn collectLookup(
             lookup_list + 2 + @as(usize, lookup_index) * 2,
         ),
     );
+    if (exact_sidecars) |sidecars| {
+        if (@import("dispatch.zig").lookupInExactSidecars(
+            sidecars,
+            lookup,
+            try view.readU16(lookup),
+            try view.readU16(lookup + 4),
+            lookup_index,
+        )) |sidecar| {
+            return lookup_dispatcher.collectAfterAcceleratorProof(
+                view,
+                lookup_index,
+                glyphs,
+                adjustments,
+                allocator,
+                run,
+                digest_cache,
+                sidecar,
+            );
+        }
+    }
     return lookup_dispatcher.collectWithIndex(
         view,
         lookup,

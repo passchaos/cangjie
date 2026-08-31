@@ -5,6 +5,8 @@ const execute =
     @import("../../../../../../runtime/lookup/contextual/chaining/coverage/execute.zig");
 const model =
     @import("../../../../../../runtime/lookup/contextual/model.zig");
+const run_metadata =
+    @import("../../../../../../../shaping/run_metadata.zig");
 const table = @import("../../../../../../table/root.zig");
 
 test "simple coverage chaining applies its nested record to the first input" {
@@ -36,6 +38,7 @@ test "simple coverage chaining applies its nested record to the first input" {
     glyph_classes[4] = 3;
     var adjustments = std.ArrayList(model.Adjustment).empty;
     defer adjustments.deinit(allocator);
+    var unsafe_glyphs: run_metadata.UnsafeGlyphs = .{};
 
     const result = try execute.collectAt(
         0,
@@ -46,7 +49,10 @@ test "simple coverage chaining applies its nested record to the first input" {
         &adjustments,
         allocator,
         0x0008,
-        .{ .glyph_classes = &glyph_classes },
+        .{
+            .glyph_classes = &glyph_classes,
+            .unsafe_glyphs = &unsafe_glyphs,
+        },
         rejectRecords,
         captureNested,
     );
@@ -56,6 +62,8 @@ test "simple coverage chaining applies its nested record to the first input" {
     try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
     try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
     try std.testing.expectEqual(@as(i16, 7), adjustments.items[0].x_advance);
+    try std.testing.expect(unsafe_glyphs.isUnsafeBefore(1));
+    try std.testing.expect(unsafe_glyphs.isUnsafeBefore(2));
 }
 
 test "accelerated coverage execution trusts only its proven first input" {

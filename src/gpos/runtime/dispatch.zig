@@ -16,40 +16,89 @@ pub fn header(
     lookup_index: ?u16,
     run: Options,
 ) Error!Header {
-    if (view.assume_validated) {
-        if (acceleratorAny(lookup_index, run)) |cached| {
-            if (cached.lookup_offset == lookup_offset and
-                cached.lookup_type != 0)
-            {
-                return .{
-                    .lookup_type = cached.lookup_type,
-                    .lookup_flag = cached.lookup_flag,
-                    .subtable_count = cached.subtable_count,
-                    .mark_filtering_set = cached.mark_filtering_set,
-                };
-            }
-        }
+    const parsed = try positioning.lookup.dispatch.header(view, lookup_offset);
+    if (exact(
+        view,
+        lookup_offset,
+        parsed.lookup_type,
+        parsed.subtable_count,
+        lookup_index,
+        run,
+    )) |cached| {
+        return .{
+            .lookup_type = cached.lookup_type,
+            .lookup_flag = cached.lookup_flag,
+            .subtable_count = cached.subtable_count,
+            .mark_filtering_set = cached.mark_filtering_set,
+        };
     }
-    return positioning.lookup.dispatch.header(view, lookup_offset);
+    return parsed;
 }
 
-pub fn acceleratorWithCoverage(
-    lookup_index: ?u16,
-    run: Options,
+pub inline fn withCoverage(
+    cached: ?*const accelerator.Lookup,
 ) ?*const accelerator.Lookup {
-    const cached = acceleratorAny(lookup_index, run) orelse return null;
-    if (cached.coverage_digest.isEmpty()) return null;
+    const lookup = cached orelse return null;
+    if (lookup.coverage_digest.isEmpty()) return null;
+    return lookup;
+}
+
+/// Return the complete sidecar slice only when it belongs to this exact
+/// validated GPOS range and still occupies its original allocation.
+pub inline fn exactSidecars(
+    view: View,
+    run: Options,
+) ?[]const accelerator.Lookup {
+    if (!view.assume_validated) return null;
+    const accelerators = run.lookup_accelerators orelse return null;
+    if (accelerators.len == 0) return null;
+    const identity = accelerators[0].table_identity orelse return null;
+    if (identity.data_ptr != view.data.ptr or
+        identity.data_len != view.data.len or
+        identity.table_offset != view.offset or
+        identity.table_length != view.length or
+        identity.accelerators_addr != @intFromPtr(accelerators.ptr) or
+        identity.accelerator_count != accelerators.len)
+    {
+        return null;
+    }
+    return accelerators;
+}
+
+pub inline fn lookupInExactSidecars(
+    accelerators: []const accelerator.Lookup,
+    lookup_offset: usize,
+    lookup_type: u16,
+    subtable_count: u16,
+    lookup_index: ?u16,
+) ?*const accelerator.Lookup {
+    const index = lookup_index orelse return null;
+    if (index >= accelerators.len) return null;
+    const cached = &accelerators[index];
+    if (cached.lookup_offset != lookup_offset or
+        cached.lookup_type != lookup_type or
+        cached.subtable_count != subtable_count)
+    {
+        return null;
+    }
     return cached;
 }
 
-pub fn acceleratorAny(
+pub inline fn exact(
+    view: View,
+    lookup_offset: usize,
+    lookup_type: u16,
+    subtable_count: u16,
     lookup_index: ?u16,
     run: Options,
 ) ?*const accelerator.Lookup {
-    const accelerators = run.lookup_accelerators orelse return null;
-    const index = lookup_index orelse return null;
-    if (index >= accelerators.len) return null;
-    return &accelerators[index];
+    return lookupInExactSidecars(
+        exactSidecars(view, run) orelse return null,
+        lookup_offset,
+        lookup_type,
+        subtable_count,
+        lookup_index,
+    );
 }
 
 pub fn resolvedExtensionType(
@@ -61,11 +110,17 @@ pub fn resolvedExtensionType(
     run: Options,
 ) Error!?u16 {
     if (view.assume_validated) {
-        if (acceleratorAny(lookup_index, run)) |cached| {
+        if (exact(
+            view,
+            lookup_offset,
+            lookup_type,
+            subtable_count,
+            lookup_index,
+            run,
+        )) |cached| {
             // Prove all dispatch fields before trusting a table-derived cached
             // extension type; foreign or stale sidecars fall back to parsing.
-            if (cached.lookup_offset == lookup_offset and
-                cached.lookup_type == lookup_type and
+            if (cached.lookup_type == lookup_type and
                 cached.subtable_count == subtable_count)
             {
                 return cached.extension_lookup_type;

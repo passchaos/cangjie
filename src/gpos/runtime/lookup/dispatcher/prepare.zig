@@ -36,7 +36,7 @@ pub fn header(
 
 /// Reconstruct a Lookup header from the sidecar produced while validating the
 /// exact GPOS table. The caller must prove both table ownership and the
-/// sidecar's `lookup_offset_proved` contract before entering this path.
+/// sidecar's exact table, allocation, and LookupList identity before entry.
 pub fn headerAfterAcceleratorProof(
     accelerator: *const LookupAccelerator,
     run: Options,

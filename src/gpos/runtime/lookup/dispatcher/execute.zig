@@ -65,10 +65,16 @@ pub noinline fn collect(
     // resolving the LookupList offset. Detached callers still derive it from
     // the optional index, but the hot font-owned path must not index the large
     // accelerator array a second time for coverage and parsed subtables.
-    const lookup_accelerator = if (prepared_accelerator) |prepared|
-        if (prepared.coverage_digest.isEmpty()) null else prepared
-    else
-        runtime_dispatch.acceleratorWithCoverage(lookup_index, run);
+    const lookup_accelerator = runtime_dispatch.withCoverage(
+        prepared_accelerator orelse runtime_dispatch.exact(
+            view,
+            lookup_offset,
+            lookup_type,
+            subtable_count,
+            lookup_index,
+            run,
+        ),
+    );
     if (lookup_accelerator) |active_accelerator| {
         const pair_lookup = lookup_type == 2 or
             (lookup_type == 9 and
@@ -124,6 +130,7 @@ pub noinline fn collect(
             allocator,
             lookup_flag,
             run,
+            lookup_accelerator,
         ),
         9 => return extension_strategy.collect(
             view,
@@ -135,6 +142,7 @@ pub noinline fn collect(
             allocator,
             lookup_flag,
             run,
+            lookup_accelerator,
         ),
         else => {},
     }

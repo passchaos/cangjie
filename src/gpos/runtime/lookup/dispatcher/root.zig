@@ -102,7 +102,6 @@ pub fn collectAfterAcceleratorProof(
     sidecar: *const accelerator.Lookup,
 ) Error!void {
     std.debug.assert(view.assume_validated);
-    std.debug.assert(sidecar.lookup_offset_proved);
     std.debug.assert(sidecar.lookup_type != 0);
     if (lookup_order.contains(run.disabled_lookups, lookup_index)) return;
     const lookup_start = profileNow(run);

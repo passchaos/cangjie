@@ -74,8 +74,8 @@ x86-64, pinned to CPU 30 where the harness supports it:
   now reuses `gvar` metadata retained by `Font.parse`, fuses dense all-point
   delta decoding with accumulation, and allocates sparse interpolation scratch
   only when required. A fixed-CPU-30 `10000 * 7` rerun then led all owning
-  rows at `1.464x`, `1.510x`, `1.488x`, and `1.494x`, with reuse at
-  `11.862x--12.750x`; a later strict `1000 * 3` verification also passed all
+  rows at `1.431x`, `1.478x`, `1.492x`, and `1.476x`, with reuse at
+  `9.542x--11.987x`; a later strict `1000 * 3` verification also passed all
   eight rows. Symmetric 200,000-iteration counters reduced owning retired
   instructions by `27.36%--40.62%` and branches by `29.49%--41.76%`.
 - Ranged shaping now propagates the reusable engine's detailed profiling

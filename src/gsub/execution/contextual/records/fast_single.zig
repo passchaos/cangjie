@@ -27,6 +27,7 @@ pub fn apply(
 ) Error!bool {
     if (record_count == 0) return true;
     if (record_count > max_records) return false;
+    const exact_lookups = runtime_dispatch.exactSidecars(view, run);
     if (try applyAccelerated(
         view,
         glyphs,
@@ -34,6 +35,7 @@ pub fn apply(
         record_count,
         input_indices,
         run,
+        exact_lookups,
     )) return true;
     return applyParsed(
         view,
@@ -42,6 +44,7 @@ pub fn apply(
         record_count,
         input_indices,
         run,
+        exact_lookups,
     );
 }
 
@@ -55,6 +58,7 @@ noinline fn applyParsed(
     record_count: usize,
     input_indices: []const usize,
     run: Options,
+    exact_lookups: ?[]const accelerator.Lookup,
 ) Error!bool {
     const lookup_list = try requiredLookupList(view);
     const lookup_count = try view.readU16(lookup_list);
@@ -64,8 +68,6 @@ noinline fn applyParsed(
     var subtable_counts: [max_records]u16 = undefined;
     var lookup_indices: [max_records]u16 = undefined;
     var singles: [max_records]Single = undefined;
-    const exact_lookups = runtime_dispatch.exactSidecars(view, run);
-
     for (0..record_count) |record_index| {
         const record = records_offset + record_index * 4;
         const sequence_index = try view.readU16(record);
@@ -166,12 +168,12 @@ fn applyAccelerated(
     record_count: usize,
     input_indices: []const usize,
     run: Options,
+    exact_lookups: ?[]const accelerator.Lookup,
 ) Error!bool {
     // Indexing by SequenceLookupRecord is safe only for the builder-owned
     // sidecar slice attached to this exact table view. A foreign table may
     // deliberately reproduce lookup indices, offsets, and types.
-    const lookups = runtime_dispatch.exactSidecars(view, run) orelse
-        return false;
+    const lookups = exact_lookups orelse return false;
     var targets: [max_records]usize = undefined;
     var singles: [max_records]*const Single = undefined;
 

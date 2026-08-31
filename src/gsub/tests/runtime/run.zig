@@ -6,6 +6,48 @@ const run = @import("../../runtime/run/root.zig");
 const table = @import("../../table/root.zig");
 
 const Executor = struct {
+    pub fn applyLookupAfterPlanProof(
+        view: table.View,
+        lookup_offset: usize,
+        lookup_index: u16,
+        glyphs: *std.ArrayList(u16),
+        allocator: std.mem.Allocator,
+        options: run.Options,
+        cache: *@import("../../runtime/prefilter/root.zig").Cache,
+        _: *const acceleration.Lookup,
+    ) run.Error!void {
+        return applyLookup(
+            view,
+            lookup_offset,
+            lookup_index,
+            glyphs,
+            allocator,
+            options,
+            cache,
+        );
+    }
+
+    pub fn applyLookupWithExactSidecars(
+        view: table.View,
+        lookup_offset: usize,
+        lookup_index: u16,
+        glyphs: *std.ArrayList(u16),
+        allocator: std.mem.Allocator,
+        options: run.Options,
+        cache: *@import("../../runtime/prefilter/root.zig").Cache,
+        _: ?[]const acceleration.Lookup,
+    ) run.Error!void {
+        return applyLookup(
+            view,
+            lookup_offset,
+            lookup_index,
+            glyphs,
+            allocator,
+            options,
+            cache,
+        );
+    }
+
     pub fn applyLookup(
         _: table.View,
         _: usize,

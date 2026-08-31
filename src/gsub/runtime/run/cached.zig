@@ -61,24 +61,29 @@ pub noinline fn apply(
     // fallback remains safe if any cached element is stale.
     for (selected) |index| {
         if (index >= sidecars.len) return false;
-        const sidecar = sidecars[index];
+        const sidecar = &sidecars[index];
         if (sidecar.lookup_offset == 0 or sidecar.lookup_type == 0) {
             return false;
         }
     }
 
-    var generation: usize = 0;
-    const prepared = state.withDigestGeneration(run, &generation);
     const view = View{
         .data = data,
         .offset = offset,
         .length = length,
         .assume_validated = true,
     };
+    var storage = state.Storage{};
+    const prepared = try state.prepareForExactSidecars(
+        run,
+        sidecars,
+        glyphs.items.len,
+        &storage,
+    );
     var cache = prefilter.Cache.init();
     for (selected) |index| {
         if (lookup_order.contains(run.disabled_lookups, index)) continue;
-        try Executor.applyLookup(
+        try Executor.applyLookupAfterPlanProof(
             view,
             sidecars[index].lookup_offset,
             index,
@@ -86,6 +91,7 @@ pub noinline fn apply(
             allocator,
             prepared,
             &cache,
+            &sidecars[index],
         );
     }
     return true;

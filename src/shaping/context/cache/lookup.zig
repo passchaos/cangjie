@@ -278,6 +278,42 @@ pub const LookupSelectionCache = struct {
         }
     }
 
+    /// Return the accelerator allocation already owned by this cache without
+    /// constructing it. Proved plan execution uses this to rebind options after
+    /// plan lookup, including empty-GSUB fonts for which no allocation exists.
+    fn existingGsubLookupAccelerators(
+        self: *LookupSelectionCache,
+        font: *const Font,
+    ) ?[]const gsub.acceleration.Lookup {
+        const font_addr = @intFromPtr(font);
+        if (self.last_gsub_accelerator) |index| {
+            const entry = self.gsub_accelerator_entries.items[index];
+            if (entry.font_addr == font_addr) return entry.accelerators;
+        }
+        for (self.gsub_accelerator_entries.items, 0..) |entry, index| {
+            if (entry.font_addr != font_addr) continue;
+            self.last_gsub_accelerator = index;
+            return entry.accelerators;
+        }
+        return null;
+    }
+
+    /// Resolve cached GSUB sidecars for execution, but treat an empty slice as
+    /// absence. This avoids copying a zero-length slice whose sentinel pointer
+    /// is not stable cache identity and cannot back any executable lookup.
+    pub fn bindGsubLookupAccelerators(
+        self: *LookupSelectionCache,
+        font: *const Font,
+        options: *gsub.runtime.Options,
+    ) void {
+        const accelerators = self.existingGsubLookupAccelerators(font) orelse
+            return;
+        options.lookup_accelerators = if (accelerators.len == 0)
+            null
+        else
+            accelerators;
+    }
+
     pub fn gsubMergedFeatureLookupPlan(self: *LookupSelectionCache, font: *const Font, applications: []const gsub.feature.Application, options: gsub.runtime.Options, gdef_metadata: GdefLookupMetadata) !gsub.feature.MergedLookupPlan {
         const key = lookupSelectionKey(font, .gsub, options.script_tag, options.language_tag, options.features, options.vertical, null);
         const slot = featureApplicationSlot(applications);

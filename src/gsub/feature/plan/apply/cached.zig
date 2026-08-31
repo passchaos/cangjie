@@ -35,6 +35,7 @@ pub fn staged(
         if (plan.entries.len != 0) return error.BadGsub;
         return;
     }
+    if (plan_sidecars_proved and !planHasLookups(plan)) return;
     // A cached-plan proof is a claim about both the table and the accelerator
     // allocation. Bind that claim once, then validate the complete plan before
     // any entry can filter or mutate the run. In particular, a bad tuple in a
@@ -47,12 +48,20 @@ pub fn staged(
     else
         try view.readU16(try requiredLookupList(view));
     var storage = state.Storage{};
-    const prepared = try state.prepareForTable(
-        view,
-        run,
-        glyphs.items.len,
-        &storage,
-    );
+    const prepared = if (plan_sidecars_proved)
+        try state.prepareForExactSidecars(
+            run,
+            plan_sidecars,
+            glyphs.items.len,
+            &storage,
+        )
+    else
+        try state.prepareForTable(
+            view,
+            run,
+            glyphs.items.len,
+            &storage,
+        );
     var cache = prefilter.Cache.init();
     for (plan.entries) |entry| {
         var selected = prepared;
@@ -119,9 +128,9 @@ pub fn mergedAfterPlanProof(
     const sidecars = try exactMergedSidecars(view, run, plan);
 
     var storage = state.Storage{};
-    const prepared = try state.prepareForTable(
-        view,
+    const prepared = try state.prepareForExactSidecars(
         run,
+        sidecars,
         glyphs.items.len,
         &storage,
     );
@@ -230,6 +239,15 @@ fn isEmpty(view: View) Error!bool {
 
 fn requiredLookupList(view: View) Error!usize {
     return table.offset.required16(view, 0, try view.readU16(8));
+}
+
+fn planHasLookups(plan: model.LookupPlan) bool {
+    for (plan.entries) |entry| {
+        if (entry.lookups.len != 0 or entry.lookup_offsets.len != 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn exactStagedSidecars(

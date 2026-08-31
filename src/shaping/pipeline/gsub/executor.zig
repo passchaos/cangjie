@@ -180,12 +180,19 @@ pub fn applyPlanAfterRunProof(
     options: gsub.runtime.Options,
     _: GdefLookupMetadata,
 ) !void {
+    var prepared_options = options;
+    if (context.lookup_selection_cache) |selection_cache| {
+        selection_cache.bindGsubLookupAccelerators(
+            font,
+            &prepared_options,
+        );
+    }
     return font_shaping.applyGsubFeatureLookupPlanAfterRunProof(
         font,
         plan,
         glyph_ids,
         context.allocator,
-        options,
+        prepared_options,
     );
 }
 
@@ -284,6 +291,10 @@ pub fn applyMergedAfterRunProof(
         var prepared_options = options;
         prepared_options.assume_validated = true;
         gdef_metadata.applyToGsubOptions(&prepared_options);
+        context.lookup_selection_cache.?.bindGsubLookupAccelerators(
+            font,
+            &prepared_options,
+        );
         return try font_shaping.applyGsubMergedFeatureLookupPlanAfterRunProof(
             font,
             plan,

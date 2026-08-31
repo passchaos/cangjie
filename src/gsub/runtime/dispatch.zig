@@ -1,8 +1,8 @@
 //! GSUB lookup header dispatch and accelerator capability selection.
 //!
-//! Cached fields are trusted only for an exact validated lookup identity.
-//! Concrete capability helpers keep sidecar-selection policy out of the
-//! substitution executor without introducing callbacks or erased contexts.
+//! Cached fields are trusted only for an exact validated table and lookup
+//! identity. Concrete capability helpers operate on an already-proved sidecar
+//! so lower executors cannot accidentally reselect foreign cached state.
 
 const accelerator = @import("../accelerator/root.zig");
 const options = @import("options.zig");
@@ -27,10 +27,9 @@ pub const Header = struct {
 pub fn header(
     view: View,
     lookup_offset: usize,
-    lookup_index: ?u16,
-    run: Options,
+    exact_sidecar: ?*const Lookup,
 ) Error!Header {
-    if (exact(view, lookup_offset, lookup_index, run)) |cached| {
+    if (exact_sidecar) |cached| {
         return .{
             .lookup_type = cached.lookup_type,
             .lookup_flag = cached.lookup_flag,
@@ -54,136 +53,129 @@ pub fn header(
     };
 }
 
-/// Return the sidecar only when the caller owns a validated table view and the
-/// cached lookup identity matches that exact table position. Capability-specific
-/// dispatchers may still decline its payload, but can reuse the header proof.
-pub inline fn exact(
-    view: View,
+/// Return the complete accelerator slice only when it belongs to this exact
+/// validated table range and still occupies its original allocation. This
+/// proof is deliberately not represented by a caller-settable boolean.
+pub inline fn exactSidecars(view: View, run: Options) ?[]const Lookup {
+    if (!view.assume_validated) return null;
+    const accelerators = run.lookup_accelerators orelse return null;
+    _ = accelerator.feature_index.exact(
+        view.data,
+        view.offset,
+        view.length,
+        accelerators,
+    ) orelse return null;
+    return accelerators;
+}
+
+/// Index an accelerator slice whose table identity was proved at the caller's
+/// boundary. This is intentionally distinct from `Options`: a copied public
+/// option value cannot manufacture the proof represented by `accelerators`.
+pub inline fn lookupInExactSidecars(
+    accelerators: []const Lookup,
     lookup_offset: usize,
     lookup_index: ?u16,
-    run: Options,
 ) ?*const Lookup {
-    if (!view.assume_validated) return null;
-    const cached = any(lookup_index, run) orelse return null;
+    const index = lookup_index orelse return null;
+    if (index >= accelerators.len) return null;
+    const cached = &accelerators[index];
     if (cached.lookup_offset != lookup_offset or cached.lookup_type == 0) {
         return null;
     }
     return cached;
 }
 
-pub fn any(lookup_index: ?u16, run: Options) ?*const Lookup {
-    const accelerators = run.lookup_accelerators orelse return null;
-    const index = lookup_index orelse return null;
-    if (index >= accelerators.len) return null;
-    return &accelerators[index];
-}
-
-pub fn chainingCoverage(
+/// Return one lookup only after proving both the table-wide sidecar identity
+/// and its exact LookupList position.
+pub inline fn exact(
+    view: View,
+    lookup_offset: usize,
     lookup_index: ?u16,
     run: Options,
 ) ?*const Lookup {
-    const cached = any(lookup_index, run) orelse return null;
-    if (!cached.chaining_coverage_only) return null;
-    return cached;
+    const accelerators = exactSidecars(view, run) orelse return null;
+    return lookupInExactSidecars(
+        accelerators,
+        lookup_offset,
+        lookup_index,
+    );
 }
 
-pub fn reverseChaining(
-    lookup_index: ?u16,
-    run: Options,
-) ?*const Lookup {
-    const cached = any(lookup_index, run) orelse return null;
-    if (cached.reverse_chaining_subtables.len == 0 or
-        cached.reverse_chaining_groups.len == 0)
+pub inline fn chainingCoverage(cached: ?*const Lookup) ?*const Lookup {
+    const lookup = cached orelse return null;
+    if (!lookup.chaining_coverage_only) return null;
+    return lookup;
+}
+
+pub inline fn reverseChaining(cached: ?*const Lookup) ?*const Lookup {
+    const lookup = cached orelse return null;
+    if (lookup.reverse_chaining_subtables.len == 0 or
+        lookup.reverse_chaining_groups.len == 0)
     {
         return null;
     }
-    return cached;
+    return lookup;
 }
 
-pub fn multiple(
-    lookup_index: ?u16,
-    run: Options,
-) ?*const MultipleSubstitution {
-    const cached = any(lookup_index, run) orelse return null;
-    if (cached.multiple_subst.entries.len == 0) return null;
-    return &cached.multiple_subst;
+pub inline fn multiple(cached: ?*const Lookup) ?*const MultipleSubstitution {
+    const lookup = cached orelse return null;
+    if (lookup.multiple_subst.entries.len == 0) return null;
+    return &lookup.multiple_subst;
 }
 
-pub fn singleEntries(
-    lookup_index: ?u16,
-    run: Options,
-) ?[]const SingleEntry {
-    const cached = any(lookup_index, run) orelse return null;
-    if (cached.single_subst_entries.len == 0) return null;
-    return cached.single_subst_entries;
+pub inline fn singleEntries(cached: ?*const Lookup) ?[]const SingleEntry {
+    const lookup = cached orelse return null;
+    if (lookup.single_subst_entries.len == 0) return null;
+    return lookup.single_subst_entries;
 }
 
-pub fn single(
-    lookup_index: ?u16,
-    run: Options,
+pub inline fn single(
+    cached: ?*const Lookup,
 ) ?*const accelerator.model.SingleSubstitution {
-    const cached = any(lookup_index, run) orelse return null;
-    if (!cached.single_subst.enabled) return null;
-    return &cached.single_subst;
+    const lookup = cached orelse return null;
+    if (!lookup.single_subst.enabled) return null;
+    return &lookup.single_subst;
 }
 
-pub fn ligature(
-    lookup_index: ?u16,
-    run: Options,
-) ?*const LigatureSubstitution {
-    const cached = any(lookup_index, run) orelse return null;
-    if (cached.ligature_subst.sets.len == 0) return null;
-    return &cached.ligature_subst;
+pub inline fn ligature(cached: ?*const Lookup) ?*const LigatureSubstitution {
+    const lookup = cached orelse return null;
+    if (lookup.ligature_subst.sets.len == 0) return null;
+    return &lookup.ligature_subst;
 }
 
-pub fn contextClass(
-    lookup_index: ?u16,
-    run: Options,
-) ?*const Lookup {
-    const cached = any(lookup_index, run) orelse return null;
-    if (cached.context_class_subtables.len == 0) return null;
-    return cached;
+pub inline fn contextClass(cached: ?*const Lookup) ?*const Lookup {
+    const lookup = cached orelse return null;
+    if (lookup.context_class_subtables.len == 0) return null;
+    return lookup;
 }
 
-pub fn contextCoverage(
-    lookup_index: ?u16,
-    run: Options,
-) ?*const Lookup {
-    const cached = any(lookup_index, run) orelse return null;
-    if (cached.context_coverage_subtables.len == 0) return null;
-    return cached;
+pub inline fn contextCoverage(cached: ?*const Lookup) ?*const Lookup {
+    const lookup = cached orelse return null;
+    if (lookup.context_coverage_subtables.len == 0) return null;
+    return lookup;
 }
 
-pub fn chainingClass(
-    lookup_index: ?u16,
-    run: Options,
-) ?*const Lookup {
-    const cached = any(lookup_index, run) orelse return null;
-    if (cached.chaining_class_subtables.len == 0) return null;
-    return cached;
+pub inline fn chainingClass(cached: ?*const Lookup) ?*const Lookup {
+    const lookup = cached orelse return null;
+    if (lookup.chaining_class_subtables.len == 0) return null;
+    return lookup;
 }
 
-pub fn chainingGlyph(
-    lookup_index: ?u16,
-    run: Options,
-) ?*const Lookup {
-    const cached = any(lookup_index, run) orelse return null;
-    if (cached.chaining_glyph_subtables.len == 0 or
-        cached.chaining_glyph_subtables.len !=
-            @as(usize, cached.subtable_count))
+pub inline fn chainingGlyph(cached: ?*const Lookup) ?*const Lookup {
+    const lookup = cached orelse return null;
+    if (lookup.chaining_glyph_subtables.len == 0 or
+        lookup.chaining_glyph_subtables.len !=
+            @as(usize, lookup.subtable_count))
     {
         return null;
     }
-    return cached;
+    return lookup;
 }
 
-pub fn extensionType(
-    lookup_index: ?u16,
-    run: Options,
-) ?*const Lookup {
-    const cached = any(lookup_index, run) orelse return null;
-    if (cached.extension_lookup_type == null) return null;
-    return cached;
+pub inline fn extensionType(cached: ?*const Lookup) ?*const Lookup {
+    const lookup = cached orelse return null;
+    if (lookup.extension_lookup_type == null) return null;
+    return lookup;
 }
 
 pub fn tableUsesRunDigestCache(lookups: ?[]const Lookup) bool {

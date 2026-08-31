@@ -2,6 +2,8 @@
 
 const std = @import("std");
 pub const cached = @import("cached.zig");
+const accelerator = @import("../../accelerator/root.zig");
+const dispatch = @import("../dispatch.zig");
 const feature = @import("../../feature/root.zig");
 const metadata = @import("../metadata.zig");
 const lookup_order = @import("../../../opentype/lookup_order.zig");
@@ -31,14 +33,20 @@ pub fn apply(
         return error.BadGsub;
     }
     try metadata.validate(run, glyphs.items.len);
-    var storage = state.Storage{};
-    var prepared = try state.prepare(run, glyphs.items.len, &storage);
     const view = View{
         .data = data,
         .offset = offset,
         .length = length,
-        .assume_validated = prepared.assume_validated,
+        .assume_validated = run.assume_validated,
     };
+    var storage = state.Storage{};
+    var prepared = try state.prepareForTable(
+        view,
+        run,
+        glyphs.items.len,
+        &storage,
+    );
+    const exact_sidecars = dispatch.exactSidecars(view, prepared);
     if (try view.readU16(0) != 1) return error.UnsupportedGsub;
     if (try isEmpty(view)) return;
 
@@ -126,6 +134,7 @@ pub fn apply(
                 allocator,
                 prepared,
                 &cache,
+                exact_sidecars,
             );
         }
     } else if (selected_owned.items.len != 0) {
@@ -143,6 +152,7 @@ pub fn apply(
                 allocator,
                 selected_run,
                 &cache,
+                exact_sidecars,
             );
         }
     } else {
@@ -156,6 +166,7 @@ pub fn apply(
                 allocator,
                 prepared,
                 &cache,
+                exact_sidecars,
             );
         }
     }
@@ -170,6 +181,7 @@ fn applyOne(
     allocator: std.mem.Allocator,
     run: Options,
     cache: *prefilter.Cache,
+    exact_sidecars: ?[]const accelerator.Lookup,
 ) Error!void {
     if (lookup_order.contains(run.disabled_lookups, lookup_index)) return;
     const lookup_offset = try table.offset.required16(
@@ -179,7 +191,7 @@ fn applyOne(
             lookup_list + 2 + @as(usize, lookup_index) * 2,
         ),
     );
-    return Executor.applyLookup(
+    return Executor.applyLookupWithExactSidecars(
         view,
         lookup_offset,
         lookup_index,
@@ -187,6 +199,7 @@ fn applyOne(
         allocator,
         run,
         cache,
+        exact_sidecars,
     );
 }
 

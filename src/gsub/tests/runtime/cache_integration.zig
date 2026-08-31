@@ -67,10 +67,20 @@ pub fn suite(comptime Bindings: type) type {
             try std.testing.expect(
                 one_sidecars[0].table_uses_run_digest_cache,
             );
-            var generation: usize = 0;
-            const one_run = state.withDigestGeneration(
-                .{ .lookup_accelerators = one_sidecars },
-                &generation,
+            var one_storage = state.Storage{};
+            const one_run = try state.prepareForTable(
+                .{
+                    .data = &one,
+                    .offset = 0,
+                    .length = one.len,
+                    .assume_validated = true,
+                },
+                .{
+                    .lookup_accelerators = one_sidecars,
+                    .assume_validated = true,
+                },
+                3,
+                &one_storage,
             );
             try std.testing.expect(
                 one_run.glyph_mutation_generation != null,
@@ -88,9 +98,20 @@ pub fn suite(comptime Bindings: type) type {
             try std.testing.expect(
                 two_sidecars[0].table_uses_run_digest_cache,
             );
-            const two_run = state.withDigestGeneration(
-                .{ .lookup_accelerators = two_sidecars },
-                &generation,
+            var two_storage = state.Storage{};
+            const two_run = try state.prepareForTable(
+                .{
+                    .data = &two,
+                    .offset = 0,
+                    .length = two.len,
+                    .assume_validated = true,
+                },
+                .{
+                    .lookup_accelerators = two_sidecars,
+                    .assume_validated = true,
+                },
+                3,
+                &two_storage,
             );
             try std.testing.expect(
                 two_run.glyph_mutation_generation != null,
@@ -152,6 +173,79 @@ pub fn suite(comptime Bindings: type) type {
             const final = cache.digestForRun(glyphs.items, 0, run);
             try std.testing.expect(final.mayHave(9));
             try std.testing.expect(!final.mayHave(5));
+        }
+
+        test "GSUB lookup dispatch rejects foreign and copied sidecar identities" {
+            const allocator = std.testing.allocator;
+            var source = [_]u8{0} ** 46;
+            var foreign = [_]u8{0} ** 46;
+            writeOneLigatureTable(&source, 5);
+            writeOneLigatureTable(&foreign, 7);
+            const sidecars = try acceleration.build.lookup.build(
+                &source,
+                0,
+                source.len,
+                allocator,
+            );
+            defer acceleration.ownership.deinit(allocator, sidecars);
+
+            // Both tables use lookup index zero, offset 14, and type 4. The
+            // source sidecar must not override the foreign table's payload.
+            var glyphs = std.ArrayList(GlyphId).empty;
+            defer glyphs.deinit(allocator);
+            try glyphs.appendSlice(allocator, &.{ 1, 2 });
+            var foreign_cache = prefilter.Cache.init();
+            try Bindings.applyLookup(
+                .{
+                    .data = &foreign,
+                    .offset = 0,
+                    .length = foreign.len,
+                    .assume_validated = true,
+                },
+                14,
+                0,
+                &glyphs,
+                allocator,
+                .{
+                    .lookup_accelerators = sidecars,
+                    .assume_validated = true,
+                },
+                &foreign_cache,
+            );
+            try std.testing.expectEqualSlices(GlyphId, &.{7}, glyphs.items);
+
+            const copied = try allocator.dupe(acceleration.Lookup, sidecars);
+            defer allocator.free(copied);
+            // Make accidental use of the copied accelerator observable while
+            // leaving its borrowed nested allocations owned by `sidecars`.
+            const copied_definitions = try allocator.dupe(
+                acceleration.model.LigatureDefinition,
+                sidecars[0].ligature_subst.definitions,
+            );
+            defer allocator.free(copied_definitions);
+            copied_definitions[0].ligature = 99;
+            copied[0].ligature_subst.definitions = copied_definitions;
+            glyphs.clearRetainingCapacity();
+            try glyphs.appendSlice(allocator, &.{ 1, 2 });
+            var copied_cache = prefilter.Cache.init();
+            try Bindings.applyLookup(
+                .{
+                    .data = &source,
+                    .offset = 0,
+                    .length = source.len,
+                    .assume_validated = true,
+                },
+                14,
+                0,
+                &glyphs,
+                allocator,
+                .{
+                    .lookup_accelerators = copied,
+                    .assume_validated = true,
+                },
+                &copied_cache,
+            );
+            try std.testing.expectEqualSlices(GlyphId, &.{5}, glyphs.items);
         }
 
         test "GSUB cached selection requires exact nonempty bounded inputs" {
@@ -320,6 +414,14 @@ fn writeTwoLigatureTable(bytes: []u8) void {
     writeU16(bytes, 14, 38);
     writeLigatureLookup(bytes, 16, 1, 2, 5);
     writeLigatureLookup(bytes, 48, 5, 3, 9);
+}
+
+fn writeOneLigatureTable(bytes: []u8, output: GlyphId) void {
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 8, 10);
+    writeU16(bytes, 10, 1);
+    writeU16(bytes, 12, 4);
+    writeLigatureLookup(bytes, 14, 1, 2, output);
 }
 
 fn writeLigatureLookup(

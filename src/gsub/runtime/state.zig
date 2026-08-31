@@ -15,12 +15,13 @@ pub const Storage = struct {
     operations_left: usize = 0,
 };
 
-pub fn withDigestGeneration(
+fn withDigestGenerationForPolicy(
     run: Options,
     generation: *usize,
+    table_uses_run_digest_cache: bool,
 ) Options {
     var result = run;
-    if (dispatch.tableUsesRunDigestCache(result.lookup_accelerators) and
+    if (table_uses_run_digest_cache and
         result.glyph_mutation_generation == null)
     {
         result.glyph_mutation_generation = generation;
@@ -28,15 +29,55 @@ pub fn withDigestGeneration(
     return result;
 }
 
+/// Prepare one run after optionally binding its accelerator slice to `view`.
+/// Foreign or copied sidecars must not control digest-cache lifetime: without
+/// exact identity, generic fallback uses uncached necessary-condition checks.
+pub inline fn prepareForTable(
+    view: dispatch.View,
+    run: Options,
+    initial_glyph_count: usize,
+    storage: *Storage,
+) Error!Options {
+    const exact_sidecars = dispatch.exactSidecars(view, run);
+    const result = withDigestGenerationForPolicy(
+        run,
+        &storage.mutation_generation,
+        dispatch.tableUsesRunDigestCache(exact_sidecars),
+    );
+    return prepareLimits(result, initial_glyph_count, storage);
+}
+
+/// Prepare after the caller already established exact table/slice identity.
+/// This avoids repeating the identity tuple comparison in cached-plan and
+/// cached-selection boundaries while retaining the same digest policy.
+pub inline fn prepareForExactSidecars(
+    run: Options,
+    exact_sidecars: []const dispatch.Lookup,
+    initial_glyph_count: usize,
+    storage: *Storage,
+) Error!Options {
+    const result = withDigestGenerationForPolicy(
+        run,
+        &storage.mutation_generation,
+        dispatch.tableUsesRunDigestCache(exact_sidecars),
+    );
+    return prepareLimits(result, initial_glyph_count, storage);
+}
+
 pub inline fn prepare(
     run: Options,
     initial_glyph_count: usize,
     storage: *Storage,
 ) Error!Options {
-    var result = withDigestGeneration(
-        run,
-        &storage.mutation_generation,
-    );
+    return prepareLimits(run, initial_glyph_count, storage);
+}
+
+fn prepareLimits(
+    run: Options,
+    initial_glyph_count: usize,
+    storage: *Storage,
+) Error!Options {
+    var result = run;
     if (result.operations_left == null) {
         const run_limits = try limits.Limits.init(initial_glyph_count);
         storage.operations_left = run_limits.operations_left;

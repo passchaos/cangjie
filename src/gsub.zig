@@ -232,17 +232,19 @@ fn applySelectedSourceFeatureWithOptions(
     scoped_options.active_source_feature = source_feature;
     scoped_options.active_feature_value = feature_value;
     try runtime.metadata.validate(scoped_options, glyphs.items.len);
-    var mutation_generation: usize = 0;
-    const shaping_options = runtime.state.withDigestGeneration(
-        scoped_options,
-        &mutation_generation,
-    );
     const table = Table{
         .data = data,
         .offset = offset,
         .length = length,
-        .assume_validated = shaping_options.assume_validated,
+        .assume_validated = scoped_options.assume_validated,
     };
+    var storage = runtime.state.Storage{};
+    const shaping_options = try runtime.state.prepareForTable(
+        table,
+        scoped_options,
+        glyphs.items.len,
+        &storage,
+    );
     if (try readU16(table, 0) != 1) return error.UnsupportedGsub;
     if (try isEmptyGsubTopology(table)) return;
     const lookup_list_offset = try table_core.service.requiredLookupList(table);
@@ -644,13 +646,19 @@ fn applyLookup(table: Table, lookup_offset: usize, glyphs: *std.ArrayList(GlyphI
 }
 
 fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*runtime_prefilter.Cache) (GsubError || std.mem.Allocator.Error)!void {
+    const exact_sidecar = runtime.dispatch.exact(
+        table,
+        lookup_offset,
+        lookup_index,
+        options,
+    );
     // The cached Font path overwhelmingly dispatches predecoded ligature and
     // chaining lookups. Keep those cases outside the generic function below:
     // its support for every lookup kind, nested contextual mutation, and
     // profiling windows otherwise forces a roughly 10 KiB stack frame on each
     // tiny lookup invocation even when none of that state is used.
     if ((options.shape_profile == null or options.profile_fast_path) and table.assume_validated) {
-        if (try lookup_execution.accelerated.apply(
+        if (exact_sidecar != null and try lookup_execution.accelerated.applyAfterIdentityProof(
             ContextualRecordExecutor,
             table,
             lookup_offset,
@@ -659,6 +667,7 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
             allocator,
             options,
             run_digest_cache,
+            exact_sidecar.?,
         )) return;
     }
     return applyLookupWithIndexGeneric(
@@ -669,10 +678,11 @@ fn applyLookupWithIndex(table: Table, lookup_offset: usize, lookup_index: ?u16, 
         allocator,
         options,
         run_digest_cache,
+        exact_sidecar,
     );
 }
 
-noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*runtime_prefilter.Cache) (GsubError || std.mem.Allocator.Error)!void {
+noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, lookup_index: ?u16, glyphs: *std.ArrayList(GlyphId), allocator: std.mem.Allocator, options: LookupOptions, run_digest_cache: ?*runtime_prefilter.Cache, exact_sidecar: ?*const LookupAccelerator) (GsubError || std.mem.Allocator.Error)!void {
     return lookup_execution.generic.apply(
         ContextualRecordExecutor,
         table,
@@ -682,6 +692,7 @@ noinline fn applyLookupWithIndexGeneric(table: Table, lookup_offset: usize, look
         allocator,
         options,
         run_digest_cache,
+        exact_sidecar,
     );
 }
 
@@ -736,6 +747,87 @@ fn applyExtensionSubstitution(table: Table, subtable_offset: usize, glyphs: *std
 }
 
 const ContextualRecordExecutor = struct {
+    pub fn applyLookupAfterPlanProof(
+        table: Table,
+        lookup_offset: usize,
+        lookup_index: u16,
+        glyphs: *std.ArrayList(GlyphId),
+        allocator: std.mem.Allocator,
+        options: LookupOptions,
+        run_digest_cache: *runtime_prefilter.Cache,
+        sidecar: *const LookupAccelerator,
+    ) (GsubError || std.mem.Allocator.Error)!void {
+        if ((options.shape_profile == null or options.profile_fast_path) and
+            try lookup_execution.accelerated.applyAfterIdentityProof(
+                ContextualRecordExecutor,
+                table,
+                lookup_offset,
+                lookup_index,
+                glyphs,
+                allocator,
+                options,
+                run_digest_cache,
+                sidecar,
+            )) return;
+        // `generic.applyAfterPlanProof` is intentionally unprofiled. A proved
+        // plan with detailed profiling enabled still reuses its exact sidecar
+        // for header/capability dispatch, but must cross the ordinary generic
+        // wrapper so lookup timing and kind counters remain complete.
+        return applyLookupWithIndexGeneric(
+            table,
+            lookup_offset,
+            lookup_index,
+            glyphs,
+            allocator,
+            options,
+            run_digest_cache,
+            sidecar,
+        );
+    }
+
+    pub fn applyLookupWithExactSidecars(
+        table: Table,
+        lookup_offset: usize,
+        lookup_index: u16,
+        glyphs: *std.ArrayList(GlyphId),
+        allocator: std.mem.Allocator,
+        options: LookupOptions,
+        run_digest_cache: *runtime_prefilter.Cache,
+        exact_sidecars: ?[]const LookupAccelerator,
+    ) (GsubError || std.mem.Allocator.Error)!void {
+        const sidecar = if (exact_sidecars) |sidecars|
+            runtime.dispatch.lookupInExactSidecars(
+                sidecars,
+                lookup_offset,
+                lookup_index,
+            )
+        else
+            null;
+        if ((options.shape_profile == null or options.profile_fast_path) and
+            sidecar != null and
+            try lookup_execution.accelerated.applyAfterIdentityProof(
+                ContextualRecordExecutor,
+                table,
+                lookup_offset,
+                lookup_index,
+                glyphs,
+                allocator,
+                options,
+                run_digest_cache,
+                sidecar.?,
+            )) return;
+        return applyLookupWithIndexGeneric(
+            table,
+            lookup_offset,
+            lookup_index,
+            glyphs,
+            allocator,
+            options,
+            run_digest_cache,
+            sidecar,
+        );
+    }
+
     pub fn applyLookupUnprofiledAfterPlanProof(
         table: Table,
         lookup_offset: usize,
@@ -779,22 +871,27 @@ const ContextualRecordExecutor = struct {
         options: LookupOptions,
         run_digest_cache: *runtime_prefilter.Cache,
     ) (GsubError || std.mem.Allocator.Error)!void {
-        if (table.assume_validated) {
-            const sidecar = runtime.dispatch.any(lookup_index, options);
-            if (sidecar != null and
-                sidecar.?.lookup_offset == lookup_offset and
-                sidecar.?.lookup_type != 0 and
-                try lookup_execution.accelerated.applyUnprofiled(
-                    ContextualRecordExecutor,
-                    table,
-                    lookup_offset,
-                    lookup_index,
-                    glyphs,
-                    allocator,
-                    options,
-                    run_digest_cache,
-                    sidecar.?,
-                )) return;
+        const exact_sidecar = if (table.assume_validated)
+            runtime.dispatch.exact(
+                table,
+                lookup_offset,
+                lookup_index,
+                options,
+            )
+        else
+            null;
+        if (exact_sidecar) |sidecar| {
+            if (try lookup_execution.accelerated.applyUnprofiled(
+                ContextualRecordExecutor,
+                table,
+                lookup_offset,
+                lookup_index,
+                glyphs,
+                allocator,
+                options,
+                run_digest_cache,
+                sidecar,
+            )) return;
         }
         return applyLookupWithIndexGeneric(
             table,
@@ -804,6 +901,7 @@ const ContextualRecordExecutor = struct {
             allocator,
             options,
             run_digest_cache,
+            exact_sidecar,
         );
     }
 

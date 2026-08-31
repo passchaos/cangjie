@@ -47,11 +47,47 @@ pub fn apply(
     run: Options,
     run_digest_cache: ?*RunDigestCache,
 ) Error!bool {
-    const sidecar =
-        runtime_dispatch.any(lookup_index, run) orelse return false;
-    if (sidecar.lookup_offset != lookup_offset or sidecar.lookup_type == 0) {
-        return false;
-    }
+    const sidecar = runtime_dispatch.exact(
+        view,
+        lookup_offset,
+        lookup_index,
+        run,
+    ) orelse return false;
+    return applyAfterIdentityProof(
+        Executor,
+        view,
+        lookup_offset,
+        lookup_index,
+        glyphs,
+        allocator,
+        run,
+        run_digest_cache,
+        sidecar,
+    );
+}
+
+/// Execute after the caller has bound the complete accelerator slice to the
+/// active table and matched this lookup's index and offset. Keeping this
+/// worker separate lets whole-table and cached-plan callers pay the table-wide
+/// identity comparison once rather than once per attempted fast path.
+pub fn applyAfterIdentityProof(
+    comptime Executor: type,
+    view: View,
+    lookup_offset: usize,
+    lookup_index: ?u16,
+    glyphs: *std.ArrayList(GlyphId),
+    allocator: std.mem.Allocator,
+    run: Options,
+    run_digest_cache: ?*RunDigestCache,
+    sidecar: *const Lookup,
+) Error!bool {
+    // This worker is deliberately usable only after a caller performed the
+    // table-wide binding and exact lookup match. Keep release-mode guards so
+    // an accidentally widened internal call cannot turn a stale pointer into
+    // trusted substitution data.
+    if (!view.assume_validated or
+        sidecar.lookup_offset != lookup_offset or
+        sidecar.lookup_type == 0) return false;
     if (run.shape_profile == null) {
         return applyUnprofiled(
             Executor,
@@ -125,6 +161,9 @@ pub inline fn applyUnprofiled(
     run_digest_cache: ?*RunDigestCache,
     sidecar: *const Lookup,
 ) Error!bool {
+    if (!view.assume_validated or
+        sidecar.lookup_offset != lookup_offset or
+        sidecar.lookup_type == 0) return false;
     const scoped_syllable =
         runtime_dispatch.matchesSourceSyllable(lookup_index, run);
     if (runtime_dispatch.needsCustomizedOptions(

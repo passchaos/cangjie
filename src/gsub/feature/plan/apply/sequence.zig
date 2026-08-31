@@ -26,7 +26,12 @@ pub fn apply(
 ) Error!void {
     try metadata.validateApplications(run, glyphs.items.len, applications);
     var storage = state.Storage{};
-    const prepared = try state.prepare(run, glyphs.items.len, &storage);
+    const prepared = try state.prepareForTable(
+        view,
+        run,
+        glyphs.items.len,
+        &storage,
+    );
     if (try isEmpty(view)) return;
     var cache = prefilter.Cache.init();
 

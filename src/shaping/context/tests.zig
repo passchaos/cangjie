@@ -37,6 +37,39 @@ test "engine owns reusable caches and resets them together" {
     try std.testing.expectEqual(context_mod.Engine.Stats{}, engine.stats());
 }
 
+test "cached GSUB plans retain detailed lookup profiling" {
+    const test_font = @import("../../test_font.zig");
+    const ShapeStageProfile = @import("../../shape_profile.zig")
+        .ShapeStageProfile;
+    const bytes = try test_font.buildScriptFeatureGsubTtf(
+        std.testing.allocator,
+    );
+    defer std.testing.allocator.free(bytes);
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+
+    var engine = context_mod.Engine.init(std.testing.allocator, .{});
+    defer engine.deinit();
+    var profile = ShapeStageProfile{};
+    engine.enableProfiling(&profile, std.testing.io, false);
+
+    _ = try engine.shape(
+        face_mod.backend.face(&font),
+        .{
+            .text = "AAA",
+            .font_size = 20,
+            .options = .{
+                .features = &.{.{
+                    .tag = @import("../../unicode.zig").tag("sups"),
+                    .enabled = true,
+                }},
+            },
+        },
+    );
+    try std.testing.expect(profile.gsub_lookup_count != 0);
+    try std.testing.expect(profile.gsub_lookup_entry_count != 0);
+}
+
 test "engine releases partial GSUB cache construction on allocation failure" {
     const test_font = @import("../../test_font.zig");
     const bytes = try test_font.buildMinimalGsubTtf(std.testing.allocator);

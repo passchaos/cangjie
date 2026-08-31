@@ -110,7 +110,7 @@ test "accelerated GSUB chaining uses a comptime nested binding" {
     };
     try std.testing.expectError(
         error.BadGsub,
-        accelerated.apply(
+        accelerated.applyAfterIdentityProof(
             Binding,
             view,
             12,
@@ -119,6 +119,7 @@ test "accelerated GSUB chaining uses a comptime nested binding" {
             allocator,
             .{ .lookup_accelerators = &sidecars },
             null,
+            &sidecars[0],
         ),
     );
 }
@@ -140,7 +141,7 @@ test "accelerated GSUB fast profile records through the profiled path" {
     var counters = @import("../../../../shape_profile.zig").ShapeStageProfile{};
     try std.testing.expectError(
         error.BadGsub,
-        accelerated.apply(
+        accelerated.applyAfterIdentityProof(
             Binding,
             .{
                 .data = &.{},
@@ -159,6 +160,7 @@ test "accelerated GSUB fast profile records through the profiled path" {
                 .profile_io = std.testing.io,
             },
             null,
+            &sidecars[0],
         ),
     );
 }
@@ -215,7 +217,7 @@ test "accelerated GSUB dispatch executes extension-wrapped class sidecars" {
     };
     try std.testing.expectError(
         error.BadGsub,
-        accelerated.apply(
+        accelerated.applyAfterIdentityProof(
             Binding,
             view,
             12,
@@ -224,6 +226,7 @@ test "accelerated GSUB dispatch executes extension-wrapped class sidecars" {
             allocator,
             .{ .lookup_accelerators = &sidecars },
             null,
+            &sidecars[0],
         ),
     );
 }
@@ -258,7 +261,7 @@ test "accelerated GSUB dispatch executes extension-wrapped ligatures" {
             .first_component_digest = first_digest,
         },
     }};
-    try std.testing.expect(try accelerated.apply(
+    try std.testing.expect(try accelerated.applyAfterIdentityProof(
         Binding,
         .{
             .data = &.{},
@@ -272,6 +275,7 @@ test "accelerated GSUB dispatch executes extension-wrapped ligatures" {
         allocator,
         .{ .lookup_accelerators = &sidecars },
         null,
+        &sidecars[0],
     ));
     try std.testing.expectEqualSlices(GlyphId, &.{ 42, 9 }, glyphs.items);
 }
@@ -297,7 +301,7 @@ test "accelerated GSUB dispatch executes extension-wrapped multiple substitution
         .extension_lookup_type = 2,
         .multiple_subst = .{ .entries = &entries },
     }};
-    try std.testing.expect(try accelerated.apply(
+    try std.testing.expect(try accelerated.applyAfterIdentityProof(
         Binding,
         .{
             .data = &bytes,
@@ -311,6 +315,7 @@ test "accelerated GSUB dispatch executes extension-wrapped multiple substitution
         allocator,
         .{ .lookup_accelerators = &sidecars },
         null,
+        &sidecars[0],
     ));
     try std.testing.expectEqualSlices(GlyphId, &.{ 9, 10, 8 }, glyphs.items);
 }
@@ -331,7 +336,7 @@ test "accelerated GSUB dispatch executes extension-wrapped single substitution" 
         .extension_lookup_type = 1,
         .single_subst_entries = &entries,
     }};
-    try std.testing.expect(try accelerated.apply(
+    try std.testing.expect(try accelerated.applyAfterIdentityProof(
         Binding,
         .{
             .data = &.{},
@@ -345,6 +350,7 @@ test "accelerated GSUB dispatch executes extension-wrapped single substitution" 
         allocator,
         .{ .lookup_accelerators = &sidecars },
         null,
+        &sidecars[0],
     ));
     try std.testing.expectEqualSlices(GlyphId, &.{ 42, 8 }, glyphs.items);
 }

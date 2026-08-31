@@ -106,8 +106,9 @@ x86-64, pinned to CPU 30 where the harness supports it:
   strict run closes every currently retained extended production-glyf row.
 - `zig build parley-matrix -Doptimize=ReleaseFast -- --iterations 1000 --samples
   7 --cpu 30 --fail-on-slower`: the 26-row matrix passed before custom
-  placement was added. The current 32-row semantic matrix passes, including
-  exact normalized object geometry in all 18 object rows. The added ordinary
+  placement was added. The current 34-row semantic matrix passes. Thirteen
+  text rows enforce exact normalized geometry and visible-left placement, and
+  all 18 object rows enforce exact normalized object geometry. The added ordinary
   out-of-flow six rows use the
   same 24x20 object as the in-flow cases but select Parley's `OutOfFlow` and
   Cangjie's `.out_of_flow` semantics for both construction and retained

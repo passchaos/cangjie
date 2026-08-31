@@ -23,6 +23,7 @@ pub fn main(init: std.process.Init) !void {
         return error.InvalidArguments;
     if (phase == .reflow and
         style != .default and
+        style != .center and
         style != .inline_object and
         style != .out_of_flow_object and
         style != .custom_out_of_flow_object and
@@ -122,6 +123,8 @@ pub fn main(init: std.process.Init) !void {
         }}
     else
         &.{};
+    // Retained center reflow is supported, although the cross-engine semantic
+    // gate intentionally exercises only the ordinary one-shot Latin row.
     var retained = if (phase == .reflow)
         try engine.prepareParagraph(cascade, .{
             .text = text,
@@ -129,6 +132,7 @@ pub fn main(init: std.process.Init) !void {
             .options = .{
                 .max_width = width,
                 .direction = paragraph_direction,
+                .alignment = alignmentForStyle(style),
                 .inline_objects = inline_objects,
                 .out_of_flow_placements = object_placements,
             },
@@ -143,6 +147,7 @@ pub fn main(init: std.process.Init) !void {
     defer allocator.free(samples);
     var checksum: u64 = 0;
     var geometry_checksum: u64 = 0;
+    var placement_checksum: u64 = 0;
     var object_checksum: u64 = 0;
     var glyph_count: usize = 0;
     var line_count: usize = 0;
@@ -171,6 +176,7 @@ pub fn main(init: std.process.Init) !void {
                 layout,
                 paragraph_direction,
             );
+            placement_checksum = placementChecksum(layout);
             object_checksum = normalizedObjectGeometryChecksum(layout);
             glyph_count = layout.glyphs.len;
             line_count = layout.lines.len;
@@ -210,8 +216,8 @@ pub fn main(init: std.process.Init) !void {
         @as(f64, @floatFromInt(iterations));
     std.debug.print(
         "engine=cangjie\tphase={s}\tdirection={s}\tstyle={s}\ttext_bytes={d}\twidth={d:.3}\titerations={d}\tsamples={d}\t" ++
-            "median_ns_per_iter={d:.3}\tglyphs={d}\tlines={d}\tobjects={d}\tchecksum={x:0>16}\tgeometry_checksum={x:0>16}\tobject_checksum={x:0>16}\n",
-        .{ @tagName(phase), @tagName(direction), @tagName(style), text.len, width, iterations, sample_count, median, glyph_count, line_count, object_count, checksum, geometry_checksum, object_checksum },
+            "median_ns_per_iter={d:.3}\tglyphs={d}\tlines={d}\tobjects={d}\tchecksum={x:0>16}\tgeometry_checksum={x:0>16}\tplacement_checksum={x:0>16}\tobject_checksum={x:0>16}\n",
+        .{ @tagName(phase), @tagName(direction), @tagName(style), text.len, width, iterations, sample_count, median, glyph_count, line_count, object_count, checksum, geometry_checksum, placement_checksum, object_checksum },
     );
 }
 
@@ -219,6 +225,7 @@ const Phase = enum { layout, reflow };
 const Direction = enum { auto, ltr, rtl };
 const Style = enum {
     default,
+    center,
     spacing,
     alternating,
     inline_object,
@@ -260,6 +267,7 @@ fn benchmarkOnce(
         .reflow => retained.?.layout(reflow, .{
             .max_width = width,
             .direction = paragraph_direction,
+            .alignment = alignmentForStyle(style),
             .inline_objects = inline_objects,
             .out_of_flow_placements = object_placements,
         }),
@@ -276,6 +284,7 @@ fn layoutOnce(
     inline_objects: []const cangjie.paragraph.InlineObject,
     object_placements: []const cangjie.paragraph.OutOfFlowPlacement,
 ) !cangjie.paragraph.Layout {
+    const alignment = alignmentForStyle(style);
     if (style == .spacing) {
         const spans = [_]cangjie.paragraph.StyledSpan{.{
             .byte_start = 0,
@@ -289,7 +298,7 @@ fn layoutOnce(
             .text = text,
             .default_font_size = 16,
             .spans = &spans,
-            .options = .{ .max_width = width, .direction = direction },
+            .options = .{ .max_width = width, .direction = direction, .alignment = alignment },
         })).layout;
     }
     if (style == .alternating) {
@@ -307,7 +316,7 @@ fn layoutOnce(
                 .text = text,
                 .default_font_size = 16,
                 .spans = &spans,
-                .options = .{ .max_width = width, .direction = direction },
+                .options = .{ .max_width = width, .direction = direction, .alignment = alignment },
             })).layout;
         }
         const spans = [_]cangjie.paragraph.StyledSpan{
@@ -330,7 +339,7 @@ fn layoutOnce(
             .text = text,
             .default_font_size = 16,
             .spans = &spans,
-            .options = .{ .max_width = width, .direction = direction },
+            .options = .{ .max_width = width, .direction = direction, .alignment = alignment },
         })).layout;
     }
     return engine.layout(cascade, .{
@@ -339,10 +348,15 @@ fn layoutOnce(
         .options = .{
             .max_width = width,
             .direction = direction,
+            .alignment = alignment,
             .inline_objects = inline_objects,
             .out_of_flow_placements = object_placements,
         },
     });
+}
+
+fn alignmentForStyle(style: Style) cangjie.paragraph.Align {
+    return if (style == .center) .center else .start;
 }
 
 fn layoutChecksum(layout: cangjie.paragraph.Layout) u64 {
@@ -430,6 +444,19 @@ fn normalizedGeometryChecksum(
             );
             hash = hashF32(hash, record.inline_size);
         }
+    }
+    return hash;
+}
+
+/// Hash the physical horizontal placement that the logical geometry checksum
+/// intentionally removes. Source ranges make the record order addressable,
+/// while 1/1024-pixel canonicalization tolerates only float accumulation noise.
+fn placementChecksum(layout: cangjie.paragraph.Layout) u64 {
+    var hash: u64 = 0xcbf29ce484222325;
+    for (layout.lines) |line| {
+        hash = hashU64(hash, line.byte_start);
+        hash = hashU64(hash, line.byte_start + line.byte_len);
+        hash = hashI32(hash, canonicalInlinePosition(line.x));
     }
     return hash;
 }
@@ -535,6 +562,7 @@ fn parseDirection(value: []const u8) !Direction {
 
 fn parseStyle(value: []const u8) !Style {
     if (std.mem.eql(u8, value, "default")) return .default;
+    if (std.mem.eql(u8, value, "center")) return .center;
     if (std.mem.eql(u8, value, "spacing")) return .spacing;
     if (std.mem.eql(u8, value, "alternating")) return .alternating;
     if (std.mem.eql(u8, value, "inline-object")) return .inline_object;
@@ -569,8 +597,43 @@ fn resolvedDirection(
 
 fn usage() error{InvalidArguments} {
     std.debug.print(
-        "usage: paragraph-bench FONT TEXT ITERATIONS SAMPLES [WIDTH] [layout|reflow] [auto|ltr|rtl] [default|spacing|alternating|inline-object|out-of-flow-object|custom-out-of-flow-object|fallback] [FALLBACK_FONT]\n",
+        "usage: paragraph-bench FONT TEXT ITERATIONS SAMPLES [WIDTH] [layout|reflow] [auto|ltr|rtl] [default|center|spacing|alternating|inline-object|out-of-flow-object|custom-out-of-flow-object|fallback] [FALLBACK_FONT]\n",
         .{},
     );
     return error.InvalidArguments;
+}
+
+test "placement checksum encodes absolute line origins" {
+    const lines = [_]cangjie.paragraph.Line{
+        .{
+            .glyph_start = 0,
+            .glyph_len = 0,
+            .run_start = 0,
+            .run_len = 0,
+            .byte_start = 2,
+            .byte_len = 5,
+            .x = 12.25,
+            .y = 0,
+            .width = 20,
+            .height = 10,
+            .baseline = 8,
+            .ascent = 8,
+            .descent = 2,
+            .leading = 0,
+        },
+    };
+    const layout: cangjie.paragraph.Layout = .{
+        .glyphs = &.{},
+        .runs = &.{},
+        .lines = &lines,
+        .width = 20,
+        .height = 10,
+    };
+    try std.testing.expectEqual(@as(u64, 0xa677645ffa7e2cbb), placementChecksum(layout));
+
+    var translated_lines = lines;
+    translated_lines[0].x += 1.0 / 1024.0;
+    var translated = layout;
+    translated.lines = &translated_lines;
+    try std.testing.expect(placementChecksum(layout) != placementChecksum(translated));
 }

@@ -83,6 +83,7 @@ fn main() {
     let mut values = Vec::with_capacity(samples);
     let mut checksum = 0u64;
     let mut geometry_checksum = 0u64;
+    let mut placement_checksum = 0u64;
     let mut object_checksum = 0u64;
     let mut glyphs = 0usize;
     let mut lines = 0usize;
@@ -108,6 +109,7 @@ fn main() {
             (
                 checksum,
                 geometry_checksum,
+                placement_checksum,
                 object_checksum,
                 glyphs,
                 lines,
@@ -129,9 +131,9 @@ fn main() {
                 retained.as_mut(),
                 false,
             );
-            assert_eq!(result.4, lines, "unstable layout line count");
-            batch_checksum = bytes(batch_checksum, &result.3.to_le_bytes());
+            assert_eq!(result.5, lines, "unstable layout line count");
             batch_checksum = bytes(batch_checksum, &result.4.to_le_bytes());
+            batch_checksum = bytes(batch_checksum, &result.5.to_le_bytes());
         }
         values.push(start.elapsed().as_nanos() as f64 / iterations as f64);
         black_box(batch_checksum);
@@ -139,7 +141,7 @@ fn main() {
     values.sort_by(f64::total_cmp);
     let median = values[values.len() / 2];
     println!(
-        "engine=parley\tphase={phase}\tdirection={direction}\tstyle={style}\ttext_bytes={}\twidth={width:.3}\titerations={}\tsamples={}\tmedian_ns_per_iter={median:.3}\tglyphs={glyphs}\tlines={lines}\tobjects={objects}\tchecksum={checksum:016x}\tgeometry_checksum={geometry_checksum:016x}\tobject_checksum={object_checksum:016x}",
+        "engine=parley\tphase={phase}\tdirection={direction}\tstyle={style}\ttext_bytes={}\twidth={width:.3}\titerations={}\tsamples={}\tmedian_ns_per_iter={median:.3}\tglyphs={glyphs}\tlines={lines}\tobjects={objects}\tchecksum={checksum:016x}\tgeometry_checksum={geometry_checksum:016x}\tplacement_checksum={placement_checksum:016x}\tobject_checksum={object_checksum:016x}",
         text.len(),
         iterations,
         samples
@@ -157,11 +159,12 @@ fn run_once(
     fallback_family_name: Option<&str>,
     retained: Option<&mut Layout<Brush>>,
     summarize_output: bool,
-) -> (u64, u64, u64, usize, usize, usize) {
+) -> (u64, u64, u64, u64, usize, usize, usize) {
     let mut owned;
+    let alignment = alignment_for_style(style);
     let layout = if let Some(layout) = retained {
         break_layout(layout, width, style);
-        layout.align(Alignment::Start, AlignmentOptions::default());
+        layout.align(alignment, AlignmentOptions::default());
         layout
     } else {
         owned = build_layout(
@@ -174,7 +177,7 @@ fn run_once(
             fallback_family_name,
         );
         break_layout(&mut owned, width, style);
-        owned.align(Alignment::Start, AlignmentOptions::default());
+        owned.align(alignment, AlignmentOptions::default());
         &mut owned
     };
     if summarize_output {
@@ -190,7 +193,15 @@ fn run_once(
         // not make Parley enumerate every line and item inside the measured
         // loop solely to reproduce that diagnostic checksum. The count is a
         // direct consequence of this benchmark's validated style/input pair.
-        (checksum, 0, 0, 0, layout.len(), object_count_hint(style))
+        (checksum, 0, 0, 0, 0, layout.len(), object_count_hint(style))
+    }
+}
+
+fn alignment_for_style(style: &str) -> Alignment {
+    if style == "center" {
+        Alignment::Center
+    } else {
+        Alignment::Start
     }
 }
 
@@ -245,7 +256,7 @@ fn build_layout(
     }
     builder.push_default(StyleProperty::FontSize(16.0));
     match style {
-        "default" => {}
+        "default" | "center" => {}
         "fallback" => {}
         "spacing" => {
             builder.push_default(StyleProperty::LetterSpacing(0.75));
@@ -275,7 +286,7 @@ fn build_layout(
                 baseline: Some(15.0),
             }),
         _ => panic!(
-            "style must be default, spacing, alternating, fallback, inline-object, out-of-flow-object, or custom-out-of-flow-object"
+            "style must be default, center, spacing, alternating, fallback, inline-object, out-of-flow-object, or custom-out-of-flow-object"
         ),
     }
     builder.set_base_direction(match direction {
@@ -291,9 +302,10 @@ fn summarize(
     layout: &Layout<Brush>,
     text: &str,
     style: &str,
-) -> (u64, u64, u64, usize, usize, usize) {
+) -> (u64, u64, u64, u64, usize, usize, usize) {
     let mut hash = 0xcbf29ce484222325u64;
     let mut geometry_hash = 0xcbf29ce484222325u64;
+    let mut placement_hash = 0xcbf29ce484222325u64;
     let mut glyph_count = 0usize;
     let mut line_count = 0usize;
     for line in layout.lines() {
@@ -307,6 +319,15 @@ fn summarize(
             &(line.text_range().start as u64).to_le_bytes(),
         );
         geometry_hash = bytes(geometry_hash, &(line.text_range().end as u64).to_le_bytes());
+        // Preserve physical translation: unlike geometry_hash, this hashes the
+        // absolute line origin rather than subtracting a per-line origin.
+        let line_origin = metrics.inline_min_coord + metrics.offset;
+        placement_hash = hash_line_placement(
+            placement_hash,
+            line.text_range().start,
+            line.text_range().end,
+            line_origin,
+        );
         let mut records = Vec::new();
         for run in line.runs() {
             for cluster in run.clusters() {
@@ -364,6 +385,7 @@ fn summarize(
     (
         hash,
         geometry_hash,
+        placement_hash,
         object_hash,
         glyph_count,
         line_count,
@@ -451,9 +473,30 @@ fn canonical_inline_position(value: f32) -> i32 {
     (value * 1024.0).round() as i32
 }
 
+fn hash_line_placement(mut hash: u64, start: usize, end: usize, x: f32) -> u64 {
+    hash = bytes(hash, &(start as u64).to_le_bytes());
+    hash = bytes(hash, &(end as u64).to_le_bytes());
+    bytes(hash, &canonical_inline_position(x).to_le_bytes())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{bytes, canonical_inline_position};
+    use super::{
+        Alignment, alignment_for_style, bytes, canonical_inline_position, hash_line_placement,
+    };
+
+    #[test]
+    fn center_style_selects_center_alignment_only() {
+        assert_eq!(alignment_for_style("center"), Alignment::Center);
+        assert_eq!(alignment_for_style("default"), Alignment::Start);
+    }
+
+    #[test]
+    fn placement_hash_encoding_is_absolute_and_quantized() {
+        let placement_hash = |x| hash_line_placement(0xcbf29ce484222325, 2, 7, x);
+        assert_eq!(placement_hash(12.25), 0xa677645ffa7e2cbb);
+        assert_ne!(placement_hash(12.25), placement_hash(12.25 + 1.0 / 1024.0),);
+    }
 
     #[test]
     fn object_hash_encoding_is_little_endian_and_quantized() {

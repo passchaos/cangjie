@@ -3,10 +3,11 @@
 This standalone runner reproduces Parley's official default benchmark
 construction boundary with an explicit font and UTF-8 text file: reusable
 `FontContext`/`LayoutContext`, `RangedBuilder::build`, 200-unit line breaking,
-and start alignment. It prints a deterministic output checksum and median
-nanoseconds per complete layout so Cangjie's `paragraph-bench` can be run
-serially on the same pinned CPU without making cross-process timing claims from
-different workloads.
+and start alignment (or center alignment for the `center` style). It prints
+deterministic native, logical-geometry, absolute-placement, and object-geometry
+checksums plus median nanoseconds per complete layout so Cangjie's
+`paragraph-bench` can be run serially on the same pinned CPU without making
+cross-process timing claims from different workloads.
 
 The relative path pins the local Parley checkout used by this repository's
 reference audit. Rust remains optional and is not part of the normal Zig test
@@ -14,17 +15,23 @@ graph. Example:
 
 ```sh
 cargo run --release --manifest-path tools/parley_layout_oracle/Cargo.toml -- \
-  /path/to/Roboto-Regular.ttf /path/to/latin.txt 1000 31 [FAMILY] [WIDTH] [DIRECTION] [default|spacing|alternating|inline-object|out-of-flow-object] [layout|reflow]
+  /path/to/Roboto-Regular.ttf /path/to/latin.txt 1000 31 [FAMILY] [WIDTH] [DIRECTION] [default|center|spacing|alternating|inline-object|out-of-flow-object|custom-out-of-flow-object|fallback] [layout|reflow] [FALLBACK_FONT]
 
 zig build paragraph-bench -Doptimize=ReleaseFast -- \
-  /path/to/Roboto-Regular.ttf /path/to/latin.txt 1000 31 [WIDTH] [PHASE] [DIRECTION] [default|spacing|alternating|inline-object|out-of-flow-object]
+  /path/to/Roboto-Regular.ttf /path/to/latin.txt 1000 31 [WIDTH] [PHASE] [DIRECTION] [default|center|spacing|alternating|inline-object|out-of-flow-object|custom-out-of-flow-object|fallback] [FALLBACK_FONT]
 ```
 
 `zig build parley-matrix -Doptimize=ReleaseFast` runs default, spacing,
-alternating-style, in-flow-object, ordinary/custom out-of-flow-object, and mixed-font fallback boundaries over
-Parley's Latin, Arabic, and Japanese sample paragraphs. It rejects mismatched
-source-byte, glyph, line, or object counts and requires exact normalized object
-geometry (stable id/source/line, x/y, size, and baseline) for all object rows.
+alternating-style, in-flow-object, ordinary/custom out-of-flow-object, and
+mixed-font fallback boundaries over Parley's Latin, Arabic, and Japanese sample
+paragraphs. One additional ordinary-Latin row uses a dedicated terminal-space-
+free fixture and center alignment. It requires exact equality for both the
+existing translation-invariant `geometry_checksum` and the new
+`placement_checksum`, which hashes each line's source range and canonicalized
+absolute x origin without removing translation. The matrix also rejects
+mismatched source-byte, glyph, line, or object counts and requires exact
+normalized object geometry (stable id/source/line, x/y, size, and baseline) for
+all object rows.
 Custom object rows explicitly resume Parley's breaker with zero occupancy and
 compare the same caller-owned absolute placement used by Cangjie.
 The Parley oracle disables optional paint-time pixel quantization so both

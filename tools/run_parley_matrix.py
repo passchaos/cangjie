@@ -116,35 +116,50 @@ def main() -> int:
             args.fallback_font,
         ),
     )
+    center_case = Case(
+        "latin",
+        args.roboto,
+        Path("tests/data/parley-center-latin.txt"),
+        "Roboto",
+        "200",
+    )
     failures: list[str] = []
     for case in cases:
-        matrix_rows = (("layout", "fallback"), ("reflow", "fallback")) if case.name == "fallback" else (
-            ("layout", "default"),
-            ("layout", "spacing"),
-            ("layout", "alternating"),
-            ("reflow", "default"),
-            ("layout", "inline-object"),
-            ("reflow", "inline-object"),
-            ("layout", "out-of-flow-object"),
-            ("reflow", "out-of-flow-object"),
-            ("layout", "custom-out-of-flow-object"),
-            ("reflow", "custom-out-of-flow-object"),
-        )
+        if case.name == "fallback":
+            matrix_rows = [("layout", "fallback"), ("reflow", "fallback")]
+        else:
+            matrix_rows = [
+                ("layout", "default"),
+                ("layout", "spacing"),
+                ("layout", "alternating"),
+                ("reflow", "default"),
+                ("layout", "inline-object"),
+                ("reflow", "inline-object"),
+                ("layout", "out-of-flow-object"),
+                ("reflow", "out-of-flow-object"),
+                ("layout", "custom-out-of-flow-object"),
+                ("reflow", "custom-out-of-flow-object"),
+            ]
+            if case.name == "latin":
+                matrix_rows.insert(1, ("layout", "center"))
         for phase, style in matrix_rows:
+            # Keep centered placement independent from the existing sample's
+            # terminal-space policy; the dedicated fixture has visible edges.
+            row_case = center_case if style == "center" else case
             cangjie_first = run(
-                cangjie_command(args.cangjie, case, style, phase, args.iterations, args.samples),
+                cangjie_command(args.cangjie, row_case, style, phase, args.iterations, args.samples),
                 args.cpu,
             )
             parley_first = run(
-                parley_command(parley, case, style, phase, args.iterations, args.samples),
+                parley_command(parley, row_case, style, phase, args.iterations, args.samples),
                 args.cpu,
             )
             parley_second = run(
-                parley_command(parley, case, style, phase, args.iterations, args.samples),
+                parley_command(parley, row_case, style, phase, args.iterations, args.samples),
                 args.cpu,
             )
             cangjie_second = run(
-                cangjie_command(args.cangjie, case, style, phase, args.iterations, args.samples),
+                cangjie_command(args.cangjie, row_case, style, phase, args.iterations, args.samples),
                 args.cpu,
             )
             records = (cangjie_first, parley_first, parley_second, cangjie_second)
@@ -175,6 +190,23 @@ def main() -> int:
             # visually discarded trailing whitespace are intentionally absent.
             geometry_checksums = {item.get("geometry_checksum") for item in records}
             geometry_equivalent = len(geometry_checksums) == 1 and None not in geometry_checksums
+            placement_checksums = {item.get("placement_checksum") for item in records}
+            placement_equivalent = (
+                len(placement_checksums) == 1 and None not in placement_checksums
+            )
+            requires_semantic_equality = (
+                case.name == "latin" and phase == "layout" and style == "center"
+            )
+            if requires_semantic_equality and not geometry_equivalent:
+                failures.append(
+                    f"{case.name}/{phase}/{style}: geometry checksums="
+                    f"{[item.get('geometry_checksum') for item in records]}"
+                )
+            if requires_semantic_equality and not placement_equivalent:
+                failures.append(
+                    f"{case.name}/{phase}/{style}: placement checksums="
+                    f"{[item.get('placement_checksum') for item in records]}"
+                )
             object_checksums = {item.get("object_checksum") for item in records}
             object_geometry_equivalent = (
                 len(object_checksums) == 1 and None not in object_checksums
@@ -227,6 +259,8 @@ def main() -> int:
                 f"lines={cangjie_first.get('lines')} "
                 f"objects={cangjie_first.get('objects')} "
                 f"geometry_equal={str(geometry_equivalent).lower()} "
+                f"placement_equal="
+                f"{str(placement_equivalent).lower() if requires_semantic_equality else 'n/a'} "
                 f"object_geometry_equal="
                 f"{str(object_geometry_equivalent).lower() if requires_object_geometry else 'n/a'}"
             )
@@ -235,7 +269,10 @@ def main() -> int:
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         return 1
-    print("Cangjie/Parley output-count and object-geometry matrix passed: 32 cases")
+    print(
+        "Cangjie/Parley output-count, object-geometry, and centered-placement "
+        "matrix passed: 33 cases"
+    )
     print(f"parley_vertical_api={str(parley_vertical_api).lower()}")
     return 0
 

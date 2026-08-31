@@ -11,9 +11,9 @@ one benchmark. The claim remains **open** until every row below is closed.
 | --- | --- | --- | --- |
 | HarfBuzz | Exact glyph IDs, clusters, advances, offsets, and relevant flags across retained upstream and production-font corpora | `shaping-parity-smoke`, `shaping-corpus-parity-smoke`, `tests/data/`, `docs/shaping-parity.md` | Strong retained coverage, not exhaustive |
 | HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: the latest fixed-CPU strict core run leads only the two Latin rows (`1.175x` Roboto, `1.062x` Source Serif) and trails Amiri words/long and Devanagari (`0.675x`/`0.793x`/`0.819x`). The latest strict broad run leads its two Latin rows (`1.102x`/`1.067x`) but Noto Nastaliq still trails badly (`0.544x` words, `0.502x` long). Earlier narrow core wins are therefore superseded; broader shaping performance remains open |
-| Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; all 33 maintained rows are semantically exact, now including real VARC GID 1 at default, conditional-boundary, and endpoint locations in owning and reuse lifecycles. The new owning varied VARC probes trail Skrifa, so the performance criterion and broader semantic coverage remain open |
+| Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; all 33 maintained rows are semantically exact, now including real VARC GID 1 at default, conditional-boundary, and endpoint locations in owning and reuse lifecycles. The focused strict VARC matrix now leads all eight new rows after parsed-gvar decoding was accelerated; broader semantic coverage remains open |
 | FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `hinted-outline-matrix`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 75 maintained grayscale raster rows, all 10 native-strike bitmap rows, the shared COLRv0 layer/CPAL row, and all five matched face-open rows lead. The expanded 120-row hinted-outline matrix is semantically exact; the earlier 100 rows led in one strict run and the 20 new U+00C3 rows lead in focused repeats, but a combined strict run remains noise-sensitive. Complete eager validation is separately reported and remains slower, COLRv1/SVG have no FreeType built-in renderer for direct performance comparison, and broader glyph/platform coverage remains incomplete |
-| Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the maintained 32-row matrix covers three scripts, three construction styles, retained reflow, matched in-flow/ordinary/custom out-of-flow objects, and mixed Roboto→Noto Sans Devanagari fallback. All 18 object rows prove identical id/source/line/position/size/baseline geometry at fractional coordinates. The latest strict matrix leads every row, including Arabic in-flow/ordinary/custom retained reflow at `1.022x`/`1.007x`/`1.013x`; these remain narrow margins, and vertical comparison remains unavailable because the pinned Parley API has no writing-mode input |
+| Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the maintained 34-row matrix covers three scripts, centered placement and reflow, three construction styles, retained reflow, matched in-flow/ordinary/custom out-of-flow objects, and mixed Roboto→Noto Sans Devanagari fallback. Thirteen text rows now enforce exact normalized geometry and visible-left placement, while all 18 object rows enforce exact object geometry. Japanese default/spacing geometry remains different, and vertical comparison remains unavailable because the pinned Parley API has no writing-mode input |
 | Robustness | Malformed supported inputs fail atomically under safety checks and sustained coverage-guided fuzzing | `font-fuzz-smoke`, `font-fuzz`, regression fixtures | Open: the retained 100K campaign is useful evidence, not exhaustive format coverage |
 | Platform scope | Results reproduced on each supported target or the performance claim explicitly scoped to named hardware/OS/toolchain versions | benchmark documentation | Open: current performance evidence is primarily one Linux x86-64 host |
 
@@ -69,15 +69,19 @@ x86-64, pinned to CPU 30 where the harness supports it:
   `5a6e6f5198f5f187`, `42fd47d8cbf0b95c`, and `2bc32c6dbad5615e`
   respectively. A fixed-CPU-30 `10000 * 7` focused probe was deliberately run
   without `--fail-on-slower`: reuse led by `9.712x--12.340x`, while owning
-  default narrowly led (`1.054x`) and the three varied owning rows trailed
-  (`0.862x`, `0.916x`, and `0.909x`). These measurements are retained as an
-  open performance finding, not a superiority claim.
-- `zig build test -j1 -Doptimize=ReleaseFast --summary failures` remains red
-  at the pre-existing `cached GSUB plans retain detailed lookup profiling`
-  assertion (`2392` passed, `1` skipped, `1` failed in the main test binary).
-  Reproducing that filtered assertion in a clean detached `c6d22ceb` worktree
-  fails identically; the VARC matrix, fixture, and documentation do not touch
-  the shaping profiler.
+  default narrowly led (`1.054x`) and the three varied owning rows initially
+  trailed (`0.862x`, `0.916x`, and `0.909x`). Parsed simple-glyph variation
+  now reuses `gvar` metadata retained by `Font.parse`, fuses dense all-point
+  delta decoding with accumulation, and allocates sparse interpolation scratch
+  only when required. A fixed-CPU-30 `10000 * 7` rerun then led all owning
+  rows at `1.464x`, `1.510x`, `1.488x`, and `1.494x`, with reuse at
+  `11.862x--12.750x`; a later strict `1000 * 3` verification also passed all
+  eight rows. Symmetric 200,000-iteration counters reduced owning retired
+  instructions by `27.36%--40.62%` and branches by `29.49%--41.76%`.
+- Ranged shaping now propagates the reusable engine's detailed profiling
+  configuration through its independent GSUB boundary. The ReleaseFast-only
+  `cached GSUB plans retain detailed lookup profiling` failure is closed; its
+  regression also verifies the actual ranged substitution result `[2,2,2]`.
 - The optional Fontations `--extended` outline corpus now includes all ten
   selected semantically identical glyphs from the larger two-axis
   `AdobeVFPrototype.otf`, in both owning and caller-storage modes. The original
@@ -647,11 +651,14 @@ reference, so further optimization remains necessary.
 ## Current conclusion
 
 Cangjie has exact semantic agreement across the maintained 33-case
-Fontations/Skrifa matrix, but the real varied-VARC owning rows currently trail
-Skrifa, so no overall Fontations performance lead is claimed. Cangjie is ahead
+Fontations/Skrifa matrix, and every retained row currently leads its matched
+reference lifecycle, including the eight real VARC rows. Broader semantic
+coverage is still open, so no overall Fontations claim is made. Cangjie is ahead
 in the complete maintained 75-row FreeType grayscale lifecycle matrix. The
-latest strict Parley matrix led all 32
-rows, although its three Arabic object-reflow margins remain narrow. This evidence is
+latest strict Parley performance matrix led all 32 then-maintained rows; the
+current 34-row semantic matrix now enforces thirteen text-geometry/placement
+rows and all 18 object-geometry rows, but has not yet received a new strict
+performance run. This evidence is
 substantial but does not satisfy the stronger overall claim. In particular,
 the latest shaping runs still trail the faster reference on Noto Nastaliq,
 both Amiri rows, and Devanagari. The

@@ -144,6 +144,11 @@ fn shapeValidated(
         .ligature_components = &sources.ligature_components,
         .source_codepoints = sources.codepoints.items,
         .random_state = &random_state,
+        // Ranged shaping bypasses the ordinary segment pipeline, so carry its
+        // profiling configuration across this independent GSUB boundary.
+        .shape_profile = buffer.shape_profile,
+        .profile_fast_path = buffer.profile_fast_path,
+        .profile_io = buffer.profile_io,
     };
     run_limits.applyTo(&gsub_options);
 

@@ -61,12 +61,22 @@ test "cached GSUB plans retain detailed lookup profiling" {
         .byte_end = 3,
     }};
 
-    _ = try engine.shape(
+    const shaped = try engine.shape(
         face_mod.backend.face(&font),
         .{
             .text = "AAA",
             .font_size = 20,
             .feature_ranges = &feature_ranges,
+        },
+    );
+    try std.testing.expectEqual(@as(usize, 3), shaped.glyphs.len);
+    try std.testing.expectEqualSlices(
+        @import("../../glyph.zig").GlyphId,
+        &.{ 2, 2, 2 },
+        &.{
+            shaped.glyphs[0].glyph_id,
+            shaped.glyphs[1].glyph_id,
+            shaped.glyphs[2].glyph_id,
         },
     );
     try std.testing.expect(profile.gsub_lookup_count != 0);

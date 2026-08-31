@@ -10,7 +10,7 @@ one benchmark. The claim remains **open** until every row below is closed.
 | Reference | Concrete completion criterion | Current artifact/evidence | Status |
 | --- | --- | --- | --- |
 | HarfBuzz | Exact glyph IDs, clusters, advances, offsets, and relevant flags across retained upstream and production-font corpora | `shaping-parity-smoke`, `shaping-corpus-parity-smoke`, `tests/data/`, `docs/shaping-parity.md` | Strong retained coverage, not exhaustive |
-| HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: the latest fixed-CPU strict core run leads only the two Latin rows (`1.175x` Roboto, `1.062x` Source Serif) and trails Amiri words/long and Devanagari (`0.675x`/`0.793x`/`0.819x`). The latest strict broad run leads its two Latin rows (`1.102x`/`1.067x`) but Noto Nastaliq still trails badly (`0.544x` words, `0.502x` long). Earlier narrow core wins are therefore superseded; broader shaping performance remains open |
+| HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` | Open: the current fixed-CPU-30 `5 * 31` core run clears the explicit `1.01x` gate for Roboto, Source Serif, and both Amiri rows (`1.441x`/`1.013x`/`1.143x`/`1.501x`) but Devanagari remains red (`0.965x`). The current `3 * 31` broad run leads both Latin rows (`1.143x`/`1.080x`) but Noto Nastaliq remains red (`0.782x` words, `0.614x` long). Some endpoints were visibly contention-affected, so the large red rows—not inflated winning ratios—are the actionable evidence; broader shaping performance remains open |
 | Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; all 33 maintained rows are semantically exact, now including real VARC GID 1 at default, conditional-boundary, and endpoint locations in owning and reuse lifecycles. The focused strict VARC matrix now leads all eight new rows after parsed-gvar decoding was accelerated; broader semantic coverage remains open |
 | FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `hinted-outline-matrix`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 75 maintained grayscale raster rows, all 10 native-strike bitmap rows, the shared COLRv0 layer/CPAL row, and all five matched face-open rows lead. The expanded 120-row hinted-outline matrix is semantically exact; the earlier 100 rows led in one strict run and the 20 new U+00C3 rows lead in focused repeats, but a combined strict run remains noise-sensitive. Complete eager validation is separately reported and remains slower, COLRv1/SVG have no FreeType built-in renderer for direct performance comparison, and broader glyph/platform coverage remains incomplete |
 | Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the maintained 34-row matrix covers three scripts, centered placement and reflow, three construction styles, retained reflow, matched in-flow/ordinary/custom out-of-flow objects, and mixed Roboto→Noto Sans Devanagari fallback. Thirteen text rows now enforce exact normalized geometry and visible-left placement, while all 18 object rows enforce exact object geometry. Japanese default/spacing line boundaries differ because Cangjie honors shaping-derived unsafe-to-break boundaries that pinned Parley does not consume; vertical comparison remains unavailable because the pinned Parley API has no writing-mode input |
@@ -635,6 +635,24 @@ parity gate passed. A noisy concurrent core matrix is retained only as a
 diagnostic—not superiority evidence—and still left Devanagari below the faster
 reference, so further optimization remains necessary.
 
+The current `f579e37f` snapshot was rerun on the same Linux x86-64 host and
+fixed CPU 30 with the matrix's symmetric process order and its new enforced
+`1.01x` minimum. Core `5 * 31` reported Roboto `1.440842x`, Source Serif
+`1.013227x`, Amiri words `1.142873x`, Amiri long `1.501133x`, and Devanagari
+`0.965414x`. Broad `3 * 31` reported Noto Nastaliq words `0.782152x`, Noto
+Nastaliq long `0.614364x`, Roboto long `1.143029x`, and Source Serif long
+`1.079957x`. All six process endpoints in each row agreed on normalized glyph
+count. Several individual reference endpoints were visibly delayed by host
+contention, so this run does not use the enlarged winning ratios as a stronger
+claim; the stable, material Devanagari and Nastaliq deficits remain decisive.
+The retained GPOS second-lookahead index nevertheless moved both Amiri rows
+from the prior red snapshot to clear wins. Three later generic experiments
+were rejected rather than retained: a four-input compact path was neutral on
+retired work and `0.56%` slower on its Devanagari target, a first-lookahead
+class digest improved Noto retired work but regressed the Devanagari control,
+and predecoded CursivePos anchors reduced Noto retired work by less than half a
+percent while leaving target wall time flat and regressing the Roboto control.
+
 ## Audit rules
 
 1. A semantic manifest proves inventory only; it is not a differential test.
@@ -665,8 +683,9 @@ current 34-row semantic matrix now enforces thirteen text-geometry/placement
 rows and all 18 object-geometry rows, but has not yet received a new strict
 performance run. This evidence is
 substantial but does not satisfy the stronger overall claim. In particular,
-the latest shaping runs still trail the faster reference on Noto Nastaliq,
-both Amiri rows, and Devanagari. The FreeType-equivalent face opening now
+the latest shaping runs still trail the faster reference on Noto Nastaliq and
+Devanagari; both Amiri rows now clear the declared margin. The
+FreeType-equivalent face opening now
 leads, while complete eager validation is reported separately. Broader hinting
 targets and more glyphs remain uncovered. SVG still needs a separate renderer
 reference, and COLRv1 coverage is represented by the bounded matrix below

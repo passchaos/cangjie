@@ -47,11 +47,11 @@ test "cascade shaping can preserve caller-materialized visual order" {
     try std.testing.expectEqual(@as(usize, 1), preserved.glyphs[1].cluster);
 }
 
-test "native-direction shaping exposes HarfBuzz buffer order for explicit RTL Old Italic" {
+test "variable-direction Old Italic preserves explicit RTL shaping" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");
 
-    const bytes = try test_font.buildCodepointSetTtf(allocator, &.{ 0x10300, 0x10301 });
+    const bytes = try test_font.buildOldItalicDirectionalGsubTtf(allocator);
     defer allocator.free(bytes);
     var font = try Font.parse(allocator, bytes);
     defer font.deinit();
@@ -71,12 +71,15 @@ test "native-direction shaping exposes HarfBuzz buffer order for explicit RTL Ol
     );
 
     try std.testing.expectEqual(@as(usize, 2), run.glyphs.len);
-    try std.testing.expectEqual(@as(GlyphId, 2), run.glyphs[0].glyph_id);
-    try std.testing.expectEqual(@as(GlyphId, 1), run.glyphs[1].glyph_id);
-    try std.testing.expectEqual(@as(u21, 0x10301), run.glyphs[0].codepoint);
-    try std.testing.expectEqual(@as(u21, 0x10300), run.glyphs[1].codepoint);
-    try std.testing.expectEqual(@as(usize, 4), run.glyphs[0].cluster);
-    try std.testing.expectEqual(@as(usize, 0), run.glyphs[1].cluster);
+    // Old Italic may be written in either direction. Its native direction is
+    // therefore indeterminate, so the caller's RTL direction selects `rtlm`
+    // while the already-visual buffer order remains unchanged.
+    try std.testing.expectEqual(@as(GlyphId, 3), run.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(GlyphId, 4), run.glyphs[1].glyph_id);
+    try std.testing.expectEqual(@as(u21, 0x10300), run.glyphs[0].codepoint);
+    try std.testing.expectEqual(@as(u21, 0x10301), run.glyphs[1].codepoint);
+    try std.testing.expectEqual(@as(usize, 0), run.glyphs[0].cluster);
+    try std.testing.expectEqual(@as(usize, 4), run.glyphs[1].cluster);
 }
 
 test "shapes cascade text right-to-left with visual glyph order" {

@@ -1349,6 +1349,28 @@ pub fn buildMixedScriptDirectionalGsubTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, tables);
 }
 
+/// Old Italic fixture whose `rtlm` feature makes an explicit RTL request
+/// observable without relying on an external HarfBuzz test font.
+pub fn buildOldItalicDirectionalGsubTtf(allocator: std.mem.Allocator) ![]u8 {
+    const tables = try allocator.alloc(Table, 8);
+    errdefer allocator.free(tables);
+    tables[0] = .{
+        .tag = "GSUB",
+        .data = try singleScriptDirectionalGsubTable(allocator, "ital", "rtlm"),
+    };
+    tables[1] = .{
+        .tag = "cmap",
+        .data = try cmapFormat12SequentialTable(allocator, &.{ 0x10300, 0x10301 }),
+    };
+    tables[2] = .{ .tag = "glyf", .data = try emptyGlyfTable(allocator, 5) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 5) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTableWithGlyphCount(allocator, 5) };
+    tables[6] = .{ .tag = "loca", .data = try emptyLocaTable(allocator, 5) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 5) };
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
 /// One-face Latin/Arabic fixture whose Arabic ScriptList owns a required
 /// `rlig` lookup. Its logical lam-alef match distinguishes the intended source
 /// pair from alef-lam even after mixed-direction visual presentation.
@@ -5221,7 +5243,7 @@ fn jstfCardinalityGsubTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 36, 8);
     writeU16(bytes, 40, 1);
     writeU16(bytes, 42, 0);
-    writeU16(bytes, 44, 1);
+    writeU16(bytes, 44, 1); // lookup index 1
     writeU16(bytes, 46, 4);
     const lookup = 48;
     writeU16(bytes, lookup, 4);
@@ -8616,6 +8638,47 @@ fn mixedScriptDirectionalGsubTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 92, 34);
     writeSingleSubstLookup(bytes, 94, 1);
     writeSingleSubstLookup(bytes, 122, 2);
+    return bytes;
+}
+
+fn singleScriptDirectionalGsubTable(
+    allocator: std.mem.Allocator,
+    script_tag: *const [4]u8,
+    feature_tag: *const [4]u8,
+) ![]u8 {
+    // ScriptList -> one default LangSys -> one directional feature -> two
+    // SingleSubst lookups. Mapping both source glyphs makes feature selection
+    // visible independently from buffer reversal.
+    const bytes = try allocator.alloc(u8, 108);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 10);
+    writeU16(bytes, 6, 30);
+    writeU16(bytes, 8, 46);
+
+    writeU16(bytes, 10, 1);
+    writeTag(bytes, 12, script_tag);
+    writeU16(bytes, 16, 8);
+    writeU16(bytes, 18, 4);
+    writeU16(bytes, 20, 0);
+    writeU16(bytes, 22, 0);
+    writeU16(bytes, 24, 0xffff);
+    writeU16(bytes, 26, 1);
+    writeU16(bytes, 28, 0);
+
+    writeU16(bytes, 30, 1);
+    writeTag(bytes, 32, feature_tag);
+    writeU16(bytes, 36, 8);
+    writeU16(bytes, 38, 0);
+    writeU16(bytes, 40, 2);
+    writeU16(bytes, 42, 0);
+    writeU16(bytes, 44, 1);
+
+    writeU16(bytes, 46, 2);
+    writeU16(bytes, 48, 6);
+    writeU16(bytes, 50, 34);
+    writeSingleSubstLookup(bytes, 52, 1);
+    writeSingleSubstLookup(bytes, 80, 2);
     return bytes;
 }
 

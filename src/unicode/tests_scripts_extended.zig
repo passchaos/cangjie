@@ -149,7 +149,7 @@ test "next Unicode 17 script tranche selects OpenType and bidi primitives" {
         bidi: unicode.BidiClass = .ltr,
     };
     const cases = [_]Case{
-        .{ .scalar = 0x1e800, .script = .mende_kikakui, .tag = .mend },
+        .{ .scalar = 0x1e800, .script = .mende_kikakui, .tag = .mend, .bidi = .rtl },
         .{ .scalar = 0x10000, .script = .linear_b, .tag = .linb },
         .{ .scalar = 0x16f00, .script = .miao, .tag = .plrd },
         .{ .scalar = 0x16b00, .script = .pahawh_hmong, .tag = .hmng },
@@ -345,7 +345,7 @@ test "final Unicode 17 script tranche selects OpenType bidi and word primitives"
         .{ .scalar = 0x10920, .script = .lydian, .tag = .lydi, .text = "\u{10920}\u{10921}", .bidi = .rtl },
         .{ .scalar = 0x108e0, .script = .hatran, .tag = .hatr, .text = "\u{108e0}\u{108e1}", .bidi = .rtl },
         .{ .scalar = 0x10f70, .script = .old_uyghur, .tag = .ougr, .text = "\u{10f70}\u{10f71}", .bidi = .rtl },
-        .{ .scalar = 0x10940, .script = .sidetic, .tag = .sidt, .text = "\u{10940}\u{10941}" },
+        .{ .scalar = 0x10940, .script = .sidetic, .tag = .sidt, .text = "\u{10940}\u{10941}", .bidi = .rtl },
         .{ .scalar = 0x11ee0, .script = .makasar, .tag = .maka, .text = "\u{11ee0}\u{11ee1}" },
         .{ .scalar = 0x10fe0, .script = .elymaic, .tag = .elym, .text = "\u{10fe0}\u{10fe1}", .bidi = .rtl },
     };
@@ -367,6 +367,21 @@ test "final Unicode 17 script tranche selects OpenType bidi and word primitives"
     try std.testing.expectEqual(unicode.Script.inherited, unicode.scriptForCodepoint(0x0951));
     try std.testing.expectEqual(unicode.Script.devanagari, unicode.scriptForCodepoint(0xa8e0));
     try std.testing.expectEqual(unicode.Script.devanagari, unicode.scriptForCodepoint(0x11b09));
+}
+
+test "OpenType horizontal directions preserve variable-direction scripts" {
+    // This is the native direction used by OpenType shaping, not the bidi
+    // class of any particular scalar. Keep it aligned with
+    // hb_script_get_horizontal_direction so explicit directions remain
+    // authoritative for historically variable-direction scripts.
+    try std.testing.expectEqual(null, unicode.openTypeScriptHorizontalDirection(.hung));
+    try std.testing.expectEqual(null, unicode.openTypeScriptHorizontalDirection(.ital));
+    try std.testing.expectEqual(null, unicode.openTypeScriptHorizontalDirection(.runr));
+    try std.testing.expectEqual(null, unicode.openTypeScriptHorizontalDirection(.tfng));
+    try std.testing.expectEqual(unicode.BidiClass.ltr, unicode.openTypeScriptHorizontalDirection(.ugar).?);
+    try std.testing.expectEqual(unicode.BidiClass.rtl, unicode.openTypeScriptHorizontalDirection(.cprt).?);
+    try std.testing.expectEqual(unicode.BidiClass.rtl, unicode.openTypeScriptHorizontalDirection(.mend).?);
+    try std.testing.expectEqual(unicode.BidiClass.rtl, unicode.openTypeScriptHorizontalDirection(.sidt).?);
 }
 
 test "Tagalog text selects Baybayin script primitives" {

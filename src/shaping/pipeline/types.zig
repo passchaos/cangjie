@@ -216,3 +216,21 @@ test "only LTR requests for RTL scripts need numeric direction traits" {
         .direction = .rtl,
     }).needsRtlNumericDirectionGuard());
 }
+
+test "variable-direction scripts retain an explicit shaping direction" {
+    const old_italic_rtl = LookupOptions{
+        .script = .old_italic,
+        .direction = .rtl,
+        .reorder_bidi = false,
+        .native_direction_shaping = true,
+    };
+    try @import("std").testing.expectEqual(
+        @as(?unicode.BidiClass, null),
+        old_italic_rtl.nativeHorizontalDirection(),
+    );
+    try @import("std").testing.expect(!old_italic_rtl.shouldShapeInNativeDirection());
+    try @import("std").testing.expectEqual(
+        TextDirection.rtl,
+        old_italic_rtl.shapingDirection(),
+    );
+}

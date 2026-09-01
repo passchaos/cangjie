@@ -89,6 +89,7 @@ test "Old Italic letters and numerals select Old Italic script primitives" {
     try std.testing.expectEqual(unicode.Script.unknown, unicode.scriptForCodepoint(0x10324));
     try std.testing.expectEqual(unicode.BidiClass.ltr, unicode.bidiClassForCodepoint(0x10300));
     try std.testing.expectEqual(unicode.BidiClass.ltr, unicode.bidiClassForCodepoint(0x10320));
+    try std.testing.expectEqual(null, unicode.openTypeScriptHorizontalDirection(.ital));
 
     const words = try unicode.itemizeWordSegments(allocator, text);
     defer allocator.free(words);

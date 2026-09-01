@@ -827,14 +827,12 @@ pub fn openTypeScriptHorizontalDirection(script_tag: OpenTypeScriptTag) ?BidiCla
         .nko,
         .thaa,
         .adlm,
-        .ugar,
         .avst,
         .armi,
         .sarb,
         .narb,
         .mero,
         .merc,
-        .hung,
         .orkh,
         .gara,
         .khar,
@@ -853,8 +851,14 @@ pub fn openTypeScriptHorizontalDirection(script_tag: OpenTypeScriptTag) ?BidiCla
         .hatr,
         .ougr,
         .elym,
+        .cprt,
+        .mend,
+        .sidt,
         => .rtl,
-        .dflt => null,
+        // These scripts have historical left-to-right, right-to-left, or
+        // boustrophedon traditions. As in HarfBuzz, preserve the caller's
+        // explicit direction instead of inventing one native direction.
+        .hung, .ital, .runr, .tfng, .dflt => null,
         else => .ltr,
     };
 }
@@ -1121,8 +1125,8 @@ fn bidiClassFast(codepoint: u21) ?BidiClass {
 
 fn bidiClassForScript(script: Script) BidiClass {
     return switch (script) {
-        .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .avestan, .imperial_aramaic, .old_south_arabian, .old_north_arabian, .meroitic_hieroglyphs, .meroitic_cursive, .old_hungarian, .old_turkic, .garay, .kharoshthi, .manichaean, .hanifi_rohingya, .yezidi, .sogdian, .nabataean, .old_sogdian, .palmyrene, .inscriptional_parthian, .psalter_pahlavi, .chorasmian, .inscriptional_pahlavi, .lydian, .hatran, .old_uyghur, .elymaic => .rtl,
-        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .ugaritic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .tagalog, .hanunoo, .buhid, .tagbanwa, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .phags_pa, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .saurashtra, .rejang, .grantha, .limbu, .sharada, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .khudawadi, .tirhuta, .modi, .takri, .nushu, .runic, .coptic, .ogham, .duployan, .tangut, .egyptian_hieroglyphs, .cuneiform, .signwriting, .bamum, .anatolian_hieroglyphs, .khitan_small_script, .linear_a, .braille, .mende_kikakui, .linear_b, .miao, .pahawh_hmong, .cypro_minoan, .bhaiksuki, .siddham, .medefaidrin, .tangsa, .kawi, .warang_citi, .new_tai_lue, .soyombo, .deseret, .tulu_tigalari, .bopomofo, .masaram_gondi, .dives_akuru, .osage, .tai_viet, .zanabazar_square, .nyiakeng_puachue_hmong, .vithkuqi, .ahom, .khojki, .nandinagari, .gunjala_gondi, .dogra, .wancho, .gurung_khema, .kirat_rai, .pau_cin_hau, .cypriot, .tai_yo, .tolong_siki, .caucasian_albanian, .todhri, .beria_erfe, .carian, .ol_chiki, .shavian, .syloti_nagri, .ol_onal, .sunuwar, .mro, .old_permic, .nag_mundari, .elbasan, .osmanya, .mahajani, .multani, .bassa_vah, .sora_sompeng, .tai_le, .toto, .lycian, .gothic, .sidetic, .makasar => .ltr,
+        .arabic, .hebrew, .phoenician, .syriac, .samaritan, .mandaic, .nko, .thaana, .adlam, .avestan, .imperial_aramaic, .old_south_arabian, .old_north_arabian, .meroitic_hieroglyphs, .meroitic_cursive, .old_hungarian, .old_turkic, .garay, .kharoshthi, .manichaean, .mende_kikakui, .hanifi_rohingya, .yezidi, .sogdian, .nabataean, .old_sogdian, .palmyrene, .inscriptional_parthian, .psalter_pahlavi, .chorasmian, .inscriptional_pahlavi, .lydian, .hatran, .old_uyghur, .elymaic, .cypriot, .sidetic => .rtl,
+        .latin, .greek, .cyrillic, .glagolitic, .old_italic, .ugaritic, .old_persian, .han, .yi, .lisu, .vai, .hiragana, .katakana, .hangul, .armenian, .thai, .lao, .tagalog, .hanunoo, .buhid, .tagbanwa, .khmer, .myanmar, .devanagari, .bengali, .odia, .gurmukhi, .gujarati, .telugu, .kannada, .sinhala, .tamil, .malayalam, .ethiopic, .georgian, .cherokee, .tifinagh, .tibetan, .phags_pa, .mongolian, .balinese, .javanese, .tai_tham, .marchen, .newa, .kayah_li, .saurashtra, .rejang, .grantha, .limbu, .sharada, .lepcha, .buginese, .sundanese, .batak, .meetei_mayek, .canadian_aboriginal, .cham, .brahmi, .kaithi, .chakma, .khudawadi, .tirhuta, .modi, .takri, .nushu, .runic, .coptic, .ogham, .duployan, .tangut, .egyptian_hieroglyphs, .cuneiform, .signwriting, .bamum, .anatolian_hieroglyphs, .khitan_small_script, .linear_a, .braille, .linear_b, .miao, .pahawh_hmong, .cypro_minoan, .bhaiksuki, .siddham, .medefaidrin, .tangsa, .kawi, .warang_citi, .new_tai_lue, .soyombo, .deseret, .tulu_tigalari, .bopomofo, .masaram_gondi, .dives_akuru, .osage, .tai_viet, .zanabazar_square, .nyiakeng_puachue_hmong, .vithkuqi, .ahom, .khojki, .nandinagari, .gunjala_gondi, .dogra, .wancho, .gurung_khema, .kirat_rai, .pau_cin_hau, .tai_yo, .tolong_siki, .caucasian_albanian, .todhri, .beria_erfe, .carian, .ol_chiki, .shavian, .syloti_nagri, .ol_onal, .sunuwar, .mro, .old_permic, .nag_mundari, .elbasan, .osmanya, .mahajani, .multani, .bassa_vah, .sora_sompeng, .tai_le, .toto, .lycian, .gothic, .makasar => .ltr,
         else => .neutral,
     };
 }

@@ -50,6 +50,7 @@ zig build shape-bench -Doptimize=ReleaseFast -- --font ~/Work/harfrust/harfrust/
 zig build shape-bench -Doptimize=ReleaseFast -- --engine coretext --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/fa-thelittleprince.txt --direction rtl --iterations 1 --warmup 2 --samples 5
 zig build shape-bench -Doptimize=ReleaseFast -- --engine harfbuzz --font ~/Work/harfrust/harfrust/benches/fonts/Amiri-Regular.ttf --text-file ~/Work/harfrust/harfrust/benches/texts/fa-thelittleprince.txt --direction rtl --iterations 1 --warmup 2 --samples 5
 zig build shaping-performance-matrix -Doptimize=ReleaseFast -Denable-harfbuzz=true -Dharfbuzz-prefix=~/.cache/cangjie-next/harfbuzz-prefix -- --iterations 5 --samples 11 --cpu 30
+zig build shaping-performance-matrix -Doptimize=ReleaseFast -Denable-harfbuzz=true -Dharfbuzz-prefix=~/.cache/cangjie-next/harfbuzz-prefix -- --iterations 5 --samples 11 --cpu 30 --json-output shaping-performance.json
 zig build shaping-performance-matrix -Doptimize=ReleaseFast -Denable-harfbuzz=true -Dharfbuzz-prefix=~/.cache/cangjie-next/harfbuzz-prefix -- --suite react-dom --iterations 1 --samples 11 --cpu 30
 ```
 
@@ -98,8 +99,8 @@ zig build shaping-corpus-parity-smoke -Doptimize=ReleaseFast -Denable-harfbuzz=t
 This is a retained correctness-corpus result, not a completion signal for the
 broader performance and cross-script coverage objectives below.
 The `shaping-performance-matrix` command runs five representative corpora by
-default and two long mixed-code corpora with `--suite react-dom` (or all seven
-with `--suite all`) in
+default, four broad rows with `--suite broad`, and two long mixed-code corpora
+with `--suite react-dom` (or all eleven with `--suite all`) in
 symmetric Cangjie/HarfBuzz/HarfRust/HarfRust/HarfBuzz/Cangjie order and reports
 the geometric-mean speedup against the faster reference. Pass
 `--fail-on-slower` to enforce the reproducible `--minimum-speedup` threshold
@@ -108,6 +109,13 @@ fails. Without the fail flag, every row remains report-only while its threshold
 result is still printed. The runner normalizes
 the Zig engines' aggregate `iterations * samples` glyph count to the HarfRust
 oracle's one-corpus count before checking output cardinality. A fixed-CPU-30
+`--json-output PATH` also atomically writes a versioned artifact after a
+complete run without changing stdout. It records the run configuration, suite,
+all six endpoint medians and normalized glyph counts, geometric means, fastest
+reference, speedup, threshold status, and semantic-count agreement. Completed
+report-only runs still produce the artifact when rows miss the threshold; an
+enforced threshold failure, build failure, benchmark failure, or validation
+failure leaves the destination untouched. A fixed-CPU-30
 `5 * 11` run after adjacent required-component prefiltering measured speedups
 of `0.959x` on Roboto, `0.879x` on Source Serif Variable, `1.010x` on Amiri
 words, `1.107x` on long Amiri text, and `0.984x` on Noto Sans Devanagari

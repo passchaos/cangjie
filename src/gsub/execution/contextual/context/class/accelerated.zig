@@ -58,7 +58,8 @@ pub fn applyGroup(
     lookup_flag: u16,
     run: Options,
 ) Error!model.ApplyResult {
-    if (group.max_input_count == 0 or
+    if (group.min_input_count == 0 or
+        group.max_input_count == 0 or
         group.max_input_count > max_input_glyphs)
     {
         return error.UnsupportedGsub;
@@ -114,7 +115,12 @@ pub fn applyGroup(
     const rules = subtable.rules[group.start .. group.start + group.len];
     if (subtable.rules_hash_sorted) {
         var matched_rule: ?*const class_context.Rule = null;
-        for (0..input_len) |extra_count| {
+        // `extra_count + 1` is the candidate rule's input count. Counts below
+        // the group minimum have no authored rule, so probing their hashes is
+        // guaranteed to miss. Dense Nastaliq class sets often have a minimum
+        // of four and previously paid three useless binary searches at every
+        // covered glyph.
+        for (@as(usize, group.min_input_count) - 1..input_len) |extra_count| {
             if (extra_count >= group.min_input_count) {
                 const glyph = glyphs.items[input_indices[extra_count]];
                 input_classes[extra_count - 1] =
@@ -233,7 +239,7 @@ fn applyAdjacentGroup(
     const rules = subtable.rules[group.start .. group.start + group.len];
     if (subtable.rules_hash_sorted) {
         var matched_rule: ?*const class_context.Rule = null;
-        for (0..input_len) |extra_count| {
+        for (@as(usize, group.min_input_count) - 1..input_len) |extra_count| {
             const target_hash = input_hashes[extra_count];
             var low: usize = 0;
             var high: usize = rules.len;

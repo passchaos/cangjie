@@ -5100,3 +5100,20 @@ shaping-performance superiority.
   Serif long prose remained wins at `1.133104x` and `1.066056x`. This is a
   bounded completeness improvement, not closure of the larger Nastaliq gap;
   the dominant remaining cost is GSUB contextual/chaining matching.
+
+
+### ContextSubst minimum-length hash probes (2026-09-01)
+
+- Hash-indexed ContextSubst class groups now begin candidate-length probing at
+  their already-decoded `min_input_count`. Shorter prefix hashes cannot name an
+  authored rule and previously caused guaranteed-miss binary searches for every
+  covered glyph; dense Noto Nastaliq groups whose minimum input is four paid
+  three such probes. Both filtered and proven-adjacent execution use the same
+  bound, without changing hash construction or authored-order selection.
+- Fixed-CPU-30 A/B/B/A counters over five corpus passes reduced Noto Nastaliq
+  words instructions/branches by `0.72%`/`1.00%` and long prose by
+  `0.97%`/`1.26%`; Devanagari and Roboto retired instructions stayed within
+  `0.14%` and `0.01%`. Symmetric 31-sample whole-corpus timing remained
+  noise-scale (`1.0030x` words, `1.0016x` long), so this is retained as a
+  bounded retired-work reduction rather than evidence that the broad Noto gap
+  is closed.

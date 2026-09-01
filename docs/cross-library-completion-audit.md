@@ -693,6 +693,14 @@ rejected: it reduced branch counts but did not reduce Noto words instructions
 and regressed controls. These experiments are not superiority evidence; the
 Noto gap remains open.
 
+The subsequent fixed-CPU-30 strict broad gate (`3 * 31`, explicit `1.01x`
+minimum) confirms that conclusion on the committed minimum-length optimization:
+Noto Nastaliq words and long remain below the fastest reference at `0.834112x`
+and `0.670056x`; Roboto long and Source Serif long pass at `1.151490x` and
+`1.075064x`. All six endpoints in every row retain identical normalized glyph
+counts. The strict command therefore fails exactly the two Noto rows rather
+than being treated as a completed shaping-performance claim.
+
 ## Audit rules
 
 1. A semantic manifest proves inventory only; it is not a differential test.

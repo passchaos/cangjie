@@ -32,3 +32,7 @@ pub fn requiredSecondDigest(
 ) ?@import("../../../../glyph_digest.zig").GlyphDigest {
     return accelerator.build.ligature.requiredSecondDigest(ligature);
 }
+
+pub fn requiredSecondUsesDigest(ligature: Ligature) bool {
+    return accelerator.build.ligature.requiredSecondUsesDigest(ligature);
+}

@@ -182,6 +182,10 @@ pub fn requiredSecondDigest(ligature: Ligature) ?GlyphDigest {
     return GlyphDigest.fromWords(words_value);
 }
 
+pub fn requiredSecondUsesDigest(ligature: Ligature) bool {
+    return (ligature.required_second_len & required_second_digest_flag) != 0;
+}
+
 pub fn shouldPrefilterSecond(competing_count: usize) bool {
     return competing_count >= min_competing_for_prefilter;
 }

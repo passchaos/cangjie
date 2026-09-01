@@ -56,12 +56,26 @@ pub noinline fn applyRequiredSecond(
     run: Options,
 ) Error!void {
     @branchHint(.cold);
-    if (matching.requiredSecondDigest(ligature)) |second_digest| {
-        if (!hasAdjacentDigestPair(
-            glyphs.items,
-            ligature.first_component_digest,
-            second_digest,
-        )) return;
+    if (matching.requiredSecondUsesDigest(ligature)) {
+        const second_digest = matching.requiredSecondDigest(ligature) orelse {
+            // Optional accelerator metadata must never alter substitution
+            // semantics. If a stale or manually assembled sidecar has an
+            // invalid tagged range, use the canonical decoded rules.
+            return apply(ligature, glyphs, allocator, lookup_flag, run);
+        };
+        const may_have_pair = if (lookup_flag == 0 and
+            run.run_has_default_ignorables == false)
+            hasAdjacentDigestPair(
+                glyphs.items,
+                ligature.first_component_digest,
+                second_digest,
+            )
+        else
+            // A conservative unfiltered scan may admit extra work, but unlike
+            // physical adjacency it cannot reject a component reached after
+            // LookupFlag/default-ignorable traversal.
+            hasAnyDigestGlyph(glyphs.items, second_digest);
+        if (!may_have_pair) return;
         return applyPrefiltered(
             ligature,
             glyphs,
@@ -71,16 +85,18 @@ pub noinline fn applyRequiredSecond(
         );
     }
     const second_components = matching.requiredSecondComponents(ligature);
-    if (second_components.len == 0 or
-        !(if (lookup_flag == 0 and
-            run.run_has_default_ignorables == false)
-            hasAdjacentRequiredPair(
-                glyphs.items,
-                ligature.first_component_digest,
-                second_components,
-            )
-        else
-            prefilter.hasAnyGlyph(glyphs.items, second_components)))
+    if (second_components.len == 0) {
+        return apply(ligature, glyphs, allocator, lookup_flag, run);
+    }
+    if (!(if (lookup_flag == 0 and
+        run.run_has_default_ignorables == false)
+        hasAdjacentRequiredPair(
+            glyphs.items,
+            ligature.first_component_digest,
+            second_components,
+        )
+    else
+        prefilter.hasAnyGlyph(glyphs.items, second_components)))
     {
         return;
     }
@@ -91,6 +107,14 @@ pub noinline fn applyRequiredSecond(
         lookup_flag,
         run,
     );
+}
+
+fn hasAnyDigestGlyph(
+    glyphs: []const GlyphId,
+    digest: @import("../../../../../glyph_digest.zig").GlyphDigest,
+) bool {
+    for (glyphs) |glyph| if (digest.mayHave(glyph)) return true;
+    return false;
 }
 
 pub fn applyAt(
@@ -202,6 +226,85 @@ test "adjacent required pair rejects separated candidates" {
         first,
         &.{7},
     ));
+}
+
+test "digest required-second prefilter preserves lookup-ignored marks" {
+    const definition_count = 129;
+    var definitions: [definition_count]accelerator.model.LigatureDefinition = undefined;
+    var components: [definition_count + 12]GlyphId = undefined;
+    for (&definitions, 0..) |*definition, index| {
+        definition.* = .{
+            .ligature = 40,
+            .component_start = index,
+            .component_count = 2,
+        };
+        components[index] = 2;
+    }
+    var first_digest = @import("../../../../../glyph_digest.zig").GlyphDigest.empty();
+    first_digest.add(1);
+    var second_digest = @import("../../../../../glyph_digest.zig").GlyphDigest.empty();
+    second_digest.add(2);
+    for (second_digest.words(), 0..) |word, word_index| {
+        inline for (0..4) |part| {
+            components[definition_count + word_index * 4 + part] =
+                @truncate(word >> (part * 16));
+        }
+    }
+    const sets = [_]accelerator.model.LigatureSet{.{
+        .glyph = 1,
+        .definition_start = 0,
+        .definition_len = definition_count,
+    }};
+    const ligature: Ligature = .{
+        .sets = &sets,
+        .definitions = &definitions,
+        .components = &components,
+        .first_component_digest = first_digest,
+        .required_second_start = definition_count,
+        .required_second_len = 0x800c,
+    };
+    var glyph_classes = [_]u16{0} ** 100;
+    glyph_classes[99] = 3;
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 99, 2 });
+
+    try applyRequiredSecond(
+        ligature,
+        &glyphs,
+        std.testing.allocator,
+        0x0008,
+        .{ .glyph_classes = &glyph_classes },
+    );
+    try std.testing.expectEqualSlices(GlyphId, &.{ 40, 99 }, glyphs.items);
+}
+
+test "invalid required-second digest falls back to decoded rules" {
+    var first_digest = @import("../../../../../glyph_digest.zig").GlyphDigest.empty();
+    first_digest.add(1);
+    const sets = [_]accelerator.model.LigatureSet{.{
+        .glyph = 1,
+        .definition_start = 0,
+        .definition_len = 1,
+    }};
+    const definitions = [_]accelerator.model.LigatureDefinition{.{
+        .ligature = 40,
+        .component_start = 0,
+        .component_count = 2,
+    }};
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 2 });
+
+    try applyRequiredSecond(.{
+        .sets = &sets,
+        .definitions = &definitions,
+        .components = &.{2},
+        .first_component_digest = first_digest,
+        .required_second_start = 1,
+        .required_second_len = 0x800b,
+    }, &glyphs, std.testing.allocator, 0, .{});
+    try std.testing.expectEqualSlices(GlyphId, &.{40}, glyphs.items);
 }
 
 fn applyKind(

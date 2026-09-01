@@ -5117,3 +5117,19 @@ shaping-performance superiority.
   noise-scale (`1.0030x` words, `1.0016x` long), so this is retained as a
   bounded retired-work reduction rather than evidence that the broad Noto gap
   is closed.
+
+### Ligature required-second filtering (2026-09-01)
+
+- The compact required-second digest is only a rejection filter. Its former
+  unconditional physical-adjacency scan could reject a valid LigatureSubst
+  when IgnoreMarks or a transparent default-ignorable separated the two
+  logical components. Physical adjacency is now used only when LookupFlag zero
+  and the run's no-default-ignorables proof both hold; other runs use a
+  conservative whole-run digest scan before the exact visibility-aware matcher.
+  Invalid optional digest/range metadata falls back to canonical decoded rules
+  rather than becoming a semantic miss.
+- A separate exact pair index for wholly two-component LigatureSubst tables was
+  prototyped against Noto Nastaliq lookups 173/174 and rejected. The final
+  defensive version preserved glyph counts/checksums but regressed symmetric
+  fixed-CPU-30 words and long-text measurements by roughly 14--16%, so none of
+  that indexing machinery is retained.

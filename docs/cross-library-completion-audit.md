@@ -714,6 +714,18 @@ and `0.670056x`; Roboto long and Source Serif long pass at `1.151490x` and
 counts. The strict command therefore fails exactly the two Noto rows rather
 than being treated as a completed shaping-performance claim.
 
+A follow-up LigatureSubst audit found that the large required-second digest
+prefilter assumed physical adjacency even when LookupFlag filtering or
+default-ignorable traversal could make two logical components nonadjacent. The
+prefilter now uses physical pairs only under the flag-free/no-default-ignorable
+proof and otherwise performs a conservative whole-run digest test; malformed
+optional digest/range metadata falls back to the canonical decoded matcher. A
+129-definition IgnoreMarks regression covers the digest threshold and retains
+the intervening mark. A separate exact two-glyph pair-index prototype was
+rejected: its final defensive implementation regressed fixed-CPU-30 symmetric
+Noto words and long runs by roughly 14--16%, despite identical glyph counts and
+checksums. It was fully removed rather than treated as progress.
+
 ## Audit rules
 
 1. A semantic manifest proves inventory only; it is not a differential test.

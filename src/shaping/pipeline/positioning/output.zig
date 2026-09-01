@@ -25,17 +25,32 @@ const adjustments = @import("adjustments.zig");
 const attachments = @import("attachments.zig");
 const policy = @import("policy.zig");
 const source_span = @import("source_span.zig");
+const space_fallback = @import("../../../space_fallback.zig");
 
 pub const Input = types.Input;
 pub const Result = types.Result;
 
+const EmitMode = enum { automatic, generic };
+
 pub fn emit(input: Input) !Result {
+    return emitWithMode(input, .automatic);
+}
+
+fn emitWithMode(input: Input, mode: EmitMode) !Result {
+    if (mode == .generic) return emitGeneric(input);
     if (canEmitSimpleAsciiHorizontal(input)) {
         return emitSimpleAsciiHorizontal(input);
     }
     if (canEmitSimpleDevanagariHorizontal(input)) {
         return emitSimpleDevanagariHorizontal(input);
     }
+    if (canEmitSimpleArabicHorizontal(input)) {
+        return emitSimpleArabicHorizontal(input);
+    }
+    return emitGeneric(input);
+}
+
+fn emitGeneric(input: Input) !Result {
     const segment_glyph_start = input.output.items.len;
     try input.output.ensureUnusedCapacity(input.allocator, input.scratch.glyph_ids.items.len);
 
@@ -601,6 +616,141 @@ test "fallback mark bases are retained only for runs with nonspacing marks" {
     ));
 }
 
+/// Prove that final horizontal construction needs none of the policy carried
+/// by the generic loop. The specialized loop still uses general source-span
+/// recovery, so GSUB ligatures and one-to-many substitutions remain valid.
+/// Requiring a mark-free run is important even without GPOS attachments:
+/// Unicode/GDEF marks may need late advance zeroing in the generic shaper.
+fn canEmitSimpleScriptHorizontal(input: Input) bool {
+    return !input.options.writing_mode.isVertical() and
+        input.kerx_lookup == null and
+        input.kern_lookup == null and
+        input.kerx_adjustments.len == 0 and
+        !input.has_gpos_attachments and
+        !input.has_kerx_state_attachments and
+        !input.run_may_have_mark_attachments and
+        !input.has_default_ignorable and
+        !input.early_zero_mark_shape and
+        !input.fallback_mark_enabled and
+        input.options.not_found_variation_selector_glyph == null;
+}
+
+fn canEmitSimpleArabicHorizontal(input: Input) bool {
+    if (input.options.script_tag != .arab or
+        input.arabic_joining_features == null or
+        !canEmitSimpleScriptHorizontal(input))
+    {
+        return false;
+    }
+    // Common-script Unicode spaces can remain inside an Arabic script item.
+    // Their synthetic widths require the generic geometry path; proving their
+    // absence once keeps that uncommon branch out of the specialized loop.
+    for (input.scratch.codepoints.items) |codepoint| {
+        if (space_fallback.mayNeedHorizontalAdvanceFallback(codepoint)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+noinline fn emitSimpleArabicHorizontal(
+    input: Input,
+) linksection(@import("../../../shaping_sections.zig").isolated_hotpaths) !Result {
+    const segment_glyph_start = input.output.items.len;
+    try input.output.ensureUnusedCapacity(
+        input.allocator,
+        input.scratch.glyph_ids.items.len,
+    );
+
+    var adjustment_cursor: usize = 0;
+    const loop_start = profileNow(input.profile, input.profile_io);
+    for (input.scratch.glyph_ids.items, 0..) |input_glyph_id, index| {
+        const source_index = input.scratch.glyph_source_indices.items[index];
+        const cluster_index = input.scratch.glyph_cluster_indices.items[index];
+        const span = source_span.forGlyph(
+            index,
+            source_index,
+            cluster_index,
+            input.scratch.clusters.items,
+            input.scratch.source_ends.items,
+            &input.scratch.ligature_components,
+        ) orelse source_span.Span{
+            .start = input.cluster_base,
+            .end = input.cluster_base,
+        };
+        const source_codepoint = input.scratch.codepoints.items[source_index];
+        const fallback_glyph = try arabic.fallbackGlyph(
+            input.font,
+            input.glyph_index_cache,
+            input_glyph_id,
+            source_codepoint,
+            source_index,
+            input.arabic_joining_features.?,
+        );
+        const glyph_id = fallback_glyph orelse input_glyph_id;
+        const adjustment = adjustments.find(
+            input.gpos_adjustments,
+            index,
+            &adjustment_cursor,
+        );
+        const metrics = try policy.horizontalMetrics(
+            input.font,
+            input.metrics_cache,
+            glyph_id,
+            input.options.normalized_variation_coords,
+        );
+        const adjustment_x_advance = if (adjustment.x_advance_absolute)
+            @as(i32, adjustment.x_advance) -
+                @as(i32, metrics.advance_width)
+        else
+            @as(i32, adjustment.x_advance);
+        const positional_boundary_unsafe =
+            input.gpos_unsafe_glyphs.isUnsafeBefore(index) or
+            input.source_boundaries.isUnsafeBeforeByte(span.start);
+        const safe_to_insert_tatweel =
+            !positional_boundary_unsafe and
+            input.source_boundaries.isSafeTatweelBeforeByte(span.start);
+
+        input.output.appendAssumeCapacity(.{
+            .glyph_id = glyph_id,
+            .codepoint = source_codepoint,
+            .cluster = span.start,
+            .source_byte_len = span.end - span.start,
+            .flags = .{
+                .unsafe_to_break_before = positional_boundary_unsafe or
+                    safe_to_insert_tatweel,
+                .safe_to_insert_tatweel = safe_to_insert_tatweel,
+            },
+            .x_advance = @as(f32, @floatFromInt(
+                @as(i32, metrics.advance_width) + adjustment_x_advance,
+            )) * input.scale,
+            .y_advance = @as(f32, @floatFromInt(adjustment.y_advance)) *
+                input.scale,
+            .x_offset = @as(f32, @floatFromInt(adjustment.x_placement)) *
+                input.scale,
+            .y_offset = @as(f32, @floatFromInt(
+                adjustment.y_placement + adjustment.attachment_cross_offset,
+            )) * input.scale,
+            .orientation = .horizontal,
+        });
+        const provenance =
+            input.scratch.ligature_components.infos.items[index];
+        try stch_feature.appendOutput(
+            input.allocator,
+            &input.scratch.stch_actions,
+            provenance.flags.stch_action,
+            input.output.items.len - segment_glyph_start,
+        );
+    }
+
+    if (input.profile) |profile| {
+        profile.position_loop_ns += profileElapsed(loop_start, input.profile_io);
+        profile.position_output_glyphs +=
+            input.output.items.len - segment_glyph_start;
+    }
+    return .{ .segment_glyph_start = segment_glyph_start };
+}
+
 fn profileNow(profile: ?*ShapeStageProfile, io: ?std.Io) i128 {
     return if (profile != null)
         std.Io.Clock.now(.awake, io.?).nanoseconds
@@ -610,4 +760,281 @@ fn profileNow(profile: ?*ShapeStageProfile, io: ?std.Io) i128 {
 
 fn profileElapsed(start: i128, io: ?std.Io) i128 {
     return std.Io.Clock.now(.awake, io.?).nanoseconds - start;
+}
+
+const testing = if (@import("builtin").is_test) struct {
+    const cluster_safety = @import("../../cluster_safety.zig");
+    const Font = @import("../../../font.zig").Font;
+    const scratch_mod = @import("../../context/scratch.zig");
+    const test_font = @import("../../../test_font.zig");
+
+    const Fixture = struct {
+        bytes: []u8,
+        font: Font,
+        scratch: scratch_mod.ShapeScratch = .{},
+        boundaries: cluster_safety.SourceBoundaries = .{},
+        output: std.ArrayList(GlyphPosition) = .empty,
+
+        fn init(allocator: std.mem.Allocator) !Fixture {
+            const bytes = try test_font.buildCodepointSetTtf(
+                allocator,
+                &.{ 0x0628, 0x0644, 0x062a },
+            );
+            errdefer allocator.free(bytes);
+            return .{
+                .bytes = bytes,
+                .font = try Font.parse(allocator, bytes),
+            };
+        }
+
+        fn deinit(self: *Fixture, allocator: std.mem.Allocator) void {
+            self.output.deinit(allocator);
+            self.boundaries.deinit(allocator);
+            self.scratch.deinit(allocator);
+            self.font.deinit();
+            allocator.free(self.bytes);
+        }
+
+        fn populate(self: *Fixture, allocator: std.mem.Allocator) !void {
+            const codepoints = [_]u21{ 0x0628, 0x0644, 0x062a };
+            const starts = [_]usize{ 11, 13, 15 };
+            const ends = [_]usize{ 13, 15, 18 };
+            try self.scratch.glyph_ids.appendSlice(
+                allocator,
+                &.{ 1, 2, 3 },
+            );
+            try self.scratch.codepoints.appendSlice(allocator, &codepoints);
+            try self.scratch.clusters.appendSlice(allocator, &starts);
+            try self.scratch.source_ends.appendSlice(allocator, &ends);
+            try self.scratch.glyph_source_indices.appendSlice(
+                allocator,
+                &.{ 0, 1, 2 },
+            );
+            try self.scratch.glyph_cluster_indices.appendSlice(
+                allocator,
+                &.{ 0, 0, 2 },
+            );
+            try self.scratch.glyph_substituted.appendNTimes(
+                allocator,
+                false,
+                3,
+            );
+            try self.scratch.ligature_components.infos.appendNTimes(
+                allocator,
+                .{},
+                3,
+            );
+            self.boundaries.reset(11, 7, self.scratch.clusters.items);
+        }
+
+        fn input(
+            self: *Fixture,
+            allocator: std.mem.Allocator,
+            output: *std.ArrayList(GlyphPosition),
+            options: types.Input,
+        ) types.Input {
+            var result = options;
+            result.allocator = allocator;
+            result.font = &self.font;
+            result.source_boundaries = &self.boundaries;
+            result.output = output;
+            result.scratch = &self.scratch;
+            return result;
+        }
+    };
+} else struct {};
+
+fn testInput(
+    fixture: *testing.Fixture,
+    allocator: std.mem.Allocator,
+    output: *std.ArrayList(GlyphPosition),
+    adjustments_value: []const gpos.Adjustment,
+    joining_features: ?[]const u32,
+) Input {
+    return fixture.input(allocator, output, .{
+        .allocator = undefined,
+        .font = undefined,
+        .metrics_cache = null,
+        .glyph_index_cache = null,
+        .source_boundaries = undefined,
+        .gdef_metadata = .{},
+        .gpos_adjustments = adjustments_value,
+        .gpos_unsafe_glyphs = .{},
+        .kerx_lookup = null,
+        .kern_lookup = null,
+        .kerx_adjustments = &.{},
+        .kerning_enabled = true,
+        .has_gpos_attachments = false,
+        .has_kerx_state_attachments = false,
+        .has_gpos_positioning = true,
+        .run_may_have_mark_attachments = false,
+        .has_default_ignorable = false,
+        .early_zero_mark_shape = false,
+        .fallback_mark_enabled = false,
+        .invisible_glyph_id = 0,
+        .arabic_joining_features = joining_features,
+        .cluster_base = 11,
+        .ascii_source = false,
+        .primary_devanagari_source = false,
+        .font_size = 20,
+        .scale = 0.25,
+        .options = .{
+            .script = .arabic,
+            .script_tag = .arab,
+            .language_tag = .ara,
+            .direction = .rtl,
+        },
+        .output = undefined,
+        .scratch = undefined,
+        .profile = null,
+        .profile_io = null,
+    });
+}
+
+test "Arabic horizontal emitter matches generic output exactly" {
+    const allocator = std.testing.allocator;
+    var fixture = try testing.Fixture.init(allocator);
+    defer fixture.deinit(allocator);
+    try fixture.populate(allocator);
+
+    var expected = std.ArrayList(GlyphPosition).empty;
+    defer expected.deinit(allocator);
+    var actual = std.ArrayList(GlyphPosition).empty;
+    defer actual.deinit(allocator);
+    const adjustment_values = [_]gpos.Adjustment{
+        .{ .index = 0, .x_advance = 17, .y_advance = -3 },
+        .{
+            .index = 1,
+            .x_advance = 421,
+            .x_advance_absolute = true,
+            .x_placement = -7,
+            .y_placement = 9,
+            .attachment_cross_offset = 5,
+        },
+    };
+    const joining_features = [_]u32{ 0, 0, 0 };
+    const seed = GlyphPosition{
+        .glyph_id = 0,
+        .codepoint = 'X',
+        .cluster = 7,
+        .x_advance = 1,
+    };
+    try expected.append(allocator, seed);
+    try actual.append(allocator, seed);
+
+    const base = testInput(
+        &fixture,
+        allocator,
+        &actual,
+        &adjustment_values,
+        &joining_features,
+    );
+
+    const expected_result = try emitWithMode(
+        fixture.input(allocator, &expected, base),
+        .generic,
+    );
+    const actual_result = try emitWithMode(
+        fixture.input(allocator, &actual, base),
+        .automatic,
+    );
+    try std.testing.expectEqual(expected_result, actual_result);
+    try std.testing.expectEqualSlices(
+        GlyphPosition,
+        expected.items,
+        actual.items,
+    );
+    try std.testing.expect(canEmitSimpleArabicHorizontal(base));
+}
+
+test "script horizontal emitter eligibility rejects every dormant subsystem" {
+    const allocator = std.testing.allocator;
+    var fixture = try testing.Fixture.init(allocator);
+    defer fixture.deinit(allocator);
+    try fixture.populate(allocator);
+    const joining_features = [_]u32{ 0, 0, 0 };
+    const input = testInput(
+        &fixture,
+        allocator,
+        &fixture.output,
+        &.{},
+        &joining_features,
+    );
+    try std.testing.expect(canEmitSimpleArabicHorizontal(input));
+
+    inline for (.{
+        "vertical",
+        "gpos_attachment",
+        "kerx_attachment",
+        "mark",
+        "default_ignorable",
+        "early_zero",
+        "fallback_mark",
+        "visible_selector",
+    }) |condition| {
+        var rejected = input;
+        if (comptime std.mem.eql(u8, condition, "vertical"))
+            rejected.options.writing_mode = .vertical_rl;
+        if (comptime std.mem.eql(u8, condition, "gpos_attachment"))
+            rejected.has_gpos_attachments = true;
+        if (comptime std.mem.eql(u8, condition, "kerx_attachment"))
+            rejected.has_kerx_state_attachments = true;
+        if (comptime std.mem.eql(u8, condition, "mark"))
+            rejected.run_may_have_mark_attachments = true;
+        if (comptime std.mem.eql(u8, condition, "default_ignorable"))
+            rejected.has_default_ignorable = true;
+        if (comptime std.mem.eql(u8, condition, "early_zero"))
+            rejected.early_zero_mark_shape = true;
+        if (comptime std.mem.eql(u8, condition, "fallback_mark"))
+            rejected.fallback_mark_enabled = true;
+        if (comptime std.mem.eql(u8, condition, "visible_selector"))
+            rejected.options.not_found_variation_selector_glyph = 9;
+        try std.testing.expect(!canEmitSimpleScriptHorizontal(rejected));
+    }
+}
+
+test "script horizontal emitters release all storage on allocation failure" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        struct {
+            fn run(allocator: std.mem.Allocator) !void {
+                // Build/parse the font outside this test's scope: its table
+                // builder is independently tested for OOM cleanup. This gate
+                // targets the emitter's output reservation and lazy `stch`
+                // sidecar allocation without conflating fixture allocation.
+                const bytes = try testing.test_font.buildCodepointSetTtf(
+                    std.testing.allocator,
+                    &.{ 0x0628, 0x0644, 0x062a },
+                );
+                defer std.testing.allocator.free(bytes);
+                var font = try testing.Font.parse(
+                    std.testing.allocator,
+                    bytes,
+                );
+                defer font.deinit();
+                var fixture = testing.Fixture{
+                    .bytes = &.{},
+                    .font = font,
+                };
+                defer {
+                    fixture.output.deinit(allocator);
+                    fixture.boundaries.deinit(allocator);
+                    fixture.scratch.deinit(allocator);
+                }
+                try fixture.populate(allocator);
+                const joining_features = [_]u32{ 0, 0, 0 };
+                _ = try emitWithMode(
+                    testInput(
+                        &fixture,
+                        allocator,
+                        &fixture.output,
+                        &.{},
+                        &joining_features,
+                    ),
+                    .automatic,
+                );
+            }
+        }.run,
+        .{},
+    );
 }

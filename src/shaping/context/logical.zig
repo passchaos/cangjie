@@ -48,34 +48,59 @@ pub const Prepared = struct {
 
         const external_previous = lastNonTransparent(external_before);
         const external_next = firstNonTransparent(external_after);
-        var previous = external_previous;
-        var cursor: usize = 0;
-        while (cursor < text.len) {
-            before[cursor] = previous;
-            const decoded = decodeValid(text, cursor);
-            cursor = decoded.next;
-            const kind = unicode.joiningTypeForCodepoint(decoded.codepoint);
-            if (kind != .transparent) previous = kind;
-        }
-        before[text.len] = previous;
-
-        var next = external_next;
-        after[text.len] = next;
-        cursor = text.len;
-        while (cursor != 0) {
-            const start = previousScalarStart(text, cursor);
-            const decoded = decodeValid(text, start);
-            const kind = unicode.joiningTypeForCodepoint(decoded.codepoint);
-            if (kind != .transparent) next = kind;
-            after[start] = next;
-            cursor = start;
-        }
+        fillJoiningBoundaries(
+            text,
+            before,
+            after,
+            external_previous,
+            external_next,
+        );
 
         result.view.joining_before = before;
         result.view.joining_after = after;
         result.view.external_joining_before = external_previous;
         result.view.external_joining_after = external_next;
         return result;
+    }
+
+    /// Construct a non-owning view over cache-owned joining summaries. The
+    /// caller must keep the cache entry stable until this value is deinitialized
+    /// or otherwise discarded. Empty summary slices mean that no summaries
+    /// were requested, exactly like the allocation-free branch of `init`.
+    pub fn initBorrowed(
+        allocator: std.mem.Allocator,
+        external_before: []const u8,
+        text: []const u8,
+        external_after: []const u8,
+        joining_before: []const ?unicode.JoiningType,
+        joining_after: []const ?unicode.JoiningType,
+    ) Prepared {
+        std.debug.assert(joining_before.len == joining_after.len);
+        std.debug.assert(
+            joining_before.len == 0 or joining_before.len == text.len + 1,
+        );
+        return .{
+            .allocator = allocator,
+            .view = .{
+                .external_before = external_before,
+                .text = text,
+                .external_after = external_after,
+                .active_end = text.len,
+                .joining_before = if (joining_before.len == 0)
+                    null
+                else
+                    joining_before,
+                .joining_after = if (joining_after.len == 0)
+                    null
+                else
+                    joining_after,
+                // Cached arrays are intrinsic to `text`. The accessors overlay
+                // these request-specific neighbors only where the intrinsic
+                // prefix or suffix has no non-transparent scalar.
+                .external_joining_before = lastNonTransparent(external_before),
+                .external_joining_after = firstNonTransparent(external_after),
+            },
+        };
     }
 
     pub fn deinit(self: *Prepared) void {
@@ -140,7 +165,7 @@ pub fn scopeResolved(
     return result;
 }
 
-fn hasJoiningRelevantScalar(text: []const u8) bool {
+pub fn hasJoiningRelevantScalar(text: []const u8) bool {
     var iterator = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
     while (iterator.nextCodepoint()) |codepoint| {
         if (unicode.joiningTypeForCodepoint(codepoint) != .non_joining) {
@@ -148,6 +173,50 @@ fn hasJoiningRelevantScalar(text: []const u8) bool {
         }
     }
     return false;
+}
+
+/// Populate nearest-neighbor sidecars for a validated complete paragraph.
+/// Cache owners use this after allocating their immutable destination arrays.
+pub fn summarizeJoiningBoundaries(
+    text: []const u8,
+    before: []?unicode.JoiningType,
+    after: []?unicode.JoiningType,
+) void {
+    fillJoiningBoundaries(text, before, after, null, null);
+}
+
+fn fillJoiningBoundaries(
+    text: []const u8,
+    before: []?unicode.JoiningType,
+    after: []?unicode.JoiningType,
+    external_previous: ?unicode.JoiningType,
+    external_next: ?unicode.JoiningType,
+) void {
+    std.debug.assert(before.len == text.len + 1);
+    std.debug.assert(after.len == text.len + 1);
+
+    var previous = external_previous;
+    var cursor: usize = 0;
+    while (cursor < text.len) {
+        before[cursor] = previous;
+        const decoded = decodeValid(text, cursor);
+        cursor = decoded.next;
+        const kind = unicode.joiningTypeForCodepoint(decoded.codepoint);
+        if (kind != .transparent) previous = kind;
+    }
+    before[text.len] = previous;
+
+    var next = external_next;
+    after[text.len] = next;
+    cursor = text.len;
+    while (cursor != 0) {
+        const start = previousScalarStart(text, cursor);
+        const decoded = decodeValid(text, start);
+        const kind = unicode.joiningTypeForCodepoint(decoded.codepoint);
+        if (kind != .transparent) next = kind;
+        after[start] = next;
+        cursor = start;
+    }
 }
 
 fn firstNonTransparent(text: []const u8) ?unicode.JoiningType {
@@ -205,4 +274,93 @@ test "logical context summarizes joining neighbors at byte boundaries" {
         unicode.JoiningType.dual,
         middle.joiningAfter().?,
     );
+}
+
+test "borrowed intrinsic summaries overlay alternating external context" {
+    const text = "َبَ";
+    var before: [text.len + 1]?unicode.JoiningType = undefined;
+    var after: [text.len + 1]?unicode.JoiningType = undefined;
+    @memset(&before, null);
+    @memset(&after, null);
+    summarizeJoiningBoundaries(text, &before, &after);
+
+    var left = Prepared.initBorrowed(
+        std.testing.allocator,
+        "ت",
+        text,
+        "ا",
+        &before,
+        &after,
+    );
+    defer left.deinit();
+    try std.testing.expectEqual(
+        unicode.JoiningType.dual,
+        left.view.subrange(0, "َ".len).joiningBefore().?,
+    );
+    try std.testing.expectEqual(
+        unicode.JoiningType.dual,
+        left.view.subrange("َب".len, text.len).joiningBefore().?,
+    );
+    try std.testing.expectEqual(
+        unicode.JoiningType.right,
+        left.view.subrange("َب".len, text.len).joiningAfter().?,
+    );
+
+    var changed = Prepared.initBorrowed(
+        std.testing.allocator,
+        "ا",
+        text,
+        "ت",
+        &before,
+        &after,
+    );
+    defer changed.deinit();
+    try std.testing.expectEqual(
+        unicode.JoiningType.right,
+        changed.view.subrange(0, "َ".len).joiningBefore().?,
+    );
+    try std.testing.expectEqual(
+        unicode.JoiningType.dual,
+        changed.view.subrange("َب".len, text.len).joiningAfter().?,
+    );
+
+    var owned_left = try Prepared.init(
+        std.testing.allocator,
+        "ت",
+        text,
+        "ا",
+        true,
+    );
+    defer owned_left.deinit();
+    var owned_changed = try Prepared.init(
+        std.testing.allocator,
+        "ا",
+        text,
+        "ت",
+        true,
+    );
+    defer owned_changed.deinit();
+    for ([_]usize{ 0, "َ".len, "َب".len, text.len }) |boundary| {
+        const left_scope = left.view.subrange(boundary, boundary);
+        const owned_left_scope = owned_left.view.subrange(boundary, boundary);
+        try std.testing.expectEqual(
+            owned_left_scope.joiningBefore(),
+            left_scope.joiningBefore(),
+        );
+        try std.testing.expectEqual(
+            owned_left_scope.joiningAfter(),
+            left_scope.joiningAfter(),
+        );
+
+        const changed_scope = changed.view.subrange(boundary, boundary);
+        const owned_changed_scope = owned_changed.view.subrange(boundary, boundary);
+        try std.testing.expectEqual(
+            owned_changed_scope.joiningBefore(),
+            changed_scope.joiningBefore(),
+        );
+        try std.testing.expectEqual(
+            owned_changed_scope.joiningAfter(),
+            changed_scope.joiningAfter(),
+        );
+    }
 }

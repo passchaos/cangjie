@@ -259,7 +259,7 @@ const Driver = struct {
     pub fn logicalRuns(
         self: *@This(),
         spans: []const styled_paragraph.Span,
-    ) !logical_run_itemization.ProbedIterator {
+    ) !LogicalItemIterator {
         self.deinitLogicalContext();
         // `styled_paragraph.shape` reaches this only after validating the
         // complete span partition and every span. Defer the cache lookup to
@@ -274,23 +274,28 @@ const Driver = struct {
                 if (self.options.direction == .rtl) .rtl else .ltr,
             );
         }
-        var logical_runs = if (self.bidi_paragraph) |paragraph|
-            logical_run_itemization.probedRuns(self.text, paragraph)
-        else
-            logical_run_itemization.probedBaseRuns(self.text, 0);
-        const itemized = logical_runs.isItemized();
-        self.prepared_context = try logical_context.Prepared.init(
+        const base_direction: unicode.BidiBaseDirection =
+            if (self.options.direction == .rtl) .rtl else .ltr;
+        const summarize_joining = spans.len > 1 or
+            logical_context.needsJoiningSummary(self.text, self.cascade) or
+            anySpanMayFallback(spans) or
+            self.options.inline_objects.len != 0 or
+            std.mem.indexOfScalar(u8, self.text, '\t') != null;
+        const analysis = try self.styled.analysis.getLogical(
+            self.text,
+            base_direction,
+            self.bidi_paragraph,
+            summarize_joining,
+        );
+        self.prepared_context = logical_context.Prepared.initBorrowed(
             self.buffer.allocator,
             &.{},
             self.text,
             &.{},
-            itemized or spans.len > 1 or
-                logical_context.needsJoiningSummary(self.text, self.cascade) or
-                anySpanMayFallback(spans) or
-                self.options.inline_objects.len != 0 or
-                std.mem.indexOfScalar(u8, self.text, '\t') != null,
+            analysis.joining_before,
+            analysis.joining_after,
         );
-        return logical_runs;
+        return .{ .items = analysis.items };
     }
 
     pub fn allocator(self: *@This()) std.mem.Allocator {
@@ -837,6 +842,17 @@ const Driver = struct {
                 break;
             }
         }
+    }
+};
+
+const LogicalItemIterator = struct {
+    items: []const @import("analysis_cache.zig").LogicalItem,
+    index: usize = 0,
+
+    pub fn next(self: *@This()) ?logical_run_itemization.Run {
+        if (self.index == self.items.len) return null;
+        defer self.index += 1;
+        return self.items[self.index].run;
     }
 };
 

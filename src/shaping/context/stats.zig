@@ -17,6 +17,8 @@ pub const Stats = struct {
     shaped_runs: Counter = .{},
     /// Reusable UAX #9 resolution keyed by exact text and base direction.
     bidi_paragraphs: Counter = .{},
+    /// Materialized script/bidi runs and joining neighbors with the same key.
+    logical_analysis: Counter = .{},
 };
 
 pub fn counter(hits: usize, misses: usize) Counter {

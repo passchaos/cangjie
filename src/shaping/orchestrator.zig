@@ -225,6 +225,8 @@ pub const TextShaper = struct {
             options.inline_objects,
             needs_bidi_reorder,
             bidi_paragraph,
+            null,
+            false,
         );
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
         const logical_shaped = buffer.shapedText();
@@ -369,6 +371,8 @@ pub const TextShaper = struct {
             options.inline_objects,
             needs_bidi_reorder,
             bidi_paragraph,
+            null,
+            false,
         );
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
         const recipe = paragraph_reshape.Uniform{
@@ -401,6 +405,7 @@ pub const TextShaper = struct {
             font_size,
             options,
             bidi_paragraph,
+            needs_bidi_reorder,
         );
         return buffer.paragraphLayout(options.writing_mode);
     }
@@ -452,6 +457,26 @@ pub const TextShaper = struct {
                 )
         else
             null;
+        // Both UAX #9 and logical itemization use the same exact key. Build the
+        // immutable bundle only after every public-input validation above, then
+        // borrow it for this synchronous layout transaction.
+        const itemized_shape = bidi_paragraph != null or
+            options.inline_objects.len != 0 or
+            std.mem.indexOfScalar(u8, text, '\t') != null;
+        const logical_analysis = if (analysis_cache) |cache|
+            if (itemized_shape)
+                try cache.getLogical(
+                    text,
+                    if (options.direction == .rtl) .rtl else .ltr,
+                    bidi_paragraph,
+                    logical_context.needsJoiningSummary(text, cascade) or
+                        options.inline_objects.len != 0 or
+                        std.mem.indexOfScalar(u8, text, '\t') != null,
+                )
+            else
+                null
+        else
+            null;
         // The Engine cache and the fallback buffer scratch both return borrowed
         // views whose lifetime covers this synchronous layout transaction.
         try shapeParagraphContent(
@@ -467,6 +492,8 @@ pub const TextShaper = struct {
             options.inline_objects,
             needs_bidi_reorder,
             bidi_paragraph,
+            logical_analysis,
+            true,
         );
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
         const recipe = paragraph_reshape.Uniform{
@@ -517,6 +544,7 @@ pub const TextShaper = struct {
             font_size,
             options,
             bidi_paragraph,
+            needs_bidi_reorder,
         );
         return buffer.paragraphLayout(options.writing_mode);
     }
@@ -972,10 +1000,16 @@ fn shapeParagraphContent(
     objects: []const inline_object.Object,
     needs_bidi_reorder: bool,
     resolved_bidi: ?unicode.BidiParagraph,
+    logical_analysis: ?paragraph_analysis_cache.LogicalAnalysis,
+    input_is_validated: bool,
 ) !void {
-    try plan_validation.input(text, font_size, options);
-    if (cascade.fonts.len == 0) return error.EmptyFontCascade;
-    try inline_object.validate(text, objects);
+    if (!input_is_validated) {
+        try plan_validation.input(text, font_size, options);
+        if (cascade.fonts.len == 0) return error.EmptyFontCascade;
+        try inline_object.validate(text, objects);
+    } else {
+        std.debug.assert(cascade.fonts.len != 0);
+    }
     if (objects.len == 0 and std.mem.indexOfScalar(u8, text, '\t') == null and
         resolved_bidi == null)
     {
@@ -1000,25 +1034,34 @@ fn shapeParagraphContent(
     // not be interpreted as a request to repeat UAX #9 merely because an
     // inline object or tab selected this itemized shaping path.
     std.debug.assert(needs_bidi_reorder == (resolved_bidi != null));
-    var logical_runs = if (resolved_bidi) |paragraph|
-        logical_run_itemization.probedRuns(text, paragraph)
-    else
-        logical_run_itemization.probedBaseRuns(
-            text,
-            if (options.direction == .rtl) 1 else 0,
-        );
-    const itemized = logical_runs.isItemized();
-    var prepared = try logical_context.Prepared.init(
-        buffer.allocator,
-        options.context_before,
+    var logical_items = LogicalItems.init(
         text,
-        options.context_after,
-        itemized or logical_context.needsJoiningSummary(text, cascade) or
-            objects.len != 0 or
-            std.mem.indexOfScalar(u8, text, '\t') != null,
+        options.direction,
+        resolved_bidi,
+        logical_analysis,
     );
+    const itemized = logical_items.isItemized();
+    var prepared = if (logical_analysis) |analysis|
+        logical_context.Prepared.initBorrowed(
+            buffer.allocator,
+            options.context_before,
+            text,
+            options.context_after,
+            analysis.joining_before,
+            analysis.joining_after,
+        )
+    else
+        try logical_context.Prepared.init(
+            buffer.allocator,
+            options.context_before,
+            text,
+            options.context_after,
+            itemized or logical_context.needsJoiningSummary(text, cascade) or
+                objects.len != 0 or
+                std.mem.indexOfScalar(u8, text, '\t') != null,
+        );
     defer prepared.deinit();
-    var logical_run = logical_runs.next();
+    var logical_item = logical_items.next();
     var items = paragraph_source_items.Cursor.init(
         text,
         objects,
@@ -1030,12 +1073,13 @@ fn shapeParagraphContent(
             .text => |range| {
                 var text_start = range.start;
                 while (text_start < range.end) {
-                    while (logical_run) |run| {
-                        if (run.byteEnd() > text_start) break;
-                        logical_run = logical_runs.next();
+                    while (logical_item) |logical| {
+                        if (logical.run.byteEnd() > text_start) break;
+                        logical_item = logical_items.next();
                     }
-                    const run = logical_run orelse
+                    const logical = logical_item orelse
                         return error.InvalidScriptItemization;
+                    const run = logical.run;
                     if (text_start < run.byte_start) {
                         return error.InvalidScriptItemization;
                     }
@@ -1050,6 +1094,7 @@ fn shapeParagraphContent(
                         font_size,
                         options,
                         run,
+                        logical.cached,
                         prepared.view,
                         text_start,
                         text_end,
@@ -1088,6 +1133,57 @@ fn shapeParagraphContent(
     }
 }
 
+const LogicalItems = union(enum) {
+    live: logical_run_itemization.ProbedIterator,
+    cached: struct {
+        items: []const paragraph_analysis_cache.LogicalItem,
+        index: usize = 0,
+    },
+
+    const Item = struct {
+        run: logical_run_itemization.Run,
+        cached: ?paragraph_analysis_cache.LogicalItem,
+    };
+
+    fn init(
+        text: []const u8,
+        direction: TextDirection,
+        resolved_bidi: ?unicode.BidiParagraph,
+        analysis: ?paragraph_analysis_cache.LogicalAnalysis,
+    ) LogicalItems {
+        if (analysis) |cached| return .{ .cached = .{ .items = cached.items } };
+        return .{ .live = if (resolved_bidi) |paragraph|
+            logical_run_itemization.probedRuns(text, paragraph)
+        else
+            logical_run_itemization.probedBaseRuns(
+                text,
+                if (direction == .rtl) 1 else 0,
+            ) };
+    }
+
+    fn next(self: *LogicalItems) ?Item {
+        return switch (self.*) {
+            .live => |*iterator| .{
+                .run = iterator.next() orelse return null,
+                .cached = null,
+            },
+            .cached => |*cursor| {
+                if (cursor.index == cursor.items.len) return null;
+                const item = cursor.items[cursor.index];
+                cursor.index += 1;
+                return .{ .run = item.run, .cached = item };
+            },
+        };
+    }
+
+    fn isItemized(self: *const LogicalItems) bool {
+        return switch (self.*) {
+            .live => |iterator| iterator.isItemized(),
+            .cached => |cursor| cursor.items.len > 1,
+        };
+    }
+};
+
 /// Shape one source-atom intersection with a grapheme-safe script and resolved
 /// bidi-level item. All ranges remain in logical byte order; only the final
 /// line presentation step performs visual permutation.
@@ -1101,6 +1197,7 @@ fn shapeParagraphLogicalIntersectionInto(
     font_size: f32,
     paragraph_options_value: ShapeOptions,
     run: logical_run_itemization.Run,
+    cached_item: ?paragraph_analysis_cache.LogicalItem,
     context: pipeline_types.LogicalContext,
     text_start: usize,
     text_end: usize,
@@ -1108,13 +1205,19 @@ fn shapeParagraphLogicalIntersectionInto(
 ) !PenPosition {
     std.debug.assert(text_start >= run.byte_start);
     std.debug.assert(text_end <= run.byteEnd());
-    const script_text = paragraph_text[run.script_byte_start..run.scriptByteEnd()];
     var resolved = resolvedBidiScriptRunOptions(
-        script_text,
+        paragraph_text[run.script_byte_start..run.scriptByteEnd()],
         run.script,
         run.direction,
         paragraph_options_value,
     );
+    if (cached_item) |item| {
+        // Explicit language remains caller-owned; only replace the inferred
+        // value that was derived from this exact enclosing script range.
+        if (paragraph_options_value.language_tag == null) {
+            resolved.lookup.language_tag = item.inferred_language_tag;
+        }
+    }
     resolved.lookup.logical_context = context.subrange(text_start, text_end);
     resolved.lookup.beginning_of_text =
         paragraph_options_value.beginning_of_text and text_start == 0;
@@ -1122,7 +1225,9 @@ fn shapeParagraphLogicalIntersectionInto(
         paragraph_options_value.end_of_text and text_end == paragraph_text.len;
     // `all_ascii` describes the bytes entering this pipeline invocation, not
     // the wider script item whose plan/context this child inherits.
-    resolved.all_ascii =
+    resolved.all_ascii = if (cached_item) |item|
+        item.all_ascii and text_start == run.byte_start and text_end == run.byteEnd()
+    else
         fallback_segment.isAscii(paragraph_text[text_start..text_end]);
     return try shapeResolvedCascadeInto(
         cascade,
@@ -1262,6 +1367,7 @@ fn finishUniformParagraph(
     font_size: f32,
     options: ParagraphOptions,
     bidi_paragraph: ?unicode.BidiParagraph,
+    needs_bidi_reorder: bool,
 ) !void {
     if (options.writing_mode.isVertical()) {
         // Vertical column construction has already completed its admitted
@@ -1272,7 +1378,7 @@ fn finishUniformParagraph(
         // visual permutation.
         vertical_justification.apply(buffer, options);
         try punctuation_compression.apply(buffer, options);
-        if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
+        if (needs_bidi_reorder) {
             try applyParagraphLineBidiVisualOrder(
                 buffer,
                 text,
@@ -1301,7 +1407,7 @@ fn finishUniformParagraph(
         options,
     );
     try punctuation_compression.apply(buffer, options);
-    if (plan_bidi.paragraphNeedsReorder(text, options.direction)) {
+    if (needs_bidi_reorder) {
         try applyParagraphLineBidiVisualOrder(
             buffer,
             text,

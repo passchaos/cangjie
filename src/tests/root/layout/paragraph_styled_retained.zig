@@ -399,6 +399,94 @@ test "retained styled bidi keeps metadata parallel to visual glyphs" {
     try std.testing.expect(saw_descending_cluster);
 }
 
+test "retained nonuniform Arabic stays owning after logical cache replacement" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildMixedScriptArabicRligTtf(allocator);
+    defer allocator.free(bytes);
+    var face = try cangjie.font.Face.parse(allocator, bytes);
+    defer face.deinit();
+    const cascade = cangjie.font.Cascade.init(&.{&face});
+    const text = "A لابب B";
+    const split = "A لاب".len;
+    const spans = [_]cangjie.paragraph.StyledSpan{
+        .{
+            .byte_start = 0,
+            .byte_len = split,
+            .style_index = 3,
+            .font_size = 20,
+        },
+        .{
+            .byte_start = split,
+            .byte_len = text.len - split,
+            .style_index = 7,
+            .font_size = 20,
+            .letter_spacing = 1,
+        },
+    };
+    const options: cangjie.paragraph.Options = .{ .max_width = 48 };
+
+    var engine = cangjie.shaping.Engine.init(allocator, .{});
+    defer engine.deinit();
+    var paragraph = try engine.prepareStyledParagraph(cascade, .{
+        .text = text,
+        .default_font_size = 20,
+        .spans = &spans,
+        .options = options,
+    });
+    defer paragraph.deinit();
+    var reflow = cangjie.paragraph.StyledReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const first = try paragraph.layout(&reflow, options);
+    const owned_glyphs = try allocator.dupe(cangjie.shaping.Glyph, first.layout.glyphs);
+    defer allocator.free(owned_glyphs);
+    const owned_lines = try allocator.dupe(cangjie.paragraph.Line, first.layout.lines);
+    defer allocator.free(owned_lines);
+    const owned_metadata = try allocator.dupe(
+        cangjie.paragraph.StyledGlyphMetadata,
+        first.glyph_metadata,
+    );
+    defer allocator.free(owned_metadata);
+
+    // Populate, replace, and clear the Engine cache. The retained paragraph
+    // may have consumed a synchronous hit during preparation, but its text,
+    // bidi paragraph, and shaped output must not borrow that entry.
+    _ = try engine.layoutStyledWithoutContentWidths(cascade, .{
+        .text = text,
+        .default_font_size = 20,
+        .spans = &spans,
+        .options = options,
+    });
+    const replacement = "A بب C";
+    const replacement_spans = [_]cangjie.paragraph.StyledSpan{
+        .{ .byte_start = 0, .byte_len = 2, .style_index = 1, .font_size = 20 },
+        .{ .byte_start = 2, .byte_len = replacement.len - 2, .style_index = 2, .font_size = 20 },
+    };
+    _ = try engine.layoutStyledWithoutContentWidths(cascade, .{
+        .text = replacement,
+        .default_font_size = 20,
+        .spans = &replacement_spans,
+        .options = options,
+    });
+    engine.clearCaches();
+
+    const repeated = try paragraph.layout(&reflow, options);
+    try std.testing.expectEqualSlices(
+        cangjie.shaping.Glyph,
+        owned_glyphs,
+        repeated.layout.glyphs,
+    );
+    try std.testing.expectEqualSlices(
+        cangjie.paragraph.Line,
+        owned_lines,
+        repeated.layout.lines,
+    );
+    try std.testing.expectEqualSlices(
+        cangjie.paragraph.StyledGlyphMetadata,
+        owned_metadata,
+        repeated.glyph_metadata,
+    );
+}
+
 test "retained styled paragraph rejects shaping changes without buffer mutation" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalTtf(allocator);

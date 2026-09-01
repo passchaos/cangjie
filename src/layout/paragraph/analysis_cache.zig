@@ -10,11 +10,27 @@
 const std = @import("std");
 
 const opportunity = @import("../line_break/opportunity.zig");
+const logical_context = @import("../../shaping/context/logical.zig");
+const logical_runs = @import("../../shaping/itemization/logical_runs.zig");
 const unicode = @import("../../unicode.zig");
 
 pub const Analysis = struct {
     graphemes: []const unicode.GraphemeCluster,
     line_breaks: []const opportunity.Opportunity,
+};
+
+/// Immutable width- and style-independent analysis used while shaping one
+/// logical paragraph. All slices borrow the cache entry.
+pub const LogicalAnalysis = struct {
+    items: []const LogicalItem,
+    joining_before: []const ?unicode.JoiningType,
+    joining_after: []const ?unicode.JoiningType,
+};
+
+pub const LogicalItem = struct {
+    run: logical_runs.Run,
+    inferred_language_tag: unicode.OpenTypeLanguageTag,
+    all_ascii: bool,
 };
 
 pub const Cache = struct {
@@ -29,6 +45,15 @@ pub const Cache = struct {
     bidi_valid: bool = false,
     bidi_hits: usize = 0,
     bidi_misses: usize = 0,
+    logical_text: []u8 = &.{},
+    logical_base_direction: unicode.BidiBaseDirection = .ltr,
+    logical_items: []LogicalItem = &.{},
+    joining_before: []?unicode.JoiningType = &.{},
+    joining_after: []?unicode.JoiningType = &.{},
+    logical_joining_complete: bool = false,
+    logical_valid: bool = false,
+    logical_hits: usize = 0,
+    logical_misses: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) Cache {
         return .{ .allocator = allocator };
@@ -37,6 +62,7 @@ pub const Cache = struct {
     pub fn deinit(self: *Cache) void {
         self.freeCurrentAnalysis();
         self.freeCurrentBidi();
+        self.freeCurrentLogical();
         self.* = undefined;
     }
 
@@ -44,8 +70,11 @@ pub const Cache = struct {
     pub fn clear(self: *Cache) void {
         self.freeCurrentAnalysis();
         self.freeCurrentBidi();
+        self.freeCurrentLogical();
         self.bidi_hits = 0;
         self.bidi_misses = 0;
+        self.logical_hits = 0;
+        self.logical_misses = 0;
     }
 
     /// Return analysis for exactly `text`, replacing the prior entry on miss.
@@ -133,10 +162,105 @@ pub const Cache = struct {
         return self.bidi_paragraph.?.borrowed();
     }
 
+    /// Return materialized script/bidi runs and optional Arabic joining
+    /// neighbors for exactly `text` and `base_direction`.
+    ///
+    /// `summarize_joining_boundaries` is deliberately not part of the key. A
+    /// false request can use an entry containing summaries, while a true
+    /// request upgrades a run-only entry transactionally. A hit performs no
+    /// allocation. All result slices remain cache-owned.
+    pub fn getLogical(
+        self: *Cache,
+        text: []const u8,
+        base_direction: unicode.BidiBaseDirection,
+        paragraph: ?unicode.BidiParagraph,
+        summarize_joining_boundaries: bool,
+    ) !LogicalAnalysis {
+        if (self.logical_valid and
+            self.logical_base_direction == base_direction and
+            std.mem.eql(u8, self.logical_text, text) and
+            (!summarize_joining_boundaries or self.logical_joining_complete))
+        {
+            self.logical_hits += 1;
+            return self.logicalAnalysis();
+        }
+
+        self.logical_misses += 1;
+        const owned_text = try self.allocator.dupe(u8, text);
+        errdefer self.allocator.free(owned_text);
+
+        var items = std.ArrayList(LogicalItem).empty;
+        defer items.deinit(self.allocator);
+        var iterator = if (paragraph) |resolved|
+            logical_runs.runs(text, resolved)
+        else
+            logical_runs.baseRuns(
+                text,
+                if (base_direction == .rtl) 1 else 0,
+            );
+        while (iterator.next()) |run| {
+            const run_text = text[run.byte_start..run.byteEnd()];
+            const script_text = text[run.script_byte_start..run.scriptByteEnd()];
+            try items.append(self.allocator, .{
+                .run = run,
+                .inferred_language_tag = unicode.inferOpenTypeLanguageTag(
+                    script_text,
+                ),
+                .all_ascii = isAscii(run_text),
+            });
+        }
+        const owned_items = try items.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned_items);
+
+        var owned_before: []?unicode.JoiningType = &.{};
+        errdefer if (owned_before.len != 0) self.allocator.free(owned_before);
+        var owned_after: []?unicode.JoiningType = &.{};
+        errdefer if (owned_after.len != 0) self.allocator.free(owned_after);
+        if (summarize_joining_boundaries and
+            logical_context.hasJoiningRelevantScalar(text))
+        {
+            owned_before = try self.allocator.alloc(
+                ?unicode.JoiningType,
+                text.len + 1,
+            );
+            @memset(owned_before, null);
+            owned_after = try self.allocator.alloc(
+                ?unicode.JoiningType,
+                text.len + 1,
+            );
+            @memset(owned_after, null);
+            logical_context.summarizeJoiningBoundaries(
+                text,
+                owned_before,
+                owned_after,
+            );
+        }
+
+        // Publish only after every owned component exists. Failed misses leave
+        // the previous bundle, including all outstanding views, intact.
+        self.freeCurrentLogical();
+        self.logical_text = owned_text;
+        self.logical_base_direction = base_direction;
+        self.logical_items = owned_items;
+        self.joining_before = owned_before;
+        self.joining_after = owned_after;
+        self.logical_joining_complete = summarize_joining_boundaries;
+        self.logical_valid = true;
+        return self.logicalAnalysis();
+    }
+
     fn analysis(self: *const Cache) Analysis {
         return .{
             .graphemes = self.graphemes,
             .line_breaks = self.line_breaks,
+        };
+    }
+
+    fn logicalAnalysis(self: *const Cache) LogicalAnalysis {
+        return .{
+            .items = self.logical_items,
+            .joining_before = self.joining_before,
+            .joining_after = self.joining_after,
         };
     }
 
@@ -159,7 +283,26 @@ pub const Cache = struct {
         self.bidi_paragraph = null;
         self.bidi_valid = false;
     }
+
+    fn freeCurrentLogical(self: *Cache) void {
+        if (!self.logical_valid) return;
+        if (self.joining_after.len != 0) self.allocator.free(self.joining_after);
+        if (self.joining_before.len != 0) self.allocator.free(self.joining_before);
+        self.allocator.free(self.logical_items);
+        self.allocator.free(self.logical_text);
+        self.logical_text = &.{};
+        self.logical_items = &.{};
+        self.joining_before = &.{};
+        self.joining_after = &.{};
+        self.logical_joining_complete = false;
+        self.logical_valid = false;
+    }
 };
+
+fn isAscii(text: []const u8) bool {
+    for (text) |byte| if (byte & 0x80 != 0) return false;
+    return true;
+}
 
 test "analysis cache exact hit performs no allocation" {
     var cache = Cache.init(std.testing.allocator);
@@ -395,6 +538,160 @@ test "bidi cache replacement is transactional under allocation failure" {
                 try std.testing.expectEqual(@as(usize, 1), cache.bidi_hits);
             },
             error.InvalidUtf8 => return err,
+        }
+    }
+}
+
+test "logical analysis cache replays exact runs and joining summaries" {
+    const text = "Aبَت 12";
+    var cache = Cache.init(std.testing.allocator);
+    defer cache.deinit();
+    var paragraph = try unicode.resolveBidiParagraph(
+        std.testing.allocator,
+        text,
+        .ltr,
+    );
+    defer paragraph.deinit();
+
+    const first = try cache.getLogical(text, .ltr, paragraph, true);
+    try std.testing.expect(first.items.len > 1);
+    for (first.items) |item| {
+        const script_text = text[item.run.script_byte_start..item.run.scriptByteEnd()];
+        const run_text = text[item.run.byte_start..item.run.byteEnd()];
+        try std.testing.expectEqual(
+            unicode.inferOpenTypeLanguageTag(script_text),
+            item.inferred_language_tag,
+        );
+        try std.testing.expectEqual(isAscii(run_text), item.all_ascii);
+    }
+    try std.testing.expectEqual(text.len + 1, first.joining_before.len);
+    try std.testing.expectEqual(text.len + 1, first.joining_after.len);
+    const beh_start = "A".len;
+    const teh_start = "Aبَ".len;
+    try std.testing.expectEqual(
+        unicode.JoiningType.dual,
+        first.joining_after[beh_start].?,
+    );
+    try std.testing.expectEqual(
+        unicode.JoiningType.dual,
+        first.joining_before[teh_start].?,
+    );
+
+    var failing = std.testing.FailingAllocator.init(
+        std.testing.allocator,
+        .{ .fail_index = 0 },
+    );
+    cache.allocator = failing.allocator();
+    const repeated = try cache.getLogical(text, .ltr, paragraph, true);
+    try std.testing.expect(!failing.has_induced_failure);
+    try std.testing.expectEqual(first.items.ptr, repeated.items.ptr);
+    try std.testing.expectEqual(
+        first.joining_before.ptr,
+        repeated.joining_before.ptr,
+    );
+    try std.testing.expectEqual(first.joining_after.ptr, repeated.joining_after.ptr);
+    try std.testing.expectEqual(@as(usize, 1), cache.logical_hits);
+    try std.testing.expectEqual(@as(usize, 1), cache.logical_misses);
+    cache.allocator = std.testing.allocator;
+}
+
+test "cached intrinsic joining summaries match prepared logical context" {
+    const texts = [_][]const u8{
+        "بَت",
+        "ب\u{200c}ت",
+        "ب\u{200d}ت",
+        "A ب\u{034f}ت B",
+        "\u{10eab}بت",
+    };
+    var cache = Cache.init(std.testing.allocator);
+    defer cache.deinit();
+    for (texts) |text| {
+        const cached = try cache.getLogical(text, .ltr, null, true);
+        var fresh = try logical_context.Prepared.init(
+            std.testing.allocator,
+            &.{},
+            text,
+            &.{},
+            true,
+        );
+        defer fresh.deinit();
+        try std.testing.expectEqualSlices(
+            ?unicode.JoiningType,
+            fresh.view.joining_before.?,
+            cached.joining_before,
+        );
+        try std.testing.expectEqualSlices(
+            ?unicode.JoiningType,
+            fresh.view.joining_after.?,
+            cached.joining_after,
+        );
+    }
+}
+
+test "logical analysis key includes text and base direction" {
+    var cache = Cache.init(std.testing.allocator);
+    defer cache.deinit();
+
+    const ltr = try cache.getLogical("123", .ltr, null, false);
+    try std.testing.expectEqual(@as(u8, 0), ltr.items[0].run.level);
+    const rtl = try cache.getLogical("123", .rtl, null, false);
+    try std.testing.expectEqual(@as(u8, 1), rtl.items[0].run.level);
+    const changed = try cache.getLogical("456", .rtl, null, false);
+    try std.testing.expectEqual(@as(u8, 1), changed.items[0].run.level);
+    try std.testing.expectEqual(@as(usize, 3), cache.logical_misses);
+    try std.testing.expectEqual(@as(usize, 0), cache.logical_hits);
+
+    const repeated = try cache.getLogical("456", .rtl, null, false);
+    try std.testing.expectEqual(changed.items.ptr, repeated.items.ptr);
+    try std.testing.expectEqual(@as(usize, 1), cache.logical_hits);
+}
+
+test "logical analysis replacement is transactional under allocation failure" {
+    const allocator = std.testing.allocator;
+    const original_text = "Aبَت";
+    const replacement_text = "אבג سلام 12";
+    var successes_before_failure: usize = 0;
+    while (true) : (successes_before_failure += 1) {
+        var failing = std.testing.FailingAllocator.init(allocator, .{});
+        var cache = Cache.init(failing.allocator());
+        defer cache.deinit();
+
+        const original = try cache.getLogical(original_text, .ltr, null, true);
+        const original_runs = original.items.ptr;
+        const original_before = original.joining_before.ptr;
+        const original_after = original.joining_after.ptr;
+        failing.fail_index = failing.alloc_index + successes_before_failure;
+
+        const replacement = cache.getLogical(
+            replacement_text,
+            .rtl,
+            null,
+            true,
+        );
+        if (replacement) |analysis| {
+            if (failing.has_induced_failure) {
+                return error.SwallowedOutOfMemoryError;
+            }
+            try std.testing.expect(analysis.items.len != 0);
+            break;
+        } else |err| switch (err) {
+            error.OutOfMemory => {
+                const previous = try cache.getLogical(
+                    original_text,
+                    .ltr,
+                    null,
+                    true,
+                );
+                try std.testing.expectEqual(original_runs, previous.items.ptr);
+                try std.testing.expectEqual(
+                    original_before,
+                    previous.joining_before.ptr,
+                );
+                try std.testing.expectEqual(
+                    original_after,
+                    previous.joining_after.ptr,
+                );
+            },
         }
     }
 }

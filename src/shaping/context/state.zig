@@ -119,6 +119,10 @@ pub const State = struct {
                 self.styled_output.analysis.bidi_hits,
                 self.styled_output.analysis.bidi_misses,
             ),
+            .logical_analysis = stats_mod.counter(
+                self.styled_output.analysis.logical_hits,
+                self.styled_output.analysis.logical_misses,
+            ),
         };
     }
 

@@ -50,6 +50,10 @@ test "one-shot uniform layout caches exact bidi paragraphs" {
         context_mod.Engine.Counter{ .misses = 1 },
         engine.stats().bidi_paragraphs,
     );
+    try std.testing.expectEqual(
+        context_mod.Engine.Counter{ .misses = 1 },
+        engine.stats().logical_analysis,
+    );
 
     const second = try engine.layout(cascade, request);
     try std.testing.expectEqualSlices(
@@ -68,6 +72,10 @@ test "one-shot uniform layout caches exact bidi paragraphs" {
     try std.testing.expectEqual(
         context_mod.Engine.Counter{ .hits = 1, .misses = 1 },
         engine.stats().bidi_paragraphs,
+    );
+    try std.testing.expectEqual(
+        context_mod.Engine.Counter{ .hits = 1, .misses = 1 },
+        engine.stats().logical_analysis,
     );
 
     // Base direction is part of the exact cache identity even when all source
@@ -198,6 +206,70 @@ test "uniform and styled Engine layouts share exact bidi analysis" {
     );
 }
 
+test "uniform logical cache keeps explicit direction and inferred properties exact" {
+    const test_font = @import("../../../test_font.zig");
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(allocator, false);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = face_mod.Cascade.init(face_mod.backend.faces(&.{&font}));
+    const text = "Latin אבג 12 سلام";
+
+    inline for (.{
+        @import("../../../shaping/pipeline/types.zig").TextDirection.ltr,
+        @import("../../../shaping/pipeline/types.zig").TextDirection.rtl,
+    }) |direction| {
+        var cached_engine = context_mod.Engine.init(allocator, .{});
+        defer cached_engine.deinit();
+        const request: context_mod.ParagraphRequest = .{
+            .text = text,
+            .font_size = 20,
+            .options = .{ .max_width = 70, .direction = direction },
+        };
+        _ = try cached_engine.layout(cascade, request);
+        const cached = try cached_engine.layout(cascade, request);
+        const expected_glyphs = try allocator.dupe(
+            glyph_position.GlyphPosition,
+            cached.glyphs,
+        );
+        defer allocator.free(expected_glyphs);
+        const expected_runs = try allocator.dupe(
+            run_types.CascadeRun,
+            cached.runs,
+        );
+        defer allocator.free(expected_runs);
+        const expected_lines = try allocator.dupe(
+            paragraph_types.ParagraphLine,
+            cached.lines,
+        );
+        defer allocator.free(expected_lines);
+
+        var fresh_engine = context_mod.Engine.init(allocator, .{});
+        defer fresh_engine.deinit();
+        const fresh = try fresh_engine.layout(cascade, request);
+        try std.testing.expectEqualSlices(
+            glyph_position.GlyphPosition,
+            expected_glyphs,
+            fresh.glyphs,
+        );
+        try std.testing.expectEqualSlices(
+            run_types.CascadeRun,
+            expected_runs,
+            fresh.runs,
+        );
+        try std.testing.expectEqualSlices(
+            paragraph_types.ParagraphLine,
+            expected_lines,
+            fresh.lines,
+        );
+        try std.testing.expectEqual(
+            context_mod.Engine.Counter{ .hits = 1, .misses = 1 },
+            cached_engine.stats().logical_analysis,
+        );
+    }
+}
+
 test "general styled layouts reuse bidi analysis and preserve parity" {
     const test_font = @import("../../../test_font.zig");
     const allocator = std.testing.allocator;
@@ -259,6 +331,10 @@ test "general styled layouts reuse bidi analysis and preserve parity" {
         context_mod.Engine.Counter{ .misses = 1 },
         engine.stats().bidi_paragraphs,
     );
+    try std.testing.expectEqual(
+        context_mod.Engine.Counter{ .misses = 1 },
+        engine.stats().logical_analysis,
+    );
 
     const second = try engine.layoutStyled(cascade, request);
     try expectStyledSlicesEqual(
@@ -272,6 +348,10 @@ test "general styled layouts reuse bidi analysis and preserve parity" {
     try std.testing.expectEqual(
         context_mod.Engine.Counter{ .hits = 1, .misses = 1 },
         engine.stats().bidi_paragraphs,
+    );
+    try std.testing.expectEqual(
+        context_mod.Engine.Counter{ .hits = 1, .misses = 1 },
+        engine.stats().logical_analysis,
     );
 
     // Two spans force the general styled implementation in this layout-only
@@ -291,6 +371,10 @@ test "general styled layouts reuse bidi analysis and preserve parity" {
     try std.testing.expectEqual(
         context_mod.Engine.Counter{ .hits = 2, .misses = 1 },
         engine.stats().bidi_paragraphs,
+    );
+    try std.testing.expectEqual(
+        context_mod.Engine.Counter{ .hits = 2, .misses = 1 },
+        engine.stats().logical_analysis,
     );
 }
 
@@ -315,7 +399,9 @@ test "invalid bidi layout requests do not mutate the analysis cache" {
     });
     const analysis = &engine.state.styled_output.analysis;
     const cached_text_ptr = analysis.bidi_text.ptr;
+    const cached_logical_text_ptr = analysis.logical_text.ptr;
     const expected_stats = context_mod.Engine.Counter{ .misses = 1 };
+    const expected_logical_stats = engine.stats().logical_analysis;
 
     try std.testing.expectError(error.InvalidFontSize, engine.layout(
         cascade,
@@ -326,7 +412,15 @@ test "invalid bidi layout requests do not mutate the analysis cache" {
         },
     ));
     try std.testing.expectEqual(expected_stats, engine.stats().bidi_paragraphs);
+    try std.testing.expectEqual(
+        expected_logical_stats,
+        engine.stats().logical_analysis,
+    );
     try std.testing.expectEqual(cached_text_ptr, analysis.bidi_text.ptr);
+    try std.testing.expectEqual(
+        cached_logical_text_ptr,
+        analysis.logical_text.ptr,
+    );
     try std.testing.expectEqualStrings("cached \u{05d0}", analysis.bidi_text);
 
     const invalid_spans = [_]styled_paragraph.Span{.{
@@ -345,7 +439,15 @@ test "invalid bidi layout requests do not mutate the analysis cache" {
         },
     ));
     try std.testing.expectEqual(expected_stats, engine.stats().bidi_paragraphs);
+    try std.testing.expectEqual(
+        expected_logical_stats,
+        engine.stats().logical_analysis,
+    );
     try std.testing.expectEqual(cached_text_ptr, analysis.bidi_text.ptr);
+    try std.testing.expectEqual(
+        cached_logical_text_ptr,
+        analysis.logical_text.ptr,
+    );
     try std.testing.expectEqualStrings("cached \u{05d0}", analysis.bidi_text);
 }
 
@@ -466,6 +568,41 @@ test "retained styled bidi remains owning across cache replacement" {
         inline_object.Positioned,
         expected_objects,
         after_replacement.layout.inline_objects,
+    );
+}
+
+test "uniform logical analysis layout is leak free under allocation failure" {
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        std.testing.allocator,
+        false,
+    );
+    defer std.testing.allocator.free(bytes);
+
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        struct {
+            fn run(allocator: std.mem.Allocator, font_bytes: []const u8) !void {
+                var font = try Font.parse(allocator, font_bytes);
+                defer font.deinit();
+                const cascade = face_mod.Cascade.init(
+                    face_mod.backend.faces(&.{&font}),
+                );
+                var engine = context_mod.Engine.init(allocator, .{});
+                defer engine.deinit();
+                const layout = try engine.layout(cascade, .{
+                    .text = "A אבג سلام 12 B",
+                    .font_size = 20,
+                    .options = .{ .max_width = 70 },
+                });
+                try std.testing.expect(layout.glyphs.len != 0);
+                try std.testing.expectEqual(
+                    context_mod.Engine.Counter{ .misses = 1 },
+                    engine.stats().logical_analysis,
+                );
+            }
+        }.run,
+        .{bytes},
     );
 }
 

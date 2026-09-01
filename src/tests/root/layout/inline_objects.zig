@@ -149,6 +149,60 @@ test "out-of-flow object anchors without changing width or line height" {
     try std.testing.expect(hit.cluster != 1);
 }
 
+test "LTR inline objects do not force bidi resolution" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(allocator, false);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const fonts = [_]*const Font{&font};
+    const marker = inline_object.object_replacement_utf8;
+
+    // U+FFFC still selects the paragraph's itemized shaping path, but neither
+    // Latin nor Japanese needs resolved embedding levels. Keep that proof
+    // visible here: the reusable UAX #9 storage must remain untouched while
+    // the synthetic object's byte cluster and geometry stay intact.
+    const fixtures = [_]struct { text: []const u8, marker_index: usize }{
+        .{ .text = "A" ++ marker ++ "A", .marker_index = 1 },
+        .{ .text = "あ" ++ marker ++ "い", .marker_index = "あ".len },
+    };
+    const kinds = [_]inline_object.Kind{
+        .in_flow,
+        .out_of_flow,
+        .custom_out_of_flow,
+    };
+    for (fixtures) |fixture| {
+        for (kinds) |kind| {
+            var buffer = LayoutBuffer.init(allocator);
+            defer buffer.deinit();
+            const object = inline_object.Object{
+                .id = 7,
+                .kind = kind,
+                .byte_index = fixture.marker_index,
+                .width = 12,
+                .height = 10,
+                .baseline = 8,
+            };
+            const paragraph = try TextShaper.layoutParagraphUtf8(
+                FontCascade.init(&fonts),
+                &buffer,
+                fixture.text,
+                20,
+                .{ .max_width = 100, .inline_objects = &.{object} },
+            );
+
+            try std.testing.expectEqual(@as(usize, 0), buffer.bidi_reorder_scratch.bidi_storage.scalars.items.len);
+            try std.testing.expectEqual(@as(usize, 0), buffer.bidi_reorder_scratch.bidi_storage.scalars.capacity);
+            try std.testing.expectEqual(@as(usize, 3), paragraph.glyphs.len);
+            try std.testing.expectEqual(fixture.marker_index, paragraph.glyphs[1].cluster);
+            try std.testing.expectEqual(marker.len, paragraph.glyphs[1].source_byte_len);
+            try std.testing.expect(paragraph.glyphs[1].isInlineObject());
+            try std.testing.expectEqual(@as(usize, 1), paragraph.inline_objects.len);
+            try std.testing.expectEqual(kind, paragraph.inline_objects[0].kind);
+        }
+    }
+}
+
 test "retained reflow updates object geometry without changing anchors" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildMinimalTtf(allocator);

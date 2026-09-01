@@ -223,6 +223,7 @@ pub const TextShaper = struct {
             font_size,
             shape_options,
             options.inline_objects,
+            needs_bidi_reorder,
             bidi_paragraph,
         );
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
@@ -360,6 +361,7 @@ pub const TextShaper = struct {
             font_size,
             paragraph_options.shapeOptions(options),
             options.inline_objects,
+            needs_bidi_reorder,
             bidi_paragraph,
         );
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
@@ -446,6 +448,7 @@ pub const TextShaper = struct {
             font_size,
             paragraph_options.shapeOptions(options),
             options.inline_objects,
+            needs_bidi_reorder,
             bidi_paragraph,
         );
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
@@ -950,6 +953,7 @@ fn shapeParagraphContent(
     font_size: f32,
     options: ShapeOptions,
     objects: []const inline_object.Object,
+    needs_bidi_reorder: bool,
     resolved_bidi: ?unicode.BidiParagraph,
 ) !void {
     try plan_validation.input(text, font_size, options);
@@ -974,17 +978,18 @@ fn shapeParagraphContent(
 
     buffer.clear();
     var pen = PenPosition{};
-    var owned_bidi: ?unicode.BidiParagraph = null;
-    defer if (owned_bidi) |*paragraph| paragraph.deinit();
-    const paragraph = resolved_bidi orelse paragraph: {
-        owned_bidi = try unicode.resolveBidiParagraph(
-            buffer.allocator,
+    // The caller has already classified the complete paragraph. A null
+    // resolved paragraph means every scalar stays at the base level; it must
+    // not be interpreted as a request to repeat UAX #9 merely because an
+    // inline object or tab selected this itemized shaping path.
+    std.debug.assert(needs_bidi_reorder == (resolved_bidi != null));
+    var logical_runs = if (resolved_bidi) |paragraph|
+        logical_run_itemization.probedRuns(text, paragraph)
+    else
+        logical_run_itemization.probedBaseRuns(
             text,
-            if (options.direction == .rtl) .rtl else .ltr,
+            if (options.direction == .rtl) 1 else 0,
         );
-        break :paragraph owned_bidi.?;
-    };
-    var logical_runs = logical_run_itemization.probedRuns(text, paragraph);
     const itemized = logical_runs.isItemized();
     var prepared = try logical_context.Prepared.init(
         buffer.allocator,

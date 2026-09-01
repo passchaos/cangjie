@@ -104,6 +104,18 @@ pub const Positioned = struct {
     anchor_y: f32,
 };
 
+/// Location proved while a retained single-object paragraph is permuted.
+///
+/// The bidi transaction already knows both the final visual glyph index and
+/// its owning line. Carrying the accumulated inline pen across that boundary
+/// avoids rediscovering the same marker with two binary searches and another
+/// glyph-prefix walk during object positioning.
+pub const RetainedPositionHint = struct {
+    line_index: usize,
+    glyph_index: usize,
+    pen_inline: f32,
+};
+
 pub fn validate(text: []const u8, objects: []const Object) !void {
     var previous_index: ?usize = null;
     for (objects, 0..) |object, object_index| {
@@ -400,6 +412,19 @@ pub fn positionSingleRetained(
     });
 }
 
+/// Position one retained object from a location already verified by the bidi
+/// transaction. The caller has also established output capacity and marker
+/// identity, so this operation is infallible and performs no source search.
+pub fn positionSingleRetainedAt(
+    buffer: anytype,
+    object: Object,
+    hint: RetainedPositionHint,
+    writing_mode: @import("../../shaping/pipeline/types.zig").WritingMode,
+) void {
+    std.debug.assert(object.kind != .custom_out_of_flow);
+    positionSingleAt(buffer, object, null, hint, writing_mode);
+}
+
 /// Position one pre-resolved custom object in the retained simple path. The
 /// absolute paint geometry is caller-owned, so only the marker's line index
 /// and fallback anchor need to be recovered from the final visual glyphs.
@@ -446,6 +471,69 @@ pub fn positionSingleResolvedRetained(
         .width = placement.geometry.width,
         .height = placement.geometry.height,
         .baseline = placement.geometry.resolvedBaseline(),
+        .anchor_x = anchor_x,
+        .anchor_y = anchor_y,
+    });
+}
+
+/// Custom-placement counterpart of `positionSingleRetainedAt`. Absolute paint
+/// geometry remains caller-owned; the verified hint supplies only its fallback
+/// source anchor and owning line.
+pub fn positionSingleResolvedRetainedAt(
+    buffer: anytype,
+    object: Object,
+    placement: Placement,
+    hint: RetainedPositionHint,
+    writing_mode: @import("../../shaping/pipeline/types.zig").WritingMode,
+) void {
+    std.debug.assert(object.kind == .custom_out_of_flow);
+    std.debug.assert(placement.byte_index == object.byte_index);
+    positionSingleAt(buffer, object, placement, hint, writing_mode);
+}
+
+fn positionSingleAt(
+    buffer: anytype,
+    object: Object,
+    placement: ?Placement,
+    hint: RetainedPositionHint,
+    writing_mode: @import("../../shaping/pipeline/types.zig").WritingMode,
+) void {
+    std.debug.assert(buffer.inline_objects.capacity >= 1);
+    std.debug.assert(hint.line_index < buffer.lines.items.len);
+    std.debug.assert(hint.glyph_index < buffer.glyphs.items.len);
+    std.debug.assert(buffer.glyphs.items[hint.glyph_index].isInlineObject());
+    std.debug.assert(buffer.glyphs.items[hint.glyph_index].cluster == object.byte_index);
+    buffer.inline_objects.clearRetainingCapacity();
+    const line = &buffer.lines.items[hint.line_index];
+    line.inline_object_start = 0;
+    line.inline_object_len = 1;
+    const baseline = object.resolvedBaseline();
+    const anchor_x = if (writing_mode.isVertical())
+        line.x + (line.width - object.width) / 2
+    else
+        hint.pen_inline;
+    const anchor_y = if (writing_mode.isVertical())
+        hint.pen_inline
+    else
+        line.y + line.baseline +
+            buffer.glyphs.items[hint.glyph_index].y_offset - baseline;
+    const geometry = if (placement) |resolved| resolved.geometry else Geometry{
+        .x = anchor_x,
+        .y = anchor_y,
+        .width = object.width,
+        .height = object.height,
+        .baseline = object.baseline,
+    };
+    buffer.inline_objects.appendAssumeCapacity(.{
+        .id = object.id,
+        .kind = object.kind,
+        .byte_index = object.byte_index,
+        .line_index = hint.line_index,
+        .x = geometry.x,
+        .y = geometry.y,
+        .width = geometry.width,
+        .height = geometry.height,
+        .baseline = geometry.resolvedBaseline(),
         .anchor_x = anchor_x,
         .anchor_y = anchor_y,
     });
@@ -588,6 +676,75 @@ test "single resolved retained positioning keeps absolute geometry and anchor" {
     try std.testing.expectEqual(@as(f32, 11), positioned.baseline);
     try std.testing.expectEqual(@as(f32, 7), positioned.anchor_x);
     try std.testing.expectEqual(@as(f32, 16), positioned.anchor_y);
+}
+
+test "verified retained hint positions every single-object kind" {
+    const GlyphPosition = @import("../glyph_position.zig").GlyphPosition;
+    const ParagraphLine = @import("../types/paragraph.zig").ParagraphLine;
+    const Buffer = struct {
+        allocator: std.mem.Allocator,
+        glyphs: std.ArrayList(GlyphPosition) = .empty,
+        lines: std.ArrayList(ParagraphLine) = .empty,
+        inline_objects: std.ArrayList(Positioned) = .empty,
+    };
+    var buffer = Buffer{ .allocator = std.testing.allocator };
+    defer buffer.glyphs.deinit(buffer.allocator);
+    defer buffer.lines.deinit(buffer.allocator);
+    defer buffer.inline_objects.deinit(buffer.allocator);
+    try buffer.glyphs.appendSlice(buffer.allocator, &.{
+        .{ .glyph_id = 1, .codepoint = 'A', .cluster = 0, .source_byte_len = 1, .x_advance = 4 },
+        .{ .glyph_id = 0, .codepoint = object_replacement_character, .cluster = 1, .source_byte_len = object_replacement_utf8.len, .x_advance = 6, .y_offset = 2, .flags = .{ .inline_object = true } },
+    });
+    try buffer.lines.append(buffer.allocator, .{
+        .glyph_start = 0,
+        .glyph_len = 2,
+        .run_start = 0,
+        .run_len = 1,
+        .byte_start = 0,
+        .byte_len = 4,
+        .x = 7,
+        .y = 9,
+        .width = 10,
+        .height = 20,
+        .baseline = 15,
+        .ascent = 15,
+        .descent = 5,
+        .leading = 0,
+    });
+    try buffer.inline_objects.ensureTotalCapacity(buffer.allocator, 1);
+    const hint: RetainedPositionHint = .{
+        .line_index = 0,
+        .glyph_index = 1,
+        .pen_inline = 11,
+    };
+    inline for (.{ Kind.in_flow, Kind.out_of_flow }) |kind| {
+        const object: Object = .{
+            .id = 3,
+            .kind = kind,
+            .byte_index = 1,
+            .width = 6,
+            .height = 8,
+            .baseline = 5,
+        };
+        positionSingleRetainedAt(&buffer, object, hint, .horizontal_tb);
+        try std.testing.expectEqual(@as(usize, 1), buffer.inline_objects.items.len);
+        try std.testing.expectEqual(@as(f32, 11), buffer.inline_objects.items[0].anchor_x);
+        try std.testing.expectEqual(@as(f32, 21), buffer.inline_objects.items[0].anchor_y);
+    }
+    const custom: Object = .{
+        .id = 4,
+        .kind = .custom_out_of_flow,
+        .byte_index = 1,
+        .width = 6,
+        .height = 8,
+        .baseline = 5,
+    };
+    positionSingleResolvedRetainedAt(&buffer, custom, .{
+        .byte_index = 1,
+        .geometry = .{ .x = 30, .y = 40, .width = 12, .height = 14, .baseline = 9 },
+    }, hint, .horizontal_tb);
+    try std.testing.expectEqual(@as(f32, 30), buffer.inline_objects.items[0].x);
+    try std.testing.expectEqual(@as(f32, 11), buffer.inline_objects.items[0].anchor_x);
 }
 
 fn findPlacement(

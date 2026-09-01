@@ -50,13 +50,25 @@ pub fn applySimpleRetained(
     direct_bidi_scalar_glyphs: bool,
     bidi_paragraph: ?unicode.BidiParagraph,
 ) !void {
+    var object_hint: ?inline_object.RetainedPositionHint = null;
+    var run_offsets_valid = false;
     if (needs_bidi_reorder) {
-        if (pure_rtl_lines and !pure_rtl_may_have_mirroring and
-            (bidi_reorder.applyPureRtlLinesWithoutMirroringAfterProof(buffer) or
-                try bidi_reorder.applyPureRtlLinesWithObjectWithoutMirroringAfterProof(buffer)))
+        if (pure_rtl_lines and options.inline_objects.len == 1) {
+            object_hint = if (pure_rtl_may_have_mirroring)
+                try bidi_reorder.applyPureRtlLinesWithObjectAfterProof(buffer)
+            else
+                try bidi_reorder.applyPureRtlLinesWithObjectWithoutMirroringAfterProof(buffer);
+            run_offsets_valid = object_hint != null;
+            if (object_hint == null) {
+                if (bidi_paragraph) |paragraph|
+                    try bidi_reorder.applyLinesResolved(buffer, paragraph)
+                else
+                    unreachable;
+            }
+        } else if (pure_rtl_lines and !pure_rtl_may_have_mirroring and
+            bidi_reorder.applyPureRtlLinesWithoutMirroringAfterProof(buffer))
         {} else if (pure_rtl_lines and
-            (bidi_reorder.applyPureRtlLinesAfterProof(buffer) or
-                try bidi_reorder.applyPureRtlLinesWithObjectAfterProof(buffer)))
+            bidi_reorder.applyPureRtlLinesAfterProof(buffer))
         {} else if (bidi_paragraph) |paragraph| {
             const applied_direct = direct_bidi_scalar_glyphs and
                 try bidi_reorder.applyLinesResolvedDirect(
@@ -83,7 +95,7 @@ pub fn applySimpleRetained(
         // owns. Rebuild their absolute pens only in that case; the LTR simple
         // path restored already-correct immutable run offsets and changed no
         // advances, spacing, tabs, justification, or punctuation.
-        bidi_reorder.recomputeRunOffsets(buffer);
+        if (!run_offsets_valid) bidi_reorder.recomputeRunOffsets(buffer);
     }
     // The strict builder already accumulated RTL widths in final visual order.
     // Hanging is excluded by its option proof, so no post-permutation line
@@ -94,19 +106,37 @@ pub fn applySimpleRetained(
         (options.inline_objects[0].kind != .custom_out_of_flow or
             options.out_of_flow_placements.len == 1))
     {
-        if (options.inline_objects[0].kind == .custom_out_of_flow)
-            inline_object.positionSingleResolvedRetained(
-                buffer,
-                options.inline_objects[0],
-                options.out_of_flow_placements[0],
-                options.writing_mode,
-            )
-        else
-            inline_object.positionSingleRetained(
-                buffer,
-                options.inline_objects[0],
-                options.writing_mode,
-            );
+        if (options.inline_objects[0].kind == .custom_out_of_flow) {
+            if (object_hint) |hint|
+                inline_object.positionSingleResolvedRetainedAt(
+                    buffer,
+                    options.inline_objects[0],
+                    options.out_of_flow_placements[0],
+                    hint,
+                    options.writing_mode,
+                )
+            else
+                inline_object.positionSingleResolvedRetained(
+                    buffer,
+                    options.inline_objects[0],
+                    options.out_of_flow_placements[0],
+                    options.writing_mode,
+                );
+        } else {
+            if (object_hint) |hint|
+                inline_object.positionSingleRetainedAt(
+                    buffer,
+                    options.inline_objects[0],
+                    hint,
+                    options.writing_mode,
+                )
+            else
+                inline_object.positionSingleRetained(
+                    buffer,
+                    options.inline_objects[0],
+                    options.writing_mode,
+                );
+        }
     } else {
         try inline_object.position(
             buffer,

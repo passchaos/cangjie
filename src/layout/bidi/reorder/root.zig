@@ -11,6 +11,7 @@ const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const run_types = @import("../../types/runs.zig");
 const mapping = @import("mapping.zig");
 const runs = @import("runs.zig");
+const inline_object = @import("../../inline_object/root.zig");
 const bidi = @import("../../../text/bidi.zig");
 const unicode = @import("../../../unicode.zig");
 
@@ -377,7 +378,7 @@ pub fn tryApplyPureRtlLinesWithObject(
     text: []const u8,
 ) !bool {
     if (bidi.visualOrderInputKind(text, true) != .pure_rtl) return false;
-    return applyPureRtlLinesWithObjectAfterProof(buffer);
+    return (try applyPureRtlLinesWithObjectAfterProof(buffer)) != null;
 }
 
 /// Apply pure-RTL line order after the caller retained the text-level proof.
@@ -439,23 +440,25 @@ fn applyPureRtlLinesAfterProofImpl(
 /// Pure-RTL variant for one unowned in-flow marker embedded in a single font
 /// run. The marker is deliberately outside `runs`, but reversing each complete
 /// line still preserves font ownership as at most two visual run fragments.
-pub fn applyPureRtlLinesWithObjectAfterProof(buffer: anytype) !bool {
+pub fn applyPureRtlLinesWithObjectAfterProof(
+    buffer: anytype,
+) !?inline_object.RetainedPositionHint {
     return applyPureRtlLinesWithObjectAfterProofImpl(buffer, true);
 }
 
 /// Single-object pure-RTL permutation after a retained no-mirroring proof.
 pub fn applyPureRtlLinesWithObjectWithoutMirroringAfterProof(
     buffer: anytype,
-) !bool {
+) !?inline_object.RetainedPositionHint {
     return applyPureRtlLinesWithObjectAfterProofImpl(buffer, false);
 }
 
 fn applyPureRtlLinesWithObjectAfterProofImpl(
     buffer: anytype,
     comptime may_mirror: bool,
-) !bool {
+) !?inline_object.RetainedPositionHint {
     const glyphs = buffer.glyphs.items;
-    if (buffer.runs.items.len != 2) return false;
+    if (buffer.runs.items.len != 2) return null;
     const leading_run = buffer.runs.items[0];
     const trailing_run = buffer.runs.items[1];
     // The shaping boundary emits one unowned object atom exactly between the
@@ -473,21 +476,33 @@ fn applyPureRtlLinesWithObjectAfterProofImpl(
         leading_run.variation_coord_start != trailing_run.variation_coord_start or
         leading_run.variation_coord_len != trailing_run.variation_coord_len)
     {
-        return false;
+        return null;
     }
 
     var previous_end: usize = 0;
-    for (buffer.lines.items) |line| {
+    var logical_object_line: ?usize = null;
+    for (buffer.lines.items, 0..) |line, line_index| {
         const line_end = std.math.add(usize, line.glyph_start, line.glyph_len) catch
-            return false;
-        if (line.glyph_start < previous_end or line_end > glyphs.len) return false;
+            return null;
+        if (line.glyph_start < previous_end or line_end > glyphs.len) return null;
+        if (logical_object_index >= line.glyph_start and
+            logical_object_index < line_end)
+        {
+            if (logical_object_line != null) return null;
+            logical_object_line = line_index;
+        }
         previous_end = line_end;
     }
+    if (logical_object_line == null) return null;
 
     const font = run_types.fontForBackend(leading_run);
     var visual_start: usize = 0;
+    var object_line_index: ?usize = null;
     var visual_object_index: ?usize = null;
-    for (buffer.lines.items) |*line| {
+    // Reserve the complete rebuilt-run result before mutating glyphs or lines.
+    // After this point the specialized transaction is infallible.
+    try buffer.runs.ensureTotalCapacity(buffer.allocator, 2);
+    for (buffer.lines.items, 0..) |*line, line_index| {
         const logical_start = line.glyph_start;
         const logical_end = logical_start + line.glyph_len;
         const gap_len = logical_start - visual_start;
@@ -500,6 +515,8 @@ fn applyPureRtlLinesWithObjectAfterProofImpl(
         {
             visual_object_index = visual_start + logical_end -
                 logical_object_index - 1;
+            std.debug.assert(line_index == logical_object_line.?);
+            object_line_index = line_index;
         }
         if (may_mirror)
             bidi.applyPureRtlVisualOrderSlice(
@@ -516,9 +533,9 @@ fn applyPureRtlLinesWithObjectAfterProofImpl(
 
     // The sole logical run covered every non-object glyph. Rebuild only its
     // one or two ranges around the marker now that line reversals placed it.
-    const object_index = visual_object_index orelse return false;
+    const object_index = visual_object_index orelse unreachable;
+    const line_index = object_line_index orelse unreachable;
     buffer.runs.clearRetainingCapacity();
-    try buffer.runs.ensureTotalCapacity(buffer.allocator, 2);
     if (object_index != 0) {
         var leading = leading_run;
         leading.glyph_start = 0;
@@ -540,7 +557,46 @@ fn applyPureRtlLinesWithObjectAfterProofImpl(
         line.run_start = range.start;
         line.run_len = range.len;
     }
-    return true;
+    // One pass supplies both absolute run origins and the object's line-local
+    // pen. Previously presentation repeated a line search, a glyph search, and
+    // a prefix sum after `recomputeRunOffsets` had walked the same prefix.
+    const object_line = buffer.lines.items[line_index];
+    var x: f32 = 0;
+    var y: f32 = 0;
+    for (glyphs[0..object_line.glyph_start]) |glyph| {
+        x += glyph.x_advance;
+        y += glyph.y_advance;
+    }
+    const line_origin = x;
+    for (glyphs[object_line.glyph_start..object_index]) |glyph| {
+        x += glyph.x_advance;
+        y += glyph.y_advance;
+    }
+    const object_pen = object_line.x + x - line_origin;
+    x += glyphs[object_index].x_advance;
+    y += glyphs[object_index].y_advance;
+    // The two output runs can only straddle the marker. Their absolute origins
+    // are therefore known without the generic run/glyph cursor traversal.
+    if (buffer.runs.items.len != 0) {
+        if (object_index == 0) {
+            // Only the post-marker run exists. Its origin includes the object's
+            // advance, just as the generic prefix-sum pass would compute it.
+            buffer.runs.items[0].x_offset = x;
+            buffer.runs.items[0].y_offset = y;
+        } else {
+            buffer.runs.items[0].x_offset = 0;
+            buffer.runs.items[0].y_offset = 0;
+        }
+        if (buffer.runs.items.len == 2) {
+            buffer.runs.items[1].x_offset = x;
+            buffer.runs.items[1].y_offset = y;
+        }
+    }
+    return .{
+        .line_index = line_index,
+        .glyph_index = object_index,
+        .pen_inline = object_pen,
+    };
 }
 
 fn rotateRecords(comptime T: type, items: []T, amount: usize) void {

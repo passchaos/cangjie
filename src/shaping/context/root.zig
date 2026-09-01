@@ -17,6 +17,7 @@ const styled_paragraph = @import("../../layout/styled_paragraph.zig");
 const font_fallback = @import("../fallback/font/root.zig");
 const shaping_plan = @import("../plan/root.zig");
 const shape_profile = @import("../../shape_profile.zig");
+const shaping_orchestrator = @import("../orchestrator.zig");
 const state_mod = @import("state.zig");
 const stats_mod = @import("stats.zig");
 const text_shaper = @import("../text_shaper.zig");
@@ -258,12 +259,14 @@ pub const Engine = struct {
         request: ParagraphRequest,
     ) !paragraph_types.ParagraphLayout {
         const state = self.getStateForWork();
-        return text_shaper.TextShaper.layoutParagraphUtf8WithCaches(
+        return shaping_orchestrator.TextShaper
+            .layoutParagraphUtf8WithCachesAndAnalysis(
             internalCascade(cascade),
             if (state.cache_font_data) &state.font_fallback else null,
             if (state.cache_font_data) &state.glyph_metrics else null,
             if (state.cache_font_data) &state.glyph_indices else null,
             state.shapedRunCache(),
+            &state.styled_output.analysis,
             &state.output,
             request.text,
             request.font_size,
@@ -304,13 +307,14 @@ pub const Engine = struct {
         const state = self.getStateForWork();
         if (uniformStyledOptions(request)) |options| {
             state.styled_output.clear();
-            const paragraph = try text_shaper.TextShaper
-                .layoutParagraphUtf8WithCaches(
+            const paragraph = try shaping_orchestrator.TextShaper
+                .layoutParagraphUtf8WithCachesAndAnalysis(
                 internalCascade(cascade),
                 if (state.cache_font_data) &state.font_fallback else null,
                 if (state.cache_font_data) &state.glyph_metrics else null,
                 if (state.cache_font_data) &state.glyph_indices else null,
                 state.shapedRunCache(),
+                &state.styled_output.analysis,
                 &state.output,
                 request.text,
                 request.default_font_size,

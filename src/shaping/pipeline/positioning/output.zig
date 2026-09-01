@@ -778,7 +778,9 @@ const testing = if (@import("builtin").is_test) struct {
         fn init(allocator: std.mem.Allocator) !Fixture {
             const bytes = try test_font.buildCodepointSetTtf(
                 allocator,
-                &.{ 0x0628, 0x0644, 0x062a },
+                // Format-12 cmap groups are ordered by scalar value. Keep the
+                // fixture order independent from the shaped source order.
+                &.{ 0x0628, 0x062a, 0x0644 },
             );
             errdefer allocator.free(bytes);
             return .{
@@ -801,7 +803,8 @@ const testing = if (@import("builtin").is_test) struct {
             const ends = [_]usize{ 13, 15, 18 };
             try self.scratch.glyph_ids.appendSlice(
                 allocator,
-                &.{ 1, 2, 3 },
+                // The fixture cmap is scalar-sorted: beh=1, teh=2, lam=3.
+                &.{ 1, 3, 2 },
             );
             try self.scratch.codepoints.appendSlice(allocator, &codepoints);
             try self.scratch.clusters.appendSlice(allocator, &starts);
@@ -1004,7 +1007,7 @@ test "script horizontal emitters release all storage on allocation failure" {
                 // sidecar allocation without conflating fixture allocation.
                 const bytes = try testing.test_font.buildCodepointSetTtf(
                     std.testing.allocator,
-                    &.{ 0x0628, 0x0644, 0x062a },
+                    &.{ 0x0628, 0x062a, 0x0644 },
                 );
                 defer std.testing.allocator.free(bytes);
                 var font = try testing.Font.parse(

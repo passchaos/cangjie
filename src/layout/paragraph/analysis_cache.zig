@@ -93,3 +93,60 @@ pub const Cache = struct {
         self.valid = false;
     }
 };
+
+test "analysis cache exact hit performs no allocation" {
+    var cache = Cache.init(std.testing.allocator);
+    defer cache.deinit();
+
+    const first = try cache.get("日本語、かな。");
+    const graphemes_ptr = first.graphemes.ptr;
+    const line_breaks_ptr = first.line_breaks.ptr;
+
+    // A cache hit must remain usable even when the next allocation would
+    // fail. Besides protecting the fast-path contract, this makes the test
+    // independent of allocator implementation details such as spare capacity.
+    var failing = std.testing.FailingAllocator.init(
+        std.testing.allocator,
+        .{ .fail_index = 0 },
+    );
+    cache.allocator = failing.allocator();
+    const repeated = try cache.get("日本語、かな。");
+    try std.testing.expect(!failing.has_induced_failure);
+    try std.testing.expectEqual(graphemes_ptr, repeated.graphemes.ptr);
+    try std.testing.expectEqual(line_breaks_ptr, repeated.line_breaks.ptr);
+    cache.allocator = std.testing.allocator;
+}
+
+test "analysis cache replacement is transactional under allocation failure" {
+    const allocator = std.testing.allocator;
+    var replacement_successes_before_failure: usize = 0;
+    while (true) : (replacement_successes_before_failure += 1) {
+        var failing = std.testing.FailingAllocator.init(allocator, .{});
+        var cache = Cache.init(failing.allocator());
+        defer cache.deinit();
+        _ = try cache.get("original");
+
+        // Count from the completed seed entry so each iteration targets one
+        // allocation in the replacement transaction while retaining a single
+        // allocator identity for all owned storage.
+        failing.fail_index =
+            failing.alloc_index + replacement_successes_before_failure;
+        const replacement = cache.get("日本語の段落");
+        if (replacement) |analysis| {
+            if (failing.has_induced_failure) {
+                return error.SwallowedOutOfMemoryError;
+            }
+            try std.testing.expect(analysis.graphemes.len != 0);
+            break;
+        } else |err| switch (err) {
+            error.OutOfMemory => {
+                // `get` builds all three owned slices before publishing. A
+                // failed replacement must therefore leave the exact prior
+                // entry available, including its no-allocation hit path.
+                const previous = try cache.get("original");
+                try std.testing.expect(previous.graphemes.len != 0);
+                try std.testing.expect(previous.line_breaks.len != 0);
+            },
+        }
+    }
+}

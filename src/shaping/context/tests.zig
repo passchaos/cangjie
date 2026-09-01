@@ -106,6 +106,72 @@ test "one-shot paragraph layout reuses bidi resolver storage" {
     try std.testing.expectEqual(input_capacity, storage.inputs.capacity);
 }
 
+test "one-shot uniform layout reuses exact Unicode analysis" {
+    const test_font = @import("../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    const cascade = face_mod.Cascade.init(face_mod.backend.faces(&.{&font}));
+    const request: context_mod.ParagraphRequest = .{
+        .text = "A A A",
+        .font_size = 20,
+        .options = .{ .max_width = 25 },
+    };
+
+    var engine = context_mod.Engine.init(std.testing.allocator, .{});
+    defer engine.deinit();
+    const first = try engine.layout(cascade, request);
+    const Glyph = @import("../../layout/glyph_position.zig").GlyphPosition;
+    const Line = @import("../../layout/types/paragraph.zig").ParagraphLine;
+    const expected_glyphs = try std.testing.allocator.dupe(Glyph, first.glyphs);
+    defer std.testing.allocator.free(expected_glyphs);
+    const expected_lines = try std.testing.allocator.dupe(Line, first.lines);
+    defer std.testing.allocator.free(expected_lines);
+
+    const analysis = &engine.state.styled_output.analysis;
+    const graphemes_ptr = analysis.graphemes.ptr;
+    const breaks_ptr = analysis.line_breaks.ptr;
+    try std.testing.expect(analysis.valid);
+    const second = try engine.layout(cascade, request);
+    try std.testing.expectEqualSlices(Glyph, expected_glyphs, second.glyphs);
+    try std.testing.expectEqualSlices(Line, expected_lines, second.lines);
+    try std.testing.expectEqual(graphemes_ptr, analysis.graphemes.ptr);
+    try std.testing.expectEqual(breaks_ptr, analysis.line_breaks.ptr);
+}
+
+test "tailored one-shot layout does not replace reusable base analysis" {
+    const test_font = @import("../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    const cascade = face_mod.Cascade.init(face_mod.backend.faces(&.{&font}));
+
+    var engine = context_mod.Engine.init(std.testing.allocator, .{});
+    defer engine.deinit();
+    _ = try engine.layout(cascade, .{
+        .text = "cached text",
+        .font_size = 20,
+        .options = .{ .max_width = 50 },
+    });
+    const analysis = &engine.state.styled_output.analysis;
+    const cached_text_ptr = analysis.text.ptr;
+
+    _ = try engine.layout(cascade, .{
+        .text = "different text",
+        .font_size = 20,
+        .options = .{
+            .max_width = 50,
+            .word_break = .break_all,
+        },
+    });
+    // Tailoring needs request-specific opportunities, so it must not evict a
+    // reusable base-only entry or publish those tailored results as generic.
+    try std.testing.expectEqualStrings("cached text", analysis.text);
+    try std.testing.expectEqual(cached_text_ptr, analysis.text.ptr);
+}
+
 test "cached GSUB plans retain detailed lookup profiling" {
     const test_font = @import("../../test_font.zig");
     const ShapeStageProfile = @import("../../shape_profile.zig")

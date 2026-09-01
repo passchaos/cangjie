@@ -33,6 +33,8 @@ const jstf_extender =
 const kashida_justification =
     @import("../layout/justification/kashida.zig");
 const paragraph_options = @import("../layout/paragraph/options.zig");
+const paragraph_analysis_cache =
+    @import("../layout/paragraph/analysis_cache.zig");
 const paragraph_source_items =
     @import("../layout/paragraph/source_items.zig");
 const paragraph_tabs = @import("../layout/paragraph/tabs.zig");
@@ -396,6 +398,28 @@ pub const TextShaper = struct {
     }
 
     pub fn layoutParagraphUtf8WithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
+        return layoutParagraphUtf8WithCachesAndAnalysis(
+            cascade,
+            fallback_cache,
+            metrics_cache,
+            glyph_index_cache,
+            shaped_cache,
+            null,
+            buffer,
+            text,
+            font_size,
+            options,
+        );
+    }
+
+    /// Engine-only uniform-layout entry point with reusable Unicode analysis.
+    ///
+    /// The optional cache is deliberately not part of retained paragraph
+    /// ownership: its returned slices are borrowed until the next cache miss,
+    /// while an owning `ShapedParagraph` must survive arbitrary later Engine
+    /// calls. Direct TextShaper users retain the allocation-independent null
+    /// behavior of `layoutParagraphUtf8WithCaches`.
+    pub fn layoutParagraphUtf8WithCachesAndAnalysis(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, analysis_cache: ?*paragraph_analysis_cache.Cache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
         try paragraph_options.validateForText(text, options);
         try plan_validation.utf8(text);
         const needs_bidi_reorder = plan_bidi.paragraphNeedsReorder(
@@ -434,13 +458,31 @@ pub const TextShaper = struct {
             .font_size = font_size,
             .options = options,
         };
+        // UAX #29/#14 analysis depends only on the validated source bytes for
+        // this default-policy case. Reuse the Engine's exact text entry after
+        // shaping has succeeded so cache-allocation failure keeps the former
+        // error ordering. Tailored policies stay on the established path.
+        const cached_analysis = if (analysis_cache) |cache| analysis: {
+            const defaults = paragraph_options.defaultLineBreakPolicy(options);
+            if (options.word_break_dictionary != null or
+                options.hyphenation.dictionary != null or
+                @import("../layout/paragraph/line_break_policy.zig")
+                    .requiresOpportunityTailoring(
+                    defaults,
+                    options.line_break_policy_ranges,
+                ))
+            {
+                break :analysis null;
+            }
+            break :analysis try cache.get(text);
+        } else null;
         try buildParagraphLines(
             buffer,
             text,
             options,
             defaultBaselineMetrics(cascade.fonts[0], font_size),
-            null,
-            null,
+            if (cached_analysis) |analysis| analysis.graphemes else null,
+            if (cached_analysis) |analysis| analysis.line_breaks else null,
             options.word_break_dictionary,
             options.hyphenation.dictionary,
             recipe,

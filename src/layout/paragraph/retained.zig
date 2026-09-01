@@ -146,6 +146,43 @@ pub const ShapedParagraph = struct {
         options: paragraph_options.Options,
     ) !paragraph_types.ParagraphLayout {
         try self.validateLayoutOptions(options);
+        const source_backed_direct = self.direct_bidi_scalar_glyphs and
+            self.needs_bidi_reorder and
+            !self.pure_rtl_lines and
+            self.bidi_paragraph != null and
+            self.runs.len == 1 and
+            self.runs[0].glyph_start == 0 and
+            self.runs[0].glyph_len == self.glyphs.len and
+            options.inline_objects.len == 0 and
+            paragraph_reflow.supportsSimpleRetained(options);
+        if (source_backed_direct) {
+            try reflow.restoreForDirectBidi(self);
+            errdefer {
+                reflow.buffer.clear();
+                reflow.buffer.bidi_reorder_scratch.direct_line_ranges
+                    .clearRetainingCapacity();
+            }
+            const built = try paragraph_reflow.tryBuildSimpleRetainedFromSource(
+                &reflow.buffer,
+                self.text,
+                self.glyphs,
+                self.runs,
+                options,
+                self.default_metrics,
+                self.grapheme_clusters,
+                self.line_breaks,
+                &reflow.buffer.bidi_reorder_scratch.direct_line_ranges,
+            );
+            std.debug.assert(built);
+            try presentation.applySimpleRetainedFromSource(
+                &reflow.buffer,
+                self.glyphs,
+                self.runs,
+                self.bidi_paragraph.?,
+            );
+            return reflow.buffer.paragraphLayout(options.writing_mode);
+        }
+
         try reflow.restore(self);
         errdefer reflow.buffer.clear();
         if (self.simple_reflow and
@@ -395,6 +432,8 @@ pub const ReflowBuffer = struct {
     ) !void {
         self.bumpGeneration();
         self.buffer.clear();
+        self.buffer.bidi_reorder_scratch.direct_line_ranges
+            .clearRetainingCapacity();
         // Reserve all three immutable arrays before copying. A reflow buffer
         // retains these capacities, so the steady-state restore becomes only
         // fixed-size memory copies rather than three allocator entry points.
@@ -420,6 +459,41 @@ pub const ReflowBuffer = struct {
         );
         self.buffer.glyphs.appendSliceAssumeCapacity(paragraph.glyphs);
         self.buffer.runs.appendSliceAssumeCapacity(paragraph.runs);
+    }
+
+    /// Prepare empty output for a source-backed direct bidi transaction.
+    ///
+    /// Line selection reads the paragraph's immutable glyph/run slices, and
+    /// presentation writes final visual glyphs directly into this buffer.
+    fn restoreForDirectBidi(
+        self: *ReflowBuffer,
+        paragraph: *const ShapedParagraph,
+    ) !void {
+        self.bumpGeneration();
+        self.buffer.clear();
+        self.buffer.bidi_reorder_scratch.direct_line_ranges
+            .clearRetainingCapacity();
+        try self.buffer.bidi_reorder_scratch.direct_line_ranges
+            .ensureTotalCapacity(
+            self.buffer.allocator,
+            paragraph.glyphs.len,
+        );
+        try self.buffer.variation_coords.ensureTotalCapacity(
+            self.buffer.allocator,
+            paragraph.normalized_variation_coords.len,
+        );
+        try self.buffer.glyphs.ensureTotalCapacity(
+            self.buffer.allocator,
+            paragraph.glyphs.len,
+        );
+        try self.buffer.runs.ensureTotalCapacity(
+            self.buffer.allocator,
+            paragraph.runs.len,
+        );
+        errdefer self.buffer.clear();
+        self.buffer.variation_coords.appendSliceAssumeCapacity(
+            paragraph.normalized_variation_coords,
+        );
     }
 
     fn bumpGeneration(self: *ReflowBuffer) void {

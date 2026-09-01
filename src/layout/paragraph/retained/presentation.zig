@@ -18,6 +18,24 @@ const punctuation_hanging = @import("../../punctuation/hanging.zig");
 const vertical_hanging = @import("../vertical_hanging.zig");
 const vertical_justification = @import("../vertical_justification.zig");
 const unicode = @import("../../../unicode.zig");
+const glyph_position = @import("../../glyph_position.zig");
+const run_types = @import("../../types/runs.zig");
+
+/// Finish a strict retained bidi layout directly from immutable shaped data.
+pub fn applySimpleRetainedFromSource(
+    buffer: anytype,
+    logical_glyphs: []const glyph_position.GlyphPosition,
+    logical_runs: []const run_types.CascadeRun,
+    bidi_paragraph: unicode.BidiParagraph,
+) !void {
+    try bidi_reorder.applyLinesResolvedDirectFromSource(
+        buffer,
+        logical_glyphs,
+        logical_runs,
+        bidi_paragraph,
+    );
+    bidi_reorder.recomputeRunOffsets(buffer);
+}
 
 /// Finish the subset of presentation reachable from the simple retained
 /// reflow proof. All disabled features were checked before line construction,

@@ -19,10 +19,14 @@ const paragraph_options = @import("../../paragraph/options.zig");
 const paragraph_types = @import("../../types/paragraph.zig");
 const shaped_boundary = @import("../shaped_boundary.zig");
 const unicode = @import("../../../unicode.zig");
+const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
+const CascadeRun = @import("../../types/runs.zig").CascadeRun;
+const DirectLineRange =
+    @import("../../bidi/reorder/scratch.zig").DirectLineRange;
 
 /// Build lines when the complete request is equivalent to plain greedy UAX
-/// wrapping over one immutable run. Returns false before mutation whenever the
-/// request requires any general-policy machinery.
+/// wrapping over immutable shaped content. Returns false before mutation
+/// whenever the request requires any general-policy machinery.
 pub fn tryBuild(
     buffer: anytype,
     text: []const u8,
@@ -31,12 +35,58 @@ pub fn tryBuild(
     graphemes: ?[]const unicode.GraphemeCluster,
     line_breaks: ?[]const opportunity.Opportunity,
 ) !bool {
+    return try tryBuildFromSource(
+        buffer,
+        text,
+        buffer.glyphs.items,
+        buffer.runs.items,
+        options,
+        default_metrics,
+        graphemes,
+        line_breaks,
+        null,
+    );
+}
+
+/// Build simple lines from immutable retained content without first copying
+/// that content into the reusable output buffer. When `direct_line_ranges` is
+/// supplied, scalar/glyph identity lets the builder record exact paragraph
+/// scalar bounds alongside each logical line at no additional search cost.
+pub fn tryBuildFromSource(
+    buffer: anytype,
+    text: []const u8,
+    glyphs: []const GlyphPosition,
+    runs: []const CascadeRun,
+    options: paragraph_options.Options,
+    default_metrics: geometry.BaselineMetrics,
+    graphemes: ?[]const unicode.GraphemeCluster,
+    line_breaks: ?[]const opportunity.Opportunity,
+    direct_line_ranges: ?*std.ArrayList(DirectLineRange),
+) !bool {
     const analyzed_graphemes = graphemes orelse return false;
     const analyzed_breaks = line_breaks orelse return false;
     if (!supports(options)) return false;
 
     buffer.lines.clearRetainingCapacity();
-    const glyphs = buffer.glyphs.items;
+    if (direct_line_ranges) |ranges| ranges.clearRetainingCapacity();
+    const direct_run_info: ?geometry.LineRunInfo =
+        if (direct_line_ranges != null and options.inline_objects.len == 0)
+            geometry.lineRunInfoWithoutObjects(
+                runs,
+                0,
+                glyphs.len,
+                default_metrics,
+            )
+        else
+            null;
+    const direct_single_run_metrics: ?geometry.BaselineMetrics =
+        if (direct_run_info) |info|
+            if (info.run_start == 0 and info.run_len == 1)
+                info.metrics
+            else
+                null
+        else
+            null;
     var line_start: usize = 0;
     var line_byte_start: usize = 0;
     var y: f32 = 0;
@@ -105,8 +155,9 @@ pub fn tryBuild(
                 next_line_start,
                 line_byte_start,
             );
-            const run_info = resolvedLineInfo(
-                buffer.runs.items,
+            const run_info = simpleLineRunInfo(
+                direct_single_run_metrics,
+                runs,
                 glyphs,
                 options.inline_objects,
                 line_start,
@@ -130,6 +181,10 @@ pub fn tryBuild(
                 alignment,
                 options.max_width,
             );
+            if (direct_line_ranges) |ranges| ranges.appendAssumeCapacity(.{
+                .scalar_start = line_start,
+                .scalar_end = next_line_start,
+            });
             y += run_info.metrics.lineHeight();
             line_start = next_line_start;
             line_byte_start = line_byte_end;
@@ -138,8 +193,9 @@ pub fn tryBuild(
         }
         if (committed) continue;
 
-        const run_info = resolvedLineInfo(
-            buffer.runs.items,
+        const run_info = simpleLineRunInfo(
+            direct_single_run_metrics,
+            runs,
             glyphs,
             options.inline_objects,
             line_start,
@@ -163,9 +219,42 @@ pub fn tryBuild(
             alignment,
             options.max_width,
         );
+        if (direct_line_ranges) |ranges| ranges.appendAssumeCapacity(.{
+            .scalar_start = line_start,
+            .scalar_end = glyphs.len,
+        });
         break;
     }
     return true;
+}
+
+fn simpleLineRunInfo(
+    direct_single_run_metrics: ?geometry.BaselineMetrics,
+    runs: []const CascadeRun,
+    glyphs: []const GlyphPosition,
+    objects: []const inline_object.Object,
+    glyph_start: usize,
+    glyph_end: usize,
+    byte_start: usize,
+    byte_end: usize,
+    default_metrics: geometry.BaselineMetrics,
+) geometry.LineRunInfo {
+    if (direct_single_run_metrics) |metrics| {
+        return if (glyph_start == glyph_end)
+            .{ .run_start = 0, .run_len = 0, .metrics = default_metrics }
+        else
+            .{ .run_start = 0, .run_len = 1, .metrics = metrics };
+    }
+    return resolvedLineInfo(
+        runs,
+        glyphs,
+        objects,
+        glyph_start,
+        glyph_end,
+        byte_start,
+        byte_end,
+        default_metrics,
+    );
 }
 
 fn resolvedLineInfo(

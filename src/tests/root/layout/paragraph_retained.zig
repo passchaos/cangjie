@@ -151,6 +151,14 @@ test "simple retained mixed bidi keeps one run across wrapped reflows" {
         @as(usize, 0),
         reflow.buffer.bidi_reorder_scratch.seen.capacity,
     );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        reflow.buffer.bidi_reorder_scratch.old_glyphs.capacity,
+    );
+    try std.testing.expectEqual(
+        narrow.lines.len,
+        reflow.buffer.bidi_reorder_scratch.direct_line_ranges.items.len,
+    );
     const narrow_glyphs = try allocator.dupe(GlyphPosition, narrow.glyphs);
     defer allocator.free(narrow_glyphs);
 
@@ -258,6 +266,105 @@ test "direct retained bidi exactly matches general layout across reflows" {
         @as(usize, 0),
         reflow.buffer.bidi_reorder_scratch.seen.capacity,
     );
+}
+
+test "source-backed direct bidi reuses all warmed allocation capacity" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var shaped = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        FontCascade.init(&.{&font}),
+        &shape_buffer,
+        "AB אב 12 אב AB אב 34 אב",
+        20,
+        .{ .max_width = 200, .direction = .ltr },
+    );
+    defer shaped.deinit();
+    try std.testing.expect(shaped.direct_bidi_scalar_glyphs);
+
+    var failing = std.testing.FailingAllocator.init(allocator, .{});
+    var reflow = ReflowBuffer.init(failing.allocator());
+    defer reflow.deinit();
+    const warm = try shaped.layout(&reflow, .{
+        .max_width = 48,
+        .direction = .ltr,
+    });
+    const expected_glyphs = try allocator.dupe(GlyphPosition, warm.glyphs);
+    defer allocator.free(expected_glyphs);
+    const expected_lines = try allocator.dupe(support.ParagraphLine, warm.lines);
+    defer allocator.free(expected_lines);
+    failing.fail_index = failing.alloc_index;
+    failing.resize_fail_index = failing.resize_index;
+
+    const repeated = try shaped.layout(&reflow, .{
+        .max_width = 48,
+        .direction = .ltr,
+    });
+    try std.testing.expectEqualSlices(
+        GlyphPosition,
+        expected_glyphs,
+        repeated.glyphs,
+    );
+    try std.testing.expectEqualSlices(
+        support.ParagraphLine,
+        expected_lines,
+        repeated.lines,
+    );
+    try std.testing.expect(!failing.has_induced_failure);
+}
+
+test "source-backed direct bidi clears partial output after allocation failure" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var shaped = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        FontCascade.init(&.{&font}),
+        &shape_buffer,
+        "AB אב 12 אב AB אב 34 אב",
+        20,
+        .{ .max_width = 200, .direction = .ltr },
+    );
+    defer shaped.deinit();
+
+    var failing = std.testing.FailingAllocator.init(allocator, .{
+        .fail_index = 0,
+    });
+    var reflow = ReflowBuffer.init(failing.allocator());
+    defer reflow.deinit();
+    try std.testing.expectError(error.OutOfMemory, shaped.layout(&reflow, .{
+        .max_width = 48,
+        .direction = .ltr,
+    }));
+    try std.testing.expectEqual(@as(usize, 0), reflow.buffer.glyphs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), reflow.buffer.runs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), reflow.buffer.lines.items.len);
+
+    failing.fail_index = std.math.maxInt(usize);
+    failing.resize_fail_index = std.math.maxInt(usize);
+    const recovered = try shaped.layout(&reflow, .{
+        .max_width = 48,
+        .direction = .ltr,
+    });
+    try std.testing.expectEqual(shaped.glyphs.len, recovered.glyphs.len);
+    try std.testing.expect(recovered.lines.len > 1);
 }
 
 test "direct retained bidi proof rejects non-identity shaped output" {

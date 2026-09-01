@@ -9,6 +9,7 @@ const std = @import("std");
 
 const mapping = @import("mapping.zig");
 const runs = @import("runs.zig");
+const GlyphPosition = @import("../../glyph_position.zig").GlyphPosition;
 const run_types = @import("../../types/runs.zig");
 const bidi = @import("../../../text/bidi.zig");
 const unicode = @import("../../../unicode.zig");
@@ -212,6 +213,164 @@ pub fn apply(
     }
     transaction_open = false;
     return true;
+}
+
+/// Emit final visual output directly from an immutable retained paragraph.
+///
+/// Callers select this only after the strict scalar/glyph proof and simple
+/// line builder succeed. Unlike `apply`, there is no mutable logical snapshot
+/// to validate, copy, or swap: all allocation completes before the first
+/// output append, and the caller clears partial output on error.
+pub fn applyFromSource(
+    buffer: anytype,
+    logical_glyphs: []const GlyphPosition,
+    logical_runs: []const run_types.CascadeRun,
+    paragraph: unicode.BidiParagraph,
+) !void {
+    if (buffer.lines.items.len !=
+        buffer.bidi_reorder_scratch.direct_line_ranges.items.len or
+        logical_glyphs.len != paragraph.scalars.len or
+        !runsOwnCompleteGlyphStream(logical_runs, logical_glyphs.len))
+    {
+        return error.InvalidBidiMap;
+    }
+    // The immutable paragraph proof established these identities once. Keep
+    // debug checks close to the unchecked direct indexing without charging
+    // optimized retained reflows for another whole-paragraph validation.
+    std.debug.assert(paragraph.classes.len == paragraph.scalars.len);
+    std.debug.assert(paragraph.levels.len == paragraph.scalars.len);
+    for (logical_glyphs, paragraph.scalars, paragraph.classes) |glyph, scalar, class| {
+        std.debug.assert(glyph.cluster == scalar.byte_start);
+        std.debug.assert(glyph.source_byte_len == scalar.byte_len);
+        std.debug.assert(glyph.codepoint == scalar.codepoint);
+        std.debug.assert(!scalarRemovedByX9(class));
+    }
+    const single_owning_run = logical_runs.len == 1;
+    const scratch = &buffer.bidi_reorder_scratch;
+    try scratch.prepareDirectFromSource(
+        buffer.allocator,
+        logical_runs,
+        logical_glyphs.len,
+        single_owning_run,
+    );
+    try buffer.glyphs.ensureTotalCapacity(
+        buffer.allocator,
+        logical_glyphs.len,
+    );
+    try buffer.runs.ensureTotalCapacity(
+        buffer.allocator,
+        if (single_owning_run) 1 else logical_glyphs.len,
+    );
+    try scratch.line_levels.ensureTotalCapacity(
+        buffer.allocator,
+        paragraph.scalars.len,
+    );
+    try scratch.visual_order.ensureTotalCapacity(
+        buffer.allocator,
+        paragraph.scalars.len,
+    );
+
+    const glyph_run_indices = scratch.glyph_run_indices.items;
+    const visual_run_indices = &scratch.visual_run_indices;
+    const line_ranges = scratch.direct_line_ranges.items;
+    for (buffer.lines.items, line_ranges) |*line, scalar_range| {
+        const scalar_start = scalar_range.scalar_start;
+        const scalar_end = scalar_range.scalar_end;
+        if (scalar_start > scalar_end or scalar_end > paragraph.scalars.len or
+            line.glyph_start < scalar_start or
+            line.glyph_start + line.glyph_len > scalar_end)
+        {
+            return error.InvalidBidiMap;
+        }
+        const logical_start = line.glyph_start;
+        const visible_end = logical_start + line.glyph_len;
+        // Direct output is built densely in final visual-line order. Update
+        // the start now; the saved logical range still gates source emission.
+        line.glyph_start = buffer.glyphs.items.len;
+        if (scalar_start == scalar_end or line.glyph_len == 0) continue;
+        try paragraph.visualOrderAndLevelsRetaining(
+            buffer.allocator,
+            scalar_start,
+            scalar_end,
+            &.{},
+            &scratch.line_levels,
+            &scratch.visual_order,
+        );
+        for (scratch.visual_order.items) |scalar_index| {
+            if (scalar_index < logical_start or scalar_index >= visible_end)
+                continue;
+            const owner = if (single_owning_run)
+                @as(usize, 0)
+            else
+                glyph_run_indices[scalar_index];
+            if (owner >= logical_runs.len) return error.InvalidBidiMap;
+            const scalar = paragraph.scalars[scalar_index];
+            const level = scratch.line_levels.items[
+                scalar_index - scalar_start
+            ];
+            buffer.glyphs.appendAssumeCapacity(mapping.visualizedGlyph(
+                logical_glyphs[scalar_index],
+                run_types.fontForBackend(logical_runs[owner]),
+                if (level & 1 != 0 and bidi.mayHaveBidiMirror(scalar.codepoint))
+                    unicode.mirroredCodepoint(scalar.codepoint)
+                else
+                    scalar.codepoint,
+            ));
+            if (!single_owning_run)
+                visual_run_indices.appendAssumeCapacity(owner);
+        }
+    }
+
+    for (buffer.lines.items, line_ranges) |line, scalar_range| {
+        const logical_visible_start = if (scalar_range.scalar_start <
+            scalar_range.scalar_end and
+            logical_glyphs[scalar_range.scalar_start].codepoint == ' ')
+            scalar_range.scalar_start + 1
+        else
+            scalar_range.scalar_start;
+        const visible_end = logical_visible_start + line.glyph_len;
+        for (visible_end..scalar_range.scalar_end) |glyph_index| {
+            appendGapGlyph(
+                single_owning_run,
+                logical_glyphs,
+                glyph_run_indices,
+                glyph_index,
+                &buffer.glyphs,
+                visual_run_indices,
+            );
+        }
+    }
+    if (buffer.glyphs.items.len != logical_glyphs.len or
+        (!single_owning_run and
+            visual_run_indices.items.len != logical_glyphs.len))
+    {
+        return error.InvalidBidiMap;
+    }
+
+    if (single_owning_run) {
+        var run = logical_runs[0];
+        run.glyph_start = 0;
+        run.glyph_len = logical_glyphs.len;
+        run.x_offset = 0;
+        run.y_offset = 0;
+        buffer.runs.appendAssumeCapacity(run);
+    } else {
+        try runs.rebuild(buffer, logical_runs, visual_run_indices.items);
+    }
+    for (buffer.lines.items) |*line| {
+        if (single_owning_run) {
+            line.run_start = 0;
+            line.run_len = @intFromBool(line.glyph_len != 0);
+        } else {
+            const run_range = runs.range(
+                buffer.runs.items,
+                line.glyph_start,
+                line.glyph_start + line.glyph_len,
+            );
+            line.run_start = run_range.start;
+            line.run_len = run_range.len;
+        }
+    }
 }
 
 fn appendGapGlyph(

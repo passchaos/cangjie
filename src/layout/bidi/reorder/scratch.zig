@@ -13,6 +13,17 @@ const runs = @import("runs.zig");
 const bidi_paragraph = @import("../../../unicode/bidi/paragraph.zig");
 const unicode = @import("../../../unicode.zig");
 
+/// Paragraph-scalar range covered by one logical line before visual reorder.
+///
+/// Strict retained layout records this while selecting breaks, when its
+/// one-scalar/one-glyph proof makes the range available without UTF-8 boundary
+/// searches. Visible glyph bounds remain on the corresponding line record so
+/// trimmed wrapping whitespace can stay outside the visual line.
+pub const DirectLineRange = struct {
+    scalar_start: usize,
+    scalar_end: usize,
+};
+
 pub const Scratch = struct {
     old_runs: std.ArrayList(run_types.CascadeRun) = .empty,
     old_glyphs: std.ArrayList(GlyphPosition) = .empty,
@@ -23,6 +34,7 @@ pub const Scratch = struct {
     line_levels: std.ArrayList(u8) = .empty,
     visual_order: std.ArrayList(usize) = .empty,
     permutation: std.ArrayList(usize) = .empty,
+    direct_line_ranges: std.ArrayList(DirectLineRange) = .empty,
     bidi_storage: bidi_paragraph.Storage,
 
     pub fn init(allocator: std.mem.Allocator) Scratch {
@@ -31,6 +43,7 @@ pub const Scratch = struct {
 
     pub fn deinit(self: *Scratch, allocator: std.mem.Allocator) void {
         self.bidi_storage.deinit();
+        self.direct_line_ranges.deinit(allocator);
         self.permutation.deinit(allocator);
         self.visual_order.deinit(allocator);
         self.line_levels.deinit(allocator);
@@ -154,6 +167,33 @@ pub const Scratch = struct {
         );
     }
 
+    /// Prepare sidecars for direct emission from immutable retained storage.
+    ///
+    /// The output does not own a logical glyph snapshot, so there is nothing
+    /// to swap or roll back. `direct_line_ranges` deliberately survives this
+    /// reset because the simple line builder populated it immediately before
+    /// presentation.
+    pub fn prepareDirectFromSource(
+        self: *Scratch,
+        allocator: std.mem.Allocator,
+        logical_runs: []const run_types.CascadeRun,
+        glyph_count: usize,
+        single_owning_run: bool,
+    ) !void {
+        self.clearTransaction();
+        if (single_owning_run) return;
+        try runs.buildGlyphRunIndicesInto(
+            allocator,
+            &self.glyph_run_indices,
+            logical_runs,
+            glyph_count,
+        );
+        try self.visual_run_indices.ensureTotalCapacity(
+            allocator,
+            glyph_count,
+        );
+    }
+
     /// Move the logical glyph stream aside for a proven owning run.
     ///
     /// A run covering the complete glyph array remains contiguous under every
@@ -252,6 +292,11 @@ pub const Scratch = struct {
     }
 
     fn clear(self: *Scratch) void {
+        self.clearTransaction();
+        self.direct_line_ranges.clearRetainingCapacity();
+    }
+
+    fn clearTransaction(self: *Scratch) void {
         self.old_runs.clearRetainingCapacity();
         self.old_glyphs.clearRetainingCapacity();
         self.glyph_run_indices.clearRetainingCapacity();

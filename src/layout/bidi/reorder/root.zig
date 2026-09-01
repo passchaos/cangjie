@@ -578,6 +578,8 @@ pub fn applyLinesResolved(
 }
 
 pub const applyLinesResolvedDirect = @import("direct.zig").apply;
+pub const applyLinesResolvedDirectFromSource =
+    @import("direct.zig").applyFromSource;
 
 /// Apply resolved line bidi without rebuilding a proven single owning run.
 ///

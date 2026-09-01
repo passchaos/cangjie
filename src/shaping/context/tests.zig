@@ -37,6 +37,75 @@ test "engine owns reusable caches and resets them together" {
     try std.testing.expectEqual(context_mod.Engine.Stats{}, engine.stats());
 }
 
+test "engine caches immutable legacy kern lookup proofs" {
+    const test_font = @import("../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    const cascade = face_mod.Cascade.init(face_mod.backend.faces(&.{&font}));
+
+    var engine = context_mod.Engine.init(std.testing.allocator, .{});
+    defer engine.deinit();
+    const request: context_mod.ParagraphRequest = .{
+        .text = "AA",
+        .font_size = 20,
+        .options = .{ .max_width = 100 },
+    };
+    const first = try engine.layout(cascade, request);
+    try std.testing.expectEqual(@as(usize, 2), first.glyphs.len);
+    const first_stats = engine.stats().kern_lookups;
+    try std.testing.expectEqual(@as(usize, 1), first_stats.misses);
+    try std.testing.expectEqual(@as(usize, 0), first_stats.hits);
+
+    const second = try engine.layout(cascade, request);
+    try std.testing.expectEqual(@as(usize, 2), second.glyphs.len);
+    const reused = engine.stats().kern_lookups;
+    try std.testing.expectEqual(@as(usize, 1), reused.misses);
+    try std.testing.expectEqual(@as(usize, 1), reused.hits);
+
+    engine.clearCaches();
+    try std.testing.expectEqual(context_mod.Engine.Counter{}, engine.stats().kern_lookups);
+}
+
+test "one-shot paragraph layout reuses bidi resolver storage" {
+    const test_font = @import("../../test_font.zig");
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        std.testing.allocator,
+        false,
+    );
+    defer std.testing.allocator.free(bytes);
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+    const cascade = face_mod.Cascade.init(face_mod.backend.faces(&.{&font}));
+    const request: context_mod.ParagraphRequest = .{
+        .text = "abc \u{05d0}\u{05d1} 12",
+        .font_size = 20,
+        .options = .{ .max_width = 200, .direction = .ltr },
+    };
+
+    var engine = context_mod.Engine.init(std.testing.allocator, .{});
+    defer engine.deinit();
+    const first = try engine.layout(cascade, request);
+    const Glyph = @import("../../layout/glyph_position.zig").GlyphPosition;
+    const Line = @import("../../layout/types/paragraph.zig").ParagraphLine;
+    const expected_glyphs = try std.testing.allocator.dupe(Glyph, first.glyphs);
+    defer std.testing.allocator.free(expected_glyphs);
+    const expected_lines = try std.testing.allocator.dupe(Line, first.lines);
+    defer std.testing.allocator.free(expected_lines);
+    const storage = &engine.state.output.bidi_reorder_scratch.bidi_storage;
+    const scalar_capacity = storage.scalars.capacity;
+    const input_capacity = storage.inputs.capacity;
+    try std.testing.expect(scalar_capacity != 0);
+    try std.testing.expect(input_capacity != 0);
+
+    const second = try engine.layout(cascade, request);
+    try std.testing.expectEqualSlices(Glyph, expected_glyphs, second.glyphs);
+    try std.testing.expectEqualSlices(Line, expected_lines, second.lines);
+    try std.testing.expectEqual(scalar_capacity, storage.scalars.capacity);
+    try std.testing.expectEqual(input_capacity, storage.inputs.capacity);
+}
+
 test "cached GSUB plans retain detailed lookup profiling" {
     const test_font = @import("../../test_font.zig");
     const ShapeStageProfile = @import("../../shape_profile.zig")

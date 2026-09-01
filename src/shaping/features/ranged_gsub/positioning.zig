@@ -219,9 +219,10 @@ pub fn collect(
         @import("../../../unicode.zig").tag("kern"),
         options.features,
     ) and font_shaping.hasKernTableForShaping(font)) {
-        const kern = try font_shaping.kernLookupForShaping(
-            font,
-        );
+        const kern = if (layout_buffer.kern_lookup_cache) |stored|
+            try stored.lookup(font)
+        else
+            try font_shaping.kernLookupForShaping(font);
         for (sources.glyph_ids.items, 0..) |glyph_id, index| {
             if (index == 0) continue;
             const output_index = output_indices.items[index];

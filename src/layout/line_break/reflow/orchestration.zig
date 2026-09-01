@@ -223,6 +223,7 @@ fn inheritShapeCaches(source: anytype, destination: anytype) void {
     destination.gsub_table_proof_cache = source.gsub_table_proof_cache;
     destination.gpos_table_proof_cache = source.gpos_table_proof_cache;
     destination.lookup_selection_cache = source.lookup_selection_cache;
+    destination.kern_lookup_cache = source.kern_lookup_cache;
 }
 
 const NoShrinkageRecipe = struct {

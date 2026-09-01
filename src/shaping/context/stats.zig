@@ -13,6 +13,7 @@ pub const Stats = struct {
     gsub_table_proofs: Counter = .{},
     gpos_table_proofs: Counter = .{},
     lookup_selection: Counter = .{},
+    kern_lookups: Counter = .{},
     shaped_runs: Counter = .{},
 };
 

@@ -18,6 +18,7 @@ pub const State = struct {
     gsub_table_proofs: cache.GsubTableProofCache,
     gpos_table_proofs: cache.GposTableProofCache,
     lookup_selection: cache.LookupSelectionCache,
+    kern_lookups: cache.KernLookupCache,
     shaped_runs: cache.ShapedRunCache,
     cache_font_data: bool,
     cache_shaped_runs: bool,
@@ -38,6 +39,7 @@ pub const State = struct {
             .gsub_table_proofs = cache.GsubTableProofCache.init(allocator),
             .gpos_table_proofs = cache.GposTableProofCache.init(allocator),
             .lookup_selection = cache.LookupSelectionCache.init(allocator),
+            .kern_lookups = cache.KernLookupCache.init(allocator),
             .shaped_runs = cache.ShapedRunCache.init(allocator),
             .cache_font_data = cache_font_data,
             .cache_shaped_runs = cache_shaped_runs,
@@ -49,6 +51,7 @@ pub const State = struct {
         self.styled_output.deinit();
         self.output.deinit();
         self.shaped_runs.deinit();
+        self.kern_lookups.deinit();
         self.lookup_selection.deinit();
         self.gpos_table_proofs.deinit();
         self.gsub_table_proofs.deinit();
@@ -61,6 +64,7 @@ pub const State = struct {
 
     pub fn clearCaches(self: *State) void {
         self.shaped_runs.clear();
+        self.kern_lookups.clear();
         self.lookup_selection.clear();
         self.gpos_table_proofs.clear();
         self.gsub_table_proofs.clear();
@@ -100,6 +104,10 @@ pub const State = struct {
                 self.lookup_selection.hits,
                 self.lookup_selection.misses,
             ),
+            .kern_lookups = stats_mod.counter(
+                self.kern_lookups.hits,
+                self.kern_lookups.misses,
+            ),
             .shaped_runs = stats_mod.counter(
                 self.shaped_runs.hits,
                 self.shaped_runs.misses,
@@ -122,6 +130,7 @@ pub const State = struct {
         self.output.gsub_table_proof_cache = &self.gsub_table_proofs;
         self.output.gpos_table_proof_cache = &self.gpos_table_proofs;
         self.output.lookup_selection_cache = &self.lookup_selection;
+        self.output.kern_lookup_cache = &self.kern_lookups;
         self.output.glyph_metrics_cache = &self.glyph_metrics;
         self.output.glyph_index_cache = &self.glyph_indices;
     }
@@ -131,6 +140,7 @@ pub const State = struct {
         self.output.gsub_table_proof_cache = null;
         self.output.gpos_table_proof_cache = null;
         self.output.lookup_selection_cache = null;
+        self.output.kern_lookup_cache = null;
         self.output.glyph_metrics_cache = null;
         self.output.glyph_index_cache = null;
     }

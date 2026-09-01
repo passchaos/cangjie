@@ -11,6 +11,7 @@ const GlyphId = @import("../../../glyph.zig").GlyphId;
 const gsub_features = @import("../gsub/features.zig");
 const pipeline_types = @import("../types.zig");
 const policy = @import("policy.zig");
+const KernLookupCache = @import("../../context/cache/root.zig").KernLookupCache;
 
 pub const Result = struct {
     kerx_lookup: ?@import("../../../font.zig").KerxLookupForShaping,
@@ -36,6 +37,7 @@ pub const Input = struct {
     options: pipeline_types.LookupOptions,
     simple_pair_eligible: *std.ArrayList(bool),
     kerx_adjustments: *std.ArrayList(aat_kerx.Adjustment),
+    kern_lookup_cache: ?*KernLookupCache,
 };
 
 pub fn prepare(input: Input) !Result {
@@ -126,9 +128,10 @@ pub fn prepare(input: Input) !Result {
         !input.options.writing_mode.isVertical() and
         shouldApplyLegacyKernFallback(input.options.script_tag) and
         kerning_enabled)
-        font_shaping.kernLookupForShaping(
-            input.font,
-        ) catch |err| switch (err) {
+        (if (input.kern_lookup_cache) |stored|
+            stored.lookup(input.font)
+        else
+            font_shaping.kernLookupForShaping(input.font)) catch |err| switch (err) {
             error.MissingTable => null,
             else => return err,
         }

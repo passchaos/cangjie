@@ -2377,3 +2377,17 @@ layout transaction now uses the immutable parsed-face shaping lookup instead.
 Focused retained-reflow repeats fell from tens of microseconds to roughly
 2--3 microseconds with unchanged checksums, while a fresh full strict matrix is
 still required to determine which gaps remain.
+
+Profiling the remaining mixed-bidi construction path found that repeatedly
+acquiring the legacy `kern` lookup checksummed DejaVu Sans's 16,380-byte table
+once per logical shaping run and consumed about 60.8% of sampled cycles. The
+reusable Engine now retains an exact-font-pointer kern lookup proof under the
+same immutable-byte contract as its other shaping caches. One-shot uniform
+layout additionally resolves UAX #9 into the layout buffer's existing reusable
+storage; retained paragraphs continue to own independent bidi arrays.
+Fixed-CPU-30 symmetric `5000 * 7` probes reduced LTR construction from
+`145.159/146.028 us` to `52.918/53.426 us` and RTL construction from
+`107.478/107.068 us` to `42.123/41.529 us`, without changing any output
+digest. The subsequent complete strict matrix improved the corresponding
+Parley ratios to `0.749865x` and `0.763963x`, but they remain below the
+declared `1.01x` threshold; mixed-bidi retained reflow also remains open.

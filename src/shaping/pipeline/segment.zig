@@ -621,6 +621,7 @@ pub fn run(input: Input) !void {
         .options = lookup_options,
         .simple_pair_eligible = kerx_simple_pair_eligible,
         .kerx_adjustments = kerx_adjustments,
+        .kern_lookup_cache = buffer.kern_lookup_cache,
     });
     const invisible_glyph_id = if (has_default_ignorable)
         if (default_ignorable_invisible_glyph_id) |glyph|

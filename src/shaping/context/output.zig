@@ -32,6 +32,7 @@ pub const Buffer = struct {
     gsub_table_proof_cache: ?*cache.GsubTableProofCache = null,
     gpos_table_proof_cache: ?*cache.GposTableProofCache = null,
     lookup_selection_cache: ?*cache.LookupSelectionCache = null,
+    kern_lookup_cache: ?*cache.KernLookupCache = null,
     glyph_metrics_cache: ?*cache.GlyphMetricsCache = null,
     glyph_index_cache: ?*cache.GlyphIndexCache = null,
     shape_scratch: scratch.ShapeScratch = .{},

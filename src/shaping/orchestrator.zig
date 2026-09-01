@@ -334,15 +334,16 @@ pub const TextShaper = struct {
             text,
             options.direction,
         );
-        var bidi_paragraph: ?unicode.BidiParagraph = if (needs_bidi_reorder)
-            try unicode.resolveBidiParagraph(
-                buffer.allocator,
+        const bidi_paragraph: ?unicode.BidiParagraph = if (needs_bidi_reorder)
+            try buffer.bidi_reorder_scratch.resolveParagraph(
                 text,
                 if (options.direction == .rtl) .rtl else .ltr,
             )
         else
             null;
-        defer if (bidi_paragraph) |*paragraph| paragraph.deinit();
+        // One-shot layout consumes the paragraph synchronously. Reuse the
+        // buffer-owned UAX #9 arrays here; retained paragraphs deliberately
+        // keep using the owning resolver because their view outlives this call.
         // Paragraph layout is deliberately staged: shape first, then line-wrap
         // the finished glyph advances. That keeps OpenType substitution and
         // positioning independent from wrapping policy.
@@ -401,15 +402,15 @@ pub const TextShaper = struct {
             text,
             options.direction,
         );
-        var bidi_paragraph: ?unicode.BidiParagraph = if (needs_bidi_reorder)
-            try unicode.resolveBidiParagraph(
-                buffer.allocator,
+        const bidi_paragraph: ?unicode.BidiParagraph = if (needs_bidi_reorder)
+            try buffer.bidi_reorder_scratch.resolveParagraph(
                 text,
                 if (options.direction == .rtl) .rtl else .ltr,
             )
         else
             null;
-        defer if (bidi_paragraph) |*paragraph| paragraph.deinit();
+        // This overload has the same synchronous lifetime as the fully cached
+        // path above, including when its optional shaped-run cache misses.
         try shapeParagraphContent(
             cascade,
             fallback_cache,

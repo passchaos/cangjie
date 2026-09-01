@@ -340,7 +340,8 @@ pub fn tryApplyPureRtlLinesWithParallelRuns(
             const mirrored = unicode.mirroredCodepoint(glyph.codepoint);
             if (mirrored == glyph.codepoint) continue;
             const font = run_types.fontForBackend(old_runs[run_index]);
-            const mirrored_glyph = font.glyphIndex(mirrored) catch continue;
+            const mirrored_glyph = @import("../../../font.zig").shaping
+                .glyphIndexForShaping(font, mirrored) catch continue;
             if (mirrored_glyph == 0) continue;
             glyph.codepoint = mirrored;
             glyph.glyph_id = mirrored_glyph;
@@ -576,6 +577,194 @@ pub fn applyLinesResolved(
     return applyLinesResolvedRecording(buffer, paragraph, false);
 }
 
+/// Apply resolved line bidi without rebuilding a proven single owning run.
+///
+/// The general transaction carries one run index beside every glyph because a
+/// visual permutation can fragment fallback ownership. When the only run owns
+/// the complete stream, that index is invariantly zero and the run itself is
+/// unchanged. This path retains the general cluster mapping, UAX #9 L1/L2,
+/// mirroring, and unmatched-output rules while omitting that redundant state.
+/// Returns false before mutation when the structural proof no longer holds.
+pub fn applyLinesResolvedSingleRun(
+    buffer: anytype,
+    paragraph: unicode.BidiParagraph,
+    comptime source_is_simple: bool,
+) !bool {
+    const glyphs = buffer.glyphs.items;
+    if (glyphs.len == 0 or buffer.lines.items.len == 0) return false;
+    if (buffer.runs.items.len != 1) return false;
+    const run = buffer.runs.items[0];
+    if (run.glyph_start != 0 or run.glyph_len != glyphs.len) return false;
+
+    // All range checks precede the glyph-list swap. A false result is thus a
+    // safe invitation for the caller to enter the general transaction.
+    var previous_end: usize = 0;
+    for (buffer.lines.items) |line| {
+        const glyph_end = std.math.add(
+            usize,
+            line.glyph_start,
+            line.glyph_len,
+        ) catch return false;
+        const byte_end = std.math.add(
+            usize,
+            line.byte_start,
+            line.byte_len,
+        ) catch return false;
+        if (line.glyph_start < previous_end or glyph_end > glyphs.len or
+            paragraph.scalarIndexForByte(line.byte_start) == null or
+            paragraph.scalarIndexForByte(byte_end) == null)
+        {
+            return false;
+        }
+        const scalar_start = paragraph.scalarIndexForByte(line.byte_start).?;
+        const scalar_end = paragraph.scalarIndexForByte(byte_end).?;
+        if (!source_is_simple) {
+            // A materialized soft hyphen is the only post-validation mapping
+            // path that requires an additional source lookup. Prove those
+            // clusters now so every operation after the glyph-owner swap is
+            // allocation-only and cannot leave partially updated lines.
+            for (glyphs[line.glyph_start..glyph_end]) |source_glyph| {
+                if (source_glyph.isDiscretionaryHyphen() and
+                    !source_glyph.isAutomaticHyphen())
+                {
+                    const scalar_index = paragraph.scalarIndexForByte(
+                        source_glyph.cluster,
+                    ) orelse return false;
+                    if (scalar_index < scalar_start or
+                        scalar_index >= scalar_end)
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+        previous_end = glyph_end;
+    }
+
+    const scratch = &buffer.bidi_reorder_scratch;
+    try scratch.beginSingleOwningRun(
+        buffer.allocator,
+        &buffer.glyphs,
+    );
+    var transaction_open = true;
+    errdefer if (transaction_open) {
+        scratch.rollbackSingleOwningRun(&buffer.glyphs);
+    };
+    // Reserve every fallible line-local append before line metadata changes.
+    // The output glyph capacity was likewise reserved by `beginSingleOwningRun`,
+    // so an allocation failure leaves both glyphs and lines in logical order.
+    try scratch.line_levels.ensureTotalCapacity(
+        buffer.allocator,
+        paragraph.scalars.len,
+    );
+    try scratch.visual_order.ensureTotalCapacity(
+        buffer.allocator,
+        paragraph.scalars.len,
+    );
+    const old_glyphs = scratch.old_glyphs.items;
+    const glyph_cluster_index = scratch.glyph_cluster_index.items;
+    const seen = scratch.seen.items;
+    const visual_glyphs = &buffer.glyphs;
+    const font = run_types.fontForBackend(run);
+
+    for (buffer.lines.items) |*line| {
+        const visual_start = visual_glyphs.items.len;
+        const old_line_start = line.glyph_start;
+        const old_line_end = old_line_start + line.glyph_len;
+        if (line.byte_len != 0 and old_line_start < old_line_end) {
+            const scalar_start = paragraph.scalarIndexForByte(
+                line.byte_start,
+            ) orelse return error.InvalidBidiMap;
+            const scalar_end = paragraph.scalarIndexForByte(
+                line.byte_start + line.byte_len,
+            ) orelse return error.InvalidBidiMap;
+            var retained_x9: [1]usize = undefined;
+            var retained_x9_count: usize = 0;
+            if (!source_is_simple) {
+                for (old_glyphs[old_line_start..old_line_end]) |source_glyph| {
+                    if (!source_glyph.isDiscretionaryHyphen() or
+                        source_glyph.isAutomaticHyphen())
+                    {
+                        continue;
+                    }
+                    retained_x9[0] = paragraph.scalarIndexForByte(
+                        source_glyph.cluster,
+                    ).?;
+                    retained_x9_count = 1;
+                    break;
+                }
+            }
+            try paragraph.visualOrderAndLevelsRetaining(
+                buffer.allocator,
+                scalar_start,
+                scalar_end,
+                retained_x9[0..retained_x9_count],
+                &scratch.line_levels,
+                &scratch.visual_order,
+            );
+            for (scratch.visual_order.items) |scalar_index| {
+                const scalar = paragraph.scalars[scalar_index];
+                const level = scratch.line_levels.items[
+                    scalar_index - scalar_start
+                ];
+                try mapping.appendItemSingleRun(
+                    buffer.allocator,
+                    old_glyphs,
+                    font,
+                    glyph_cluster_index,
+                    seen,
+                    old_line_start,
+                    old_line_end,
+                    .{
+                        .logical_index = scalar_index,
+                        .visual_index = 0,
+                        .byte_start = scalar.byte_start,
+                        .byte_len = scalar.byte_len,
+                        .codepoint = scalar.codepoint,
+                        .visual_codepoint = if (level & 1 != 0)
+                            unicode.mirroredCodepoint(scalar.codepoint)
+                        else
+                            scalar.codepoint,
+                        .direction = if (level & 1 != 0) .rtl else .ltr,
+                    },
+                    visual_glyphs,
+                );
+            }
+        }
+        try mapping.appendUnseenSingleRun(
+            buffer.allocator,
+            old_glyphs,
+            font,
+            seen,
+            old_line_start,
+            old_line_end,
+            visual_glyphs,
+        );
+        line.glyph_start = visual_start;
+        line.glyph_len = visual_glyphs.items.len - visual_start;
+        line.run_start = 0;
+        line.run_len = @intFromBool(line.glyph_len != 0);
+    }
+
+    // Wrapping whitespace outside visible line ranges remains a stable logical
+    // suffix, exactly as in the general mapper.
+    try mapping.appendUnseenSingleRun(
+        buffer.allocator,
+        old_glyphs,
+        font,
+        seen,
+        0,
+        old_glyphs.len,
+        visual_glyphs,
+    );
+    if (visual_glyphs.items.len != old_glyphs.len) {
+        return error.InvalidBidiMap;
+    }
+
+    transaction_open = false;
+    return true;
+}
+
 pub fn applyLinesResolvedRecording(
     buffer: anytype,
     paragraph: unicode.BidiParagraph,
@@ -730,4 +919,171 @@ pub fn applyLinesResolvedRecording(
     }
     runs.recomputeOffsets(buffer);
     transaction_open = false;
+}
+
+test "single owning run resolved path matches general mixed bidi mapping" {
+    const output = @import("../../../shaping/context/output.zig");
+    const paragraph_types = @import("../../types/paragraph.zig");
+    const test_font = @import("../../../test_font.zig");
+
+    const allocator = std.testing.allocator;
+    const font_bytes = try test_font.buildNamedBidiMirrorTtfWithNames(
+        allocator,
+        "Mixed Mirror Sans",
+        "Regular",
+        "Mixed Mirror Sans Regular",
+    );
+    defer allocator.free(font_bytes);
+    var font = try Font.parse(allocator, font_bytes);
+    defer font.deinit();
+
+    // The blank after each visible range models wrapping whitespace retained
+    // in the source line's byte range but excluded from its glyph range.
+    const text = "(אב) A (אב) A ";
+    const logical_glyphs = [_]GlyphPosition{
+        .{ .glyph_id = try font.glyphIndex('('), .codepoint = '(', .cluster = 0, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = try font.glyphIndex(0x05d0), .codepoint = 0x05d0, .cluster = 1, .source_byte_len = 2, .x_advance = 1 },
+        .{ .glyph_id = try font.glyphIndex(0x05d1), .codepoint = 0x05d1, .cluster = 3, .source_byte_len = 2, .x_advance = 1 },
+        .{ .glyph_id = try font.glyphIndex(')'), .codepoint = ')', .cluster = 5, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = 0, .codepoint = ' ', .cluster = 6, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = 0, .codepoint = 'A', .cluster = 7, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = 0, .codepoint = ' ', .cluster = 8, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = try font.glyphIndex('('), .codepoint = '(', .cluster = 9, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = try font.glyphIndex(0x05d0), .codepoint = 0x05d0, .cluster = 10, .source_byte_len = 2, .x_advance = 1 },
+        .{ .glyph_id = try font.glyphIndex(0x05d1), .codepoint = 0x05d1, .cluster = 12, .source_byte_len = 2, .x_advance = 1 },
+        .{ .glyph_id = try font.glyphIndex(')'), .codepoint = ')', .cluster = 14, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = 0, .codepoint = ' ', .cluster = 15, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = 0, .codepoint = 'A', .cluster = 16, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = 0, .codepoint = ' ', .cluster = 17, .source_byte_len = 1, .x_advance = 1 },
+    };
+    const logical_lines = [_]paragraph_types.ParagraphLine{
+        .{ .glyph_start = 0, .glyph_len = 6, .run_start = 0, .run_len = 1, .byte_start = 0, .byte_len = 9, .x = 0, .y = 0, .width = 6, .height = 1, .baseline = 1, .ascent = 1, .descent = 0, .leading = 0 },
+        .{ .glyph_start = 7, .glyph_len = 6, .run_start = 0, .run_len = 1, .byte_start = 9, .byte_len = 9, .x = 0, .y = 1, .width = 6, .height = 1, .baseline = 1, .ascent = 1, .descent = 0, .leading = 0 },
+    };
+    const logical_run = run_types.CascadeRun{
+        .font = @import("../../../font/face/root.zig").backend.face(&font),
+        .font_index = 0,
+        .font_size = 12,
+        .glyph_start = 0,
+        .glyph_len = logical_glyphs.len,
+        .x_offset = 0,
+    };
+
+    var paragraph = try unicode.resolveBidiParagraph(
+        allocator,
+        text,
+        .rtl,
+    );
+    defer paragraph.deinit();
+    var expected = output.Buffer.init(allocator);
+    defer expected.deinit();
+    try expected.glyphs.appendSlice(allocator, &logical_glyphs);
+    try expected.runs.append(allocator, logical_run);
+    try expected.lines.appendSlice(allocator, &logical_lines);
+    try applyLinesResolved(&expected, paragraph);
+
+    var actual = output.Buffer.init(allocator);
+    defer actual.deinit();
+    try actual.glyphs.appendSlice(allocator, &logical_glyphs);
+    try actual.runs.append(allocator, logical_run);
+    try actual.lines.appendSlice(allocator, &logical_lines);
+    try std.testing.expect(
+        try applyLinesResolvedSingleRun(&actual, paragraph, false),
+    );
+
+    try std.testing.expectEqualSlices(
+        GlyphPosition,
+        expected.glyphs.items,
+        actual.glyphs.items,
+    );
+    try std.testing.expectEqualSlices(
+        run_types.CascadeRun,
+        expected.runs.items,
+        actual.runs.items,
+    );
+    try std.testing.expectEqualSlices(
+        paragraph_types.ParagraphLine,
+        expected.lines.items,
+        actual.lines.items,
+    );
+    try std.testing.expectEqual(@as(usize, 0), actual.runs.items[0].glyph_start);
+    try std.testing.expectEqual(logical_glyphs.len, actual.runs.items[0].glyph_len);
+    try std.testing.expectEqual(@as(usize, 0), actual.bidi_reorder_scratch.old_runs.capacity);
+    try std.testing.expectEqual(@as(usize, 0), actual.bidi_reorder_scratch.glyph_run_indices.capacity);
+    try std.testing.expectEqual(@as(usize, 0), actual.bidi_reorder_scratch.visual_run_indices.capacity);
+    // The RTL bracket pair is mirrored while the LTR scalar makes the source
+    // genuinely mixed, rather than eligible for pure-RTL reversal.
+    try std.testing.expectEqual(@as(u21, '('), actual.glyphs.items[2].codepoint);
+    try std.testing.expectEqual(@as(usize, 5), actual.glyphs.items[2].cluster);
+    try std.testing.expectEqual(@as(u21, ')'), actual.glyphs.items[5].codepoint);
+    try std.testing.expectEqual(@as(usize, 0), actual.glyphs.items[5].cluster);
+    try std.testing.expectEqual(@as(u21, ' '), actual.glyphs.items[12].codepoint);
+    try std.testing.expectEqual(@as(u21, ' '), actual.glyphs.items[13].codepoint);
+}
+
+test "single owning run rejects invalid later-line source before mutation" {
+    const output = @import("../../../shaping/context/output.zig");
+    const paragraph_types = @import("../../types/paragraph.zig");
+    const test_font = @import("../../../test_font.zig");
+
+    const allocator = std.testing.allocator;
+    const font_bytes = try test_font.buildNamedBidiMirrorTtfWithNames(
+        allocator,
+        "Rollback Mirror Sans",
+        "Regular",
+        "Rollback Mirror Sans Regular",
+    );
+    defer allocator.free(font_bytes);
+    var font = try Font.parse(allocator, font_bytes);
+    defer font.deinit();
+
+    const text = " (אב) A";
+    const logical_glyphs = [_]GlyphPosition{
+        .{ .glyph_id = 0, .codepoint = ' ', .cluster = 0, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = try font.glyphIndex('('), .codepoint = '(', .cluster = 1, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = try font.glyphIndex(0x05d0), .codepoint = 0x05d0, .cluster = 2, .source_byte_len = 2, .x_advance = 1 },
+        .{ .glyph_id = try font.glyphIndex(0x05d1), .codepoint = 0x05d1, .cluster = 4, .source_byte_len = 2, .x_advance = 1 },
+        .{ .glyph_id = try font.glyphIndex(')'), .codepoint = ')', .cluster = 6, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = 0, .codepoint = 'A', .cluster = 8, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = 0, .codepoint = 0x00ad, .cluster = 3, .source_byte_len = 1, .x_advance = 1, .flags = .{ .discretionary_hyphen = true } },
+    };
+    const logical_lines = [_]paragraph_types.ParagraphLine{
+        .{ .glyph_start = 1, .glyph_len = 4, .run_start = 0, .run_len = 1, .byte_start = 1, .byte_len = 6, .x = 3, .y = 4, .indent = 5, .width = 4, .height = 10, .baseline = 7, .ascent = 8, .descent = 2, .leading = 1 },
+        .{ .glyph_start = 5, .glyph_len = 2, .run_start = 0, .run_len = 1, .byte_start = 7, .byte_len = 2, .x = 13, .y = 14, .indent = 15, .width = 2, .height = 20, .baseline = 17, .ascent = 18, .descent = 2, .leading = 1 },
+    };
+    const logical_run = run_types.CascadeRun{
+        .font = @import("../../../font/face/root.zig").backend.face(&font),
+        .font_index = 0,
+        .font_size = 12,
+        .glyph_start = 0,
+        .glyph_len = logical_glyphs.len,
+        .x_offset = 0,
+    };
+
+    var paragraph = try unicode.resolveBidiParagraph(allocator, text, .rtl);
+    defer paragraph.deinit();
+    var actual = output.Buffer.init(allocator);
+    defer actual.deinit();
+    try actual.glyphs.appendSlice(allocator, &logical_glyphs);
+    try actual.runs.append(allocator, logical_run);
+    try actual.lines.appendSlice(allocator, &logical_lines);
+
+    try std.testing.expect(
+        !try applyLinesResolvedSingleRun(&actual, paragraph, false),
+    );
+    try std.testing.expectEqualSlices(
+        GlyphPosition,
+        &logical_glyphs,
+        actual.glyphs.items,
+    );
+    try std.testing.expectEqualSlices(
+        paragraph_types.ParagraphLine,
+        &logical_lines,
+        actual.lines.items,
+    );
+    try std.testing.expectEqualSlices(
+        run_types.CascadeRun,
+        &.{logical_run},
+        actual.runs.items,
+    );
 }

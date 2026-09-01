@@ -8,6 +8,16 @@ use std::{env, fs, hint::black_box, sync::Arc, time::Instant};
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Brush;
 
+#[derive(Clone, Copy, Debug)]
+struct GeometryRecord {
+    start: usize,
+    len: usize,
+    is_rtl: bool,
+    position: f32,
+    size: f32,
+    discarded_size: f32,
+}
+
 fn main() {
     let mut args = env::args().skip(1);
     let font_path = args.next().expect("font path");
@@ -63,6 +73,10 @@ fn main() {
         source_cache: SourceCache::default(),
     };
     let mut layout_cx = LayoutContext::<Brush>::new();
+    // Match Cangjie's reusable Engine output boundary for construction.
+    // `build_into` still performs fresh text analysis and shaping, but retains
+    // Layout-owned allocation capacity across timed iterations.
+    let mut rebuild_layout = Layout::<Brush>::default();
     let mut retained = if phase == "reflow" {
         // Parley keeps shaped clusters in Layout and explicitly supports
         // line-breaking the same owner again. This matches Cangjie's retained
@@ -100,6 +114,7 @@ fn main() {
                 &style,
                 fallback_family_name,
                 retained.as_mut(),
+                &mut rebuild_layout,
                 true,
             );
             assert!(
@@ -129,6 +144,7 @@ fn main() {
                 &style,
                 fallback_family_name,
                 retained.as_mut(),
+                &mut rebuild_layout,
                 false,
             );
             assert_eq!(result.5, lines, "unstable layout line count");
@@ -158,27 +174,28 @@ fn run_once(
     style: &str,
     fallback_family_name: Option<&str>,
     retained: Option<&mut Layout<Brush>>,
+    rebuild_layout: &mut Layout<Brush>,
     summarize_output: bool,
 ) -> (u64, u64, u64, u64, usize, usize, usize) {
-    let mut owned;
     let alignment = alignment_for_style(style);
     let layout = if let Some(layout) = retained {
         break_layout(layout, width, style);
         layout.align(alignment, AlignmentOptions::default());
         layout
     } else {
-        owned = build_layout(
+        build_layout_into(
             font_cx,
             layout_cx,
+            rebuild_layout,
             text,
             family_name,
             direction,
             style,
             fallback_family_name,
         );
-        break_layout(&mut owned, width, style);
-        owned.align(alignment, AlignmentOptions::default());
-        &mut owned
+        break_layout(rebuild_layout, width, style);
+        rebuild_layout.align(alignment, AlignmentOptions::default());
+        rebuild_layout
     };
     if summarize_output {
         summarize(layout, text, style)
@@ -242,6 +259,30 @@ fn build_layout(
     style: &str,
     fallback_family_name: Option<&str>,
 ) -> Layout<Brush> {
+    let mut layout = Layout::default();
+    build_layout_into(
+        font_cx,
+        layout_cx,
+        &mut layout,
+        text,
+        family_name,
+        direction,
+        style,
+        fallback_family_name,
+    );
+    layout
+}
+
+fn build_layout_into(
+    font_cx: &mut FontContext,
+    layout_cx: &mut LayoutContext<Brush>,
+    layout: &mut Layout<Brush>,
+    text: &str,
+    family_name: &str,
+    direction: &str,
+    style: &str,
+    fallback_family_name: Option<&str>,
+) {
     // Cangjie retains fractional layout metrics. Disable Parley's optional
     // paint-time pixel snapping so both engines expose the same coordinates.
     let mut builder = layout_cx.ranged_builder(font_cx, text, 1.0, false);
@@ -295,7 +336,7 @@ fn build_layout(
         "rtl" => BaseDirection::Rtl,
         _ => panic!("direction must be auto, ltr, or rtl"),
     });
-    builder.build(text)
+    builder.build_into(layout, text);
 }
 
 fn summarize(
@@ -335,18 +376,25 @@ fn summarize(
                 if trailing {
                     trailing_advance += advance;
                 }
-                records.push((
-                    range.start,
-                    range.end - range.start,
-                    cluster.visual_offset().unwrap_or_default(),
-                    if trailing { 0.0 } else { advance },
-                ));
+                records.push(GeometryRecord {
+                    start: range.start,
+                    len: range.end - range.start,
+                    // This is the resolved cluster/run direction, not the
+                    // paragraph base direction exposed by Layout::is_rtl.
+                    // Discarded wrapping whitespace has no visible direction.
+                    // Match the zero-position/zero-size normalization below.
+                    is_rtl: !trailing && cluster.is_rtl(),
+                    position: cluster.visual_offset().unwrap_or_default(),
+                    size: if trailing { 0.0 } else { advance },
+                    discarded_size: if trailing { advance } else { 0.0 },
+                });
             }
         }
-        records.sort_by_key(|record| record.0);
+        records.sort_by_key(|record| record.start);
         let logical_origin = records
             .iter()
-            .find_map(|record| (record.3 != 0.0).then_some(record.2));
+            .find(|record| record.size != 0.0)
+            .map(|record| collapsed_inline_position(&records, record));
         // Preserve absolute physical placement while excluding wrapping
         // whitespace. In an RTL paragraph the logical suffix is the physical
         // prefix, so advance past it using the resolved base direction.
@@ -363,18 +411,21 @@ fn summarize(
             line.text_range().end,
             placement,
         );
-        for (start, len, position, size) in records {
-            geometry_hash = bytes(geometry_hash, &(start as u64).to_le_bytes());
-            geometry_hash = bytes(geometry_hash, &(len as u64).to_le_bytes());
+        for record in &records {
+            geometry_hash = bytes(geometry_hash, &(record.start as u64).to_le_bytes());
+            geometry_hash = bytes(geometry_hash, &(record.len as u64).to_le_bytes());
+            geometry_hash = bytes(geometry_hash, &[u8::from(record.is_rtl)]);
             // Match Cangjie's logical-line normalization: discard only a
             // constant line translation and sub-1/1024 px accumulation noise.
-            let logical_position = if size == 0.0 {
+            let logical_position = if record.size == 0.0 {
                 0
             } else {
-                ((position - logical_origin.unwrap_or_default()) * 1024.0).round() as i32
+                ((collapsed_inline_position(&records, record) - logical_origin.unwrap_or_default())
+                    * 1024.0)
+                    .round() as i32
             };
             geometry_hash = bytes(geometry_hash, &logical_position.to_le_bytes());
-            geometry_hash = bytes(geometry_hash, &size.to_bits().to_le_bytes());
+            geometry_hash = bytes(geometry_hash, &record.size.to_bits().to_le_bytes());
         }
         for item in line.items() {
             match item {
@@ -402,6 +453,15 @@ fn summarize(
         line_count,
         object_count,
     )
+}
+
+fn collapsed_inline_position(records: &[GeometryRecord], record: &GeometryRecord) -> f32 {
+    let discarded_before = records
+        .iter()
+        .filter(|discarded| discarded.discarded_size != 0.0 && discarded.position < record.position)
+        .map(|discarded| discarded.discarded_size)
+        .sum::<f32>();
+    record.position - discarded_before
 }
 
 fn visible_line_origin(

@@ -93,6 +93,36 @@ pub const Scratch = struct {
         );
     }
 
+    /// Move the logical glyph stream aside for a proven owning run.
+    ///
+    /// A run covering the complete glyph array remains contiguous under every
+    /// permutation, so line-level bidi needs the cluster/seen indexes but not
+    /// the proportional ownership map or the run snapshot used by `begin`.
+    pub fn beginSingleOwningRun(
+        self: *Scratch,
+        allocator: std.mem.Allocator,
+        output_glyphs: *std.ArrayList(GlyphPosition),
+    ) !void {
+        self.clear();
+        std.mem.swap(
+            std.ArrayList(GlyphPosition),
+            &self.old_glyphs,
+            output_glyphs,
+        );
+        errdefer self.rollbackSingleOwningRun(output_glyphs);
+        try mapping.buildClusterIndexInto(
+            allocator,
+            &self.glyph_cluster_index,
+            self.old_glyphs.items,
+        );
+        try self.seen.resize(allocator, self.old_glyphs.items.len);
+        @memset(self.seen.items, false);
+        try output_glyphs.ensureTotalCapacity(
+            allocator,
+            self.old_glyphs.items.len,
+        );
+    }
+
     /// Restore the exact logical lists if a later permutation step fails.
     pub fn rollback(
         self: *Scratch,
@@ -106,6 +136,19 @@ pub const Scratch = struct {
             &self.old_runs,
             output_runs,
         );
+        std.mem.swap(
+            std.ArrayList(GlyphPosition),
+            &self.old_glyphs,
+            output_glyphs,
+        );
+    }
+
+    /// Restore the single-run transaction without disturbing the proven run.
+    pub fn rollbackSingleOwningRun(
+        self: *Scratch,
+        output_glyphs: *std.ArrayList(GlyphPosition),
+    ) void {
+        output_glyphs.clearRetainingCapacity();
         std.mem.swap(
             std.ArrayList(GlyphPosition),
             &self.old_glyphs,

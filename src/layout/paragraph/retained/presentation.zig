@@ -38,10 +38,23 @@ pub fn applySimpleRetained(
         {} else if (pure_rtl_lines and
             (bidi_reorder.applyPureRtlLinesAfterProof(buffer) or
                 try bidi_reorder.applyPureRtlLinesWithObjectAfterProof(buffer)))
-        {} else if (bidi_paragraph) |paragraph|
-            try bidi_reorder.applyLinesResolved(buffer, paragraph)
-        else
-            unreachable;
+        {} else if (bidi_paragraph) |paragraph| {
+            // The strict builder cannot introduce or reshape glyphs. With no
+            // object atoms, a sole run that still covers the restored output
+            // therefore remains its owner under every line-local permutation.
+            // Keep the generic path as an atomic fallback if that structural
+            // proof is not present on a particular reflow.
+            if (pure_rtl_lines or
+                options.inline_objects.len != 0 or
+                !try bidi_reorder.applyLinesResolvedSingleRun(
+                    buffer,
+                    paragraph,
+                    true,
+                ))
+            {
+                try bidi_reorder.applyLinesResolved(buffer, paragraph);
+            }
+        } else unreachable;
         // Visual permutation changes which glyph ranges each retained run
         // owns. Rebuild their absolute pens only in that case; the LTR simple
         // path restored already-correct immutable run offsets and changed no

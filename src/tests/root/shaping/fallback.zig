@@ -245,6 +245,44 @@ test "fallback mark output preserves ASCII and consecutive mark semantics" {
     }, marked.glyphs);
 }
 
+test "script itemization does not split a grapheme before fallback" {
+    const test_font = @import("../../../test_font.zig");
+    const allocator = std.testing.allocator;
+    const text = "A\u{0951}";
+
+    const primary_bytes = try test_font.buildCodepointSetTtf(allocator, &.{'A'});
+    defer allocator.free(primary_bytes);
+    const fallback_bytes = try test_font.buildCodepointSetTtf(
+        allocator,
+        &.{ 'A', 0x0951 },
+    );
+    defer allocator.free(fallback_bytes);
+    var primary = try Font.parse(allocator, primary_bytes);
+    defer primary.deinit();
+    var fallback = try Font.parse(allocator, fallback_bytes);
+    defer fallback.deinit();
+
+    const cascade = FontCascade.init(&.{ &primary, &fallback });
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        try cascade.selectFontForCluster(text),
+    );
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const shaped = try TextShaper.shapeUtf8Cascade(cascade, &buffer, text, 20);
+
+    try std.testing.expectEqual(@as(usize, 1), shaped.runs.len);
+    try std.testing.expectEqual(@as(usize, 1), shaped.runs[0].font_index);
+    try std.testing.expectEqual(@as(usize, 2), shaped.glyphs.len);
+    try std.testing.expect(shaped.glyphs[0].glyph_id != 0);
+    try std.testing.expect(shaped.glyphs[1].glyph_id != 0);
+    try std.testing.expectEqual(@as(usize, 0), shaped.glyphs[0].cluster);
+    // The default public cluster policy may preserve the mark's scalar byte
+    // offset; font ownership, not output cluster coalescing, is the invariant
+    // guarded here.
+    try std.testing.expectEqual(@as(usize, 1), shaped.glyphs[1].cluster);
+}
+
 test "Arabic normalization composes base mark pairs when the font has the precomposed glyph" {
     const test_font = @import("../../../test_font.zig");
     const allocator = std.testing.allocator;

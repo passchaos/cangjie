@@ -22,6 +22,7 @@ const FontCascade = support.FontCascade;
 const inferOpenTypeLanguageTag = support.inferOpenTypeLanguageTag;
 const openTypeTag = support.openTypeTag;
 const testing = support.testing;
+const inline_object = @import("../../../layout/inline_object/root.zig");
 
 test "shapes mixed-script text with script run metadata" {
     const allocator = std.testing.allocator;
@@ -94,6 +95,360 @@ test "shapes script runs with script and language specific OpenType lookups" {
     try std.testing.expectEqual(OpenTypeLanguageTag.jan, japanese_shape.script_runs[0].language_tag);
 
     try std.testing.expectEqual(OpenTypeLanguageTag.jan, inferOpenTypeLanguageTag("一あ"));
+}
+
+test "ordinary cascade itemizes scripts before same-face fallback" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMixedScriptDirectionalGsubTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const text = "A\u{0628}";
+    const options: @import("../../../shaping/plan/root.zig").ShapeOptions = .{
+        .reorder_bidi = false,
+        .native_direction_shaping = true,
+    };
+
+    const shaped = try TextShaper.shapeUtf8CascadeWithOptions(
+        cascade,
+        &buffer,
+        text,
+        20,
+        options,
+    );
+    try std.testing.expectEqual(@as(usize, 2), shaped.glyphs.len);
+    try std.testing.expectEqualSlices(
+        GlyphId,
+        &.{ 3, 4 },
+        &.{ shaped.glyphs[0].glyph_id, shaped.glyphs[1].glyph_id },
+    );
+    try std.testing.expectEqualSlices(
+        usize,
+        &.{ 0, 1 },
+        &.{ shaped.glyphs[0].cluster, shaped.glyphs[1].cluster },
+    );
+    // Script boundaries are not rendering ownership boundaries. Adjacent
+    // output from the same face remains one CascadeRun for fast bidi/reflow.
+    try std.testing.expectEqual(@as(usize, 1), shaped.runs.len);
+    try std.testing.expectEqual(@as(usize, 2), shaped.runs[0].glyph_len);
+
+    var shaped_cache = support.ShapedRunCache.init(allocator);
+    defer shaped_cache.deinit();
+    _ = try TextShaper.shapeUtf8CascadeWithCaches(
+        cascade,
+        null,
+        null,
+        null,
+        &shaped_cache,
+        &buffer,
+        text,
+        20,
+        options,
+    );
+    const cached = try TextShaper.shapeUtf8CascadeWithCaches(
+        cascade,
+        null,
+        null,
+        null,
+        &shaped_cache,
+        &buffer,
+        text,
+        20,
+        options,
+    );
+    try std.testing.expectEqual(@as(usize, 1), shaped_cache.hits);
+    try std.testing.expectEqualSlices(
+        GlyphId,
+        &.{ 3, 4 },
+        &.{ cached.glyphs[0].glyph_id, cached.glyphs[1].glyph_id },
+    );
+    try std.testing.expectEqual(@as(usize, 1), cached.runs.len);
+
+    const scripted = try TextShaper.shapeUtf8ScriptRuns(
+        cascade,
+        &buffer,
+        text,
+        20,
+        options,
+    );
+    try std.testing.expectEqualSlices(
+        GlyphId,
+        &.{ 3, 4 },
+        &.{ scripted.glyphs[0].glyph_id, scripted.glyphs[1].glyph_id },
+    );
+    try std.testing.expectEqual(@as(usize, 1), scripted.font_runs.len);
+    try std.testing.expectEqual(@as(usize, 2), scripted.script_runs.len);
+    try std.testing.expectEqual(Script.latin, scripted.script_runs[0].script);
+    try std.testing.expectEqual(OpenTypeScriptTag.latn, scripted.script_runs[0].script_tag);
+    try std.testing.expectEqual(Script.arabic, scripted.script_runs[1].script);
+    try std.testing.expectEqual(OpenTypeScriptTag.arab, scripted.script_runs[1].script_tag);
+}
+
+test "ordinary cascade preserves caller direction for already-visual text" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const directional_bytes =
+        try test_font.buildMixedScriptDirectionalGsubTtf(allocator);
+    defer allocator.free(directional_bytes);
+    var directional_font = try Font.parse(allocator, directional_bytes);
+    defer directional_font.deinit();
+    const directional_cascade = FontCascade.init(&.{&directional_font});
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    // Disabling the paragraph bidi pass is the public contract for text whose
+    // visual order was established by the caller. The Latin `ltra` feature
+    // maps glyph 1 to 3, so retaining glyph 1 proves that script itemization
+    // did not replace the explicit RTL direction with a resolved LTR level.
+    const visual_rtl = try TextShaper.shapeUtf8CascadeWithOptions(
+        directional_cascade,
+        &buffer,
+        "A\u{0628}",
+        20,
+        .{ .direction = .rtl, .reorder_bidi = false },
+    );
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 4 }, &.{
+        visual_rtl.glyphs[0].glyph_id,
+        visual_rtl.glyphs[1].glyph_id,
+    });
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, &.{
+        visual_rtl.glyphs[0].cluster,
+        visual_rtl.glyphs[1].cluster,
+    });
+
+    const arabic_bytes = try test_font.buildMixedScriptArabicRligTtf(allocator);
+    defer allocator.free(arabic_bytes);
+    var arabic_font = try Font.parse(allocator, arabic_bytes);
+    defer arabic_font.deinit();
+    const arabic_cascade = FontCascade.init(&.{&arabic_font});
+
+    // Alef-lam is the caller-materialized visual order of logical lam-alef.
+    // Native-direction shaping must reverse just that Arabic script item for
+    // GSUB, where the order-sensitive required ligature maps it to glyph 7.
+    // Bidi-level itemization used to clear `native_direction_shaping`, leaving
+    // two glyphs and violating the already-visual input contract.
+    const native_arabic = try TextShaper.shapeUtf8CascadeWithOptions(
+        arabic_cascade,
+        &buffer,
+        "A \u{0627}\u{0644}",
+        20,
+        .{
+            .reorder_bidi = false,
+            .native_direction_shaping = true,
+        },
+    );
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2, 7 }, &.{
+        native_arabic.glyphs[0].glyph_id,
+        native_arabic.glyphs[1].glyph_id,
+        native_arabic.glyphs[2].glyph_id,
+    });
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, &.{
+        native_arabic.glyphs[0].cluster,
+        native_arabic.glyphs[1].cluster,
+        native_arabic.glyphs[2].cluster,
+    });
+    try std.testing.expectEqual(
+        @as(usize, 4),
+        native_arabic.glyphs[2].source_byte_len,
+    );
+}
+
+test "LTR mixed Arabic rlig follows logical script-run order" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMixedScriptArabicRligTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    // Logical alef-lam becomes visually adjacent as lam-alef, but that visual
+    // order must never be fed back through Arabic required-ligature shaping.
+    const no_ligature = try TextShaper.shapeUtf8CascadeWithOptions(
+        cascade,
+        &buffer,
+        "A ال",
+        20,
+        .{ .direction = .ltr },
+    );
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2, 4, 3 }, &.{
+        no_ligature.glyphs[0].glyph_id,
+        no_ligature.glyphs[1].glyph_id,
+        no_ligature.glyphs[2].glyph_id,
+        no_ligature.glyphs[3].glyph_id,
+    });
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 4, 2 }, &.{
+        no_ligature.glyphs[0].cluster,
+        no_ligature.glyphs[1].cluster,
+        no_ligature.glyphs[2].cluster,
+        no_ligature.glyphs[3].cluster,
+    });
+
+    const ligature = try TextShaper.shapeUtf8CascadeWithOptions(
+        cascade,
+        &buffer,
+        "A لا",
+        20,
+        .{ .direction = .ltr },
+    );
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2, 7 }, &.{
+        ligature.glyphs[0].glyph_id,
+        ligature.glyphs[1].glyph_id,
+        ligature.glyphs[2].glyph_id,
+    });
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, &.{
+        ligature.glyphs[0].cluster,
+        ligature.glyphs[1].cluster,
+        ligature.glyphs[2].cluster,
+    });
+    try std.testing.expectEqual(@as(usize, 4), ligature.glyphs[2].source_byte_len);
+
+    const with_digits = try TextShaper.shapeUtf8CascadeWithOptions(
+        cascade,
+        &buffer,
+        "A لا 12",
+        20,
+        .{ .direction = .ltr },
+    );
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2, 5, 6, 2, 7 }, &.{
+        with_digits.glyphs[0].glyph_id,
+        with_digits.glyphs[1].glyph_id,
+        with_digits.glyphs[2].glyph_id,
+        with_digits.glyphs[3].glyph_id,
+        with_digits.glyphs[4].glyph_id,
+        with_digits.glyphs[5].glyph_id,
+    });
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 7, 8, 6, 2 }, &.{
+        with_digits.glyphs[0].cluster,
+        with_digits.glyphs[1].cluster,
+        with_digits.glyphs[2].cluster,
+        with_digits.glyphs[3].cluster,
+        with_digits.glyphs[4].cluster,
+        with_digits.glyphs[5].cluster,
+    });
+}
+
+test "uniform retained paragraph shapes Arabic rlig before bidi presentation" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMixedScriptArabicRligTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    var no_ligature = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &buffer,
+        "A ال",
+        20,
+        .{ .max_width = 200, .direction = .ltr },
+    );
+    defer no_ligature.deinit();
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2, 3, 4 }, &.{
+        no_ligature.glyphs[0].glyph_id,
+        no_ligature.glyphs[1].glyph_id,
+        no_ligature.glyphs[2].glyph_id,
+        no_ligature.glyphs[3].glyph_id,
+    });
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 4 }, &.{
+        no_ligature.glyphs[0].cluster,
+        no_ligature.glyphs[1].cluster,
+        no_ligature.glyphs[2].cluster,
+        no_ligature.glyphs[3].cluster,
+    });
+
+    var ligature = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &buffer,
+        "A لا",
+        20,
+        .{ .max_width = 200, .direction = .ltr },
+    );
+    defer ligature.deinit();
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2, 7 }, &.{
+        ligature.glyphs[0].glyph_id,
+        ligature.glyphs[1].glyph_id,
+        ligature.glyphs[2].glyph_id,
+    });
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, &.{
+        ligature.glyphs[0].cluster,
+        ligature.glyphs[1].cluster,
+        ligature.glyphs[2].cluster,
+    });
+    try std.testing.expectEqual(@as(usize, 4), ligature.glyphs[2].source_byte_len);
+}
+
+test "uniform paragraph keeps full-text script ownership across tab and object ranges" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMixedScriptDirectionalGsubTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const text =
+        "A\u{0628}\tA" ++ inline_object.object_replacement_utf8 ++
+        "\u{0628}";
+    const object = inline_object.Object{
+        .id = 1,
+        .byte_index = 5,
+        .width = 8,
+        .height = 8,
+    };
+    var paragraph = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{ .max_width = 200, .inline_objects = &.{object} },
+    );
+    defer paragraph.deinit();
+    const shaped = paragraph.shapedText();
+
+    try std.testing.expectEqual(@as(usize, 6), shaped.glyphs.len);
+    try std.testing.expectEqualSlices(
+        GlyphId,
+        &.{ 3, 4, 0, 3, 0, 4 },
+        &.{
+            shaped.glyphs[0].glyph_id,
+            shaped.glyphs[1].glyph_id,
+            shaped.glyphs[2].glyph_id,
+            shaped.glyphs[3].glyph_id,
+            shaped.glyphs[4].glyph_id,
+            shaped.glyphs[5].glyph_id,
+        },
+    );
+    try std.testing.expectEqualSlices(
+        usize,
+        &.{ 0, 1, 3, 4, 5, 8 },
+        &.{
+            shaped.glyphs[0].cluster,
+            shaped.glyphs[1].cluster,
+            shaped.glyphs[2].cluster,
+            shaped.glyphs[3].cluster,
+            shaped.glyphs[4].cluster,
+            shaped.glyphs[5].cluster,
+        },
+    );
+    try std.testing.expect(shaped.glyphs[2].isTab());
+    try std.testing.expect(shaped.glyphs[4].isInlineObject());
+    try std.testing.expectEqual(@as(usize, 3), shaped.runs.len);
+    try std.testing.expectEqual(@as(usize, 2), shaped.runs[0].glyph_len);
 }
 
 test "caches shape plans by direction script language and features" {

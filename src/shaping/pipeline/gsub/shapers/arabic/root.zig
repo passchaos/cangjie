@@ -70,6 +70,7 @@ pub fn run(input: Input) !Result {
             input.lookup_options.context_before,
             input.codepoints,
             input.lookup_options.context_after,
+            input.lookup_options.logical_context,
             input.joining_forms.items,
         );
     } else {
@@ -82,6 +83,7 @@ pub fn run(input: Input) !Result {
             input.lookup_options.context_before,
             input.codepoints,
             input.lookup_options.context_after,
+            input.lookup_options.logical_context,
             input.joining_forms.items,
         );
         for (

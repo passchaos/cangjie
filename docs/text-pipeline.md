@@ -2350,3 +2350,30 @@ Latin, `1.187x`/`1.089x` for Arabic, and `1.801x`/`1.512x` for Japanese; the
 previously noisy Arabic in-flow reflow row measured `1.068x`. Object rows still
 report `geometry_equal=false` because the shared digest currently models text
 graphemes rather than positioned-object rectangles.
+
+The matrix now adds two default-style mixed-bidi fixtures, one resolving LTR
+and one RTL, each in construction and retained-reflow phases, bringing the
+maintained total to 38 rows. The common digest includes every
+source-addressable cluster's resolved direction and collapses discarded
+wrapping-whitespace advance before comparing later visible positions. Both
+engines agree exactly on normalized geometry and visible-left placement in all
+four new rows: 73 glyphs over three lines for the LTR fixture and 76 glyphs
+over three lines for the RTL fixture. The explicitly enforced text-semantic set
+therefore grows from 13 to 17 rows; all 18 object-geometry rows remain exact.
+
+The runner's declared default performance margin is now `1.01x`, rather than
+mere parity. `--minimum-speedup` must be finite and greater than one, an exact
+boundary result passes, and `--fail-on-slower` enforces it while non-strict
+runs report it. A fixed-CPU-30 `1000 * 7` strict run passed the semantic checks
+but failed nine performance rows: Latin centered reflow `0.434357x`; Arabic
+default, spacing, and alternating construction
+`0.690567x`/`0.696919x`/`0.718518x`; Japanese alternating construction
+`0.879623x`; mixed-bidi LTR construction/reflow
+`0.274357x`/`0.477241x`; and mixed-bidi RTL construction/reflow
+`0.272972x`/`0.469446x`. These measurements supersede any implication above
+that the expanded maintained matrix is fully green. Subsequent profiling found
+that public mutation-aware cmap validation dominated mixed-bidi mirroring; the
+layout transaction now uses the immutable parsed-face shaping lookup instead.
+Focused retained-reflow repeats fell from tens of microseconds to roughly
+2--3 microseconds with unchanged checksums, while a fresh full strict matrix is
+still required to determine which gaps remain.

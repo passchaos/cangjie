@@ -77,6 +77,11 @@ pub const LookupOptions = struct {
     remove_default_ignorables: bool = false,
     context_before: []const u8 = &.{},
     context_after: []const u8 = &.{},
+    /// Internal non-owning view of the complete logical request. Public
+    /// callers continue to use the flat before/after slices above; itemizing
+    /// orchestrators install this view so nested run and fallback boundaries
+    /// can retain context without repeatedly concatenating whole prefixes.
+    logical_context: ?LogicalContext = null,
     beginning_of_text: bool = false,
     end_of_text: bool = false,
     cluster_level: ?ClusterLevel = null,
@@ -136,6 +141,57 @@ pub const LookupOptions = struct {
             return textDirectionFromBidiClass(native);
         }
         return self.direction;
+    }
+};
+
+pub const LogicalContext = struct {
+    external_before: []const u8 = &.{},
+    text: []const u8,
+    external_after: []const u8 = &.{},
+    active_start: usize = 0,
+    active_end: usize,
+    /// Nearest non-transparent joining type before each UTF-8 byte boundary
+    /// in `text`; only entries at scalar boundaries are read.
+    joining_before: ?[]const ?unicode.JoiningType = null,
+    /// Nearest non-transparent joining type at or after each UTF-8 byte
+    /// boundary in `text`.
+    joining_after: ?[]const ?unicode.JoiningType = null,
+    external_joining_before: ?unicode.JoiningType = null,
+    external_joining_after: ?unicode.JoiningType = null,
+
+    pub fn subrange(
+        self: LogicalContext,
+        start: usize,
+        end: usize,
+    ) LogicalContext {
+        var result = self;
+        result.active_start = start;
+        result.active_end = end;
+        return result;
+    }
+
+    pub fn hasBefore(self: LogicalContext) bool {
+        return self.active_start != 0 or self.external_before.len != 0;
+    }
+
+    pub fn joiningBefore(self: LogicalContext) ?unicode.JoiningType {
+        if (self.joining_before) |types| {
+            if (self.active_start < types.len) {
+                return types[self.active_start] orelse
+                    self.external_joining_before;
+            }
+        }
+        return self.external_joining_before;
+    }
+
+    pub fn joiningAfter(self: LogicalContext) ?unicode.JoiningType {
+        if (self.joining_after) |types| {
+            if (self.active_end < types.len) {
+                return types[self.active_end] orelse
+                    self.external_joining_after;
+            }
+        }
+        return self.external_joining_after;
     }
 };
 

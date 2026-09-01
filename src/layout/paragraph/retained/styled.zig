@@ -18,7 +18,6 @@ const styled_buffer = @import("../../styled_buffer.zig");
 const styled_paragraph = @import("../../styled_paragraph.zig");
 const context_output = @import("../../../shaping/context/output.zig");
 const font_fallback = @import("../../../shaping/fallback/font/root.zig");
-const plan_bidi = @import("../../../shaping/plan/bidi.zig");
 const shaping_plan = @import("../../../shaping/plan/root.zig");
 const segmentation = @import("../../../text/segmentation/root.zig");
 const unicode = @import("../../../unicode.zig");
@@ -287,7 +286,7 @@ pub fn prepare(
     const union_fonts = try buildUnionCascade(allocator, cascade, spans);
     errdefer allocator.free(union_fonts);
     const retained_cascade = font_fallback.Cascade.init(union_fonts);
-    try styled_layout.prepare(.{
+    var bidi_paragraph = try styled_layout.prepare(.{
         .cascade = cascade,
         .font_index_cascade = retained_cascade,
         .buffer = buffer,
@@ -298,6 +297,7 @@ pub fn prepare(
         .options = options,
         .compute_content_widths = false,
     });
+    errdefer if (bidi_paragraph) |*paragraph| paragraph.deinit();
 
     const owned_text = try allocator.dupe(u8, text);
     errdefer allocator.free(owned_text);
@@ -340,20 +340,6 @@ pub fn prepare(
     }
     const cascade_fonts = try allocator.dupe(*const Font, cascade.fonts);
     errdefer allocator.free(cascade_fonts);
-    const needs_bidi_reorder = plan_bidi.paragraphNeedsReorder(
-        owned_text,
-        options.direction,
-    );
-    var bidi_paragraph = if (needs_bidi_reorder)
-        try unicode.resolveBidiParagraph(
-            allocator,
-            owned_text,
-            if (options.direction == .rtl) .rtl else .ltr,
-        )
-    else
-        null;
-    errdefer if (bidi_paragraph) |*paragraph| paragraph.deinit();
-
     return .{
         .allocator = allocator,
         .text = owned_text,
@@ -371,7 +357,7 @@ pub fn prepare(
         .hyphenation_dictionary = options.hyphenation.dictionary,
         .default_font_size = default_font_size,
         .shape_key = styled_layout.shapeKey(owned_text, options),
-        .needs_bidi_reorder = needs_bidi_reorder,
+        .needs_bidi_reorder = bidi_paragraph != null,
         .bidi_paragraph = bidi_paragraph,
     };
 }

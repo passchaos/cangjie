@@ -64,8 +64,28 @@ pub fn resolveWithContext(
     before: []const u8,
     item_codepoints: []const u21,
     after: []const u8,
+    logical_context: ?@import("../../../types.zig").LogicalContext,
     item_forms: []unicode.JoiningForm,
 ) !void {
+    if (logical_context) |context| {
+        if (context.joining_before != null or context.joining_after != null) {
+            return unicode.resolveJoiningFormsWithNeighbors(
+                item_codepoints,
+                item_forms,
+                context.joiningBefore(),
+                context.joiningAfter(),
+            );
+        }
+        // A complete internal item needs no context sidecar. Preserve the
+        // allocation-free Arabic fast path when itemization found no cut.
+        if (context.active_start == 0 and
+            context.active_end == context.text.len and
+            context.external_before.len == 0 and
+            context.external_after.len == 0)
+        {
+            return try unicode.resolveJoiningForms(item_codepoints, item_forms);
+        }
+    }
     if (before.len == 0 and after.len == 0) {
         return try unicode.resolveJoiningForms(item_codepoints, item_forms);
     }

@@ -178,6 +178,49 @@ test "styled explicit override keeps metadata parallel across soft columns" {
     try std.testing.expectEqualSlices(u32, &.{ 2, 1, 3, 2 }, &visible_styles);
 }
 
+test "styled vertical RTL preserves direction for a Latin bidi item" {
+    const allocator = std.testing.allocator;
+    const text = "A\u{0628}";
+    const bytes = try @import("../../../../test_font.zig")
+        .buildMixedScriptDirectionalGsubTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    var styled = support.StyledParagraphBuffer.init(allocator);
+    defer styled.deinit();
+
+    const spans = [_]support.StyledParagraphSpan{.{
+        .byte_start = 0,
+        .byte_len = text.len,
+        .style_index = 1,
+        .font_size = 20,
+    }};
+    const result = try TextShaper.layoutStyledParagraphUtf8(
+        FontCascade.init(&.{&font}),
+        &buffer,
+        &styled,
+        text,
+        20,
+        &spans,
+        .{
+            .max_width = 200,
+            .wrap_mode = .no_wrap,
+            .direction = .rtl,
+            .writing_mode = .vertical_lr,
+            .text_orientation = .upright,
+        },
+    );
+    const latin = for (result.glyphs) |glyph| {
+        if (glyph.cluster == 0) break glyph;
+    } else return error.MissingLatinGlyph;
+    // UAX #9 assigns the Latin item an even horizontal level. That item may
+    // be reordered visually, but it still shapes bottom-to-top: the `ltra`
+    // substitution must not replace source glyph 1 with glyph 3.
+    try std.testing.expectEqual(@as(support.GlyphId, 1), latin.glyph_id);
+}
+
 fn expectClusters(glyphs: []const support.GlyphPosition, expected: []const usize) !void {
     try std.testing.expectEqual(expected.len, glyphs.len);
     for (glyphs, expected) |glyph, cluster| {

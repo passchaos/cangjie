@@ -223,6 +223,39 @@ test "vertical presentation fallback survives bottom-to-top shaping" {
     try std.testing.expectEqual(@as(GlyphId, 4), btt.glyphs[0].glyph_id);
 }
 
+test "vertical paragraph bidi itemization preserves requested direction" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMixedScriptDirectionalGsubTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    var shaped = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        FontCascade.init(&.{&font}),
+        &buffer,
+        "A\u{0628}",
+        20,
+        .{
+            .max_width = 200,
+            .direction = .rtl,
+            .writing_mode = .vertical_rl,
+            .text_orientation = .upright,
+        },
+    );
+    defer shaped.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), shaped.glyphs.len);
+    // UAX #9 resolves Latin to an even (horizontal-LTR) level. Vertical RTL
+    // must nevertheless remain bottom-to-top, so the directional `ltra`
+    // substitution must not replace source glyph 1 with glyph 3.
+    try std.testing.expectEqual(@as(GlyphId, 1), shaped.glyphs[0].glyph_id);
+    try std.testing.expectEqual(@as(usize, 0), shaped.glyphs[0].cluster);
+}
+
 test "vertical shaped cache and fallback runs preserve independent y pens" {
     const test_font = @import("../../../test_font.zig");
     const primary_bytes = try test_font.buildVerticalMetricsTtf(std.testing.allocator);

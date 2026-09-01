@@ -70,7 +70,7 @@ pub fn appendItem(
     allowed_end: usize,
     item: unicode.BidiMapItem,
     out_glyphs: *std.ArrayList(GlyphPosition),
-    out_run_indices: *std.ArrayList(usize),
+    out_run_indices: ?*std.ArrayList(usize),
     out_permutation: if (record_permutation) *std.ArrayList(usize) else void,
 ) !void {
     const item_range =
@@ -127,6 +127,40 @@ pub fn appendItem(
     }
 }
 
+/// Append one bidi item when every glyph has the same proven font owner.
+///
+/// This deliberately shares cluster lookup, intra-cluster ordering, and
+/// mirroring with the general mapper. It only erases the run-index sidecar
+/// whose value would be zero for every glyph.
+pub fn appendItemSingleRun(
+    allocator: std.mem.Allocator,
+    glyphs: []const GlyphPosition,
+    font: *const Font,
+    cluster_index: []const ClusterEntry,
+    seen: []bool,
+    allowed_start: usize,
+    allowed_end: usize,
+    item: unicode.BidiMapItem,
+    out_glyphs: *std.ArrayList(GlyphPosition),
+) !void {
+    return appendItem(
+        false,
+        allocator,
+        glyphs,
+        &[_]run_types.CascadeRun{},
+        font,
+        &.{},
+        cluster_index,
+        seen,
+        allowed_start,
+        allowed_end,
+        item,
+        out_glyphs,
+        null,
+        {},
+    );
+}
+
 pub fn appendUnseen(
     comptime record_permutation: bool,
     allocator: std.mem.Allocator,
@@ -138,7 +172,7 @@ pub fn appendUnseen(
     start: usize,
     end: usize,
     out_glyphs: *std.ArrayList(GlyphPosition),
-    out_run_indices: *std.ArrayList(usize),
+    out_run_indices: ?*std.ArrayList(usize),
     out_permutation: if (record_permutation) *std.ArrayList(usize) else void,
 ) !void {
     for (start..@min(end, glyphs.len)) |glyph_index| {
@@ -158,6 +192,32 @@ pub fn appendUnseen(
             out_permutation,
         );
     }
+}
+
+/// Preserve unmatched outputs for a single owning run.
+pub fn appendUnseenSingleRun(
+    allocator: std.mem.Allocator,
+    glyphs: []const GlyphPosition,
+    font: *const Font,
+    seen: []bool,
+    start: usize,
+    end: usize,
+    out_glyphs: *std.ArrayList(GlyphPosition),
+) !void {
+    return appendUnseen(
+        false,
+        allocator,
+        glyphs,
+        &[_]run_types.CascadeRun{},
+        font,
+        &.{},
+        seen,
+        start,
+        end,
+        out_glyphs,
+        null,
+        {},
+    );
 }
 
 fn entryLessThan(_: void, lhs: ClusterEntry, rhs: ClusterEntry) bool {
@@ -198,7 +258,7 @@ fn appendItemGlyph(
     glyph_index: usize,
     item: unicode.BidiMapItem,
     out_glyphs: *std.ArrayList(GlyphPosition),
-    out_run_indices: *std.ArrayList(usize),
+    out_run_indices: ?*std.ArrayList(usize),
     out_permutation: if (record_permutation) *std.ArrayList(usize) else void,
 ) !void {
     const glyph = glyphs[glyph_index];
@@ -235,20 +295,29 @@ fn appendGlyph(
     glyph_index: usize,
     visual_codepoint: ?u21,
     out_glyphs: *std.ArrayList(GlyphPosition),
-    out_run_indices: *std.ArrayList(usize),
+    out_run_indices: ?*std.ArrayList(usize),
     out_permutation: if (record_permutation) *std.ArrayList(usize) else void,
 ) !void {
     seen[glyph_index] = true;
     var glyph = glyphs[glyph_index];
     if (visual_codepoint) |codepoint| mirror: {
         if (codepoint == glyph.codepoint) break :mirror;
-        const run_index = glyph_run_indices[glyph_index];
-        if (run_index == @import("runs.zig").no_run) break :mirror;
-        const font = if (run_index < old_runs.len)
-            run_types.fontForBackend(old_runs[run_index])
-        else
-            single_font orelse break :mirror;
-        const mirrored_glyph = font.glyphIndex(codepoint) catch break :mirror;
+        const font = if (out_run_indices == null)
+            single_font orelse break :mirror
+        else owner: {
+            const run_index = glyph_run_indices[glyph_index];
+            if (run_index == @import("runs.zig").no_run or
+                run_index >= old_runs.len)
+            {
+                break :mirror;
+            }
+            break :owner run_types.fontForBackend(old_runs[run_index]);
+        };
+        // The font was parsed and remains immutable for the shaping/layout
+        // transaction. Reuse that proof rather than revalidating the complete
+        // cmap checksum for every mirrored scalar.
+        const mirrored_glyph = @import("../../../font.zig").shaping
+            .glyphIndexForShaping(font, codepoint) catch break :mirror;
         if (mirrored_glyph == 0) break :mirror;
         // Mirroring happens after GSUB/GPOS. Retain positioning deltas while
         // selecting the mirrored glyph from the same cascade font.
@@ -256,7 +325,9 @@ fn appendGlyph(
         glyph.glyph_id = mirrored_glyph;
     }
     try out_glyphs.append(allocator, glyph);
-    try out_run_indices.append(allocator, glyph_run_indices[glyph_index]);
+    if (out_run_indices) |indices| {
+        try indices.append(allocator, glyph_run_indices[glyph_index]);
+    }
     if (record_permutation) out_permutation.appendAssumeCapacity(glyph_index);
 }
 

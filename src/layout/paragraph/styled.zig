@@ -30,6 +30,9 @@ const styled_paragraph = @import("../styled_paragraph.zig");
 const context_output = @import("../../shaping/context/output.zig");
 const font_fallback = @import("../../shaping/fallback/font/root.zig");
 const fallback_segment = @import("../../shaping/fallback/segment.zig");
+const logical_run_itemization =
+    @import("../../shaping/itemization/logical_runs.zig");
+const logical_context = @import("../../shaping/context/logical.zig");
 const plan_bidi = @import("../../shaping/plan/bidi.zig");
 const plan_validation = @import("../../shaping/plan/validation.zig");
 const segment_pipeline = @import("../../shaping/pipeline/segment.zig");
@@ -100,6 +103,20 @@ pub fn layout(input: Input) !paragraph_types.ParagraphLayout {
 
     input.buffer.clear();
     input.styled.clear();
+    const needs_bidi_reorder = plan_bidi.paragraphNeedsReorder(
+        input.text,
+        input.options.direction,
+    );
+    var owned_bidi: ?unicode.BidiParagraph = null;
+    defer if (owned_bidi) |*paragraph| paragraph.deinit();
+    const bidi_paragraph = if (needs_bidi_reorder) paragraph: {
+        owned_bidi = try unicode.resolveBidiParagraph(
+            input.buffer.allocator,
+            input.text,
+            if (input.options.direction == .rtl) .rtl else .ltr,
+        );
+        break :paragraph owned_bidi.?;
+    } else null;
     var scratch: ReflowScratch = .{};
     defer scratch.deinit(input.buffer.allocator);
     var driver = Driver{
@@ -111,15 +128,19 @@ pub fn layout(input: Input) !paragraph_types.ParagraphLayout {
         .options = input.options,
         .compute_content_widths = input.compute_content_widths,
         .scratch = &scratch,
+        .needs_bidi_reorder = needs_bidi_reorder,
+        .bidi_paragraph = bidi_paragraph,
     };
+    defer driver.deinitLogicalContext();
     try styled_paragraph.layout(&driver, input.text, input.spans);
     return input.buffer.paragraphLayout(input.options.writing_mode);
 }
 
 /// Shape and build pristine styled metadata without selecting visual lines.
 /// The caller may copy these logical-order arrays into an owning retained
-/// paragraph and later invoke `reflow` without whole-paragraph shaping.
-pub fn prepare(input: Input) !void {
+/// paragraph and later invoke `reflow` without whole-paragraph shaping. The
+/// returned bidi paragraph, when present, is owned by the caller.
+pub fn prepare(input: Input) !?unicode.BidiParagraph {
     try paragraph_options.validateForText(input.text, input.options);
     try plan_validation.utf8(input.text);
     try plan_validation.fontSize(input.default_font_size);
@@ -128,6 +149,19 @@ pub fn prepare(input: Input) !void {
 
     input.buffer.clear();
     input.styled.clear();
+    const needs_bidi_reorder = plan_bidi.paragraphNeedsReorder(
+        input.text,
+        input.options.direction,
+    );
+    var bidi_paragraph: ?unicode.BidiParagraph = if (needs_bidi_reorder)
+        try unicode.resolveBidiParagraph(
+            input.buffer.allocator,
+            input.text,
+            if (input.options.direction == .rtl) .rtl else .ltr,
+        )
+    else
+        null;
+    errdefer if (bidi_paragraph) |*paragraph| paragraph.deinit();
     var driver = Driver{
         .cascade = input.cascade,
         .font_index_cascade = input.font_index_cascade,
@@ -137,9 +171,13 @@ pub fn prepare(input: Input) !void {
         .default_font_size = input.default_font_size,
         .options = input.options,
         .compute_content_widths = false,
+        .needs_bidi_reorder = needs_bidi_reorder,
+        .bidi_paragraph = bidi_paragraph,
     };
+    defer driver.deinitLogicalContext();
     try styled_paragraph.shape(&driver, input.text, input.spans);
     try driver.prepareMetadata(input.spans);
+    return bidi_paragraph;
 }
 
 /// Validate a styled request without shaping it. Retained preparation uses
@@ -222,6 +260,40 @@ const Driver = struct {
     bidi_paragraph: ?unicode.BidiParagraph = null,
     analysis_is_retained: bool = false,
     pen: fallback_segment.Pen = .{},
+    prepared_context: ?logical_context.Prepared = null,
+
+    fn deinitLogicalContext(self: *@This()) void {
+        if (self.prepared_context) |*context| context.deinit();
+        self.prepared_context = null;
+    }
+
+    pub fn logicalRuns(
+        self: *@This(),
+        spans: []const styled_paragraph.Span,
+    ) !logical_run_itemization.Iterator {
+        self.deinitLogicalContext();
+        var probe = if (self.bidi_paragraph) |paragraph|
+            logical_run_itemization.runs(self.text, paragraph)
+        else
+            logical_run_itemization.baseRuns(self.text, 0);
+        const first = probe.next();
+        const itemized = first != null and probe.next() != null;
+        self.prepared_context = try logical_context.Prepared.init(
+            self.buffer.allocator,
+            &.{},
+            self.text,
+            &.{},
+            itemized or spans.len > 1 or
+                logical_context.needsJoiningSummary(self.text, self.cascade) or
+                anySpanMayFallback(spans) or
+                self.options.inline_objects.len != 0 or
+                std.mem.indexOfScalar(u8, self.text, '\t') != null,
+        );
+        return if (self.bidi_paragraph) |paragraph|
+            logical_run_itemization.runs(self.text, paragraph)
+        else
+            logical_run_itemization.baseRuns(self.text, 0);
+    }
 
     pub fn allocator(self: *@This()) std.mem.Allocator {
         return self.buffer.allocator;
@@ -258,7 +330,7 @@ const Driver = struct {
         self: *@This(),
         byte_start: usize,
         byte_end: usize,
-        inferred_script: unicode.Script,
+        logical_run: logical_run_itemization.Run,
         span: styled_paragraph.Span,
     ) !void {
         const item_cascade = font_fallback.Cascade.init(
@@ -281,7 +353,7 @@ const Driver = struct {
                         item_cascade,
                         range.start,
                         range.end,
-                        inferred_script,
+                        logical_run,
                         span,
                     );
                 },
@@ -322,32 +394,44 @@ const Driver = struct {
         cascade: font_fallback.Cascade,
         byte_start: usize,
         byte_end: usize,
-        inferred_script: unicode.Script,
+        logical_run: logical_run_itemization.Run,
         span: styled_paragraph.Span,
     ) !void {
         const item_text = self.text[byte_start..byte_end];
+        const script_text = self.text[logical_run.script_byte_start..logical_run.scriptByteEnd()];
+        const context = self.prepared_context orelse
+            return error.InvalidShapingContext;
         var segment_context = SegmentContext{
             .buffer = self.buffer,
             .metrics_cache = self.buffer.glyph_metrics_cache,
             .glyph_index_cache = self.buffer.glyph_index_cache,
             .font_size = span.font_size,
+            .text = item_text,
+            .cluster_base = byte_start,
             .lookup_options = .{
                 .lookup = .{
-                    .script = inferred_script,
+                    .script = logical_run.script,
                     .script_tag = span.script_tag orelse
-                        unicode.openTypeScriptTag(inferred_script),
+                        unicode.openTypeScriptTag(logical_run.script),
                     .script_tag_explicit = span.script_tag != null,
                     .language_tag = span.language_tag orelse
-                        unicode.inferOpenTypeLanguageTag(item_text),
-                    .direction = self.options.direction,
+                        unicode.inferOpenTypeLanguageTag(script_text),
+                    // UAX #9 resolved directions are horizontal. Vertical
+                    // runs retain the paragraph's explicit inline direction.
+                    .direction = if (self.options.writing_mode.isVertical())
+                        self.options.direction
+                    else
+                        logical_run.direction,
                     .reorder_bidi = false,
-                    .native_direction_shaping = true,
+                    .native_direction_shaping = false,
                     .writing_mode = normalizedWritingMode(self.options),
                     .text_orientation = self.options.text_orientation,
                     .features = span.features,
                     .normalized_variation_coords = span.normalized_variation_coords,
-                    .context_before = self.text[0..byte_start],
-                    .context_after = self.text[byte_end..],
+                    .logical_context = context.view.subrange(
+                        byte_start,
+                        byte_end,
+                    ),
                     .beginning_of_text = byte_start == 0,
                     .end_of_text = byte_end == self.text.len,
                 },
@@ -374,6 +458,7 @@ const Driver = struct {
         self: *@This(),
         spans: []const styled_paragraph.Span,
     ) !void {
+        defer self.deinitLogicalContext();
         try bidi_reorder.normalizeLogical(self.buffer);
         try styled_buffer.rebuild(
             &self.styled.metadata,
@@ -785,6 +870,15 @@ fn simpleStyledShape(
     return expected_byte_start == text_len;
 }
 
+fn anySpanMayFallback(spans: []const styled_paragraph.Span) bool {
+    for (spans) |span| {
+        if (span.faces) |faces| {
+            if (faces.len > 1) return true;
+        }
+    }
+    return false;
+}
+
 fn normalizedWritingMode(
     options: paragraph_options.Options,
 ) pipeline_types.WritingMode {
@@ -801,6 +895,8 @@ const SegmentContext = struct {
     metrics_cache: ?*@import("../../shaping/context/cache/root.zig").GlyphMetricsCache,
     glyph_index_cache: ?*@import("../../shaping/context/cache/root.zig").GlyphIndexCache,
     font_size: f32,
+    text: []const u8,
+    cluster_base: usize,
     lookup_options: pipeline_types.ResolvedLookupOptions,
 
     pub fn appendSegment(
@@ -811,6 +907,16 @@ const SegmentContext = struct {
         cluster_base: usize,
         pen: fallback_segment.Pen,
     ) !fallback_segment.Pen {
+        std.debug.assert(cluster_base >= self.cluster_base);
+        const local_start = cluster_base - self.cluster_base;
+        std.debug.assert(local_start <= self.text.len);
+        std.debug.assert(text.len <= self.text.len - local_start);
+        var lookup_options = logical_context.scopeResolved(
+            self.lookup_options,
+            local_start,
+            local_start + text.len,
+        );
+        lookup_options.all_ascii = fallback_segment.isAscii(text);
         const font = cascade.fonts[font_index];
         const glyph_start = self.buffer.glyphs.items.len;
         _ = try segment_pipeline.run(.{
@@ -821,13 +927,13 @@ const SegmentContext = struct {
             .text = text,
             .font_size = self.font_size,
             .cluster_base = cluster_base,
-            .lookup_options = self.lookup_options,
+            .lookup_options = lookup_options,
         });
         const glyph_len = self.buffer.glyphs.items.len - glyph_start;
         if (glyph_len == 0) return pen;
 
         const variation_range = try self.buffer.internVariationCoords(
-            self.lookup_options.lookup.normalized_variation_coords,
+            lookup_options.lookup.normalized_variation_coords,
         );
         try self.buffer.runs.append(self.buffer.allocator, .{
             .font = face_mod.backend.face(font),

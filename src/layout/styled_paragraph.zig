@@ -67,9 +67,8 @@ pub fn shape(context: anytype, text: []const u8, spans: []const Span) !void {
     try validatePartition(text, spans);
     for (spans) |span| try context.validateSpan(span);
 
-    const script_runs = try unicode.itemizeScriptRuns(context.allocator(), text);
-    defer context.allocator().free(script_runs);
-    var script_index: usize = 0;
+    var logical_runs = try context.logicalRuns(spans);
+    var logical_run = logical_runs.next();
     var span_index: usize = 0;
     while (span_index < spans.len) {
         const span = spans[span_index];
@@ -80,21 +79,23 @@ pub fn shape(context: anytype, text: []const u8, spans: []const Span) !void {
             shaping_end_index += 1;
         }
         const span_end = spans[shaping_end_index - 1].byteEnd();
-        while (script_index < script_runs.len and
-            script_runs[script_index].byte_start +
-                script_runs[script_index].byte_len <= span.byte_start)
-        {
-            script_index += 1;
-        }
-        var item_script_index = script_index;
-        while (item_script_index < script_runs.len) : (item_script_index += 1) {
-            const script_run = script_runs[item_script_index];
-            const script_end = script_run.byte_start + script_run.byte_len;
-            if (script_run.byte_start >= span_end) break;
-            const item_start = @max(span.byte_start, script_run.byte_start);
-            const item_end = @min(span_end, script_end);
+        while (logical_run) |run| {
+            if (run.byteEnd() <= span.byte_start) {
+                logical_run = logical_runs.next();
+                continue;
+            }
+            if (run.byte_start >= span_end) break;
+            const item_start = @max(span.byte_start, run.byte_start);
+            const item_end = @min(span_end, run.byteEnd());
             if (item_start >= item_end) continue;
-            try context.shapeItem(item_start, item_end, script_run.script, span);
+            try context.shapeItem(item_start, item_end, run, span);
+            if (item_end == run.byteEnd()) {
+                logical_run = logical_runs.next();
+            } else {
+                // This logical item continues into the next shaping-equivalent
+                // style group. Retain it for the outer span cursor.
+                break;
+            }
         }
         span_index = shaping_end_index;
     }

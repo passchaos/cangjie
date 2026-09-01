@@ -1323,6 +1323,77 @@ pub fn buildScriptFeatureGsubTtf(allocator: std.mem.Allocator) ![]u8 {
     return buildSfnt(allocator, 0x00010000, try scriptFeatureGsubTtfTables(allocator));
 }
 
+/// One face whose Latin and Arabic ScriptList entries select disjoint,
+/// direction-sensitive substitutions. This catches orchestration that chooses
+/// one plan for mixed-script text merely because fallback selected one face.
+pub fn buildMixedScriptDirectionalGsubTtf(allocator: std.mem.Allocator) ![]u8 {
+    const tables = try allocator.alloc(Table, 8);
+    errdefer allocator.free(tables);
+    tables[0] = .{
+        .tag = "GSUB",
+        .data = try mixedScriptDirectionalGsubTable(allocator),
+    };
+    tables[1] = .{
+        .tag = "cmap",
+        .data = try cmapFormat12RangesTable(allocator, &.{
+            .{ .start = 'A', .end = 'A', .glyph_id = 1 },
+            .{ .start = 0x0628, .end = 0x0628, .glyph_id = 2 },
+        }),
+    };
+    tables[2] = .{ .tag = "glyf", .data = try emptyGlyfTable(allocator, 5) };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{ .tag = "hhea", .data = try hheaTableWithMetrics(allocator, 5) };
+    tables[5] = .{ .tag = "hmtx", .data = try hmtxTableWithGlyphCount(allocator, 5) };
+    tables[6] = .{ .tag = "loca", .data = try emptyLocaTable(allocator, 5) };
+    tables[7] = .{ .tag = "maxp", .data = try maxpTableWithGlyphs(allocator, 5) };
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
+/// One-face Latin/Arabic fixture whose Arabic ScriptList owns a required
+/// `rlig` lookup. Its logical lam-alef match distinguishes the intended source
+/// pair from alef-lam even after mixed-direction visual presentation.
+pub fn buildMixedScriptArabicRligTtf(allocator: std.mem.Allocator) ![]u8 {
+    const glyph_count = 8;
+    const tables = try allocator.alloc(Table, 8);
+    errdefer allocator.free(tables);
+    tables[0] = .{
+        .tag = "GSUB",
+        .data = try mixedScriptArabicRligTable(allocator),
+    };
+    tables[1] = .{
+        .tag = "cmap",
+        .data = try cmapFormat12RangesTable(allocator, &.{
+            .{ .start = ' ', .end = ' ', .glyph_id = 2 },
+            .{ .start = '1', .end = '2', .glyph_id = 5 },
+            .{ .start = 'A', .end = 'A', .glyph_id = 1 },
+            .{ .start = 0x0627, .end = 0x0627, .glyph_id = 3 },
+            .{ .start = 0x0644, .end = 0x0644, .glyph_id = 4 },
+        }),
+    };
+    tables[2] = .{
+        .tag = "glyf",
+        .data = try emptyGlyfTable(allocator, glyph_count),
+    };
+    tables[3] = .{ .tag = "head", .data = try headTable(allocator) };
+    tables[4] = .{
+        .tag = "hhea",
+        .data = try hheaTableWithMetrics(allocator, glyph_count),
+    };
+    tables[5] = .{
+        .tag = "hmtx",
+        .data = try hmtxTableWithGlyphCount(allocator, glyph_count),
+    };
+    tables[6] = .{
+        .tag = "loca",
+        .data = try emptyLocaTable(allocator, glyph_count),
+    };
+    tables[7] = .{
+        .tag = "maxp",
+        .data = try maxpTableWithGlyphs(allocator, glyph_count),
+    };
+    return buildSfnt(allocator, 0x00010000, tables);
+}
+
 pub fn buildVariationSelectorFeatureGsubTtf(
     allocator: std.mem.Allocator,
 ) ![]u8 {
@@ -8488,6 +8559,130 @@ fn scriptFeatureGsubTable(allocator: std.mem.Allocator) ![]u8 {
     writeU16(bytes, 102, 1);
     writeU16(bytes, 104, 1);
     return bytes;
+}
+
+fn mixedScriptDirectionalGsubTable(allocator: std.mem.Allocator) ![]u8 {
+    // Two Script records -> two one-feature LangSys records -> two SingleSubst
+    // lookups. The Latin run uses directional `ltra`; Arabic's script shaper
+    // applies source-scoped `isol`, making both substitutions dependent on the
+    // correct ScriptList plan rather than a DFLT fallback.
+    const bytes = try allocator.alloc(u8, 150);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 10);
+    writeU16(bytes, 6, 62);
+    writeU16(bytes, 8, 88);
+
+    // ScriptList.
+    writeU16(bytes, 10, 2);
+    writeTag(bytes, 12, "arab");
+    writeU16(bytes, 16, 14);
+    writeTag(bytes, 18, "latn");
+    writeU16(bytes, 22, 32);
+
+    // arab Script + default LangSys selecting FeatureRecord 0.
+    writeU16(bytes, 24, 4);
+    writeU16(bytes, 26, 0);
+    writeU16(bytes, 28, 0);
+    writeU16(bytes, 30, 0xffff);
+    writeU16(bytes, 32, 1);
+    writeU16(bytes, 34, 0);
+
+    // latn Script + default LangSys selecting FeatureRecord 1.
+    writeU16(bytes, 42, 4);
+    writeU16(bytes, 44, 0);
+    writeU16(bytes, 46, 0);
+    writeU16(bytes, 48, 0xffff);
+    writeU16(bytes, 50, 1);
+    writeU16(bytes, 52, 1);
+
+    // FeatureList: isol -> lookup 1, ltra -> lookup 0. Feature records are
+    // tag-sorted even though their lookup indexes intentionally are not.
+    writeU16(bytes, 62, 2);
+    writeTag(bytes, 64, "isol");
+    writeU16(bytes, 68, 14);
+    writeTag(bytes, 70, "ltra");
+    writeU16(bytes, 74, 20);
+    writeU16(bytes, 76, 0);
+    writeU16(bytes, 78, 1);
+    writeU16(bytes, 80, 1);
+    writeU16(bytes, 82, 0);
+    writeU16(bytes, 84, 1);
+    writeU16(bytes, 86, 0);
+
+    // LookupList. Each SingleSubst format 1 adds two to its source glyph.
+    writeU16(bytes, 88, 2);
+    writeU16(bytes, 90, 6);
+    writeU16(bytes, 92, 34);
+    writeSingleSubstLookup(bytes, 94, 1);
+    writeSingleSubstLookup(bytes, 122, 2);
+    return bytes;
+}
+
+fn mixedScriptArabicRligTable(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, 82);
+    @memset(bytes, 0);
+    writeU32(bytes, 0, 0x00010000);
+    writeU16(bytes, 4, 10); // ScriptList.
+    writeU16(bytes, 6, 28); // FeatureList.
+    writeU16(bytes, 8, 44); // LookupList.
+
+    // Only the Arabic script selects this feature. There is deliberately no
+    // DFLT or Latin record, so shaping the whole mixed string under one plan
+    // cannot accidentally make the regression pass.
+    writeU16(bytes, 10, 1);
+    writeTag(bytes, 12, "arab");
+    writeU16(bytes, 16, 8);
+    writeU16(bytes, 18, 4); // DefaultLangSys offset.
+    writeU16(bytes, 20, 0); // LangSys count.
+    writeU16(bytes, 22, 0); // LookupOrder.
+    writeU16(bytes, 24, 0); // Required FeatureRecord index: rlig.
+    writeU16(bytes, 26, 0); // Optional feature count.
+
+    writeU16(bytes, 28, 1);
+    writeTag(bytes, 30, "rlig");
+    writeU16(bytes, 34, 10);
+    writeU16(bytes, 38, 0); // FeatureParams.
+    writeU16(bytes, 40, 1);
+    writeU16(bytes, 42, 0); // Lookup index.
+
+    writeU16(bytes, 44, 1);
+    writeU16(bytes, 46, 4);
+    writeU16(bytes, 48, 4); // LigatureSubst.
+    writeU16(bytes, 50, 0);
+    writeU16(bytes, 52, 1);
+    writeU16(bytes, 54, 8);
+
+    // Ligature matching follows logical component order even though the Arabic
+    // pipeline later emits the native RTL result in visual order.
+    writeU16(bytes, 56, 1);
+    writeU16(bytes, 58, 10); // Coverage offset.
+    writeU16(bytes, 60, 1);
+    writeU16(bytes, 62, 16); // LigatureSet offset.
+    writeU16(bytes, 66, 1); // Coverage format 1.
+    writeU16(bytes, 68, 1);
+    writeU16(bytes, 70, 4);
+    writeU16(bytes, 72, 1);
+    writeU16(bytes, 74, 4);
+    writeU16(bytes, 76, 7);
+    writeU16(bytes, 78, 2);
+    writeU16(bytes, 80, 3);
+    return bytes;
+}
+
+fn writeSingleSubstLookup(bytes: []u8, lookup: usize, source_glyph: u16) void {
+    writeU16(bytes, lookup, 1);
+    writeU16(bytes, lookup + 2, 0);
+    writeU16(bytes, lookup + 4, 1);
+    writeU16(bytes, lookup + 6, 8);
+    const subtable = lookup + 8;
+    writeU16(bytes, subtable, 1);
+    writeU16(bytes, subtable + 2, 6);
+    writeI16(bytes, subtable + 4, 2);
+    const coverage = subtable + 6;
+    writeU16(bytes, coverage, 1);
+    writeU16(bytes, coverage + 2, 1);
+    writeU16(bytes, coverage + 4, source_glyph);
 }
 
 fn contextGsubTable(allocator: std.mem.Allocator) ![]u8 {

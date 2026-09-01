@@ -4,6 +4,15 @@
 const std = @import("std");
 const cangjie = @import("cangjie");
 
+const GeometryRecord = struct {
+    byte_start: usize,
+    byte_len: usize,
+    is_rtl: bool,
+    inline_position: f32,
+    inline_size: f32,
+    discarded_inline_size: f32,
+};
+
 pub fn main(init: std.process.Init) !void {
     const allocator = std.heap.smp_allocator;
     var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
@@ -93,7 +102,10 @@ pub fn main(init: std.process.Init) !void {
     );
     var engine = cangjie.shaping.Engine.init(allocator, .{});
     defer engine.deinit();
-    const paragraph_direction = try resolvedDirection(direction, text);
+    // The public paragraph API takes an explicit base direction. Resolve the
+    // benchmark's convenience `auto` input once and use that same request for
+    // construction and retained reflow.
+    const retained_direction = try resolvedDirection(direction, text);
     const inline_objects = if (style.hasInlineObject())
         &[_]cangjie.paragraph.InlineObject{.{
             .id = 1,
@@ -131,7 +143,7 @@ pub fn main(init: std.process.Init) !void {
             .font_size = 16,
             .options = .{
                 .max_width = width,
-                .direction = paragraph_direction,
+                .direction = retained_direction,
                 .alignment = alignmentForStyle(style),
                 .inline_objects = inline_objects,
                 .out_of_flow_placements = object_placements,
@@ -160,7 +172,7 @@ pub fn main(init: std.process.Init) !void {
                 cascade,
                 text,
                 width,
-                paragraph_direction,
+                retained_direction,
                 style,
                 inline_objects,
                 object_placements,
@@ -174,7 +186,7 @@ pub fn main(init: std.process.Init) !void {
                 allocator,
                 text,
                 layout,
-                paragraph_direction,
+                retained_direction,
             );
             placement_checksum = placementChecksum(layout);
             object_checksum = normalizedObjectGeometryChecksum(layout);
@@ -191,7 +203,7 @@ pub fn main(init: std.process.Init) !void {
                 cascade,
                 text,
                 width,
-                paragraph_direction,
+                retained_direction,
                 style,
                 inline_objects,
                 object_placements,
@@ -392,13 +404,7 @@ fn normalizedGeometryChecksum(
         .{ .direction = if (direction == .rtl) .rtl else .ltr },
     );
     defer geometry.deinit();
-    const Record = struct {
-        byte_start: usize,
-        byte_len: usize,
-        inline_position: f32,
-        inline_size: f32,
-    };
-    var records = std.ArrayList(Record).empty;
+    var records = std.ArrayList(GeometryRecord).empty;
     defer records.deinit(allocator);
     var hash: u64 = 0xcbf29ce484222325;
     for (geometry.lines) |line| {
@@ -415,23 +421,38 @@ fn normalizedGeometryChecksum(
                 try records.append(allocator, .{
                     .byte_start = grapheme.byte_start,
                     .byte_len = grapheme.byte_len,
+                    // Geometry spans split on resolved bidi direction, so this
+                    // is the cluster-level direction rather than the paragraph
+                    // base direction supplied to buildGeometry.
+                    // A discarded wrapping suffix has neither visible extent
+                    // nor a meaningful paint direction. Normalize that bit
+                    // together with its zeroed position/size; visible neutral
+                    // clusters still retain their resolved line direction.
+                    .is_rtl = !trailing and span.direction == .rtl,
                     .inline_position = span.bounds.x - line.bounds.x +
                         grapheme.inline_position,
                     .inline_size = if (trailing) 0 else grapheme.inline_size,
+                    .discarded_inline_size = if (trailing)
+                        grapheme.inline_size
+                    else
+                        0,
                 });
             }
         }
-        std.mem.sort(Record, records.items, {}, struct {
-            fn lessThan(_: void, a: Record, b: Record) bool {
+        std.mem.sort(GeometryRecord, records.items, {}, struct {
+            fn lessThan(_: void, a: GeometryRecord, b: GeometryRecord) bool {
                 return a.byte_start < b.byte_start;
             }
         }.lessThan);
         const origin = for (records.items) |record| {
-            if (record.inline_size != 0) break record.inline_position;
+            if (record.inline_size != 0) {
+                break collapsedInlinePosition(records.items, record);
+            }
         } else 0;
         for (records.items) |record| {
             hash = hashU64(hash, record.byte_start);
             hash = hashU64(hash, record.byte_len);
+            hash = hashResolvedDirection(hash, record.is_rtl);
             // Logical geometry is translation invariant. Quantizing relative
             // positions to 1/1024 px removes only floating accumulation noise
             // while preserving every visible local displacement and raw size.
@@ -440,12 +461,34 @@ fn normalizedGeometryChecksum(
                 if (record.inline_size == 0)
                     0
                 else
-                    canonicalInlinePosition(record.inline_position - origin),
+                    canonicalInlinePosition(
+                        collapsedInlinePosition(records.items, record) -
+                            origin,
+                    ),
             );
             hash = hashF32(hash, record.inline_size);
         }
     }
     return hash;
+}
+
+/// Remove the physical advance of wrapping whitespace from every later
+/// visible record. The matrix already zeroes that suffix's own extent; keeping
+/// its translation would make two engines disagree merely because one retains
+/// the discarded advance in its native line coordinates.
+fn collapsedInlinePosition(
+    records: []const GeometryRecord,
+    record: GeometryRecord,
+) f32 {
+    var position = record.inline_position;
+    for (records) |discarded| {
+        if (discarded.discarded_inline_size != 0 and
+            discarded.inline_position < record.inline_position)
+        {
+            position -= discarded.discarded_inline_size;
+        }
+    }
+    return position;
 }
 
 /// Hash the physical visible-left placement that the logical geometry checksum
@@ -532,6 +575,12 @@ fn hashF32(initial: u64, value: f32) u64 {
 fn hashI32(initial: u64, value: i32) u64 {
     var encoded: [4]u8 = undefined;
     std.mem.writeInt(i32, &encoded, value, .little);
+    return bytes(initial, &encoded);
+}
+
+fn hashResolvedDirection(initial: u64, is_rtl: bool) u64 {
+    // Keep the cross-engine encoding independent of Zig enum tag values.
+    const encoded = [_]u8{if (is_rtl) 1 else 0};
     return bytes(initial, &encoded);
 }
 

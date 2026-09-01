@@ -30,6 +30,69 @@ pub const ScriptRun = struct {
     byte_len: usize,
 };
 
+/// Allocation-free UAX #24-style script-run traversal.
+///
+/// `next` returns `error.InvalidUtf8` rather than assuming validated input so
+/// the iterator is safe as a public primitive. Shaping entry points validate
+/// once before constructing it, and therefore pay no allocation or duplicate
+/// collection cost while consuming homogeneous script items.
+pub const ScriptRunIterator = struct {
+    text: []const u8,
+    cursor: usize = 0,
+
+    pub fn next(self: *ScriptRunIterator) error{InvalidUtf8}!?ScriptRun {
+        if (self.cursor >= self.text.len) return null;
+
+        const run_start = self.cursor;
+        var run_end = self.cursor;
+        var current_script: ?Script = null;
+        while (self.cursor < self.text.len) {
+            const cluster = self.cursor;
+            const decoded = decodeCodepointAt(self.text, self.cursor) orelse
+                return error.InvalidUtf8;
+            const script = scriptForCodepoint(decoded.codepoint);
+            if (current_script == null) {
+                current_script = if (script == .common or script == .inherited)
+                    .common
+                else
+                    script;
+                self.cursor = decoded.next;
+                run_end = decoded.next;
+                continue;
+            }
+            if (scriptBelongsToRun(
+                decoded.codepoint,
+                script,
+                current_script.?,
+            )) {
+                if (current_script.? == .common and
+                    script != .common and script != .inherited)
+                {
+                    current_script = script;
+                }
+                self.cursor = decoded.next;
+                run_end = decoded.next;
+                continue;
+            }
+
+            // Leave the incompatible scalar unconsumed for the next call.
+            // This makes each returned range an exact partition of `text`.
+            self.cursor = cluster;
+            break;
+        }
+
+        return .{
+            .script = current_script.?,
+            .byte_start = run_start,
+            .byte_len = run_end - run_start,
+        };
+    }
+};
+
+pub fn scriptRuns(text: []const u8) ScriptRunIterator {
+    return .{ .text = text };
+}
+
 pub const BidiClass = enum {
     ltr,
     rtl,
@@ -75,6 +138,24 @@ pub noinline fn resolveJoiningForms(
     forms: []JoiningForm,
 ) error{InvalidJoiningInput}!void {
     return joining.resolve(JoiningPolicy, codepoints, forms);
+}
+
+/// Resolve a logical shaping subrange with its nearest non-transparent
+/// joining neighbors. This keeps cross-item positional forms correct without
+/// copying or rescanning the omitted paragraph prefix and suffix.
+pub noinline fn resolveJoiningFormsWithNeighbors(
+    codepoints: []const u21,
+    forms: []JoiningForm,
+    before: ?JoiningType,
+    after: ?JoiningType,
+) error{InvalidJoiningInput}!void {
+    return joining.resolveWithNeighbors(
+        JoiningPolicy,
+        codepoints,
+        forms,
+        before,
+        after,
+    );
 }
 
 pub const BidiRun = struct {
@@ -1338,51 +1419,8 @@ pub fn itemizeLineBreaks(allocator: std.mem.Allocator, text: []const u8) ![]Line
 pub fn itemizeScriptRuns(allocator: std.mem.Allocator, text: []const u8) ![]ScriptRun {
     var runs = std.ArrayList(ScriptRun).empty;
     errdefer runs.deinit(allocator);
-
-    var current_script: ?Script = null;
-    var run_start: usize = 0;
-    var run_end: usize = 0;
-    // Script runs drive OpenType ScriptList selection. Common/inherited
-    // codepoints stay with the surrounding run so punctuation does not split a
-    // Latin, Arabic, or CJK shaping segment by itself.
-    var cursor: usize = 0;
-    while (cursor < text.len) {
-        const cluster = cursor;
-        const decoded = decodeCodepointAt(text, cursor) orelse return error.InvalidUtf8;
-        const codepoint = decoded.codepoint;
-        const next_index = decoded.next;
-        cursor = next_index;
-        const script = scriptForCodepoint(codepoint);
-        if (current_script == null) {
-            current_script = if (script == .common or script == .inherited) .common else script;
-            run_start = cluster;
-            run_end = next_index;
-            continue;
-        }
-        if (scriptBelongsToRun(codepoint, script, current_script.?)) {
-            if (current_script.? == .common and script != .common and script != .inherited) {
-                current_script = script;
-            }
-            run_end = next_index;
-            continue;
-        }
-        try runs.append(allocator, .{
-            .script = current_script.?,
-            .byte_start = run_start,
-            .byte_len = run_end - run_start,
-        });
-        current_script = if (script == .common or script == .inherited) .common else script;
-        run_start = cluster;
-        run_end = next_index;
-    }
-
-    if (current_script) |script| {
-        try runs.append(allocator, .{
-            .script = script,
-            .byte_start = run_start,
-            .byte_len = run_end - run_start,
-        });
-    }
+    var iterator = scriptRuns(text);
+    while (try iterator.next()) |run| try runs.append(allocator, run);
     return try runs.toOwnedSlice(allocator);
 }
 

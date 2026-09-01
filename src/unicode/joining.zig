@@ -202,10 +202,24 @@ pub fn resolve(
     codepoints: []const u21,
     forms: []Form,
 ) error{InvalidJoiningInput}!void {
+    return resolveWithNeighbors(Policy, codepoints, forms, null, null);
+}
+
+/// Resolve a logical subrange while retaining the nearest non-transparent
+/// joining types on either side. Itemized shaping uses this form so font,
+/// script, style, and bidi boundaries do not turn a joining boundary into a
+/// word boundary or require copying/rescanning the complete omitted text.
+pub fn resolveWithNeighbors(
+    comptime Policy: type,
+    codepoints: []const u21,
+    forms: []Form,
+    before: ?Type,
+    after: ?Type,
+) error{InvalidJoiningInput}!void {
     if (forms.len != codepoints.len) return error.InvalidJoiningInput;
     @memset(forms, .none);
 
-    var previous: ?Type = null;
+    var previous = before;
     var pending_index: ?usize = null;
     var pending_kind: Type = .non_joining;
     var pending_joins_previous = false;
@@ -235,7 +249,14 @@ pub fn resolve(
     }
 
     if (pending_index) |pending| {
-        forms[pending] = formForConnections(pending_joins_previous, false);
+        const joins_next = if (after) |kind|
+            joinsLeft(pending_kind) and joinsRight(kind)
+        else
+            false;
+        forms[pending] = formForConnections(
+            pending_joins_previous,
+            joins_next,
+        );
     }
 }
 

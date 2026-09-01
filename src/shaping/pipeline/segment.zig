@@ -191,7 +191,11 @@ pub fn run(input: Input) !void {
     var gsub_options = gsub.runtime.Options{
         .script_tag = lookup_options.script_tag,
         .language_tag = lookup_options.language_tag,
-        .text_direction = if (lookup_options.direction == .rtl) .rtl else .ltr,
+        // GSUB consumes the buffer after optional native-direction reversal.
+        // Using the paragraph base direction here would select the wrong
+        // directional and contextual features for an RTL script item embedded
+        // in an LTR paragraph.
+        .text_direction = gsubDirection(shaping_direction),
         .features = gsub_feature_overrides,
         .normalized_variation_coords = lookup_options.normalized_variation_coords,
         .vertical = lookup_options.writing_mode.isVertical(),
@@ -255,7 +259,10 @@ pub fn run(input: Input) !void {
             null,
     };
     if (lookup_options.beginning_of_text and
-        lookup_options.context_before.len == 0 and
+        !(if (lookup_options.logical_context) |context|
+            context.hasBefore()
+        else
+            lookup_options.context_before.len != 0) and
         codepoints.items.len != 0 and
         unicode.isUnicodeMarkCodepoint(codepoints.items[0]) and
         lookup_options.script_tag != .mym2)
@@ -721,6 +728,10 @@ pub fn run(input: Input) !void {
     scratch.may_need_bidi_reorder = source_result.may_need_bidi_reorder;
 }
 
+fn gsubDirection(direction: pipeline_types.TextDirection) gsub.runtime.options.Direction {
+    return if (direction == .rtl) .rtl else .ltr;
+}
+
 fn insertBeginningDottedCircle(
     allocator: std.mem.Allocator,
     glyph_ids: *std.ArrayList(GlyphId),
@@ -795,4 +806,28 @@ test "beginning item dotted circle creates a synthetic base source" {
     try std.testing.expectEqualSlices(u21, &.{ 0x25cc, 0x064e }, codepoints.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, sources.items);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, cluster_owners.items);
+}
+
+test "GSUB follows the effective native buffer direction" {
+    const embedded_arabic = pipeline_types.LookupOptions{
+        .script = .arabic,
+        .direction = .ltr,
+        .reorder_bidi = false,
+        .native_direction_shaping = true,
+        .run_has_letter = true,
+    };
+    try std.testing.expectEqual(
+        gsub.runtime.options.Direction.rtl,
+        gsubDirection(embedded_arabic.shapingDirection()),
+    );
+
+    // A numeric-only Arabic-script run deliberately remains in logical LTR
+    // order, so its directional GSUB features must remain LTR as well.
+    var arabic_number = embedded_arabic;
+    arabic_number.run_has_decimal_number = true;
+    arabic_number.run_has_letter = false;
+    try std.testing.expectEqual(
+        gsub.runtime.options.Direction.ltr,
+        gsubDirection(arabic_number.shapingDirection()),
+    );
 }

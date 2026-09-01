@@ -75,6 +75,45 @@ test "Script Extensions keep shared characters with compatible runs" {
     );
 }
 
+test "streaming script runs match the collecting compatibility API" {
+    const allocator = std.testing.allocator;
+    const samples = [_][]const u8{
+        "",
+        "ASCII only",
+        "A\u{060c}\u{0628}",
+        "\u{30fc}\u{30a2} A\u{0301}\u{4e00}",
+        "\u{0915}\u{0964}\u{09ac}",
+    };
+    for (samples) |sample| {
+        const collected = try unicode.itemizeScriptRuns(allocator, sample);
+        defer allocator.free(collected);
+
+        var streamed = std.ArrayList(unicode.ScriptRun).empty;
+        defer streamed.deinit(allocator);
+        var iterator = unicode.scriptRuns(sample);
+        while (try iterator.next()) |run| {
+            try streamed.append(allocator, run);
+        }
+        try std.testing.expectEqualSlices(
+            unicode.ScriptRun,
+            collected,
+            streamed.items,
+        );
+    }
+}
+
+test "streaming script runs report malformed UTF-8" {
+    var leading = unicode.scriptRuns("\xff");
+    try std.testing.expectError(error.InvalidUtf8, leading.next());
+
+    var after_run = unicode.scriptRuns("A\u{0628}\xff");
+    try std.testing.expectEqual(
+        unicode.ScriptRun{ .script = .latin, .byte_start = 0, .byte_len = 1 },
+        (try after_run.next()).?,
+    );
+    try std.testing.expectError(error.InvalidUtf8, after_run.next());
+}
+
 test "large Unicode 17 scripts select distinct OpenType primitives" {
     const Case = struct {
         scalar: u21,

@@ -19,6 +19,8 @@ const plan_validation = @import("plan/validation.zig");
 const font_fallback = @import("fallback/font/root.zig");
 const fallback_segment = @import("fallback/segment.zig");
 const script_run_itemization = @import("itemization/script_runs.zig");
+const logical_run_itemization = @import("itemization/logical_runs.zig");
+const logical_context = @import("context/logical.zig");
 const bidi_reorder = @import("../layout/bidi/reorder/root.zig");
 const glyph_position = @import("../layout/glyph_position.zig");
 const inline_object = @import("../layout/inline_object/root.zig");
@@ -129,19 +131,18 @@ pub const TextShaper = struct {
             }
         }
         buffer.clear();
-        var fallback_context = DynamicFallbackContext{
-            .buffer = buffer,
-            .metrics_cache = metrics_cache,
-            .glyph_index_cache = glyph_index_cache,
-            .font_size = font_size,
-            .options = options,
-        };
-        _ = try fallback_segment.shape(&fallback_context, .{
-            .cascade = cascade,
-            .fallback_cache = fallback_cache,
-            .glyph_index_cache = glyph_index_cache,
-            .text = text,
-        });
+        _ = try shapeItemizedCascadeInto(
+            cascade,
+            fallback_cache,
+            metrics_cache,
+            glyph_index_cache,
+            buffer,
+            text,
+            font_size,
+            0,
+            .{},
+            options,
+        );
 
         if (plan_bidi.shouldReorderShapedRun(text, options, false)) {
             try applyBidiVisualOrder(buffer, text, options.direction, null);
@@ -193,8 +194,22 @@ pub const TextShaper = struct {
         options: ParagraphOptions,
     ) !ShapedParagraph {
         try paragraph_options.validateForText(text, options);
+        try plan_validation.utf8(text);
         if (cascade.fonts.len == 0) return error.EmptyFontCascade;
         const shape_options = paragraph_options.shapeOptions(options);
+        const needs_bidi_reorder = plan_bidi.paragraphNeedsReorder(
+            text,
+            options.direction,
+        );
+        var bidi_paragraph: ?unicode.BidiParagraph = if (needs_bidi_reorder)
+            try unicode.resolveBidiParagraph(
+                allocator,
+                text,
+                if (options.direction == .rtl) .rtl else .ltr,
+            )
+        else
+            null;
+        errdefer if (bidi_paragraph) |*paragraph| paragraph.deinit();
         try shapeParagraphContent(
             cascade,
             fallback_cache,
@@ -206,6 +221,7 @@ pub const TextShaper = struct {
             font_size,
             shape_options,
             options.inline_objects,
+            bidi_paragraph,
         );
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
         const logical_shaped = buffer.shapedText();
@@ -250,10 +266,6 @@ pub const TextShaper = struct {
             cascade.fonts,
         );
         errdefer allocator.free(cascade_fonts);
-        const needs_bidi_reorder = plan_bidi.paragraphNeedsReorder(
-            text,
-            options.direction,
-        );
         const pure_rtl_lines = options.direction == .rtl and
             bidi_order.visualOrderInputKind(owned_text, true) == .pure_rtl;
         const pure_rtl_may_have_mirroring = pure_rtl_lines and
@@ -270,16 +282,6 @@ pub const TextShaper = struct {
             ShapePlanKey.fromText(text, shape_options).language_tag
         else
             unicode.inferOpenTypeLanguageTag(text);
-        var bidi_paragraph = if (needs_bidi_reorder)
-            try unicode.resolveBidiParagraph(
-                allocator,
-                owned_text,
-                if (options.direction == .rtl) .rtl else .ltr,
-            )
-        else
-            null;
-        errdefer if (bidi_paragraph) |*paragraph| paragraph.deinit();
-
         return .{
             .allocator = allocator,
             .text = owned_text,
@@ -327,6 +329,20 @@ pub const TextShaper = struct {
 
     pub fn layoutParagraphUtf8FullyCachedWithOptions(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
         try paragraph_options.validateForText(text, options);
+        try plan_validation.utf8(text);
+        const needs_bidi_reorder = plan_bidi.paragraphNeedsReorder(
+            text,
+            options.direction,
+        );
+        var bidi_paragraph: ?unicode.BidiParagraph = if (needs_bidi_reorder)
+            try unicode.resolveBidiParagraph(
+                buffer.allocator,
+                text,
+                if (options.direction == .rtl) .rtl else .ltr,
+            )
+        else
+            null;
+        defer if (bidi_paragraph) |*paragraph| paragraph.deinit();
         // Paragraph layout is deliberately staged: shape first, then line-wrap
         // the finished glyph advances. That keeps OpenType substitution and
         // positioning independent from wrapping policy.
@@ -341,6 +357,7 @@ pub const TextShaper = struct {
             font_size,
             paragraph_options.shapeOptions(options),
             options.inline_objects,
+            bidi_paragraph,
         );
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
         const recipe = paragraph_reshape.Uniform{
@@ -372,12 +389,27 @@ pub const TextShaper = struct {
             text,
             font_size,
             options,
+            bidi_paragraph,
         );
         return buffer.paragraphLayout(options.writing_mode);
     }
 
     pub fn layoutParagraphUtf8WithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
         try paragraph_options.validateForText(text, options);
+        try plan_validation.utf8(text);
+        const needs_bidi_reorder = plan_bidi.paragraphNeedsReorder(
+            text,
+            options.direction,
+        );
+        var bidi_paragraph: ?unicode.BidiParagraph = if (needs_bidi_reorder)
+            try unicode.resolveBidiParagraph(
+                buffer.allocator,
+                text,
+                if (options.direction == .rtl) .rtl else .ltr,
+            )
+        else
+            null;
+        defer if (bidi_paragraph) |*paragraph| paragraph.deinit();
         try shapeParagraphContent(
             cascade,
             fallback_cache,
@@ -389,6 +421,7 @@ pub const TextShaper = struct {
             font_size,
             paragraph_options.shapeOptions(options),
             options.inline_objects,
+            bidi_paragraph,
         );
         try normalizeParagraphGlyphsToLogicalOrder(buffer);
         const recipe = paragraph_reshape.Uniform{
@@ -420,6 +453,7 @@ pub const TextShaper = struct {
             text,
             font_size,
             options,
+            bidi_paragraph,
         );
         return buffer.paragraphLayout(options.writing_mode);
     }
@@ -494,64 +528,29 @@ fn textMetricsFromParagraph(paragraph: ParagraphLayout) TextMetrics {
 
 fn shapeScriptRunsInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !void {
     buffer.clear();
-    if (cascade.fonts.len == 0) return error.EmptyFontCascade;
-    const script_runs = try unicode.itemizeScriptRuns(buffer.allocator, text);
-    defer buffer.allocator.free(script_runs);
-
-    var pen = PenPosition{};
-    for (script_runs) |script_run| {
-        const run_text = text[script_run.byte_start .. script_run.byte_start + script_run.byte_len];
-        pen = try shapeCascadeSegmentInto(
-            cascade,
-            buffer,
-            run_text,
-            font_size,
-            script_run.byte_start,
-            pen,
-            plan_resolution.forScriptRun(
-                run_text,
-                script_run.script,
-                options,
-            ),
-        );
-    }
+    _ = try shapeItemizedCascadeInto(
+        cascade,
+        null,
+        null,
+        null,
+        buffer,
+        text,
+        font_size,
+        0,
+        .{},
+        options,
+    );
 }
 
 const PenPosition = fallback_segment.Pen;
 
-const DynamicFallbackContext = struct {
+const FixedFallbackContext = struct {
     buffer: *LayoutBuffer,
     metrics_cache: ?*GlyphMetricsCache,
     glyph_index_cache: ?*GlyphIndexCache,
     font_size: f32,
-    options: ShapeOptions,
-
-    pub fn appendSegment(
-        self: *@This(),
-        cascade: FontCascade,
-        font_index: usize,
-        text: []const u8,
-        cluster_base: usize,
-        pen: PenPosition,
-    ) !PenPosition {
-        return try appendCascadeRun(
-            cascade.fonts[font_index],
-            self.metrics_cache,
-            self.glyph_index_cache,
-            font_index,
-            self.buffer,
-            text,
-            self.font_size,
-            cluster_base,
-            pen,
-            plan_resolution.forText(text, self.options),
-        );
-    }
-};
-
-const FixedFallbackContext = struct {
-    buffer: *LayoutBuffer,
-    font_size: f32,
+    text: []const u8,
+    cluster_base: usize,
     lookup_options: ResolvedLookupOptions,
 
     pub fn appendSegment(
@@ -562,20 +561,278 @@ const FixedFallbackContext = struct {
         cluster_base: usize,
         pen: PenPosition,
     ) !PenPosition {
+        std.debug.assert(cluster_base >= self.cluster_base);
+        const local_start = cluster_base - self.cluster_base;
+        std.debug.assert(local_start <= self.text.len);
+        std.debug.assert(text.len <= self.text.len - local_start);
+        var scoped = logical_context.scopeResolved(
+            self.lookup_options,
+            local_start,
+            local_start + text.len,
+        );
+        scoped.all_ascii = fallback_segment.isAscii(text);
         return try appendCascadeRun(
             cascade.fonts[font_index],
-            null,
-            null,
+            self.metrics_cache,
+            self.glyph_index_cache,
             font_index,
             self.buffer,
             text,
             self.font_size,
             cluster_base,
             pen,
-            self.lookup_options,
+            scoped,
         );
     }
 };
+
+/// Shape one logical item by script first and fallback font second. The helper
+/// never clears output; callers can thread one pen and absolute cluster space
+/// through script runs, paragraph text ranges, tabs, and inline objects.
+fn shapeItemizedCascadeInto(
+    cascade: FontCascade,
+    fallback_cache: ?*FontFallbackCache,
+    metrics_cache: ?*GlyphMetricsCache,
+    glyph_index_cache: ?*GlyphIndexCache,
+    buffer: *LayoutBuffer,
+    text: []const u8,
+    font_size: f32,
+    cluster_base: usize,
+    initial_pen: PenPosition,
+    options: ShapeOptions,
+) !PenPosition {
+    if (cascade.fonts.len == 0) return error.EmptyFontCascade;
+    if (text.len == 0) return initial_pen;
+
+    // `reorder_bidi = false` means the caller has already established visual
+    // run order. Keep script-first itemization, but do not resolve embedding
+    // levels and replace the caller's direction/native-direction policy.
+    const needs_bidi = options.reorder_bidi and
+        !options.writing_mode.isVertical() and
+        plan_bidi.paragraphNeedsReorder(text, options.direction);
+    if (!needs_bidi and fallback_segment.isAscii(text)) {
+        return try shapeResolvedCascadeInto(
+            cascade,
+            fallback_cache,
+            metrics_cache,
+            glyph_index_cache,
+            buffer,
+            text,
+            font_size,
+            cluster_base,
+            initial_pen,
+            plan_resolution.forText(text, options),
+        );
+    }
+    if (!needs_bidi) {
+        return try shapeScriptItemizedCascadeInto(
+            cascade,
+            fallback_cache,
+            metrics_cache,
+            glyph_index_cache,
+            buffer,
+            text,
+            font_size,
+            cluster_base,
+            initial_pen,
+            options,
+        );
+    }
+
+    var paragraph = try unicode.resolveBidiParagraph(
+        buffer.allocator,
+        text,
+        if (options.direction == .rtl) .rtl else .ltr,
+    );
+    defer paragraph.deinit();
+    return try shapeItemizedCascadeResolvedInto(
+        cascade,
+        fallback_cache,
+        metrics_cache,
+        glyph_index_cache,
+        buffer,
+        text,
+        font_size,
+        cluster_base,
+        initial_pen,
+        options,
+        paragraph,
+    );
+}
+
+fn shapeScriptItemizedCascadeInto(
+    cascade: FontCascade,
+    fallback_cache: ?*FontFallbackCache,
+    metrics_cache: ?*GlyphMetricsCache,
+    glyph_index_cache: ?*GlyphIndexCache,
+    buffer: *LayoutBuffer,
+    text: []const u8,
+    font_size: f32,
+    cluster_base: usize,
+    initial_pen: PenPosition,
+    options: ShapeOptions,
+) !PenPosition {
+    var scripts = logical_run_itemization.scriptRuns(text);
+    const first = scripts.next() orelse return initial_pen;
+    const second = scripts.next();
+    const itemized = second != null;
+    var prepared = try logical_context.Prepared.init(
+        buffer.allocator,
+        options.context_before,
+        text,
+        options.context_after,
+        itemized or logical_context.needsJoiningSummary(text, cascade),
+    );
+    defer prepared.deinit();
+
+    var pen = initial_pen;
+    var pending: ?logical_run_itemization.ScriptRun = first;
+    while (pending) |run| {
+        const end = run.byteEnd();
+        const run_text = text[run.byte_start..end];
+        var resolved = resolvedScriptRunOptions(
+            run_text,
+            run.script,
+            options,
+        );
+        resolved.lookup.logical_context =
+            prepared.view.subrange(run.byte_start, end);
+        resolved.lookup.beginning_of_text =
+            options.beginning_of_text and run.byte_start == 0;
+        resolved.lookup.end_of_text =
+            options.end_of_text and end == text.len;
+        pen = try shapeResolvedCascadeInto(
+            cascade,
+            fallback_cache,
+            metrics_cache,
+            glyph_index_cache,
+            buffer,
+            run_text,
+            font_size,
+            cluster_base + run.byte_start,
+            pen,
+            resolved,
+        );
+        pending = if (second != null and run.byte_start == first.byte_start)
+            second
+        else
+            scripts.next();
+    }
+    return pen;
+}
+
+fn shapeItemizedCascadeResolvedInto(
+    cascade: FontCascade,
+    fallback_cache: ?*FontFallbackCache,
+    metrics_cache: ?*GlyphMetricsCache,
+    glyph_index_cache: ?*GlyphIndexCache,
+    buffer: *LayoutBuffer,
+    text: []const u8,
+    font_size: f32,
+    cluster_base: usize,
+    initial_pen: PenPosition,
+    options: ShapeOptions,
+    paragraph: unicode.BidiParagraph,
+) !PenPosition {
+    var probe = logical_run_itemization.runs(text, paragraph);
+    _ = probe.next() orelse return initial_pen;
+    const second = probe.next();
+    const itemized = second != null;
+    var prepared = try logical_context.Prepared.init(
+        buffer.allocator,
+        options.context_before,
+        text,
+        options.context_after,
+        itemized or logical_context.needsJoiningSummary(text, cascade),
+    );
+    defer prepared.deinit();
+
+    var pen = initial_pen;
+    var runs = logical_run_itemization.runs(text, paragraph);
+    while (runs.next()) |run| {
+        const run_end = run.byteEnd();
+        const run_text = text[run.byte_start..run_end];
+        const script_text = text[run.script_byte_start..run.scriptByteEnd()];
+        var run_options = options;
+        // UAX #9 levels describe horizontal embedding direction. They split
+        // vertical text for later visual reordering, but must not replace the
+        // requested top-to-bottom or bottom-to-top shaping direction.
+        if (!options.writing_mode.isVertical()) {
+            run_options.direction = run.direction;
+        }
+        run_options.reorder_bidi = false;
+        run_options.native_direction_shaping = false;
+        var resolved = resolvedScriptRunOptions(
+            script_text,
+            run.script,
+            run_options,
+        );
+        resolved.lookup.logical_context =
+            prepared.view.subrange(run.byte_start, run_end);
+        resolved.lookup.beginning_of_text =
+            options.beginning_of_text and run.byte_start == 0;
+        resolved.lookup.end_of_text =
+            options.end_of_text and run_end == text.len;
+        resolved.all_ascii = fallback_segment.isAscii(run_text);
+        pen = try shapeResolvedCascadeInto(
+            cascade,
+            fallback_cache,
+            metrics_cache,
+            glyph_index_cache,
+            buffer,
+            run_text,
+            font_size,
+            cluster_base + run.byte_start,
+            pen,
+            resolved,
+        );
+    }
+    return pen;
+}
+
+fn resolvedScriptRunOptions(
+    text: []const u8,
+    script: unicode.Script,
+    options: ShapeOptions,
+) ResolvedLookupOptions {
+    var resolved = plan_resolution.forScriptRun(text, script, options);
+    // The script iterator already proved homogeneity, and this local byte
+    // proof restores the source/pipeline ASCII fast path without changing the
+    // fixed script and language selected for the run.
+    resolved.all_ascii = fallback_segment.isAscii(text);
+    return resolved;
+}
+
+fn shapeResolvedCascadeInto(
+    cascade: FontCascade,
+    fallback_cache: ?*FontFallbackCache,
+    metrics_cache: ?*GlyphMetricsCache,
+    glyph_index_cache: ?*GlyphIndexCache,
+    buffer: *LayoutBuffer,
+    text: []const u8,
+    font_size: f32,
+    cluster_base: usize,
+    pen: PenPosition,
+    lookup_options: ResolvedLookupOptions,
+) !PenPosition {
+    var context = FixedFallbackContext{
+        .buffer = buffer,
+        .metrics_cache = metrics_cache,
+        .glyph_index_cache = glyph_index_cache,
+        .font_size = font_size,
+        .text = text,
+        .cluster_base = cluster_base,
+        .lookup_options = lookup_options,
+    };
+    return try fallback_segment.shape(&context, .{
+        .cascade = cascade,
+        .fallback_cache = fallback_cache,
+        .glyph_index_cache = glyph_index_cache,
+        .text = text,
+        .cluster_base = cluster_base,
+        .pen = pen,
+    });
+}
 
 pub fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions, feature_ranges: []const unicode.GsubFeatureRange) !GlyphRun {
     const shape_profile = buffer.shape_profile;
@@ -626,20 +883,6 @@ pub fn shapeSingleFontInto(font: *const Font, metrics_cache: ?*GlyphMetricsCache
     );
 }
 
-fn shapeCascadeSegmentInto(cascade: FontCascade, buffer: *LayoutBuffer, text: []const u8, font_size: f32, cluster_base: usize, pen: PenPosition, lookup_options: ResolvedLookupOptions) !PenPosition {
-    var fallback_context = FixedFallbackContext{
-        .buffer = buffer,
-        .font_size = font_size,
-        .lookup_options = lookup_options,
-    };
-    return try fallback_segment.shape(&fallback_context, .{
-        .cascade = cascade,
-        .text = text,
-        .cluster_base = cluster_base,
-        .pen = pen,
-    });
-}
-
 fn shapeParagraphContent(
     cascade: FontCascade,
     fallback_cache: ?*FontFallbackCache,
@@ -651,11 +894,14 @@ fn shapeParagraphContent(
     font_size: f32,
     options: ShapeOptions,
     objects: []const inline_object.Object,
+    resolved_bidi: ?unicode.BidiParagraph,
 ) !void {
     try plan_validation.input(text, font_size, options);
     if (cascade.fonts.len == 0) return error.EmptyFontCascade;
     try inline_object.validate(text, objects);
-    if (objects.len == 0 and std.mem.indexOfScalar(u8, text, '\t') == null) {
+    if (objects.len == 0 and std.mem.indexOfScalar(u8, text, '\t') == null and
+        resolved_bidi == null)
+    {
         _ = try TextShaper.shapeUtf8CascadeWithCaches(
             cascade,
             fallback_cache,
@@ -672,6 +918,31 @@ fn shapeParagraphContent(
 
     buffer.clear();
     var pen = PenPosition{};
+    var owned_bidi: ?unicode.BidiParagraph = null;
+    defer if (owned_bidi) |*paragraph| paragraph.deinit();
+    const paragraph = resolved_bidi orelse paragraph: {
+        owned_bidi = try unicode.resolveBidiParagraph(
+            buffer.allocator,
+            text,
+            if (options.direction == .rtl) .rtl else .ltr,
+        );
+        break :paragraph owned_bidi.?;
+    };
+    var probe = logical_run_itemization.runs(text, paragraph);
+    const first_item = probe.next();
+    const itemized = first_item != null and probe.next() != null;
+    var prepared = try logical_context.Prepared.init(
+        buffer.allocator,
+        options.context_before,
+        text,
+        options.context_after,
+        itemized or logical_context.needsJoiningSummary(text, cascade) or
+            objects.len != 0 or
+            std.mem.indexOfScalar(u8, text, '\t') != null,
+    );
+    defer prepared.deinit();
+    var logical_runs = logical_run_itemization.runs(text, paragraph);
+    var logical_run = logical_runs.next();
     var items = paragraph_source_items.Cursor.init(
         text,
         objects,
@@ -681,21 +952,35 @@ fn shapeParagraphContent(
     while (items.next()) |item| {
         switch (item) {
             .text => |range| {
-                var context = DynamicFallbackContext{
-                    .buffer = buffer,
-                    .metrics_cache = metrics_cache,
-                    .glyph_index_cache = glyph_index_cache,
-                    .font_size = font_size,
-                    .options = options,
-                };
-                pen = try fallback_segment.shape(&context, .{
-                    .cascade = cascade,
-                    .fallback_cache = fallback_cache,
-                    .glyph_index_cache = glyph_index_cache,
-                    .text = text[range.start..range.end],
-                    .cluster_base = range.start,
-                    .pen = pen,
-                });
+                var text_start = range.start;
+                while (text_start < range.end) {
+                    while (logical_run) |run| {
+                        if (run.byteEnd() > text_start) break;
+                        logical_run = logical_runs.next();
+                    }
+                    const run = logical_run orelse
+                        return error.InvalidScriptItemization;
+                    if (text_start < run.byte_start) {
+                        return error.InvalidScriptItemization;
+                    }
+                    const text_end = @min(range.end, run.byteEnd());
+                    pen = try shapeParagraphLogicalIntersectionInto(
+                        cascade,
+                        fallback_cache,
+                        metrics_cache,
+                        glyph_index_cache,
+                        buffer,
+                        text,
+                        font_size,
+                        options,
+                        run,
+                        prepared.view,
+                        text_start,
+                        text_end,
+                        pen,
+                    );
+                    text_start = text_end;
+                }
             },
             .object => |object| {
                 const in_flow = object.kind == .in_flow;
@@ -727,6 +1012,64 @@ fn shapeParagraphContent(
     }
 }
 
+/// Shape one source-atom intersection with a grapheme-safe script and resolved
+/// bidi-level item. All ranges remain in logical byte order; only the final
+/// line presentation step performs visual permutation.
+fn shapeParagraphLogicalIntersectionInto(
+    cascade: FontCascade,
+    fallback_cache: ?*FontFallbackCache,
+    metrics_cache: ?*GlyphMetricsCache,
+    glyph_index_cache: ?*GlyphIndexCache,
+    buffer: *LayoutBuffer,
+    paragraph_text: []const u8,
+    font_size: f32,
+    paragraph_options_value: ShapeOptions,
+    run: logical_run_itemization.Run,
+    context: pipeline_types.LogicalContext,
+    text_start: usize,
+    text_end: usize,
+    pen: PenPosition,
+) !PenPosition {
+    std.debug.assert(text_start >= run.byte_start);
+    std.debug.assert(text_end <= run.byteEnd());
+    const script_text = paragraph_text[run.script_byte_start..run.scriptByteEnd()];
+    var item_options = paragraph_options_value;
+    // Resolved bidi direction governs horizontal shaping only. In vertical
+    // text, the paragraph direction remains the inline progression requested
+    // by the caller while UAX #9 supplies item boundaries and visual order.
+    if (!paragraph_options_value.writing_mode.isVertical()) {
+        item_options.direction = run.direction;
+    }
+    item_options.reorder_bidi = false;
+    item_options.native_direction_shaping = false;
+    var resolved = resolvedScriptRunOptions(
+        script_text,
+        run.script,
+        item_options,
+    );
+    resolved.lookup.logical_context = context.subrange(text_start, text_end);
+    resolved.lookup.beginning_of_text =
+        paragraph_options_value.beginning_of_text and text_start == 0;
+    resolved.lookup.end_of_text =
+        paragraph_options_value.end_of_text and text_end == paragraph_text.len;
+    // `all_ascii` describes the bytes entering this pipeline invocation, not
+    // the wider script item whose plan/context this child inherits.
+    resolved.all_ascii =
+        fallback_segment.isAscii(paragraph_text[text_start..text_end]);
+    return try shapeResolvedCascadeInto(
+        cascade,
+        fallback_cache,
+        metrics_cache,
+        glyph_index_cache,
+        buffer,
+        paragraph_text[text_start..text_end],
+        font_size,
+        text_start,
+        pen,
+        resolved,
+    );
+}
+
 fn applyBidiVisualOrder(
     buffer: *LayoutBuffer,
     text: []const u8,
@@ -747,12 +1090,25 @@ fn applyParagraphLineBidiVisualOrder(
     buffer: *LayoutBuffer,
     text: []const u8,
     direction: TextDirection,
+    paragraph: ?unicode.BidiParagraph,
 ) !void {
     if (direction == .rtl and
         (bidi_reorder.tryApplyPureRtlLines(buffer, text) or
             try bidi_reorder.tryApplyPureRtlLinesWithObject(buffer, text)))
     {
         return;
+    }
+    if (paragraph) |resolved| {
+        // Script itemization can create several shaping calls without creating
+        // several rendering owners. When those adjacent calls coalesced back
+        // to one complete CascadeRun, use the same compact transaction as
+        // retained reflow and avoid proportional run-ownership sidecars.
+        if (try bidi_reorder.applyLinesResolvedSingleRun(
+            buffer,
+            resolved,
+            false,
+        )) return;
+        return try bidi_reorder.applyLinesResolved(buffer, resolved);
     }
     return try bidi_reorder.applyLines(buffer, text, direction == .rtl);
 }
@@ -837,6 +1193,7 @@ fn finishUniformParagraph(
     text: []const u8,
     font_size: f32,
     options: ParagraphOptions,
+    bidi_paragraph: ?unicode.BidiParagraph,
 ) !void {
     if (options.writing_mode.isVertical()) {
         // Vertical column construction has already completed its admitted
@@ -852,6 +1209,7 @@ fn finishUniformParagraph(
                 buffer,
                 text,
                 options.direction,
+                bidi_paragraph,
             );
         }
         vertical_hanging.apply(buffer, options);
@@ -880,6 +1238,7 @@ fn finishUniformParagraph(
             buffer,
             text,
             options.direction,
+            bidi_paragraph,
         );
     }
     punctuation_hanging.apply(buffer, options);
@@ -915,7 +1274,7 @@ fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     const variation_range = try buffer.internVariationCoords(
         lookup_options.lookup.normalized_variation_coords,
     );
-    try buffer.runs.append(buffer.allocator, .{
+    const new_run = CascadeRun{
         .font = face_mod.backend.face(font),
         .font_index = font_index,
         .font_size = font_size,
@@ -925,7 +1284,31 @@ fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .y_offset = pen.y,
         .variation_coord_start = variation_range.start,
         .variation_coord_len = variation_range.len,
-    });
+    };
+    if (buffer.runs.items.len != 0) {
+        const previous = &buffer.runs.items[buffer.runs.items.len - 1];
+        // CascadeRun records only contiguous rendering ownership. Script
+        // selection has already completed inside each pipeline invocation and
+        // ScriptedRun metadata is rebuilt independently, so adjacent identical
+        // owners may be coalesced without erasing a shaping boundary. This is
+        // also what keeps a mixed-script, single-face paragraph eligible for
+        // the allocation-free single-run bidi specializations. Variation
+        // identity is the interned flat range, hence start/len equality is
+        // sufficient here.
+        if (previous.glyph_start + previous.glyph_len == new_run.glyph_start and
+            previous.font == new_run.font and
+            previous.font_index == new_run.font_index and
+            previous.font_size == new_run.font_size and
+            previous.variation_coord_start == new_run.variation_coord_start and
+            previous.variation_coord_len == new_run.variation_coord_len)
+        {
+            previous.glyph_len += new_run.glyph_len;
+        } else {
+            try buffer.runs.append(buffer.allocator, new_run);
+        }
+    } else {
+        try buffer.runs.append(buffer.allocator, new_run);
+    }
     var next_pen = pen;
     for (buffer.glyphs.items[glyph_start..]) |glyph| {
         next_pen.x += glyph.x_advance;

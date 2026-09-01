@@ -91,6 +91,77 @@ test "shaped paragraphs reflow repeatedly without reshaping or accumulating layo
     );
 }
 
+test "simple retained mixed bidi keeps one run across wrapped reflows" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    const text = "AB אב 12 אב";
+
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var shaped = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        text,
+        20,
+        .{ .max_width = 200, .direction = .ltr },
+    );
+    defer shaped.deinit();
+    try std.testing.expect(shaped.simple_reflow);
+    try std.testing.expectEqual(@as(usize, 1), shaped.runs.len);
+
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const narrow = try shaped.layout(&reflow, .{
+        .max_width = 60,
+        .direction = .ltr,
+    });
+    try std.testing.expectEqual(@as(usize, 1), narrow.runs.len);
+    for (narrow.lines) |line| {
+        try std.testing.expectEqual(@as(usize, 0), line.run_start);
+        try std.testing.expectEqual(
+            @as(usize, @intFromBool(line.glyph_len != 0)),
+            line.run_len,
+        );
+    }
+    // Single-run presentation never allocates the generic ownership sidecars.
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        reflow.buffer.bidi_reorder_scratch.glyph_run_indices.capacity,
+    );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        reflow.buffer.bidi_reorder_scratch.visual_run_indices.capacity,
+    );
+    const narrow_glyphs = try allocator.dupe(GlyphPosition, narrow.glyphs);
+    defer allocator.free(narrow_glyphs);
+
+    const wide = try shaped.layout(&reflow, .{
+        .max_width = 200,
+        .direction = .ltr,
+    });
+    try std.testing.expectEqual(@as(usize, 1), wide.lines.len);
+    try std.testing.expectEqual(@as(usize, 1), wide.runs.len);
+
+    const narrow_again = try shaped.layout(&reflow, .{
+        .max_width = 60,
+        .direction = .ltr,
+    });
+    try std.testing.expectEqualSlices(
+        GlyphPosition,
+        narrow_glyphs,
+        narrow_again.glyphs,
+    );
+}
+
 test "shaped paragraphs restore advances between justified reflows" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

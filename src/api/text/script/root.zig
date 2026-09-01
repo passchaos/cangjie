@@ -4,6 +4,7 @@ const unicode = @import("../../../unicode.zig");
 
 pub const Script = unicode.Script;
 pub const Run = unicode.ScriptRun;
+pub const RunIterator = unicode.ScriptRunIterator;
 pub const Extensions = unicode.ScriptExtensions;
 
 pub const of = unicode.scriptForCodepoint;
@@ -11,4 +12,5 @@ pub const extensionsContain = unicode.scriptExtensionsContain;
 pub const extensionsCount = unicode.scriptExtensionsCount;
 pub const extensionsForCodepoint = unicode.scriptExtensionsForCodepoint;
 pub const hasExplicitExtensions = unicode.hasExplicitScriptExtensions;
+pub const runs = unicode.scriptRuns;
 pub const collectRuns = unicode.itemizeScriptRuns;

@@ -20,6 +20,7 @@ pub const TextShaper = @import("../../shaping/text_shaper.zig").TextShaper;
 
 pub const Script = @import("../../unicode.zig").Script;
 pub const ScriptRun = @import("../../unicode.zig").ScriptRun;
+pub const ScriptRunIterator = @import("../../unicode.zig").ScriptRunIterator;
 pub const BidiClass = @import("../../unicode.zig").BidiClass;
 pub const ExactBidiClass = @import("../../unicode.zig").ExactBidiClass;
 pub const BidiBaseDirection = @import("../../unicode.zig").BidiBaseDirection;

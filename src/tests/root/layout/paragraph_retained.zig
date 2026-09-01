@@ -7,6 +7,7 @@ const TextShaper = support.TextShaper;
 const GraphemeCluster = support.GraphemeCluster;
 const LineBreakOpportunity =
     @import("../../../layout/line_break/opportunity.zig").Opportunity;
+const paragraph_reflow = @import("../../../layout/line_break/reflow/root.zig");
 const Font = support.Font;
 const GlyphPosition = support.GlyphPosition;
 const CascadeRun = support.CascadeRun;
@@ -160,6 +161,170 @@ test "simple retained mixed bidi keeps one run across wrapped reflows" {
         narrow_glyphs,
         narrow_again.glyphs,
     );
+}
+
+test "simple retained reflow centers wrapped lines without stale placement" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var shaped = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        "AA A",
+        20,
+        .{ .max_width = 100 },
+    );
+    defer shaped.deinit();
+    try std.testing.expect(shaped.simple_reflow);
+    try std.testing.expect(paragraph_reflow.supportsSimpleRetained(.{
+        .max_width = 40,
+        .alignment = .center,
+    }));
+    try std.testing.expect(!paragraph_reflow.supportsSimpleRetained(.{
+        .max_width = 40,
+        .alignment = .left,
+    }));
+
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const started = try shaped.layout(&reflow, .{ .max_width = 40 });
+    try std.testing.expectEqual(@as(usize, 2), started.lines.len);
+    for (started.lines) |line| {
+        try std.testing.expectEqual(@as(f32, 0), line.x);
+        try std.testing.expectEqual(
+            @as(?support.TextAlign, .left),
+            line.resolved_alignment,
+        );
+    }
+
+    const centered = try shaped.layout(&reflow, .{
+        .max_width = 40,
+        .alignment = .center,
+    });
+    try std.testing.expectEqual(@as(usize, 2), centered.lines.len);
+    for (
+        centered.lines,
+        [_]f32{ 30, 16 },
+        [_]f32{ 5, 12 },
+        [_]usize{ 0, 3 },
+        [_]usize{ 2, 1 },
+        [_]usize{ 0, 3 },
+        [_]usize{ 3, 1 },
+    ) |
+        line,
+        expected_width,
+        expected_x,
+        expected_glyph_start,
+        expected_glyph_len,
+        expected_byte_start,
+        expected_byte_len,
+    | {
+        try std.testing.expectEqual(expected_width, line.width);
+        try std.testing.expectEqual(expected_x, line.x);
+        try std.testing.expectEqual(expected_glyph_start, line.glyph_start);
+        try std.testing.expectEqual(expected_glyph_len, line.glyph_len);
+        try std.testing.expectEqual(expected_byte_start, line.byte_start);
+        try std.testing.expectEqual(expected_byte_len, line.byte_len);
+        try std.testing.expectEqual(
+            @as(?support.TextAlign, .center),
+            line.resolved_alignment,
+        );
+    }
+
+    const started_again = try shaped.layout(&reflow, .{ .max_width = 40 });
+    try std.testing.expectEqual(@as(usize, 2), started_again.lines.len);
+    for (started_again.lines) |line| {
+        try std.testing.expectEqual(@as(f32, 0), line.x);
+        try std.testing.expectEqual(
+            @as(?support.TextAlign, .left),
+            line.resolved_alignment,
+        );
+    }
+}
+
+test "simple retained center alignment clamps overwide lines" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var shaped = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        "A",
+        20,
+        .{ .max_width = 100 },
+    );
+    defer shaped.deinit();
+    try std.testing.expect(shaped.simple_reflow);
+
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const centered = try shaped.layout(&reflow, .{
+        .max_width = 10,
+        .alignment = .center,
+    });
+    try std.testing.expectEqual(@as(usize, 1), centered.lines.len);
+    try std.testing.expectEqual(@as(f32, 16), centered.lines[0].width);
+    try std.testing.expectEqual(@as(f32, 0), centered.lines[0].x);
+    try std.testing.expectEqual(
+        @as(?support.TextAlign, .center),
+        centered.lines[0].resolved_alignment,
+    );
+}
+
+test "simple retained center alignment is direction independent" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+
+    inline for (.{ .ltr, .rtl }) |direction| {
+        var shape_buffer = LayoutBuffer.init(allocator);
+        defer shape_buffer.deinit();
+        var shaped = try TextShaper.shapeParagraphUtf8(
+            allocator,
+            cascade,
+            &shape_buffer,
+            "A",
+            20,
+            .{ .max_width = 100, .direction = direction },
+        );
+        defer shaped.deinit();
+        try std.testing.expect(shaped.simple_reflow);
+
+        var reflow = ReflowBuffer.init(allocator);
+        defer reflow.deinit();
+        const centered = try shaped.layout(&reflow, .{
+            .max_width = 40,
+            .alignment = .center,
+            .direction = direction,
+        });
+        try std.testing.expectEqual(@as(usize, 1), centered.lines.len);
+        try std.testing.expectEqual(@as(f32, 16), centered.lines[0].width);
+        try std.testing.expectEqual(@as(f32, 12), centered.lines[0].x);
+        try std.testing.expectEqual(
+            @as(?support.TextAlign, .center),
+            centered.lines[0].resolved_alignment,
+        );
+    }
 }
 
 test "shaped paragraphs restore advances between justified reflows" {

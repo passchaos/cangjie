@@ -40,8 +40,7 @@ pub fn tryBuild(
     var line_start: usize = 0;
     var line_byte_start: usize = 0;
     var y: f32 = 0;
-    const alignment: paragraph_types.TextAlign =
-        if (options.direction == .rtl) .right else .left;
+    const alignment = geometry.resolvedAlignment(options);
 
     while (line_start < glyphs.len) {
         // The preceding line may have scanned past the selected soft boundary
@@ -250,7 +249,7 @@ fn appendSimpleLine(
         .run_len = run_info.run_len,
         .byte_start = byte_start,
         .byte_len = byte_end - byte_start,
-        .x = if (alignment == .right) @max(0, max_width - width) else 0,
+        .x = geometry.alignedLineX(width, max_width, alignment),
         .y = y,
         .indent = 0,
         .region_x = 0,
@@ -278,7 +277,7 @@ pub fn supports(options: paragraph_options.Options) bool {
         options.word_break == .normal and
         options.overflow_wrap == .break_word and
         options.white_space_collapse == .preserve and
-        options.alignment == .start and
+        (options.alignment == .start or options.alignment == .center) and
         options.line_height == null and
         options.max_lines == null and
         !options.ellipsis and

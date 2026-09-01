@@ -134,13 +134,20 @@ pub fn run(input: Input) !void {
         resolved_lookup_options.all_ascii,
         selected_lookup_options,
     );
+    var may_need_mark_reordering =
+        source_result.may_need_mark_reordering;
     if (!resolved_lookup_options.all_ascii) {
-        try normalize_decompose.missingPrecomposed(
+        const decomposed_source = try normalize_decompose.missingPrecomposed(
             buffer.allocator,
             font,
             glyph_index_cache,
             scratch,
         );
+        // A missing precomposed glyph can expand even a class-zero Japanese
+        // scalar (for example U+304C) into a base plus a combining mark. Require
+        // normalization whenever this stage changed the source sequence.
+        may_need_mark_reordering =
+            may_need_mark_reordering or decomposed_source;
     }
     const has_default_ignorable = source_result.has_default_ignorable;
     var default_ignorable_invisible_glyph_id =
@@ -308,6 +315,10 @@ pub fn run(input: Input) !void {
         );
         const dotted_circle_glyph = try glyphIndexWithOptionalCache(font, glyph_index_cache, 0x25cc);
         if (use_shape) {
+            // USE canonical decomposition can likewise introduce mark-leading
+            // components. Normal Japanese/ASCII plans never enter USE, while
+            // an explicit cross-script override must remain conservative.
+            may_need_mark_reordering = true;
             try use_shaper.insertVowelConstraintDottedCircles(
                 buffer.allocator,
                 glyph_ids,
@@ -338,25 +349,29 @@ pub fn run(input: Input) !void {
         gsub_options.source_codepoints = codepoints.items;
         source_boundaries.bindSourceByteStarts(clusters.items);
     }
-    // HarfBuzz normalizes every shaping buffer before script-specific GSUB.
-    // Keep immutable source codepoints in logical order, but reorder the glyph
-    // stream and its parallel metadata by modified combining class. USE then
-    // runs its syllable machine over this canonicalized source permutation.
-    const mark_normalization_input = normalize_marks.Input{
-        .glyph_ids = glyph_ids,
-        .glyph_source_indices = glyph_source_indices,
-        .glyph_cluster_indices = glyph_cluster_indices,
-        .glyph_substituted = glyph_substituted,
-        .ligature_components = ligature_components,
-        .codepoints = codepoints.items,
-    };
-    normalize_marks.reorder(
-        mark_normalization_input,
-        lookup_options.cluster_level,
-    );
     var arabic_joining_features: ?[]const u32 = null;
-    if (lookup_options.script_tag == .arab) {
-        normalize_marks.reorderArabicModifiers(mark_normalization_input);
+    if (may_need_mark_reordering) {
+        // HarfBuzz normalizes every shaping buffer before script-specific
+        // GSUB. Keep immutable source codepoints in logical order, but reorder
+        // the glyph stream and its parallel metadata by modified combining
+        // class. USE then runs its syllable machine over this canonicalized
+        // source permutation. ASCII and the specialized Japanese source path
+        // prove this entire scan is a no-op.
+        const mark_normalization_input = normalize_marks.Input{
+            .glyph_ids = glyph_ids,
+            .glyph_source_indices = glyph_source_indices,
+            .glyph_cluster_indices = glyph_cluster_indices,
+            .glyph_substituted = glyph_substituted,
+            .ligature_components = ligature_components,
+            .codepoints = codepoints.items,
+        };
+        normalize_marks.reorder(
+            mark_normalization_input,
+            lookup_options.cluster_level,
+        );
+        if (lookup_options.script_tag == .arab) {
+            normalize_marks.reorderArabicModifiers(mark_normalization_input);
+        }
     }
     if (gsub_arabic.supports(lookup_options.script_tag) and
         codepoints.items.len != 0)

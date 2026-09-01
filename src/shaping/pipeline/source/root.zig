@@ -26,6 +26,10 @@ pub const Result = struct {
     /// not decode and classify the same non-ASCII run a second time.
     may_need_bidi_reorder: bool = false,
     primary_devanagari_block: bool = false,
+    /// Whether normalization must inspect the emitted source records for
+    /// non-zero modified combining classes. This stays fail-closed unless a
+    /// source path proves that the complete run has class zero.
+    may_need_mark_reordering: bool = true,
     default_ignorable_invisible_glyph_id: ?GlyphId = null,
 };
 
@@ -86,7 +90,12 @@ fn populateWithMode(
     try glyph_substituted.ensureUnusedCapacity(allocator, text.len);
     try ligature_components.infos.ensureUnusedCapacity(allocator, text.len);
 
-    var result = Result{};
+    // ASCII has no non-zero canonical combining classes, and every
+    // shaping-specific class override is above the ASCII range. This remains
+    // true when unusual direction or script options select the generic loop.
+    var result = Result{
+        .may_need_mark_reordering = !all_ascii,
+    };
     const track_rtl_numeric_guard = options.needsRtlNumericDirectionGuard();
     if (all_ascii and options.direction == .ltr) {
         // The caller already validated and classified this run. One byte is one
@@ -150,6 +159,7 @@ fn populateWithMode(
             // ignorable. Horizontal LTR presentation is identity as well, so
             // the generic source loop cannot merge, replace, mirror, or omit
             // any admitted scalar.
+            result.may_need_mark_reordering = false;
             try three_byte.populate(
                 font,
                 glyph_index_cache,
@@ -360,7 +370,9 @@ noinline fn populateAsciiCached(
     cluster_base: usize,
     track_rtl_numeric_guard: bool,
 ) !Result {
-    var result = Result{};
+    var result = Result{
+        .may_need_mark_reordering = false,
+    };
     // `populate` reserved every parallel list for the complete ASCII run.
     // Publish their lengths once so this loop writes the records directly
     // rather than updating eight ArrayList lengths for every source byte.
@@ -569,7 +581,67 @@ test "Japanese three-byte fast path matches generic source population" {
     try std.testing.expect(!expected_result.run_has_decimal_number);
     try std.testing.expect(!expected_result.run_has_letter);
     try std.testing.expect(!expected_result.may_need_bidi_reorder);
+    try std.testing.expect(
+        expected_result.may_need_mark_reordering,
+    );
+    const specialized_result = try populate(
+        allocator,
+        &font,
+        null,
+        &actual,
+        text,
+        17,
+        false,
+        options,
+    );
+    try std.testing.expect(
+        !specialized_result.may_need_mark_reordering,
+    );
     try expectEquivalentSourceBuffers(&expected, &actual);
+}
+
+test "source skip proof is conservative outside ASCII and Japanese paths" {
+    const test_font = @import("../../../test_font.zig");
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCodepointSetTtf(
+        allocator,
+        &.{ 'A', 0x0915, 0x094d },
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    var scratch: scratch_mod.ShapeScratch = .{};
+    defer scratch.deinit(allocator);
+
+    const ascii = try populate(
+        allocator,
+        &font,
+        null,
+        &scratch,
+        "A",
+        0,
+        true,
+        TestOptions{ .direction = .rtl },
+    );
+    try std.testing.expect(!ascii.may_need_mark_reordering);
+
+    const devanagari = try populate(
+        allocator,
+        &font,
+        null,
+        &scratch,
+        "क्",
+        0,
+        false,
+        TestOptions{
+            .script = .devanagari,
+            .script_tag = .dev2,
+        },
+    );
+    try std.testing.expect(devanagari.primary_devanagari_block);
+    try std.testing.expect(
+        devanagari.may_need_mark_reordering,
+    );
 }
 
 fn expectEquivalentSourceBuffers(

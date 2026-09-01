@@ -13,13 +13,15 @@ const unicode = @import("../../../unicode.zig");
 /// decomposition. This follows HarfBuzz's recursive 1:2 normalizer: an
 /// existing cmap glyph remains authoritative, a supported direct left branch
 /// stops recursion early, and recursive NFD is the final fallback. Every
-/// emitted component retains the original UTF-8 source range.
+/// emitted component retains the original UTF-8 source range. Returns whether
+/// any source was expanded so callers can invalidate source-scan proofs.
 pub fn missingPrecomposed(
     allocator: std.mem.Allocator,
     font: *const Font,
     glyph_index_cache: ?*cache_mod.GlyphIndexCache,
     scratch: *scratch_mod.ShapeScratch,
-) !void {
+) !bool {
+    var decomposed_any = false;
     var source_index: usize = 0;
     var glyph_index: usize = 0;
     while (source_index < scratch.codepoints.items.len) {
@@ -127,9 +129,11 @@ pub fn missingPrecomposed(
         try scratch.glyph_cluster_indices.replaceRange(allocator, glyph_index, 1, owners[0..components.len]);
         try scratch.glyph_substituted.replaceRange(allocator, glyph_index, 1, substituted[0..components.len]);
         try scratch.ligature_components.infos.replaceRange(allocator, glyph_index, 1, infos[0..components.len]);
+        decomposed_any = true;
         glyph_index += components.len;
         source_index += components.len;
     }
+    return decomposed_any;
 }
 
 fn mapComponents(
@@ -148,4 +152,43 @@ fn mapComponents(
         out[index] = glyph;
     }
     return true;
+}
+
+test "missing precomposed Japanese source reports proof invalidation" {
+    const test_font = @import("../../../test_font.zig");
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildCodepointSetTtf(
+        allocator,
+        &.{ 0x304b, 0x3099 },
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var scratch: scratch_mod.ShapeScratch = .{};
+    defer scratch.deinit(allocator);
+    try scratch.codepoints.append(allocator, 0x304c);
+    try scratch.clusters.append(allocator, 7);
+    try scratch.source_ends.append(allocator, 10);
+    try scratch.glyph_ids.append(allocator, 0);
+    try scratch.glyph_source_indices.append(allocator, 0);
+    try scratch.glyph_cluster_indices.append(allocator, 0);
+    try scratch.glyph_substituted.append(allocator, false);
+    try scratch.ligature_components.infos.append(allocator, .{});
+
+    try std.testing.expect(try missingPrecomposed(
+        allocator,
+        &font,
+        null,
+        &scratch,
+    ));
+    try std.testing.expectEqualSlices(
+        u21,
+        &.{ 0x304b, 0x3099 },
+        scratch.codepoints.items,
+    );
+    try std.testing.expectEqual(
+        @as(u8, 8),
+        unicode.modifiedCombiningClassForShaping(scratch.codepoints.items[1]),
+    );
 }

@@ -39,18 +39,19 @@ pub fn isJapaneseText(text: []const u8) bool {
         // to Japanese text blocks whose scalars have identity presentation and
         // independent default clusters. U+302A..U+302F and
         // U+3099..U+309A are combining marks; U+303E is a variation selector.
-        if (!((codepoint >= 0x3000 and codepoint <= 0x3029) or
-            (codepoint >= 0x3030 and codepoint <= 0x303d) or
-            codepoint == 0x303f or
-            (codepoint >= 0x3041 and codepoint <= 0x3098) or
-            (codepoint >= 0x309b and codepoint <= 0x30ff) or
-            (codepoint >= 0x3400 and codepoint <= 0x4dbf) or
-            (codepoint >= 0x4e00 and codepoint <= 0x9fff)))
-        {
-            return false;
-        }
+        if (!isJapaneseCodepoint(codepoint)) return false;
     }
     return true;
+}
+
+fn isJapaneseCodepoint(codepoint: u21) bool {
+    return (codepoint >= 0x3000 and codepoint <= 0x3029) or
+        (codepoint >= 0x3030 and codepoint <= 0x303d) or
+        codepoint == 0x303f or
+        (codepoint >= 0x3041 and codepoint <= 0x3098) or
+        (codepoint >= 0x309b and codepoint <= 0x30ff) or
+        (codepoint >= 0x3400 and codepoint <= 0x4dbf) or
+        (codepoint >= 0x4e00 and codepoint <= 0x9fff);
 }
 
 pub fn populate(
@@ -152,4 +153,23 @@ test "Japanese three-byte proof excludes generic-source behavior" {
     // malformed triples if that outer boundary is ever refactored.
     try std.testing.expect(!isJapaneseText("\xe4\x00\x80"));
     try std.testing.expect(!isJapaneseText("\xe4\xb8\x00"));
+}
+
+test "Japanese three-byte proof exhaustively admits only zero modified classes" {
+    for (0x3000..0xa000) |raw_codepoint| {
+        const codepoint: u21 = @intCast(raw_codepoint);
+        var encoded: [4]u8 = undefined;
+        const len = try std.unicode.utf8Encode(codepoint, &encoded);
+        const admitted = isJapaneseText(encoded[0..len]);
+        // Compare the byte-level run predicate with its scalar helper, then
+        // validate the helper against the independent generated Unicode data.
+        const expected = isJapaneseCodepoint(codepoint);
+        try std.testing.expectEqual(expected, admitted);
+        if (admitted) {
+            try std.testing.expectEqual(
+                @as(u8, 0),
+                unicode.modifiedCombiningClassForShaping(codepoint),
+            );
+        }
+    }
 }

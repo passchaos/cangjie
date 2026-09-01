@@ -138,12 +138,27 @@ pub fn runMayHaveMarkAttachments(
         else
             @min(index, codepoints.len -| 1);
         if (source_index < codepoints.len and
-            unicode.isUnicodeMarkCodepoint(codepoints[source_index]))
+            isUnicodeMarkForPositioning(codepoints[source_index]))
         {
             return true;
         }
     }
     return false;
+}
+
+/// Reject ordinary CJK scalars before entering the complete Unicode mark
+/// classifier. The two retained subranges are the only Unicode marks in the
+/// admitted CJK blocks; keep this exact allow-list in sync with the exhaustive
+/// proof test below rather than broadening it for visually mark-like symbols.
+fn isUnicodeMarkForPositioning(codepoint: u21) bool {
+    if (codepoint >= 0x3400 and codepoint <= 0x9fff) return false;
+    if (codepoint >= 0x3000 and codepoint <= 0x30ff and
+        !(codepoint >= 0x302a and codepoint <= 0x302d) and
+        !(codepoint >= 0x3099 and codepoint <= 0x309a))
+    {
+        return false;
+    }
+    return unicode.isUnicodeMarkCodepoint(codepoint);
 }
 
 pub fn horizontalMetrics(
@@ -432,4 +447,61 @@ test "generic shaping zeroes synthesized Unicode nonspacing marks late" {
         .{ .script_tag = .qaag },
     );
     try std.testing.expectEqual(MarkAdvanceZeroing{}, zawgyi);
+}
+
+test "CJK mark shortcut exactly preserves Unicode classification" {
+    const std = @import("std");
+
+    // Exhaust every scalar admitted by either cheap-rejection range. This is
+    // intentionally a comparison against the independent Unicode classifier,
+    // not a restatement of the exception list.
+    for (0x3000..0x3100) |value| {
+        const codepoint: u21 = @intCast(value);
+        try std.testing.expectEqual(
+            unicode.isUnicodeMarkCodepoint(codepoint),
+            isUnicodeMarkForPositioning(codepoint),
+        );
+    }
+    for (0x3400..0xa000) |value| {
+        const codepoint: u21 = @intCast(value);
+        try std.testing.expectEqual(
+            unicode.isUnicodeMarkCodepoint(codepoint),
+            isUnicodeMarkForPositioning(codepoint),
+        );
+    }
+
+    for ([_]u21{ 0x302a, 0x302b, 0x302c, 0x302d, 0x3099, 0x309a }) |mark| {
+        try std.testing.expect(unicode.isNonspacingMarkCodepoint(mark));
+        try std.testing.expect(isUnicodeMarkForPositioning(mark));
+    }
+    for ([_]u21{ 0x3029, 0x302e, 0x3098, 0x309b }) |ordinary| {
+        try std.testing.expectEqual(
+            unicode.isUnicodeMarkCodepoint(ordinary),
+            isUnicodeMarkForPositioning(ordinary),
+        );
+    }
+}
+
+test "CJK mark shortcut keeps GDEF authoritative and missing GDEF conservative" {
+    const std = @import("std");
+    var classes = [_]u16{0} ** 3;
+
+    // A font-authored GDEF mark wins even for an ordinary Han source scalar.
+    classes[2] = @intFromEnum(GlyphClass.mark);
+    try std.testing.expect(runMayHaveMarkAttachments(
+        &.{ 1, 2 },
+        &.{ 0x4e00, 0x4e8c },
+        &.{ 0, 1 },
+        .{ .glyph_classes = &classes },
+        false,
+    ));
+
+    // Missing GlyphClassDef still cannot prove that a run has no attachments.
+    try std.testing.expect(runMayHaveMarkAttachments(
+        &.{1},
+        &.{0x4e00},
+        &.{0},
+        .{},
+        false,
+    ));
 }

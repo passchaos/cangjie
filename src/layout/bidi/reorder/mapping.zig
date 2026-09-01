@@ -161,6 +161,114 @@ pub fn appendItemSingleRun(
     );
 }
 
+/// Select the indexed or monotone mapper at compile time for one owning run.
+/// Keeping this dispatch here makes both paths share the same public inputs and
+/// leaves the line-level bidi loop independent of the lookup representation.
+pub fn appendItemSingleRunMode(
+    comptime source_is_simple: bool,
+    allocator: std.mem.Allocator,
+    glyphs: []const GlyphPosition,
+    font: *const Font,
+    cluster_index: []const ClusterEntry,
+    seen: []bool,
+    allowed_start: usize,
+    allowed_end: usize,
+    item: unicode.BidiMapItem,
+    out_glyphs: *std.ArrayList(GlyphPosition),
+) !void {
+    if (source_is_simple) {
+        return appendItemMonotoneSingleRun(
+            allocator,
+            glyphs,
+            font,
+            seen,
+            allowed_start,
+            allowed_end,
+            item,
+            out_glyphs,
+        );
+    }
+    return appendItemSingleRun(
+        allocator,
+        glyphs,
+        font,
+        cluster_index,
+        seen,
+        allowed_start,
+        allowed_end,
+        item,
+        out_glyphs,
+    );
+}
+
+/// Append one bidi item from a proven monotone, contiguous cluster stream.
+///
+/// `source_is_simple` is established while retained shaping output is still
+/// immutable: cluster starts strictly increase between source atoms and every
+/// output sharing a cluster is adjacent. Restricting the search to the current
+/// old line slice is important because wrapping whitespace may leave gaps
+/// between visible lines. Once the equal-cluster range is found, emission uses
+/// the exact general helpers so RTL intra-cluster order and mirroring remain
+/// byte-for-byte equivalent. The caller has reserved room for every old glyph,
+/// so these shared fallible appends cannot allocate during line mutation.
+fn appendItemMonotoneSingleRun(
+    allocator: std.mem.Allocator,
+    glyphs: []const GlyphPosition,
+    font: *const Font,
+    seen: []bool,
+    allowed_start: usize,
+    allowed_end: usize,
+    item: unicode.BidiMapItem,
+    out_glyphs: *std.ArrayList(GlyphPosition),
+) !void {
+    const item_range = monotoneClusterRange(
+        glyphs,
+        allowed_start,
+        allowed_end,
+        item.byte_start,
+    ) orelse return;
+    if (item.direction == .rtl) {
+        var glyph_index = item_range.end;
+        while (glyph_index > item_range.start) {
+            glyph_index -= 1;
+            if (seen[glyph_index]) continue;
+            try appendItemGlyph(
+                false,
+                allocator,
+                glyphs,
+                &[_]run_types.CascadeRun{},
+                font,
+                &.{},
+                seen,
+                glyph_index,
+                item,
+                out_glyphs,
+                null,
+                {},
+            );
+        }
+        return;
+    }
+
+    for (item_range.start..item_range.end) |glyph_index| {
+        if (seen[glyph_index]) continue;
+        try appendItemGlyph(
+            false,
+            allocator,
+            glyphs,
+            &[_]run_types.CascadeRun{},
+            font,
+            &.{},
+            seen,
+            glyph_index,
+            item,
+            out_glyphs,
+            null,
+            {},
+        );
+    }
+}
+
 pub fn appendUnseen(
     comptime record_permutation: bool,
     allocator: std.mem.Allocator,
@@ -243,6 +351,31 @@ fn clusterRange(
     while (low < entries.len and entries[low].cluster == cluster) {
         low += 1;
     }
+    if (start == low) return null;
+    return .{ .start = start, .end = low };
+}
+
+fn monotoneClusterRange(
+    glyphs: []const GlyphPosition,
+    allowed_start: usize,
+    allowed_end: usize,
+    cluster: usize,
+) ?struct { start: usize, end: usize } {
+    const end = @min(allowed_end, glyphs.len);
+    if (allowed_start >= end) return null;
+
+    var low = allowed_start;
+    var high = end;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (glyphs[mid].cluster < cluster) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    const start = low;
+    while (low < end and glyphs[low].cluster == cluster) low += 1;
     if (start == low) return null;
     return .{ .start = start, .end = low };
 }
@@ -363,4 +496,22 @@ test "cluster index repairs non-monotone output" {
         .{ .cluster = 0, .glyph_index = 2 },
         .{ .cluster = 2, .glyph_index = 0 },
     }, reordered_index);
+}
+
+test "monotone cluster range is line local and keeps equal outputs contiguous" {
+    const glyphs = [_]GlyphPosition{
+        .{ .glyph_id = 1, .codepoint = 'A', .cluster = 0, .x_advance = 1 },
+        .{ .glyph_id = 2, .codepoint = ' ', .cluster = 1, .x_advance = 1 },
+        .{ .glyph_id = 3, .codepoint = 'B', .cluster = 2, .x_advance = 1 },
+        .{ .glyph_id = 4, .codepoint = 'B', .cluster = 2, .x_advance = 1 },
+        .{ .glyph_id = 5, .codepoint = ' ', .cluster = 3, .x_advance = 1 },
+        .{ .glyph_id = 6, .codepoint = 'C', .cluster = 4, .x_advance = 1 },
+    };
+
+    const pair = monotoneClusterRange(&glyphs, 2, 4, 2).?;
+    try std.testing.expectEqual(@as(usize, 2), pair.start);
+    try std.testing.expectEqual(@as(usize, 4), pair.end);
+    try std.testing.expect(monotoneClusterRange(&glyphs, 2, 4, 0) == null);
+    try std.testing.expect(monotoneClusterRange(&glyphs, 5, 6, 3) == null);
+    try std.testing.expect(monotoneClusterRange(&glyphs, 4, 4, 3) == null);
 }

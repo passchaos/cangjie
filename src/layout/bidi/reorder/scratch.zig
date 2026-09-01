@@ -103,6 +103,38 @@ pub const Scratch = struct {
         allocator: std.mem.Allocator,
         output_glyphs: *std.ArrayList(GlyphPosition),
     ) !void {
+        return self.beginSingleOwningRunImpl(
+            allocator,
+            output_glyphs,
+            true,
+        );
+    }
+
+    /// Move a proven monotone logical glyph stream aside without indexing it.
+    ///
+    /// Strict retained reflow proves once, while the immutable shaped stream
+    /// is created, that clusters increase monotonically and equal clusters are
+    /// contiguous. The line mapper can therefore search each old line slice
+    /// directly instead of materializing `glyph_cluster_index` on every
+    /// reflow. `seen` remains necessary for ligatures and X9-removed scalars.
+    pub fn beginMonotoneSingleOwningRun(
+        self: *Scratch,
+        allocator: std.mem.Allocator,
+        output_glyphs: *std.ArrayList(GlyphPosition),
+    ) !void {
+        return self.beginSingleOwningRunImpl(
+            allocator,
+            output_glyphs,
+            false,
+        );
+    }
+
+    fn beginSingleOwningRunImpl(
+        self: *Scratch,
+        allocator: std.mem.Allocator,
+        output_glyphs: *std.ArrayList(GlyphPosition),
+        comptime build_cluster_index: bool,
+    ) !void {
         self.clear();
         std.mem.swap(
             std.ArrayList(GlyphPosition),
@@ -110,11 +142,13 @@ pub const Scratch = struct {
             output_glyphs,
         );
         errdefer self.rollbackSingleOwningRun(output_glyphs);
-        try mapping.buildClusterIndexInto(
-            allocator,
-            &self.glyph_cluster_index,
-            self.old_glyphs.items,
-        );
+        if (build_cluster_index) {
+            try mapping.buildClusterIndexInto(
+                allocator,
+                &self.glyph_cluster_index,
+                self.old_glyphs.items,
+            );
+        }
         try self.seen.resize(allocator, self.old_glyphs.items.len);
         @memset(self.seen.items, false);
         try output_glyphs.ensureTotalCapacity(
@@ -224,4 +258,85 @@ test "failed scratch preparation restores output ownership" {
         output_glyphs.items,
     );
     try std.testing.expectEqual(@as(usize, 0), output_runs.items.len);
+}
+
+test "monotone single-run scratch leaves cluster index unused" {
+    var scratch = Scratch.init(std.testing.allocator);
+    defer scratch.deinit(std.testing.allocator);
+    const glyphs = [_]GlyphPosition{
+        .{ .glyph_id = 1, .codepoint = 'A', .cluster = 0, .x_advance = 1 },
+        .{ .glyph_id = 2, .codepoint = 'A', .cluster = 0, .x_advance = 1 },
+        .{ .glyph_id = 3, .codepoint = 'B', .cluster = 1, .x_advance = 1 },
+    };
+    var output_glyphs = std.ArrayList(GlyphPosition).empty;
+    defer output_glyphs.deinit(std.testing.allocator);
+    try output_glyphs.appendSlice(std.testing.allocator, &glyphs);
+
+    try scratch.beginMonotoneSingleOwningRun(
+        std.testing.allocator,
+        &output_glyphs,
+    );
+    try std.testing.expectEqualSlices(
+        GlyphPosition,
+        &glyphs,
+        scratch.old_glyphs.items,
+    );
+    try std.testing.expectEqual(@as(usize, 0), output_glyphs.items.len);
+    try std.testing.expectEqual(@as(usize, glyphs.len), scratch.seen.items.len);
+    try std.testing.expectEqual(@as(usize, 0), scratch.glyph_cluster_index.items.len);
+    try std.testing.expectEqual(@as(usize, 0), scratch.glyph_cluster_index.capacity);
+}
+
+test "failed monotone single-run scratch preparation restores output ownership" {
+    var scratch = Scratch.init(std.testing.allocator);
+    defer scratch.deinit(std.testing.allocator);
+    const glyphs = [_]GlyphPosition{
+        .{ .glyph_id = 1, .codepoint = 'A', .cluster = 0, .x_advance = 1 },
+    };
+    var output_glyphs = std.ArrayList(GlyphPosition).empty;
+    defer output_glyphs.deinit(std.testing.allocator);
+    try output_glyphs.appendSlice(std.testing.allocator, &glyphs);
+    var failing = std.testing.FailingAllocator.init(
+        std.testing.allocator,
+        .{ .fail_index = 0 },
+    );
+
+    try std.testing.expectError(
+        error.OutOfMemory,
+        scratch.beginMonotoneSingleOwningRun(
+            failing.allocator(),
+            &output_glyphs,
+        ),
+    );
+    try std.testing.expectEqualSlices(
+        GlyphPosition,
+        &glyphs,
+        output_glyphs.items,
+    );
+    try std.testing.expectEqual(@as(usize, 0), scratch.old_glyphs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), scratch.glyph_cluster_index.capacity);
+}
+
+test "monotone single-run scratch does not touch retained cluster index capacity" {
+    var scratch = Scratch.init(std.testing.allocator);
+    defer scratch.deinit(std.testing.allocator);
+    try scratch.glyph_cluster_index.ensureTotalCapacity(
+        std.testing.allocator,
+        8,
+    );
+    const retained_capacity = scratch.glyph_cluster_index.capacity;
+    const glyphs = [_]GlyphPosition{
+        .{ .glyph_id = 1, .codepoint = 'A', .cluster = 0, .x_advance = 1 },
+        .{ .glyph_id = 2, .codepoint = 'B', .cluster = 1, .x_advance = 1 },
+    };
+    var output_glyphs = std.ArrayList(GlyphPosition).empty;
+    defer output_glyphs.deinit(std.testing.allocator);
+    try output_glyphs.appendSlice(std.testing.allocator, &glyphs);
+
+    try scratch.beginMonotoneSingleOwningRun(
+        std.testing.allocator,
+        &output_glyphs,
+    );
+    try std.testing.expectEqual(@as(usize, 0), scratch.glyph_cluster_index.items.len);
+    try std.testing.expectEqual(retained_capacity, scratch.glyph_cluster_index.capacity);
 }

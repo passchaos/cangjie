@@ -582,9 +582,11 @@ pub fn applyLinesResolved(
 /// The general transaction carries one run index beside every glyph because a
 /// visual permutation can fragment fallback ownership. When the only run owns
 /// the complete stream, that index is invariantly zero and the run itself is
-/// unchanged. This path retains the general cluster mapping, UAX #9 L1/L2,
-/// mirroring, and unmatched-output rules while omitting that redundant state.
-/// Returns false before mutation when the structural proof no longer holds.
+/// unchanged. The ordinary variant retains the general cluster index; a strict
+/// retained source instead searches its proven monotone cluster slices and
+/// omits that second glyph-sized sidecar too. Both retain UAX #9 L1/L2,
+/// mirroring, and unmatched-output rules. Returns false before mutation when
+/// the structural proof no longer holds.
 pub fn applyLinesResolvedSingleRun(
     buffer: anytype,
     paragraph: unicode.BidiParagraph,
@@ -610,14 +612,17 @@ pub fn applyLinesResolvedSingleRun(
             line.byte_start,
             line.byte_len,
         ) catch return false;
-        if (line.glyph_start < previous_end or glyph_end > glyphs.len or
-            paragraph.scalarIndexForByte(line.byte_start) == null or
-            paragraph.scalarIndexForByte(byte_end) == null)
-        {
+        if (line.glyph_start < previous_end or glyph_end > glyphs.len)
             return false;
-        }
-        const scalar_start = paragraph.scalarIndexForByte(line.byte_start).?;
-        const scalar_end = paragraph.scalarIndexForByte(byte_end).?;
+        // Keep the boundary indexes produced by each binary search instead of
+        // repeating both lookups immediately below. This proof runs on every
+        // retained reflow, including lines whose glyph range is empty.
+        const scalar_start = paragraph.scalarIndexForByte(
+            line.byte_start,
+        ) orelse return false;
+        const scalar_end = paragraph.scalarIndexForByte(
+            byte_end,
+        ) orelse return false;
         if (!source_is_simple) {
             // A materialized soft hyphen is the only post-validation mapping
             // path that requires an additional source lookup. Prove those
@@ -642,10 +647,16 @@ pub fn applyLinesResolvedSingleRun(
     }
 
     const scratch = &buffer.bidi_reorder_scratch;
-    try scratch.beginSingleOwningRun(
-        buffer.allocator,
-        &buffer.glyphs,
-    );
+    if (source_is_simple)
+        try scratch.beginMonotoneSingleOwningRun(
+            buffer.allocator,
+            &buffer.glyphs,
+        )
+    else
+        try scratch.beginSingleOwningRun(
+            buffer.allocator,
+            &buffer.glyphs,
+        );
     var transaction_open = true;
     errdefer if (transaction_open) {
         scratch.rollbackSingleOwningRun(&buffer.glyphs);
@@ -662,7 +673,10 @@ pub fn applyLinesResolvedSingleRun(
         paragraph.scalars.len,
     );
     const old_glyphs = scratch.old_glyphs.items;
-    const glyph_cluster_index = scratch.glyph_cluster_index.items;
+    const glyph_cluster_index = if (source_is_simple)
+        &.{}
+    else
+        scratch.glyph_cluster_index.items;
     const seen = scratch.seen.items;
     const visual_glyphs = &buffer.glyphs;
     const font = run_types.fontForBackend(run);
@@ -707,7 +721,20 @@ pub fn applyLinesResolvedSingleRun(
                 const level = scratch.line_levels.items[
                     scalar_index - scalar_start
                 ];
-                try mapping.appendItemSingleRun(
+                const item: unicode.BidiMapItem = .{
+                    .logical_index = scalar_index,
+                    .visual_index = 0,
+                    .byte_start = scalar.byte_start,
+                    .byte_len = scalar.byte_len,
+                    .codepoint = scalar.codepoint,
+                    .visual_codepoint = if (level & 1 != 0)
+                        unicode.mirroredCodepoint(scalar.codepoint)
+                    else
+                        scalar.codepoint,
+                    .direction = if (level & 1 != 0) .rtl else .ltr,
+                };
+                try mapping.appendItemSingleRunMode(
+                    source_is_simple,
                     buffer.allocator,
                     old_glyphs,
                     font,
@@ -715,18 +742,7 @@ pub fn applyLinesResolvedSingleRun(
                     seen,
                     old_line_start,
                     old_line_end,
-                    .{
-                        .logical_index = scalar_index,
-                        .visual_index = 0,
-                        .byte_start = scalar.byte_start,
-                        .byte_len = scalar.byte_len,
-                        .codepoint = scalar.codepoint,
-                        .visual_codepoint = if (level & 1 != 0)
-                            unicode.mirroredCodepoint(scalar.codepoint)
-                        else
-                            scalar.codepoint,
-                        .direction = if (level & 1 != 0) .rtl else .ltr,
-                    },
+                    item,
                     visual_glyphs,
                 );
             }
@@ -1019,6 +1035,125 @@ test "single owning run resolved path matches general mixed bidi mapping" {
     try std.testing.expectEqual(@as(usize, 0), actual.glyphs.items[5].cluster);
     try std.testing.expectEqual(@as(u21, ' '), actual.glyphs.items[12].codepoint);
     try std.testing.expectEqual(@as(u21, ' '), actual.glyphs.items[13].codepoint);
+}
+
+test "monotone single owning run matches generic clusters ligature X9 and gaps" {
+    const output = @import("../../../shaping/context/output.zig");
+    const paragraph_types = @import("../../types/paragraph.zig");
+    const test_font = @import("../../../test_font.zig");
+
+    const allocator = std.testing.allocator;
+    const font_bytes = try test_font.buildNamedBidiMirrorTtfWithNames(
+        allocator,
+        "Monotone Mirror Sans",
+        "Regular",
+        "Monotone Mirror Sans Regular",
+    );
+    defer allocator.free(font_bytes);
+    var font = try Font.parse(allocator, font_bytes);
+    defer font.deinit();
+
+    // U+202B and U+202C are removed by X9, but their deliberately retained
+    // glyph outputs must survive through the mapper's unmatched-output rule.
+    // Cluster 5 expands to two outputs, while cluster 15 spans both bytes of
+    // the synthetic "fi" ligature. Spaces at glyph indexes 9 and 11 are
+    // wrapping gaps outside visible lines.
+    const text = "A \u{202b}(אב)\u{202c} fi B \u{202b}(אב)\u{202c}";
+    const logical_glyphs = [_]GlyphPosition{
+        .{ .glyph_id = 100, .codepoint = 'A', .cluster = 0, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = 101, .codepoint = ' ', .cluster = 1, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = 102, .codepoint = 0x202b, .cluster = 2, .source_byte_len = 3, .x_advance = 0 },
+        .{ .glyph_id = try font.glyphIndex('('), .codepoint = '(', .cluster = 5, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = 104, .codepoint = '(', .cluster = 5, .source_byte_len = 1, .x_advance = 0 },
+        .{ .glyph_id = try font.glyphIndex(0x05d0), .codepoint = 0x05d0, .cluster = 6, .source_byte_len = 2, .x_advance = 1 },
+        .{ .glyph_id = try font.glyphIndex(0x05d1), .codepoint = 0x05d1, .cluster = 8, .source_byte_len = 2, .x_advance = 1 },
+        .{ .glyph_id = try font.glyphIndex(')'), .codepoint = ')', .cluster = 10, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = 108, .codepoint = 0x202c, .cluster = 11, .source_byte_len = 3, .x_advance = 0 },
+        .{ .glyph_id = 109, .codepoint = ' ', .cluster = 14, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = 110, .codepoint = 'f', .cluster = 15, .source_byte_len = 2, .x_advance = 1 },
+        .{ .glyph_id = 111, .codepoint = ' ', .cluster = 17, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = 112, .codepoint = 'B', .cluster = 18, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = 113, .codepoint = ' ', .cluster = 19, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = 114, .codepoint = 0x202b, .cluster = 20, .source_byte_len = 3, .x_advance = 0 },
+        .{ .glyph_id = try font.glyphIndex('('), .codepoint = '(', .cluster = 23, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = try font.glyphIndex(0x05d0), .codepoint = 0x05d0, .cluster = 24, .source_byte_len = 2, .x_advance = 1 },
+        .{ .glyph_id = try font.glyphIndex(0x05d1), .codepoint = 0x05d1, .cluster = 26, .source_byte_len = 2, .x_advance = 1 },
+        .{ .glyph_id = try font.glyphIndex(')'), .codepoint = ')', .cluster = 28, .source_byte_len = 1, .x_advance = 1 },
+        .{ .glyph_id = 119, .codepoint = 0x202c, .cluster = 29, .source_byte_len = 3, .x_advance = 0 },
+    };
+    const logical_lines = [_]paragraph_types.ParagraphLine{
+        .{ .glyph_start = 0, .glyph_len = 9, .run_start = 0, .run_len = 1, .byte_start = 0, .byte_len = 15, .x = 0, .y = 0, .width = 6, .height = 1, .baseline = 1, .ascent = 1, .descent = 0, .leading = 0 },
+        .{ .glyph_start = 10, .glyph_len = 1, .run_start = 0, .run_len = 1, .byte_start = 15, .byte_len = 3, .x = 0, .y = 1, .width = 1, .height = 1, .baseline = 1, .ascent = 1, .descent = 0, .leading = 0 },
+        .{ .glyph_start = 12, .glyph_len = 8, .run_start = 0, .run_len = 1, .byte_start = 18, .byte_len = 14, .x = 0, .y = 2, .width = 6, .height = 1, .baseline = 1, .ascent = 1, .descent = 0, .leading = 0 },
+    };
+    const logical_run = run_types.CascadeRun{
+        .font = @import("../../../font/face/root.zig").backend.face(&font),
+        .font_index = 0,
+        .font_size = 12,
+        .glyph_start = 0,
+        .glyph_len = logical_glyphs.len,
+        .x_offset = 0,
+    };
+
+    var paragraph = try unicode.resolveBidiParagraph(allocator, text, .ltr);
+    defer paragraph.deinit();
+    // Mirror the preparation-time simple stream proof in this hand-built
+    // fixture: equal clusters are contiguous, each later cluster begins at the
+    // widest preceding source end, and the final output reaches text.len.
+    var expected_byte_start: usize = 0;
+    var active_cluster: ?usize = null;
+    for (logical_glyphs) |glyph| {
+        const source_end = glyph.sourceByteEnd();
+        if (active_cluster != null and glyph.cluster == active_cluster.?) {
+            expected_byte_start = @max(expected_byte_start, source_end);
+            continue;
+        }
+        try std.testing.expectEqual(expected_byte_start, glyph.cluster);
+        try std.testing.expect(source_end > glyph.cluster);
+        active_cluster = glyph.cluster;
+        expected_byte_start = source_end;
+    }
+    try std.testing.expectEqual(text.len, expected_byte_start);
+    for (logical_lines) |line| {
+        const byte_end = line.byte_start + line.byte_len;
+        for (logical_glyphs[line.glyph_start .. line.glyph_start + line.glyph_len]) |glyph| {
+            try std.testing.expect(glyph.cluster >= line.byte_start);
+            try std.testing.expect(glyph.cluster < byte_end);
+        }
+    }
+    var expected = output.Buffer.init(allocator);
+    defer expected.deinit();
+    try expected.glyphs.appendSlice(allocator, &logical_glyphs);
+    try expected.runs.append(allocator, logical_run);
+    try expected.lines.appendSlice(allocator, &logical_lines);
+    try applyLinesResolved(&expected, paragraph);
+
+    var actual = output.Buffer.init(allocator);
+    defer actual.deinit();
+    try actual.glyphs.appendSlice(allocator, &logical_glyphs);
+    try actual.runs.append(allocator, logical_run);
+    try actual.lines.appendSlice(allocator, &logical_lines);
+    try std.testing.expect(
+        try applyLinesResolvedSingleRun(&actual, paragraph, true),
+    );
+
+    try std.testing.expectEqualSlices(
+        GlyphPosition,
+        expected.glyphs.items,
+        actual.glyphs.items,
+    );
+    try std.testing.expectEqualSlices(
+        run_types.CascadeRun,
+        expected.runs.items,
+        actual.runs.items,
+    );
+    try std.testing.expectEqualSlices(
+        paragraph_types.ParagraphLine,
+        expected.lines.items,
+        actual.lines.items,
+    );
+    try std.testing.expectEqual(@as(usize, 0), actual.bidi_reorder_scratch.glyph_cluster_index.items.len);
+    try std.testing.expectEqual(@as(usize, 0), actual.bidi_reorder_scratch.glyph_cluster_index.capacity);
 }
 
 test "single owning run rejects invalid later-line source before mutation" {

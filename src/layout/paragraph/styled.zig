@@ -270,14 +270,13 @@ const Driver = struct {
     pub fn logicalRuns(
         self: *@This(),
         spans: []const styled_paragraph.Span,
-    ) !logical_run_itemization.Iterator {
+    ) !logical_run_itemization.ProbedIterator {
         self.deinitLogicalContext();
-        var probe = if (self.bidi_paragraph) |paragraph|
-            logical_run_itemization.runs(self.text, paragraph)
+        var logical_runs = if (self.bidi_paragraph) |paragraph|
+            logical_run_itemization.probedRuns(self.text, paragraph)
         else
-            logical_run_itemization.baseRuns(self.text, 0);
-        const first = probe.next();
-        const itemized = first != null and probe.next() != null;
+            logical_run_itemization.probedBaseRuns(self.text, 0);
+        const itemized = logical_runs.isItemized();
         self.prepared_context = try logical_context.Prepared.init(
             self.buffer.allocator,
             &.{},
@@ -289,10 +288,7 @@ const Driver = struct {
                 self.options.inline_objects.len != 0 or
                 std.mem.indexOfScalar(u8, self.text, '\t') != null,
         );
-        return if (self.bidi_paragraph) |paragraph|
-            logical_run_itemization.runs(self.text, paragraph)
-        else
-            logical_run_itemization.baseRuns(self.text, 0);
+        return logical_runs;
     }
 
     pub fn allocator(self: *@This()) std.mem.Allocator {

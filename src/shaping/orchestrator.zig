@@ -929,9 +929,8 @@ fn shapeParagraphContent(
         );
         break :paragraph owned_bidi.?;
     };
-    var probe = logical_run_itemization.runs(text, paragraph);
-    const first_item = probe.next();
-    const itemized = first_item != null and probe.next() != null;
+    var logical_runs = logical_run_itemization.probedRuns(text, paragraph);
+    const itemized = logical_runs.isItemized();
     var prepared = try logical_context.Prepared.init(
         buffer.allocator,
         options.context_before,
@@ -942,7 +941,6 @@ fn shapeParagraphContent(
             std.mem.indexOfScalar(u8, text, '\t') != null,
     );
     defer prepared.deinit();
-    var logical_runs = logical_run_itemization.runs(text, paragraph);
     var logical_run = logical_runs.next();
     var items = paragraph_source_items.Cursor.init(
         text,

@@ -153,16 +153,6 @@ const LevelIterator = struct {
         };
     }
 
-    fn initBase(text: []const u8, base_level: u8) LevelIterator {
-        return .{
-            .scalars = &.{},
-            .levels = &.{},
-            .base_level = base_level,
-            .resolved = false,
-            .graphemes = unicode.graphemeClustersAssumeValid(text),
-        };
-    }
-
     fn next(self: *LevelIterator) ?LevelItem {
         const first = self.takeGrapheme() orelse return null;
         var result = first;
@@ -232,10 +222,11 @@ const LevelIterator = struct {
 
 pub const Iterator = struct {
     scripts: ScriptIterator,
-    levels: LevelIterator,
+    levels: ?LevelIterator,
     script_item: ?ScriptItem = null,
     level_item: ?LevelItem = null,
     cursor: usize = 0,
+    base_level: u8 = 0,
 
     pub fn init(text: []const u8, paragraph: unicode.BidiParagraph) Iterator {
         std.debug.assert(paragraph.scalars.len == paragraph.classes.len);
@@ -256,13 +247,33 @@ pub const Iterator = struct {
     pub fn initBase(text: []const u8, base_level: u8) Iterator {
         return .{
             .scripts = .init(text),
-            .levels = .initBase(text, base_level),
+            .levels = null,
+            .base_level = base_level,
         };
     }
 
     pub fn next(self: *Iterator) ?Run {
+        // Without resolved bidi levels, script items are already the final
+        // partition. Do not walk the same grapheme stream a second time merely
+        // to attach one constant paragraph level.
+        if (self.levels == null) {
+            const script = self.scripts.next() orelse return null;
+            return .{
+                .script = script.script,
+                .level = self.base_level,
+                .direction = directionForLevel(self.base_level),
+                .byte_start = script.byte_start,
+                .byte_len = script.byte_len,
+                .script_byte_start = script.byte_start,
+                .script_byte_len = script.byte_len,
+            };
+        }
         if (self.script_item == null) self.script_item = self.scripts.next();
-        if (self.level_item == null) self.level_item = self.levels.next();
+        if (self.level_item == null) {
+            if (self.levels) |*levels| {
+                self.level_item = levels.next();
+            } else unreachable;
+        }
         const script = self.script_item orelse return null;
         const level = self.level_item orelse return null;
         std.debug.assert(self.cursor >= script.byte_start);
@@ -285,12 +296,52 @@ pub const Iterator = struct {
     }
 };
 
+/// A two-item lookahead which answers whether itemization produced multiple
+/// runs without restarting the Unicode iterators. Callers then consume the
+/// prefetched items followed by the already-advanced underlying iterator.
+pub const ProbedIterator = struct {
+    iterator: Iterator,
+    prefetched: [2]?Run,
+    replay_index: usize = 0,
+
+    pub fn next(self: *ProbedIterator) ?Run {
+        if (self.replay_index < self.prefetched.len) {
+            const result = self.prefetched[self.replay_index];
+            self.replay_index += 1;
+            if (result != null) return result;
+        }
+        return self.iterator.next();
+    }
+
+    pub fn isItemized(self: *const ProbedIterator) bool {
+        return self.prefetched[1] != null;
+    }
+};
+
+fn probe(iterator: Iterator) ProbedIterator {
+    var advanced = iterator;
+    const first = advanced.next();
+    const second = advanced.next();
+    return .{
+        .iterator = advanced,
+        .prefetched = .{ first, second },
+    };
+}
+
 pub fn runs(text: []const u8, paragraph: unicode.BidiParagraph) Iterator {
     return .init(text, paragraph);
 }
 
 pub fn baseRuns(text: []const u8, base_level: u8) Iterator {
     return .initBase(text, base_level);
+}
+
+pub fn probedRuns(text: []const u8, paragraph: unicode.BidiParagraph) ProbedIterator {
+    return probe(.init(text, paragraph));
+}
+
+pub fn probedBaseRuns(text: []const u8, base_level: u8) ProbedIterator {
+    return probe(.initBase(text, base_level));
 }
 
 /// Construct the script-only iterator used by proven pure-LTR shaping paths.
@@ -359,6 +410,37 @@ test "script-only empty text remains exhausted" {
     var iterator = scriptRuns("");
     try std.testing.expectEqual(@as(?ScriptRun, null), iterator.next());
     try std.testing.expectEqual(@as(?ScriptRun, null), iterator.next());
+}
+
+test "probed base runs replay lookahead without restarting itemization" {
+    const text = "A\u{0951}\u{0627}12B";
+    var expected = baseRuns(text, 0);
+    var probed = probedBaseRuns(text, 0);
+    try std.testing.expect(probed.isItemized());
+    while (expected.next()) |run| {
+        try std.testing.expectEqualDeep(run, probed.next().?);
+    }
+    try std.testing.expectEqual(@as(?Run, null), probed.next());
+}
+
+test "probed resolved runs replay lookahead without losing X9 levels" {
+    const text = "A\u{202e}B\u{202c}\u{0627}";
+    var paragraph = try unicode.resolveBidiParagraph(
+        std.testing.allocator,
+        text,
+        .ltr,
+    );
+    defer paragraph.deinit();
+    var expected = runs(text, paragraph);
+    var probed = probedRuns(text, paragraph);
+    try std.testing.expect(probed.isItemized());
+    while (expected.next()) |run| {
+        const replayed = probed.next() orelse
+            return error.MissingLogicalRun;
+        try std.testing.expectEqualDeep(run, replayed);
+        try std.testing.expect(replayed.level != 0xff);
+    }
+    try std.testing.expectEqual(@as(?Run, null), probed.next());
 }
 
 test "script edges inside a grapheme preserve preceding-base ownership" {

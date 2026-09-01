@@ -24,3 +24,26 @@ test "ligature second prefilter counts competing definitions" {
         false,
     ));
 }
+
+test "small exact required-second policy is cardinality bounded" {
+    try std.testing.expect(ligature.shouldBuildExactRequiredSecondIndex(
+        true,
+        1,
+    ));
+    try std.testing.expect(ligature.shouldBuildExactRequiredSecondIndex(
+        true,
+        ligature.max_exact_required_seconds,
+    ));
+    try std.testing.expect(!ligature.shouldBuildExactRequiredSecondIndex(
+        true,
+        0,
+    ));
+    try std.testing.expect(!ligature.shouldBuildExactRequiredSecondIndex(
+        true,
+        ligature.max_exact_required_seconds + 1,
+    ));
+    try std.testing.expect(!ligature.shouldBuildExactRequiredSecondIndex(
+        false,
+        1,
+    ));
+}

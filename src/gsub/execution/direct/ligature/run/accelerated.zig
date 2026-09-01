@@ -279,6 +279,93 @@ test "digest required-second prefilter preserves lookup-ignored marks" {
     try std.testing.expectEqualSlices(GlyphId, &.{ 40, 99 }, glyphs.items);
 }
 
+test "exact required-second prefilter preserves logical visibility" {
+    var first_digest = @import("../../../../../glyph_digest.zig").GlyphDigest.empty();
+    first_digest.add(1);
+    const sets = [_]accelerator.model.LigatureSet{.{
+        .glyph = 1,
+        .definition_start = 0,
+        .definition_len = 1,
+    }};
+    const definitions = [_]accelerator.model.LigatureDefinition{.{
+        .ligature = 40,
+        .component_start = 0,
+        .component_count = 2,
+    }};
+    const exact_ligature: Ligature = .{
+        .sets = &sets,
+        .definitions = &definitions,
+        // The decoded component prefix and exact-index tail deliberately live
+        // in the same allocation, as they do in builder output.
+        .components = &.{ 2, 2 },
+        .first_component_digest = first_digest,
+        .required_second_start = 1,
+        .required_second_len = 1,
+    };
+
+    var glyph_classes = [_]u16{0} ** 100;
+    glyph_classes[99] = 3;
+    var marked = std.ArrayList(GlyphId).empty;
+    defer marked.deinit(std.testing.allocator);
+    try marked.appendSlice(std.testing.allocator, &.{ 1, 99, 2 });
+    try applyRequiredSecond(
+        exact_ligature,
+        &marked,
+        std.testing.allocator,
+        0x0008,
+        .{ .glyph_classes = &glyph_classes },
+    );
+    try std.testing.expectEqualSlices(GlyphId, &.{ 40, 99 }, marked.items);
+
+    var sources = std.ArrayList(usize).empty;
+    defer sources.deinit(std.testing.allocator);
+    try sources.appendSlice(std.testing.allocator, &.{ 0, 1, 2 });
+    const codepoints = [_]u21{ 'A', 0x034f, 'B' };
+    var controlled = std.ArrayList(GlyphId).empty;
+    defer controlled.deinit(std.testing.allocator);
+    try controlled.appendSlice(std.testing.allocator, &.{ 1, 99, 2 });
+    try applyRequiredSecond(
+        exact_ligature,
+        &controlled,
+        std.testing.allocator,
+        0,
+        .{
+            .glyph_source_indices = &sources,
+            .source_codepoints = &codepoints,
+            .run_has_default_ignorables = true,
+        },
+    );
+    try std.testing.expectEqualSlices(GlyphId, &.{ 40, 99 }, controlled.items);
+}
+
+test "invalid exact required-second range falls back to decoded rules" {
+    var first_digest = @import("../../../../../glyph_digest.zig").GlyphDigest.empty();
+    first_digest.add(1);
+    const sets = [_]accelerator.model.LigatureSet{.{
+        .glyph = 1,
+        .definition_start = 0,
+        .definition_len = 1,
+    }};
+    const definitions = [_]accelerator.model.LigatureDefinition{.{
+        .ligature = 40,
+        .component_start = 0,
+        .component_count = 2,
+    }};
+    var glyphs = std.ArrayList(GlyphId).empty;
+    defer glyphs.deinit(std.testing.allocator);
+    try glyphs.appendSlice(std.testing.allocator, &.{ 1, 2 });
+
+    try applyRequiredSecond(.{
+        .sets = &sets,
+        .definitions = &definitions,
+        .components = &.{2},
+        .first_component_digest = first_digest,
+        .required_second_start = 1,
+        .required_second_len = 1,
+    }, &glyphs, std.testing.allocator, 0, .{});
+    try std.testing.expectEqualSlices(GlyphId, &.{40}, glyphs.items);
+}
+
 test "invalid required-second digest falls back to decoded rules" {
     var first_digest = @import("../../../../../glyph_digest.zig").GlyphDigest.empty();
     first_digest.add(1);

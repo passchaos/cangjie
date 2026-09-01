@@ -5141,3 +5141,31 @@ shaping-performance superiority.
   defensive version preserved glyph counts/checksums but regressed symmetric
   fixed-CPU-30 words and long-text measurements by roughly 14--16%, so none of
   that indexing machinery is retained.
+
+### Small LigatureSubst required-second sets (2026-09-02)
+
+- A LigatureSubst lookup in Source Serif's `ccmp` feature has 14 definitions
+  distributed across 13 first-glyph sets. Its per-set competition count is
+  therefore only one, but every definition requires one of four combining-mark
+  second glyphs. When every decoded definition requires a second component and
+  the complete unique set has at most 16 glyphs, the builder now appends that
+  sorted exact set to the existing component allocation and records it in the
+  compact required-second range. Larger low-competition sets retain ordinary
+  matching, while the existing 128-competition digest policy keeps precedence
+  for large lookups. No lookup-sidecar size changes.
+- The exact set remains only a necessary-condition filter. Physical pair scans
+  still require both zero LookupFlag and the no-default-ignorables proof; all
+  other runs scan a permissive whole-run superset before the visibility-aware
+  matcher. Invalid bounds, oversized ranges, or noncanonical unsorted/duplicate
+  metadata fall back to decoded definitions. Focused tests cover component-tail
+  layout and deduplication, digest-policy precedence, IgnoreMarks and CGJ
+  traversal, and malformed metadata. The complete ReleaseFast suite and direct
+  HarfRust corpus comparisons pass. The full HarfBuzz corpus target could not
+  run on the host's HarfBuzz 8.3.0 because that gate requires 14.2.0 or newer.
+- Independent ReleaseFast binaries from `b0b4f43b` were compared serially on an
+  idle E-core in A/B/B/A order. Seven-sample screening improved Source Serif
+  words by `3.78%` and long prose by `5.22%`; Roboto words and Devanagari words
+  controls improved by `0.33%` and `3.09%`. A 31-sample Source Serif
+  confirmation improved words from `123.126` to `116.011 ns/glyph` (`6.13%`)
+  and long prose from `89.225` to `86.071 ns/glyph` (`3.67%`). Every paired run
+  retained exact aggregate glyph counts and checksums.

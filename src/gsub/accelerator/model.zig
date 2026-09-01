@@ -122,8 +122,9 @@ pub const LigatureSubstitution = struct {
     definitions: []const LigatureDefinition = &.{},
     components: []const GlyphId = &.{},
     first_component_digest: GlyphDigest = .{},
-    /// Compact range metadata uses tail padding instead of widening every
-    /// lookup sidecar with another slice.
+    /// Compact exact-range or tagged-digest metadata uses tail padding instead
+    /// of widening every lookup sidecar with another slice. Both payload kinds
+    /// live after the decoded definition components in `components`.
     required_second_start: u32 = 0,
     required_second_len: u16 = 0,
     prefilter_second: bool = false,

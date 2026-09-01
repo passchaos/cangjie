@@ -13,8 +13,10 @@ pub const View = table.View;
 
 pub const min_competing_for_prefilter = 32;
 pub const min_competing_for_required_second = 128;
+pub const max_exact_required_seconds = 16;
 const required_second_digest_flag: u16 = 0x8000;
 const required_second_digest_u16_len: u16 = 12;
+const bounded_second_capacity = max_exact_required_seconds + 1;
 
 pub fn build(
     view: View,
@@ -37,6 +39,8 @@ pub fn build(
     var competing_count: usize = 0;
     var first_digest = GlyphDigest.empty();
     var second_digest = GlyphDigest.empty();
+    var bounded_seconds: [bounded_second_capacity]GlyphId = undefined;
+    var bounded_second_len: usize = 0;
     var all_require_second = true;
 
     for (sets, 0..) |*set, set_index| {
@@ -84,6 +88,11 @@ pub fn build(
                 try components.append(allocator, component);
                 if (component_index == 1) {
                     second_digest.add(component);
+                    addBoundedUniqueSecond(
+                        &bounded_seconds,
+                        &bounded_second_len,
+                        component,
+                    );
                 }
             }
             try definitions.append(allocator, .{
@@ -128,6 +137,30 @@ pub fn build(
                 }
             }
         }
+    } else if (shouldBuildExactRequiredSecondIndex(
+        all_require_second,
+        bounded_second_len,
+    )) {
+        // Definition components occupy the prefix of this allocation. The
+        // exact index is a disjoint tail, so the recorded component_start
+        // values remain valid and ownership stays in one compact slice.
+        std.sort.heap(
+            GlyphId,
+            bounded_seconds[0..bounded_second_len],
+            {},
+            lessGlyph,
+        );
+        if (components.items.len <= std.math.maxInt(u32) and
+            bounded_second_len <=
+                @as(usize, std.math.maxInt(u32)) - components.items.len)
+        {
+            required_second_start = @intCast(components.items.len);
+            required_second_len = @intCast(bounded_second_len);
+            try components.appendSlice(
+                allocator,
+                bounded_seconds[0..bounded_second_len],
+            );
+        }
     }
 
     const owned_definitions = try definitions.toOwnedSlice(allocator);
@@ -151,12 +184,20 @@ pub fn requiredSecondComponents(ligature: Ligature) []const GlyphId {
     }
     const start: usize = ligature.required_second_start;
     const len: usize = ligature.required_second_len;
-    if (start > ligature.components.len or
+    if (len == 0 or len > max_exact_required_seconds or
+        start > ligature.components.len or
         len > ligature.components.len - start)
     {
         return &.{};
     }
-    return ligature.components[start .. start + len];
+    const seconds = ligature.components[start .. start + len];
+    // Binary search is only sound for the builder's sorted, deduplicated
+    // representation. Treat malformed optional metadata as absent so runtime
+    // execution falls back to the authoritative decoded definitions.
+    for (seconds[1..], seconds[0 .. seconds.len - 1]) |current, previous| {
+        if (current <= previous) return &.{};
+    }
+    return seconds;
 }
 
 pub fn requiredSecondDigest(ligature: Ligature) ?GlyphDigest {
@@ -196,6 +237,36 @@ pub fn shouldBuildRequiredSecondIndex(
 ) bool {
     return all_require_second and
         competing_count >= min_competing_for_required_second;
+}
+
+pub fn shouldBuildExactRequiredSecondIndex(
+    all_require_second: bool,
+    unique_second_count: usize,
+) bool {
+    return all_require_second and
+        unique_second_count > 0 and
+        unique_second_count <= max_exact_required_seconds;
+}
+
+fn addBoundedUniqueSecond(
+    seconds: *[bounded_second_capacity]GlyphId,
+    len: *usize,
+    glyph: GlyphId,
+) void {
+    // Seventeen distinct values are enough to disqualify the small exact
+    // representation. Retaining that overflow sentinel (rather than clamping
+    // to 16) prevents the builder from indexing an incomplete required set;
+    // stop doing even bounded duplicate scans after it is present.
+    if (len.* == seconds.len) return;
+    for (seconds[0..len.*]) |existing| {
+        if (existing == glyph) return;
+    }
+    seconds[len.*] = glyph;
+    len.* += 1;
+}
+
+fn lessGlyph(_: void, lhs: GlyphId, rhs: GlyphId) bool {
+    return lhs < rhs;
 }
 
 fn lessSet(_: void, lhs: model.LigatureSet, rhs: model.LigatureSet) bool {

@@ -676,6 +676,23 @@ class digest improved Noto retired work but regressed the Devanagari control,
 and predecoded CursivePos anchors reduced Noto retired work by less than half a
 percent while leaving target wall time flat and regressing the Roboto control.
 
+A later bounded GPOS completion now prepares MarkLigPos mark/ligature Coverage
+indexes for direct and homogeneous ExtensionPos lookups, including exact nested
+dispatch. It remains whole-corpus neutral, as expected for Noto lookup 13's
+small share. ContextSubst's hash matcher also now starts at each group's
+already-proven minimum input length rather than binary-searching impossible
+shorter prefix hashes. Fixed-CPU-30 five-pass counters fell by about
+`0.72%` instructions/`1.00%` branches on Noto words and `0.97%`/`1.26%` on
+long prose; 31-sample timing was noise-scale (`1.0030x`/`1.0016x`). The latest
+post-change broad report-only sample remains red at `0.825879x` and `0.667667x`
+for Noto words/long, while Roboto and Source Serif long remain wins. A separate
+attempt to reuse the chaining second-input digest in the top-level loop was
+rejected after Noto regressed about `0.24--0.44%` and Roboto showed a material
+code-layout regression. An exact dense ContextSubst second-class index was also
+rejected: it reduced branch counts but did not reduce Noto words instructions
+and regressed controls. These experiments are not superiority evidence; the
+Noto gap remains open.
+
 ## Audit rules
 
 1. A semantic manifest proves inventory only; it is not a differential test.

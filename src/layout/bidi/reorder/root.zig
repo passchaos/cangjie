@@ -727,7 +727,8 @@ pub fn applyLinesResolvedSingleRun(
                     .byte_start = scalar.byte_start,
                     .byte_len = scalar.byte_len,
                     .codepoint = scalar.codepoint,
-                    .visual_codepoint = if (level & 1 != 0)
+                    .visual_codepoint = if (level & 1 != 0 and
+                        bidi.mayHaveBidiMirror(scalar.codepoint))
                         unicode.mirroredCodepoint(scalar.codepoint)
                     else
                         scalar.codepoint,
@@ -869,7 +870,8 @@ pub fn applyLinesResolvedRecording(
                         .byte_start = scalar.byte_start,
                         .byte_len = scalar.byte_len,
                         .codepoint = scalar.codepoint,
-                        .visual_codepoint = if (level & 1 != 0)
+                        .visual_codepoint = if (level & 1 != 0 and
+                            bidi.mayHaveBidiMirror(scalar.codepoint))
                             unicode.mirroredCodepoint(scalar.codepoint)
                         else
                             scalar.codepoint,

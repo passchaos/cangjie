@@ -146,7 +146,13 @@ pub fn reverseRecords(comptime T: type, items: []T) void {
     }
 }
 
-fn mayHaveBidiMirror(codepoint: u21) bool {
+/// Cheap one-sided filter for the generated Unicode bidi mirror map.
+///
+/// `false` guarantees that mirror lookup would return `codepoint`; `true` is
+/// deliberately allowed to be a false positive. Keeping that contract makes
+/// the hot Arabic/Hebrew paths inexpensive while an exhaustive test below
+/// protects this hand-maintained range summary when Unicode data changes.
+pub fn mayHaveBidiMirror(codepoint: u21) bool {
     if (codepoint < 0x28) return false;
     if (codepoint <= 0x7d) {
         return codepoint == '(' or codepoint == ')' or
@@ -235,4 +241,24 @@ test "pure RTL mirror proof recognizes only candidate ranges" {
     };
     try std.testing.expect(!runMayHaveBidiMirroring(&plain));
     try std.testing.expect(runMayHaveBidiMirroring(&bracketed));
+}
+
+test "bidi mirror candidate filter has no false negatives" {
+    var value: u32 = 0;
+    while (value <= 0x10ffff) : (value += 1) {
+        const codepoint: u21 = @intCast(value);
+        if (unicode.mirroredCodepoint(codepoint) != codepoint) {
+            try std.testing.expect(mayHaveBidiMirror(codepoint));
+        }
+    }
+
+    // These are representative hot-path letters, not merely values in gaps
+    // between the coarse punctuation and mathematical candidate ranges.
+    for ([_]u21{ 0x05d0, 0x05ea, 0x0627, 0x0633, 0x0644, 0x0645 }) |codepoint| {
+        try std.testing.expect(!mayHaveBidiMirror(codepoint));
+        try std.testing.expectEqual(
+            codepoint,
+            unicode.mirroredCodepoint(codepoint),
+        );
+    }
 }

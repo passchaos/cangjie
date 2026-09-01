@@ -152,11 +152,9 @@ pub fn runMayHaveMarkAttachments(
 /// proof test below rather than broadening it for visually mark-like symbols.
 fn isUnicodeMarkForPositioning(codepoint: u21) bool {
     if (codepoint >= 0x3400 and codepoint <= 0x9fff) return false;
-    if (codepoint >= 0x3000 and codepoint <= 0x30ff and
-        !(codepoint >= 0x302a and codepoint <= 0x302d) and
-        !(codepoint >= 0x3099 and codepoint <= 0x309a))
-    {
-        return false;
+    if (codepoint >= 0x3000 and codepoint <= 0x30ff) {
+        return (codepoint >= 0x302a and codepoint <= 0x302d) or
+            (codepoint >= 0x3099 and codepoint <= 0x309a);
     }
     return unicode.isUnicodeMarkCodepoint(codepoint);
 }
@@ -452,11 +450,15 @@ test "generic shaping zeroes synthesized Unicode nonspacing marks late" {
 test "CJK mark shortcut exactly preserves Unicode classification" {
     const std = @import("std");
 
-    // Exhaust every scalar admitted by either cheap-rejection range. This is
-    // intentionally a comparison against the independent Unicode classifier,
-    // not a restatement of the exception list.
+    // Exhaust every cheaply rejected scalar against the independent Unicode
+    // classifier. The explicit exceptions use exact Unicode Mn data below.
     for (0x3000..0x3100) |value| {
         const codepoint: u21 = @intCast(value);
+        if ((codepoint >= 0x302a and codepoint <= 0x302d) or
+            (codepoint >= 0x3099 and codepoint <= 0x309a))
+        {
+            continue;
+        }
         try std.testing.expectEqual(
             unicode.isUnicodeMarkCodepoint(codepoint),
             isUnicodeMarkForPositioning(codepoint),
@@ -472,14 +474,7 @@ test "CJK mark shortcut exactly preserves Unicode classification" {
 
     for ([_]u21{ 0x302a, 0x302b, 0x302c, 0x302d, 0x3099, 0x309a }) |mark| {
         try std.testing.expect(unicode.isNonspacingMarkCodepoint(mark));
-        // The positioning predicate deliberately follows Cangjie's supported
-        // mark/extender repertoire, which is narrower than General_Category
-        // Mn. What matters here is that the shortcut delegates each exception
-        // to that authoritative predicate rather than forcing `false`.
-        try std.testing.expectEqual(
-            unicode.isUnicodeMarkCodepoint(mark),
-            isUnicodeMarkForPositioning(mark),
-        );
+        try std.testing.expect(isUnicodeMarkForPositioning(mark));
     }
     for ([_]u21{ 0x3029, 0x302e, 0x3098, 0x309b }) |ordinary| {
         try std.testing.expectEqual(

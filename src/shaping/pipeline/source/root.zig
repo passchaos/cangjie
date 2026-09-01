@@ -13,6 +13,7 @@ const GlyphIndexCache = cache_mod.GlyphIndexCache;
 const scratch_mod = @import("../../context/scratch.zig");
 const source_buffer = @import("buffer.zig");
 const support = @import("support.zig");
+const three_byte = @import("three_byte.zig");
 const thai_lao = @import("thai_lao.zig");
 const unicode = @import("../../../unicode.zig");
 
@@ -37,6 +38,32 @@ pub fn populate(
     cluster_base: usize,
     all_ascii: bool,
     options: anytype,
+) !Result {
+    return populateWithMode(
+        allocator,
+        font,
+        glyph_index_cache,
+        scratch,
+        text,
+        cluster_base,
+        all_ascii,
+        options,
+        .automatic,
+    );
+}
+
+const PopulationMode = enum { automatic, generic };
+
+fn populateWithMode(
+    allocator: std.mem.Allocator,
+    font: *const Font,
+    glyph_index_cache: ?*GlyphIndexCache,
+    scratch: *scratch_mod.ShapeScratch,
+    text: []const u8,
+    cluster_base: usize,
+    all_ascii: bool,
+    options: anytype,
+    comptime mode: PopulationMode,
 ) !Result {
     scratch.clear();
     const glyph_ids = &scratch.glyph_ids;
@@ -93,32 +120,46 @@ pub fn populate(
         }
         return result;
     }
-    if (options.script == .devanagari and
+    if (mode == .automatic and
         options.direction == .ltr and
         !options.writing_mode.isVertical() and
-        options.cluster_level == null and
-        isDevanagariBlockUtf8(text))
+        options.cluster_level == null)
     {
-        // A homogeneous Devanagari-block run cannot contain variation
-        // selectors, Arabic presentation composition, default-ignorables, or
-        // bidi controls. Its default cluster policy is one source per scalar,
-        // so populate the already-reserved parallel arrays directly instead
-        // of evaluating every generic-script predicate for every character.
-        result.primary_devanagari_block = true;
-        var byte_index: usize = 0;
-        while (byte_index < text.len) : (byte_index += 3) {
-            const codepoint: u21 = (@as(u21, text[byte_index] & 0x0f) << 12) |
-                (@as(u21, text[byte_index + 1] & 0x3f) << 6) |
-                @as(u21, text[byte_index + 2] & 0x3f);
-            source_buffer.appendIdentity(
+        if (options.script == .devanagari and isDevanagariBlockUtf8(text)) {
+            // A homogeneous Devanagari-block run cannot contain variation
+            // selectors, Arabic presentation composition, default-ignorables,
+            // or bidi controls. Its default cluster policy is one source per
+            // scalar, so populate the already-reserved parallel arrays without
+            // evaluating every generic-script predicate for every character.
+            result.primary_devanagari_block = true;
+            try three_byte.populate(
+                font,
+                glyph_index_cache,
                 scratch,
-                try support.glyphIndex(font, glyph_index_cache, codepoint),
-                codepoint,
-                cluster_base + byte_index,
-                cluster_base + byte_index + 3,
+                text,
+                cluster_base,
+                false,
             );
+            return result;
         }
-        return result;
+        if (three_byte.supportsJapaneseScript(options.script) and
+            three_byte.isJapaneseText(text))
+        {
+            // This proof admits only three-byte BMP Han, Hiragana, Katakana,
+            // and Japanese punctuation that is neither a mark nor a default
+            // ignorable. Horizontal LTR presentation is identity as well, so
+            // the generic source loop cannot merge, replace, mirror, or omit
+            // any admitted scalar.
+            try three_byte.populate(
+                font,
+                glyph_index_cache,
+                scratch,
+                text,
+                cluster_base,
+                true,
+            );
+            return result;
+        }
     }
     const track_bidi_reorder = options.reorder_bidi and
         !options.writing_mode.isVertical() and
@@ -459,6 +500,164 @@ test "source scan recognizes bidi visual-reorder triggers" {
     try std.testing.expect(!scalarInRange(0x202e, range));
     try std.testing.expect(unicode.mayNeedBidiVisualReorder(0x05d0));
     try std.testing.expect(unicode.mayNeedBidiVisualReorder(0x202e));
+}
+
+const TestOptions = struct {
+    script: unicode.Script = .han,
+    script_tag: unicode.OpenTypeScriptTag = .hani,
+    direction: @import("../types.zig").TextDirection = .ltr,
+    writing_mode: @import("../types.zig").WritingMode = .horizontal_tb,
+    cluster_level: ?@import("../types.zig").ClusterLevel = null,
+    reorder_bidi: bool = true,
+
+    fn needsRtlNumericDirectionGuard(_: @This()) bool {
+        return false;
+    }
+};
+
+test "Japanese three-byte fast path matches generic source population" {
+    const test_font = @import("../../../test_font.zig");
+    const allocator = std.testing.allocator;
+    const codepoint_set = [_]u32{
+        0x20,
+        0x3001,
+        0x3002,
+        0x3008,
+        0x3009,
+        0x3042,
+        0x304c,
+        0x30ab,
+        0x30fc,
+        0x3400,
+        0x4e00,
+        0x65e5,
+        0x672c,
+        0x8a9e,
+        0x9fff,
+    };
+    const bytes = try test_font.buildCodepointSetTtf(allocator, &codepoint_set);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    const options = TestOptions{};
+    const text = "日本語かなカナ、。〈〉㐀龿　";
+    var expected: scratch_mod.ShapeScratch = .{};
+    defer expected.deinit(allocator);
+    var actual: scratch_mod.ShapeScratch = .{};
+    defer actual.deinit(allocator);
+    const expected_result = try populateWithMode(
+        allocator,
+        &font,
+        null,
+        &expected,
+        text,
+        17,
+        false,
+        options,
+        .generic,
+    );
+    try three_byte.testing.populateForced(
+        allocator,
+        &font,
+        null,
+        &actual,
+        text,
+        17,
+    );
+    try std.testing.expect(!expected_result.has_default_ignorable);
+    try std.testing.expect(!expected_result.run_has_decimal_number);
+    try std.testing.expect(!expected_result.run_has_letter);
+    try std.testing.expect(!expected_result.may_need_bidi_reorder);
+    try expectEquivalentSourceBuffers(&expected, &actual);
+}
+
+fn expectEquivalentSourceBuffers(
+    expected: *const scratch_mod.ShapeScratch,
+    actual: *const scratch_mod.ShapeScratch,
+) !void {
+    try std.testing.expectEqualSlices(
+        GlyphId,
+        expected.glyph_ids.items,
+        actual.glyph_ids.items,
+    );
+    try std.testing.expectEqualSlices(
+        u21,
+        expected.codepoints.items,
+        actual.codepoints.items,
+    );
+    try std.testing.expectEqualSlices(
+        usize,
+        expected.clusters.items,
+        actual.clusters.items,
+    );
+    try std.testing.expectEqualSlices(
+        usize,
+        expected.source_ends.items,
+        actual.source_ends.items,
+    );
+    try std.testing.expectEqualSlices(
+        usize,
+        expected.glyph_source_indices.items,
+        actual.glyph_source_indices.items,
+    );
+    try std.testing.expectEqualSlices(
+        usize,
+        expected.glyph_cluster_indices.items,
+        actual.glyph_cluster_indices.items,
+    );
+    try std.testing.expectEqualSlices(
+        bool,
+        expected.glyph_substituted.items,
+        actual.glyph_substituted.items,
+    );
+    try std.testing.expectEqualSlices(
+        @import("../../../ligature_provenance.zig").Info,
+        expected.ligature_components.infos.items,
+        actual.ligature_components.infos.items,
+    );
+    try std.testing.expectEqualSlices(
+        usize,
+        expected.ligature_components.sources.items,
+        actual.ligature_components.sources.items,
+    );
+}
+
+test "Japanese three-byte fast path releases partial storage on allocation failure" {
+    const test_font = @import("../../../test_font.zig");
+    const codepoint_set = [_]u32{ 0x3001, 0x3042, 0x30ab, 0x4e00 };
+    const bytes = try test_font.buildCodepointSetTtf(
+        std.testing.allocator,
+        &codepoint_set,
+    );
+    defer std.testing.allocator.free(bytes);
+    var font = try Font.parse(std.testing.allocator, bytes);
+    defer font.deinit();
+
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        struct {
+            fn run(allocator: std.mem.Allocator, parsed_font: *const Font) !void {
+                var scratch: scratch_mod.ShapeScratch = .{};
+                defer scratch.deinit(allocator);
+                var glyph_index_cache = GlyphIndexCache.init(allocator);
+                defer glyph_index_cache.deinit();
+                const result = try populate(
+                    allocator,
+                    parsed_font,
+                    &glyph_index_cache,
+                    &scratch,
+                    "一あカ、",
+                    5,
+                    false,
+                    TestOptions{},
+                );
+                try std.testing.expect(!result.has_default_ignorable);
+                try std.testing.expectEqual(@as(usize, 4), scratch.glyph_ids.items.len);
+            }
+        }.run,
+        .{&font},
+    );
 }
 
 test "Devanagari UTF-8 fast-path proof requires the complete block" {

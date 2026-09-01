@@ -117,6 +117,7 @@ test "simple retained mixed bidi keeps one run across wrapped reflows" {
     );
     defer shaped.deinit();
     try std.testing.expect(shaped.simple_reflow);
+    try std.testing.expect(shaped.direct_bidi_scalar_glyphs);
     try std.testing.expectEqual(@as(usize, 1), shaped.runs.len);
 
     var reflow = ReflowBuffer.init(allocator);
@@ -142,6 +143,14 @@ test "simple retained mixed bidi keeps one run across wrapped reflows" {
         @as(usize, 0),
         reflow.buffer.bidi_reorder_scratch.visual_run_indices.capacity,
     );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        reflow.buffer.bidi_reorder_scratch.glyph_cluster_index.capacity,
+    );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        reflow.buffer.bidi_reorder_scratch.seen.capacity,
+    );
     const narrow_glyphs = try allocator.dupe(GlyphPosition, narrow.glyphs);
     defer allocator.free(narrow_glyphs);
 
@@ -161,6 +170,152 @@ test "simple retained mixed bidi keeps one run across wrapped reflows" {
         narrow_glyphs,
         narrow_again.glyphs,
     );
+}
+
+test "direct retained bidi exactly matches general layout across reflows" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildNamedBidiMirrorTtfWithNames(
+        allocator,
+        "Retained Mirror Sans",
+        "Regular",
+        "Retained Mirror Sans Regular",
+    );
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    const text = "(אב) A (אב) A ";
+
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var shaped = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        cascade,
+        &shape_buffer,
+        text,
+        20,
+        .{ .max_width = 200, .direction = .ltr },
+    );
+    defer shaped.deinit();
+    try std.testing.expect(shaped.simple_reflow);
+    try std.testing.expect(shaped.direct_bidi_scalar_glyphs);
+
+    var reflow = ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    var one_shot_buffer = LayoutBuffer.init(allocator);
+    defer one_shot_buffer.deinit();
+    for ([_]f32{ 60, 200, 75, 60 }) |width| {
+        const retained = try shaped.layout(&reflow, .{
+            .max_width = width,
+            .direction = .ltr,
+        });
+        const retained_glyphs = try allocator.dupe(
+            GlyphPosition,
+            retained.glyphs,
+        );
+        defer allocator.free(retained_glyphs);
+        const retained_runs = try allocator.dupe(CascadeRun, retained.runs);
+        defer allocator.free(retained_runs);
+        const retained_lines = try allocator.dupe(
+            support.ParagraphLine,
+            retained.lines,
+        );
+        defer allocator.free(retained_lines);
+        const expected = try TextShaper.layoutParagraphUtf8(
+            cascade,
+            &one_shot_buffer,
+            text,
+            20,
+            .{ .max_width = width, .direction = .ltr },
+        );
+        try std.testing.expectEqualSlices(
+            GlyphPosition,
+            expected.glyphs,
+            retained_glyphs,
+        );
+        try std.testing.expectEqualSlices(
+            CascadeRun,
+            expected.runs,
+            retained_runs,
+        );
+        try std.testing.expectEqualSlices(
+            support.ParagraphLine,
+            expected.lines,
+            retained_lines,
+        );
+        try std.testing.expectEqual(expected.width, retained.width);
+        try std.testing.expectEqual(expected.height, retained.height);
+    }
+
+    // The strict path needs neither lookup structure used by the general
+    // cluster mapper, even after alternating narrow and wide transactions.
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        reflow.buffer.bidi_reorder_scratch.glyph_cluster_index.capacity,
+    );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        reflow.buffer.bidi_reorder_scratch.seen.capacity,
+    );
+}
+
+test "direct retained bidi proof rejects non-identity shaped output" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const ligature_bytes = try test_font.buildMixedScriptArabicRligTtf(
+        allocator,
+    );
+    defer allocator.free(ligature_bytes);
+    var ligature_font = try Font.parse(allocator, ligature_bytes);
+    defer ligature_font.deinit();
+    var shape_buffer = LayoutBuffer.init(allocator);
+    defer shape_buffer.deinit();
+    var ligature = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        FontCascade.init(&.{&ligature_font}),
+        &shape_buffer,
+        "A لا",
+        20,
+        .{ .max_width = 200, .direction = .ltr },
+    );
+    defer ligature.deinit();
+    try std.testing.expect(ligature.simple_reflow);
+    try std.testing.expect(!ligature.direct_bidi_scalar_glyphs);
+
+    const multiple_bytes = try test_font.buildMultipleGsubTtf(allocator);
+    defer allocator.free(multiple_bytes);
+    var multiple_font = try Font.parse(allocator, multiple_bytes);
+    defer multiple_font.deinit();
+    var multiple = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        FontCascade.init(&.{&multiple_font}),
+        &shape_buffer,
+        "Aא",
+        20,
+        .{ .max_width = 200, .direction = .ltr },
+    );
+    defer multiple.deinit();
+    try std.testing.expect(!multiple.direct_bidi_scalar_glyphs);
+
+    const broad_bytes = try test_font.buildLastResortCmapTtfWithKern(
+        allocator,
+        false,
+    );
+    defer allocator.free(broad_bytes);
+    var broad_font = try Font.parse(allocator, broad_bytes);
+    defer broad_font.deinit();
+    var x9 = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        FontCascade.init(&.{&broad_font}),
+        &shape_buffer,
+        "A\u{202b}א\u{202c}",
+        20,
+        .{ .max_width = 200, .direction = .ltr },
+    );
+    defer x9.deinit();
+    try std.testing.expect(!x9.direct_bidi_scalar_glyphs);
 }
 
 test "simple retained reflow centers wrapped lines without stale placement" {

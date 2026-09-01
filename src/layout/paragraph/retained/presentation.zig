@@ -29,6 +29,7 @@ pub fn applySimpleRetained(
     needs_bidi_reorder: bool,
     pure_rtl_lines: bool,
     pure_rtl_may_have_mirroring: bool,
+    direct_bidi_scalar_glyphs: bool,
     bidi_paragraph: ?unicode.BidiParagraph,
 ) !void {
     if (needs_bidi_reorder) {
@@ -39,18 +40,23 @@ pub fn applySimpleRetained(
             (bidi_reorder.applyPureRtlLinesAfterProof(buffer) or
                 try bidi_reorder.applyPureRtlLinesWithObjectAfterProof(buffer)))
         {} else if (bidi_paragraph) |paragraph| {
+            const applied_direct = direct_bidi_scalar_glyphs and
+                try bidi_reorder.applyLinesResolvedDirect(
+                    buffer,
+                    paragraph,
+                );
             // The strict builder cannot introduce or reshape glyphs. With no
             // object atoms, a sole run that still covers the restored output
             // therefore remains its owner under every line-local permutation.
             // Keep the generic path as an atomic fallback if that structural
             // proof is not present on a particular reflow.
-            if (pure_rtl_lines or
+            if (!applied_direct and (pure_rtl_lines or
                 options.inline_objects.len != 0 or
                 !try bidi_reorder.applyLinesResolvedSingleRun(
                     buffer,
                     paragraph,
                     true,
-                ))
+                )))
             {
                 try bidi_reorder.applyLinesResolved(buffer, paragraph);
             }

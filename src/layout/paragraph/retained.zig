@@ -51,6 +51,9 @@ pub const ShapedParagraph = struct {
     pure_rtl_lines: bool,
     pure_rtl_may_have_mirroring: bool,
     simple_reflow: bool,
+    /// Preparation proved that bidi scalar index is also logical glyph index.
+    /// This lets retained presentation omit per-glyph cluster search state.
+    direct_bidi_scalar_glyphs: bool,
     /// Width-independent UAX #9 paragraph state retained from preparation.
     /// Line-dependent L1/L2 work still runs after each set of breaks, but UTF-8
     /// decoding and paragraph-level resolution are not repeated per reflow.
@@ -161,6 +164,7 @@ pub const ShapedParagraph = struct {
                 self.needs_bidi_reorder,
                 self.pure_rtl_lines,
                 self.pure_rtl_may_have_mirroring,
+                self.direct_bidi_scalar_glyphs,
                 self.bidi_paragraph,
             );
             return reflow.buffer.paragraphLayout(options.writing_mode);
@@ -293,6 +297,47 @@ pub const ShapedParagraph = struct {
             shape_options.cluster_level == self.shape_key.cluster_level;
     }
 };
+
+/// Prove an exact scalar-to-glyph identity for retained bidi presentation.
+///
+/// The broader simple-reflow proof permits ligatures and multiple outputs.
+/// This deliberately rejects every cardinality change, synthetic output, and
+/// X9-removed control so scalar index remains a safe glyph index after every
+/// future width-dependent line break.
+pub fn directBidiScalarGlyphs(
+    glyphs: []const glyph_position.GlyphPosition,
+    paragraph: ?unicode.BidiParagraph,
+) bool {
+    const resolved = paragraph orelse return false;
+    if (glyphs.len == 0 or glyphs.len != resolved.scalars.len or
+        resolved.classes.len != resolved.scalars.len)
+    {
+        return false;
+    }
+    for (glyphs, resolved.scalars, resolved.classes) |glyph, scalar, class| {
+        if (glyph.cluster != scalar.byte_start or
+            glyph.source_byte_len != scalar.byte_len or
+            glyph.codepoint != scalar.codepoint or
+            glyph.synthetic_glyph_id != null or
+            glyph.isDiscretionaryHyphen() or
+            glyph.isAutomaticHyphen() or
+            glyph.isInlineObject() or
+            glyph.isKashida() or
+            glyph.isTab() or
+            scalarRemovedByX9(class))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn scalarRemovedByX9(class: unicode.ExactBidiClass) bool {
+    return switch (class) {
+        .rle, .lre, .rlo, .lro, .pdf, .bn => true,
+        else => false,
+    };
+}
 
 fn simpleOptionsNeedNoDeepValidation(options: paragraph_options.Options) bool {
     return options.line_break_policy_ranges.len == 0 and

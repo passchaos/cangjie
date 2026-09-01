@@ -277,6 +277,11 @@ pub const TextShaper = struct {
             owned_text,
             owned_glyphs,
         );
+        const direct_bidi_scalar_glyphs = simple_reflow and
+            retained_paragraph.directBidiScalarGlyphs(
+                owned_glyphs,
+                bidi_paragraph,
+            );
         const inferred_script_tag = if (shape_options.script_tag == null)
             ShapePlanKey.fromText(text, shape_options).script_tag
         else
@@ -304,6 +309,7 @@ pub const TextShaper = struct {
             .pure_rtl_lines = pure_rtl_lines,
             .pure_rtl_may_have_mirroring = pure_rtl_may_have_mirroring,
             .simple_reflow = simple_reflow,
+            .direct_bidi_scalar_glyphs = direct_bidi_scalar_glyphs,
             .bidi_paragraph = bidi_paragraph,
             .cascade_fonts = cascade_fonts,
             .font_size = font_size,

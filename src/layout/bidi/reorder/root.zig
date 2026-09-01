@@ -577,6 +577,8 @@ pub fn applyLinesResolved(
     return applyLinesResolvedRecording(buffer, paragraph, false);
 }
 
+pub const applyLinesResolvedDirect = @import("direct.zig").apply;
+
 /// Apply resolved line bidi without rebuilding a proven single owning run.
 ///
 /// The general transaction carries one run index beside every glyph because a

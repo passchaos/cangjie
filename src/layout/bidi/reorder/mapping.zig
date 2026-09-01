@@ -432,36 +432,53 @@ fn appendGlyph(
     out_permutation: if (record_permutation) *std.ArrayList(usize) else void,
 ) !void {
     seen[glyph_index] = true;
-    var glyph = glyphs[glyph_index];
-    if (visual_codepoint) |codepoint| mirror: {
-        if (codepoint == glyph.codepoint) break :mirror;
-        const font = if (out_run_indices == null)
-            single_font orelse break :mirror
+    const glyph = visualizedGlyph(
+        glyphs[glyph_index],
+        if (out_run_indices == null)
+            single_font
         else owner: {
             const run_index = glyph_run_indices[glyph_index];
-            if (run_index == @import("runs.zig").no_run or
+            break :owner if (run_index == @import("runs.zig").no_run or
                 run_index >= old_runs.len)
-            {
-                break :mirror;
-            }
-            break :owner run_types.fontForBackend(old_runs[run_index]);
-        };
+                null
+            else
+                run_types.fontForBackend(old_runs[run_index]);
+        },
+        visual_codepoint,
+    );
+    try out_glyphs.append(allocator, glyph);
+    if (out_run_indices) |indices| {
+        try indices.append(allocator, glyph_run_indices[glyph_index]);
+    }
+    if (record_permutation) out_permutation.appendAssumeCapacity(glyph_index);
+}
+
+/// Copy one positioned glyph while applying UAX #9 mirroring in its owner.
+///
+/// Mirroring happens after GSUB/GPOS. A missing mirrored cmap entry therefore
+/// preserves the original positioned glyph rather than changing its owner or
+/// recomputing any positioning delta.
+pub fn visualizedGlyph(
+    source: GlyphPosition,
+    font: ?*const Font,
+    visual_codepoint: ?u21,
+) GlyphPosition {
+    var glyph = source;
+    if (visual_codepoint) |codepoint| mirror: {
+        if (codepoint == glyph.codepoint) break :mirror;
+        const owning_font = font orelse break :mirror;
         // The font was parsed and remains immutable for the shaping/layout
         // transaction. Reuse that proof rather than revalidating the complete
         // cmap checksum for every mirrored scalar.
         const mirrored_glyph = @import("../../../font.zig").shaping
-            .glyphIndexForShaping(font, codepoint) catch break :mirror;
+            .glyphIndexForShaping(owning_font, codepoint) catch break :mirror;
         if (mirrored_glyph == 0) break :mirror;
         // Mirroring happens after GSUB/GPOS. Retain positioning deltas while
         // selecting the mirrored glyph from the same cascade font.
         glyph.codepoint = codepoint;
         glyph.glyph_id = mirrored_glyph;
     }
-    try out_glyphs.append(allocator, glyph);
-    if (out_run_indices) |indices| {
-        try indices.append(allocator, glyph_run_indices[glyph_index]);
-    }
-    if (record_permutation) out_permutation.appendAssumeCapacity(glyph_index);
+    return glyph;
 }
 
 test "cluster index repairs non-monotone output" {

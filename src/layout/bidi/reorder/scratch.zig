@@ -93,6 +93,67 @@ pub const Scratch = struct {
         );
     }
 
+    /// Move a direct-mapped stream whose one run owns every glyph.
+    ///
+    /// Unlike the broader single-run transaction, scalar/glyph identity also
+    /// proves that neither a cluster index nor a seen bitmap is needed.
+    pub fn beginDirectSingleOwningRun(
+        self: *Scratch,
+        allocator: std.mem.Allocator,
+        output_glyphs: *std.ArrayList(GlyphPosition),
+    ) !void {
+        self.clear();
+        std.mem.swap(
+            std.ArrayList(GlyphPosition),
+            &self.old_glyphs,
+            output_glyphs,
+        );
+        errdefer self.rollbackSingleOwningRun(output_glyphs);
+        try output_glyphs.ensureTotalCapacity(
+            allocator,
+            self.old_glyphs.items.len,
+        );
+    }
+
+    /// Move a proven one-scalar/one-glyph stream aside for direct reordering.
+    ///
+    /// Run ownership can still fragment under L2, so this keeps the two owner
+    /// indexes used by `runs.rebuild`. The preparation-time scalar/glyph proof
+    /// makes both the cluster index and the seen bitmap redundant.
+    pub fn beginDirect(
+        self: *Scratch,
+        allocator: std.mem.Allocator,
+        output_runs: *std.ArrayList(run_types.CascadeRun),
+        output_glyphs: *std.ArrayList(GlyphPosition),
+    ) !void {
+        self.clear();
+        std.mem.swap(
+            std.ArrayList(run_types.CascadeRun),
+            &self.old_runs,
+            output_runs,
+        );
+        std.mem.swap(
+            std.ArrayList(GlyphPosition),
+            &self.old_glyphs,
+            output_glyphs,
+        );
+        errdefer self.rollback(output_runs, output_glyphs);
+        try runs.buildGlyphRunIndicesInto(
+            allocator,
+            &self.glyph_run_indices,
+            self.old_runs.items,
+            self.old_glyphs.items.len,
+        );
+        try output_glyphs.ensureTotalCapacity(
+            allocator,
+            self.old_glyphs.items.len,
+        );
+        try self.visual_run_indices.ensureTotalCapacity(
+            allocator,
+            self.old_glyphs.items.len,
+        );
+    }
+
     /// Move the logical glyph stream aside for a proven owning run.
     ///
     /// A run covering the complete glyph array remains contiguous under every

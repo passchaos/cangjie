@@ -316,6 +316,10 @@ pub const ProbedIterator = struct {
     pub fn isItemized(self: *const ProbedIterator) bool {
         return self.prefetched[1] != null;
     }
+
+    pub fn isEmpty(self: *const ProbedIterator) bool {
+        return self.prefetched[0] == null;
+    }
 };
 
 fn probe(iterator: Iterator) ProbedIterator {

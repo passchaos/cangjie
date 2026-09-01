@@ -735,10 +735,9 @@ fn shapeItemizedCascadeResolvedInto(
     options: ShapeOptions,
     paragraph: unicode.BidiParagraph,
 ) !PenPosition {
-    var probe = logical_run_itemization.runs(text, paragraph);
-    _ = probe.next() orelse return initial_pen;
-    const second = probe.next();
-    const itemized = second != null;
+    var runs = logical_run_itemization.probedRuns(text, paragraph);
+    if (runs.isEmpty()) return initial_pen;
+    const itemized = runs.isItemized();
     var prepared = try logical_context.Prepared.init(
         buffer.allocator,
         options.context_before,
@@ -749,7 +748,6 @@ fn shapeItemizedCascadeResolvedInto(
     defer prepared.deinit();
 
     var pen = initial_pen;
-    var runs = logical_run_itemization.runs(text, paragraph);
     while (runs.next()) |run| {
         const run_end = run.byteEnd();
         const run_text = text[run.byte_start..run_end];

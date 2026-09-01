@@ -135,13 +135,15 @@ fn ownedMarkToLigatureSubtables(
 ) ![]accelerator.model.MarkToLigatureSubtable {
     const subtables =
         try allocator.alloc(accelerator.model.MarkToLigatureSubtable, 1);
+    errdefer allocator.free(subtables);
     subtables[0] = .{
         .mark_coverage = .{
             .glyphs = try allocator.dupe(u16, &.{5}),
         },
-        .ligature_coverage = .{
-            .glyphs = try allocator.dupe(u16, &.{6}),
-        },
+    };
+    errdefer subtables[0].mark_coverage.?.deinit(allocator);
+    subtables[0].ligature_coverage = .{
+        .glyphs = try allocator.dupe(u16, &.{6}),
     };
     return subtables;
 }

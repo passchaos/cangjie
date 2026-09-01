@@ -5093,7 +5093,10 @@ shaping-performance superiority.
   `34659f154e1f2e4c` and `43cd60c82fa43d33`. A pinned-CPU-30 A/B/B/A run
   (14 observations per implementation) measured `1652.998` versus
   `1656.427 ns/glyph` on words and `1277.435` versus `1269.644 ns/glyph` on
-  long prose (baseline versus candidate): noise-scale `-0.21%` and a repeatable
-  `+0.61%` speedup respectively. This is a bounded completeness improvement,
-  not closure of the larger Nastaliq gap; the dominant remaining cost is GSUB
-  contextual/chaining matching.
+  long prose (baseline versus candidate): noise-scale `-0.21%` and `+0.61%`
+  respectively, so the change is performance-neutral at whole-corpus scale. A
+  four-row broad report-only matrix measured Noto at `0.825879x` (words) and
+  `0.667667x` (long) against the fastest reference, while Roboto and Source
+  Serif long prose remained wins at `1.133104x` and `1.066056x`. This is a
+  bounded completeness improvement, not closure of the larger Nastaliq gap;
+  the dominant remaining cost is GSUB contextual/chaining matching.

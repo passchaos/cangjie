@@ -141,7 +141,7 @@ pub fn apply(
         if (exact_accelerator) |accelerator| {
             if (accelerator.mark_to_ligature_subtables.len == subtable_count) {
                 for (accelerator.mark_to_ligature_subtables) |subtable| {
-                    _ = try marks.ligature.collectAtParsed(
+                    if (try marks.ligature.collectAtParsed(
                         view,
                         subtable,
                         glyphs,
@@ -150,7 +150,7 @@ pub fn apply(
                         allocator,
                         lookup_flag,
                         nested_run,
-                    );
+                    )) return;
                 }
                 return;
             }
@@ -265,7 +265,7 @@ pub fn apply(
                 nested_run,
                 &.{},
             ),
-            5 => _ = try marks.ligature.collectAt(
+            5 => if (try marks.ligature.collectAt(
                 view,
                 subtable,
                 glyphs,
@@ -274,7 +274,7 @@ pub fn apply(
                 allocator,
                 lookup_flag,
                 nested_run,
-            ),
+            )) return,
             6 => _ = try marks.mark.collectAt(
                 view,
                 subtable,

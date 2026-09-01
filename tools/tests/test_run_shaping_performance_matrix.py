@@ -228,6 +228,31 @@ class ShapingPerformanceMatrixTest(unittest.TestCase):
             matrix.emit_json_report(None, self.configuration(), outcome)
         write.assert_not_called()
 
+    def test_main_execution_failure_leaves_destination_untouched(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "matrix.json"
+            destination.write_text("old", encoding="utf-8")
+            with (
+                mock.patch.object(subprocess, "run"),
+                mock.patch.object(
+                    matrix, "run_matrix", side_effect=RuntimeError("boom")
+                ),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "boom"):
+                    matrix.main(
+                        [
+                            "--cangjie", "cangjie",
+                            "--harfbuzz", "harfbuzz",
+                            "--harfrust-manifest", "oracle/Cargo.toml",
+                            "--corpus-root", "corpus",
+                            "--json-output", str(destination),
+                        ]
+                    )
+
+            self.assertEqual("old", destination.read_text(encoding="utf-8"))
+
     def test_main_does_not_write_report_for_enforced_gate_failure(self) -> None:
         failing_result = matrix.evaluate_case(
             self.case, self.records((4.0, 3.0, 8.0, 2.0, 3.0, 4.0)),
@@ -241,11 +266,13 @@ class ShapingPerformanceMatrixTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "matrix.json"
             destination.write_text("old", encoding="utf-8")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
             with (
                 mock.patch.object(subprocess, "run"),
                 mock.patch.object(matrix, "run_matrix", return_value=outcome),
-                contextlib.redirect_stdout(io.StringIO()),
-                contextlib.redirect_stderr(io.StringIO()),
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
             ):
                 status = matrix.main(
                     [
@@ -262,6 +289,17 @@ class ShapingPerformanceMatrixTest(unittest.TestCase):
 
             self.assertEqual(1, status)
             self.assertEqual("old", destination.read_text(encoding="utf-8"))
+            self.assertEqual(
+                "shaping_performance_gate=enforced "
+                "minimum_speedup=1.010000x\n",
+                stdout.getvalue(),
+            )
+            self.assertEqual(
+                "Cangjie shaping performance matrix failed "
+                "(minimum_speedup=1.010000x):\n"
+                "- synthetic: below minimum\n",
+                stderr.getvalue(),
+            )
 
     def test_main_writes_report_for_successful_report_only_run(self) -> None:
         result = matrix.evaluate_case(
@@ -271,11 +309,13 @@ class ShapingPerformanceMatrixTest(unittest.TestCase):
         outcome = matrix.MatrixOutcome((self.case,), (result,), ())
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "matrix.json"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
             with (
                 mock.patch.object(subprocess, "run"),
                 mock.patch.object(matrix, "run_matrix", return_value=outcome),
-                contextlib.redirect_stdout(io.StringIO()),
-                contextlib.redirect_stderr(io.StringIO()),
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
             ):
                 status = matrix.main(
                     [
@@ -294,6 +334,14 @@ class ShapingPerformanceMatrixTest(unittest.TestCase):
             self.assertEqual("report-only", report["gate"]["mode"])
             self.assertFalse(report["gate"]["thresholds_met"])
             self.assertTrue(report["gate"]["command_succeeded"])
+            self.assertEqual(
+                "shaping_performance_gate=report-only "
+                "minimum_speedup=1.010000x\n"
+                "Cangjie/HarfBuzz/HarfRust shaping matrix completed: "
+                "1 corpora gate_mode=report-only minimum_speedup=1.010000x\n",
+                stdout.getvalue(),
+            )
+            self.assertEqual("", stderr.getvalue())
 
     def test_run_matrix_preserves_symmetric_endpoint_order(self) -> None:
         args = argparse.Namespace(
@@ -313,9 +361,10 @@ class ShapingPerformanceMatrixTest(unittest.TestCase):
             commands.append(command)
             return next(returned)
 
+        stdout = io.StringIO()
         with (
             mock.patch.object(matrix, "run", side_effect=fake_run),
-            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stdout(stdout),
         ):
             outcome = matrix.run_matrix(args, Path("harfrust"))
 
@@ -329,6 +378,17 @@ class ShapingPerformanceMatrixTest(unittest.TestCase):
                 else command[command.index("--engine") + 1]
                 for command in commands[:6]
             ],
+        )
+        self.assertEqual(
+            "roboto-react-dom: cangjie=4.000/1.000 "
+            "harfbuzz=8.000/2.000 harfrust=18.000/8.000 "
+            "speedup_vs_best=2.000000x minimum_speedup=1.010000x "
+            "threshold=met gate_mode=report-only glyphs=10\n"
+            "source-serif-react-dom: cangjie=4.000/1.000 "
+            "harfbuzz=8.000/2.000 harfrust=18.000/8.000 "
+            "speedup_vs_best=2.000000x minimum_speedup=1.010000x "
+            "threshold=met gate_mode=report-only glyphs=10\n",
+            stdout.getvalue(),
         )
 
 

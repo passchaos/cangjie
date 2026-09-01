@@ -211,6 +211,30 @@ test "engine releases partial GSUB cache construction on allocation failure" {
     );
 }
 
+test "engine releases partial GPOS plan cache construction on allocation failure" {
+    const test_font = @import("../../test_font.zig");
+    const bytes = try test_font.buildMinimalGposTtf(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        struct {
+            fn run(allocator: std.mem.Allocator, font_bytes: []const u8) !void {
+                var face = try face_mod.Face.parse(allocator, font_bytes);
+                defer face.deinit();
+                var engine = context_mod.Engine.init(allocator, .{});
+                defer engine.deinit();
+                const shaped = try engine.shape(
+                    &face,
+                    .{ .text = "AA", .font_size = 20 },
+                );
+                try std.testing.expectEqual(@as(usize, 2), shaped.glyphs.len);
+            }
+        }.run,
+        .{bytes},
+    );
+}
+
 test "engine optionally retains complete cascade runs" {
     const test_font = @import("../../test_font.zig");
     const bytes = try test_font.buildMinimalTtf(std.testing.allocator);

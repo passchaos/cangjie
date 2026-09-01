@@ -23,6 +23,11 @@ const LookupSelectionKey = struct {
     run_may_have_mark_attachments: ?bool,
 };
 
+const GposPlanKey = struct {
+    selection: LookupSelectionKey,
+    apply_all_if_unselected: bool,
+};
+
 pub const LayoutScriptSelections = struct {
     gsub: font_mod.LayoutScriptSelection,
     gpos: font_mod.LayoutScriptSelection,
@@ -41,6 +46,11 @@ pub const LookupSelectionCache = struct {
     const GposAcceleratorEntry = struct {
         font_addr: usize,
         accelerators: []gpos.LookupAccelerator,
+    };
+    const GposPlanEntry = struct {
+        key: GposPlanKey,
+        features: []unicode.FeatureOverride,
+        plan: gpos.feature.LookupPlan,
     };
     const ScriptSelectionEntry = struct {
         font_addr: usize,
@@ -66,6 +76,7 @@ pub const LookupSelectionCache = struct {
     entries: std.ArrayList(Entry) = .empty,
     gsub_accelerator_entries: std.ArrayList(GsubAcceleratorEntry) = .empty,
     gpos_accelerator_entries: std.ArrayList(GposAcceleratorEntry) = .empty,
+    gpos_plan_entries: std.ArrayList(GposPlanEntry) = .empty,
     script_selection_entries: std.ArrayList(ScriptSelectionEntry) = .empty,
     gsub_feature_plan_entries: std.ArrayList(FeaturePlanEntry) = .empty,
     gsub_merged_feature_plan_entries: std.ArrayList(MergedFeaturePlanEntry) = .empty,
@@ -73,6 +84,7 @@ pub const LookupSelectionCache = struct {
     gsub_merged_feature_plan_slots: [8]?usize = .{null} ** 8,
     last_gsub_accelerator: ?usize = null,
     last_gpos_accelerator: ?usize = null,
+    last_gpos_plan: ?usize = null,
     last_script_selection: ?usize = null,
     last_lookup: ?usize = null,
     hits: usize = 0,
@@ -87,6 +99,7 @@ pub const LookupSelectionCache = struct {
         self.gsub_merged_feature_plan_entries.deinit(self.allocator);
         self.script_selection_entries.deinit(self.allocator);
         self.gsub_feature_plan_entries.deinit(self.allocator);
+        self.gpos_plan_entries.deinit(self.allocator);
         self.gpos_accelerator_entries.deinit(self.allocator);
         self.gsub_accelerator_entries.deinit(self.allocator);
         self.entries.deinit(self.allocator);
@@ -103,6 +116,14 @@ pub const LookupSelectionCache = struct {
             gsub.acceleration.deinit(self.allocator, entry.accelerators);
         }
         self.gsub_accelerator_entries.clearRetainingCapacity();
+        // Plans contain no borrowed pointers, but release them before the
+        // accelerator graph they will be rebound to at execution time. This
+        // order keeps the ownership boundary explicit during cache teardown.
+        for (self.gpos_plan_entries.items) |*entry| {
+            self.allocator.free(entry.features);
+            entry.plan.deinit(self.allocator);
+        }
+        self.gpos_plan_entries.clearRetainingCapacity();
         for (self.gpos_accelerator_entries.items) |entry| {
             gpos.deinitLookupAccelerators(self.allocator, entry.accelerators);
         }
@@ -124,6 +145,7 @@ pub const LookupSelectionCache = struct {
         self.gsub_merged_feature_plan_slots = .{null} ** 8;
         self.last_gsub_accelerator = null;
         self.last_gpos_accelerator = null;
+        self.last_gpos_plan = null;
         self.last_script_selection = null;
         self.last_lookup = null;
         self.hits = 0;
@@ -379,7 +401,10 @@ pub const LookupSelectionCache = struct {
 
         self.misses += 1;
         const accelerators = try font_shaping.gposLookupAcceleratorsForShaping(font, self.allocator);
-        errdefer self.allocator.free(accelerators);
+        // Each GPOS lookup can own decoded coverage, pair, contextual, and
+        // mark sidecars. Failure to retain the outer cache entry must destroy
+        // that complete graph rather than freeing only the top-level slice.
+        errdefer gpos.deinitLookupAccelerators(self.allocator, accelerators);
         try self.gpos_accelerator_entries.append(self.allocator, .{
             .font_addr = font_addr,
             .accelerators = accelerators,
@@ -388,6 +413,67 @@ pub const LookupSelectionCache = struct {
         return self.gpos_accelerator_entries.items[
             self.last_gpos_accelerator.?
         ].accelerators;
+    }
+
+    /// Return an immutable GPOS execution plan whose stable index/offset
+    /// tuples are owned by this cache. Runtime-only inputs such as variation
+    /// coordinates and disabled JSTF lookups deliberately do not enter the
+    /// key; they remain live in `LookupOptions` during every execution.
+    pub fn gposLookupPlan(
+        self: *LookupSelectionCache,
+        font: *const Font,
+        options: gpos.LookupOptions,
+        gdef_metadata: GdefLookupMetadata,
+    ) !gpos.feature.LookupPlan {
+        const key = GposPlanKey{
+            .selection = lookupSelectionKey(
+                font,
+                .gpos,
+                options.script_tag,
+                options.language_tag,
+                options.features,
+                false,
+                options.run_may_have_mark_attachments,
+            ),
+            .apply_all_if_unselected = options.apply_all_if_unselected,
+        };
+        if (self.last_gpos_plan) |index| {
+            const entry = self.gpos_plan_entries.items[index];
+            if (gposPlanKeysEqual(entry.key, key) and
+                featureOverridesEqual(entry.features, options.features))
+            {
+                self.hits += 1;
+                return entry.plan;
+            }
+        }
+        for (self.gpos_plan_entries.items, 0..) |entry, index| {
+            if (!gposPlanKeysEqual(entry.key, key)) continue;
+            if (!featureOverridesEqual(entry.features, options.features)) continue;
+            self.last_gpos_plan = index;
+            self.hits += 1;
+            return entry.plan;
+        }
+
+        self.misses += 1;
+        var plan = try font_shaping.gposLookupPlanForShaping(
+            font,
+            self.allocator,
+            options,
+            gdef_metadata,
+        );
+        errdefer plan.deinit(self.allocator);
+        const features = try self.allocator.dupe(
+            unicode.FeatureOverride,
+            options.features,
+        );
+        errdefer self.allocator.free(features);
+        try self.gpos_plan_entries.append(self.allocator, .{
+            .key = key,
+            .features = features,
+            .plan = plan,
+        });
+        self.last_gpos_plan = self.gpos_plan_entries.items.len - 1;
+        return self.gpos_plan_entries.items[self.last_gpos_plan.?].plan;
     }
 
     pub fn gposLookups(self: *LookupSelectionCache, font: *const Font, options: gpos.LookupOptions, gdef_metadata: GdefLookupMetadata) ![]const u16 {
@@ -485,6 +571,11 @@ fn lookupSelectionKeysEqual(a: LookupSelectionKey, b: LookupSelectionKey) bool {
         a.feature_hash == b.feature_hash and
         a.vertical == b.vertical and
         a.run_may_have_mark_attachments == b.run_may_have_mark_attachments;
+}
+
+fn gposPlanKeysEqual(a: GposPlanKey, b: GposPlanKey) bool {
+    return lookupSelectionKeysEqual(a.selection, b.selection) and
+        a.apply_all_if_unselected == b.apply_all_if_unselected;
 }
 
 fn featureOverridesHash(features: []const unicode.FeatureOverride) u64 {

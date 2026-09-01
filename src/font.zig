@@ -4016,6 +4016,37 @@ pub const Font = struct {
         try gpos_mod.collectAdjustmentsWithOptionsAfterMetadataProof(self.data, gpos.offset, gpos.length, glyphs, adjustments, allocator, gpos_options);
     }
 
+    /// Execute a cache-owned GPOS plan after the shaping pipeline has proved
+    /// both the table and the post-GSUB glyph/source metadata. A false result
+    /// is an atomic decline; the caller must use the ordinary table traversal.
+    noinline fn collectGposAdjustmentsWithPlanAfterRunProof(
+        self: *const Font,
+        plan: gpos_mod.feature.LookupPlan,
+        glyphs: []const glyph_mod.GlyphId,
+        adjustments: *std.ArrayList(gpos_mod.Adjustment),
+        allocator: std.mem.Allocator,
+        options: gpos_mod.LookupOptions,
+        gdef_metadata: GdefLookupMetadata,
+    ) linksection(shaping_sections.isolated_hotpaths) FontError!bool {
+        const gpos = self.gpos orelse
+            return plan.entries.len == 0 and plan.identity == null and
+                plan.font_addr == null;
+        if (plan.font_addr != @intFromPtr(self)) return false;
+        var gpos_options = options;
+        gpos_options.assume_validated = true;
+        gdef_metadata.applyToGposOptions(&gpos_options);
+        return try gpos_mod.collectAdjustmentsWithPlanAfterProof(
+            self.data,
+            gpos.offset,
+            gpos.length,
+            plan,
+            glyphs,
+            adjustments,
+            allocator,
+            gpos_options,
+        );
+    }
+
     fn collectJstfMaxAdjustmentsForShaping(
         self: *const Font,
         lookup_offsets: []const usize,
@@ -4052,6 +4083,28 @@ pub const Font = struct {
         gpos_options.assume_validated = true;
         gdef_metadata.applyToGposOptions(&gpos_options);
         return try gpos_mod.selectedLookupIndicesForOptions(self.data, gpos.offset, gpos.length, allocator, gpos_options);
+    }
+
+    fn gposLookupPlanForShaping(
+        self: *const Font,
+        allocator: std.mem.Allocator,
+        options: gpos_mod.LookupOptions,
+        gdef_metadata: GdefLookupMetadata,
+    ) FontError!gpos_mod.feature.LookupPlan {
+        const gpos = self.gpos orelse return .{};
+        try sfnt.checksum.validate(self.data, gpos);
+        var gpos_options = options;
+        gpos_options.assume_validated = true;
+        gdef_metadata.applyToGposOptions(&gpos_options);
+        var plan = try gpos_mod.buildLookupPlan(
+            self.data,
+            gpos.offset,
+            gpos.length,
+            allocator,
+            gpos_options,
+        );
+        plan.font_addr = @intFromPtr(self);
+        return plan;
     }
 
     fn gposLookupAcceleratorsForShaping(self: *const Font, allocator: std.mem.Allocator) FontError![]gpos_mod.LookupAccelerator {
@@ -7683,8 +7736,10 @@ pub const shaping = struct {
     pub const applyMorxForShaping = Font.applyMorxForShaping;
     pub const collectGposAdjustmentsWithOptionsUsingGdefAfterProof = Font.collectGposAdjustmentsWithOptionsUsingGdefAfterProof;
     pub const collectGposAdjustmentsWithOptionsUsingGdefAfterRunProof = Font.collectGposAdjustmentsWithOptionsUsingGdefAfterRunProof;
+    pub const collectGposAdjustmentsWithPlanAfterRunProof = Font.collectGposAdjustmentsWithPlanAfterRunProof;
     pub const collectJstfMaxAdjustmentsForShaping = Font.collectJstfMaxAdjustmentsForShaping;
     pub const selectGposLookupsForShaping = Font.selectGposLookupsForShaping;
+    pub const gposLookupPlanForShaping = Font.gposLookupPlanForShaping;
     pub const gposLookupAcceleratorsForShaping = Font.gposLookupAcceleratorsForShaping;
     pub const gdefLookupMetadataForShaping = Font.gdefLookupMetadataForShaping;
     pub const validateShapedGlyphRunForShaping = Font.validateShapedGlyphRunForShaping;

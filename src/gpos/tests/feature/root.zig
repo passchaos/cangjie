@@ -2,6 +2,7 @@
 
 test {
     _ = @import("ordering.zig");
+    _ = @import("plan.zig");
     _ = @import("selection.zig");
     _ = @import("validation.zig");
 }

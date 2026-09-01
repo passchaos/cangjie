@@ -99,34 +99,66 @@ pub fn run(input: Input) !Result {
                 )));
 
     if (!use_kerx_positioning) {
+        var collected_with_plan = false;
+        var table_proved = false;
         if (input.lookup_selection_cache) |selection_cache| {
             gpos_options.lookup_accelerators =
                 try selection_cache.gposLookupAccelerators(input.font);
-            gpos_options.selected_lookups = try selection_cache.gposLookups(
-                input.font,
-                gpos_options,
-                input.gdef_metadata,
-            );
+            // Profiling retains the established selection/apply timing split,
+            // while JSTF enable lists still need the generic merge path. The
+            // proof-bound plan deliberately handles neither in its first
+            // version and declines atomically if called with either one.
+            if (input.gpos_table_proof_cache != null and
+                input.profile == null and
+                gpos_options.enabled_lookups.len == 0)
+            {
+                const plan = try selection_cache.gposLookupPlan(
+                    input.font,
+                    gpos_options,
+                    input.gdef_metadata,
+                );
+                try input.gpos_table_proof_cache.?.prove(input.font);
+                table_proved = true;
+                collected_with_plan =
+                    try font_shaping.collectGposAdjustmentsWithPlanAfterRunProof(
+                        input.font,
+                        plan,
+                        input.glyph_ids,
+                        input.adjustments,
+                        input.allocator,
+                        gpos_options,
+                        input.gdef_metadata,
+                    );
+            }
         }
-        if (input.gpos_table_proof_cache) |proof_cache| {
-            try proof_cache.prove(input.font);
-            try font_shaping.collectGposAdjustmentsWithOptionsUsingGdefAfterRunProof(
-                input.font,
-                input.glyph_ids,
-                input.adjustments,
-                input.allocator,
-                gpos_options,
-                input.gdef_metadata,
-            );
-        } else {
-            try font_shaping.collectGposAdjustmentsWithOptionsUsingGdefForShaping(
-                input.font,
-                input.glyph_ids,
-                input.adjustments,
-                input.allocator,
-                gpos_options,
-                input.gdef_metadata,
-            );
+        if (!collected_with_plan) {
+            if (input.lookup_selection_cache) |selection_cache| {
+                gpos_options.selected_lookups = try selection_cache.gposLookups(
+                    input.font,
+                    gpos_options,
+                    input.gdef_metadata,
+                );
+            }
+            if (input.gpos_table_proof_cache) |proof_cache| {
+                if (!table_proved) try proof_cache.prove(input.font);
+                try font_shaping.collectGposAdjustmentsWithOptionsUsingGdefAfterRunProof(
+                    input.font,
+                    input.glyph_ids,
+                    input.adjustments,
+                    input.allocator,
+                    gpos_options,
+                    input.gdef_metadata,
+                );
+            } else {
+                try font_shaping.collectGposAdjustmentsWithOptionsUsingGdefForShaping(
+                    input.font,
+                    input.glyph_ids,
+                    input.adjustments,
+                    input.allocator,
+                    gpos_options,
+                    input.gdef_metadata,
+                );
+            }
         }
     }
     return .{

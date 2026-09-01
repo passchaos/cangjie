@@ -1,6 +1,7 @@
 const std = @import("std");
 const accelerator_core = @import("gpos/accelerator/root.zig");
 const GlyphId = @import("glyph.zig").GlyphId;
+pub const feature = @import("gpos/feature/root.zig");
 const positioning = @import("gpos/positioning/root.zig");
 pub const runtime = @import("gpos/runtime/root.zig");
 const runtime_run = @import("gpos/runtime/run.zig");
@@ -131,6 +132,55 @@ pub fn selectedLookupIndicesForOptions(data: []const u8, offset: usize, length: 
         data,
         offset,
         length,
+        allocator,
+        options,
+    );
+}
+
+/// Build an allocator-owned lookup plan for an internal immutable-font cache.
+///
+/// `options` must name the exact validated sidecar allocation returned by
+/// `buildLookupAccelerators`; the plan is bound to that allocation and must be
+/// destroyed before it. Entries retain stable LookupList indexes and offsets
+/// only, so run-local variation values and metadata are resolved at execution.
+pub fn buildLookupPlan(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GposError || std.mem.Allocator.Error)!feature.LookupPlan {
+    return feature.plan.buildLookupPlan(
+        data,
+        offset,
+        length,
+        allocator,
+        options,
+    );
+}
+
+/// Attempt exact proof-bound plan execution for the same cached selection.
+/// `false` is an atomic decline and leaves the caller free to use ordinary
+/// defensive table traversal. Higher-level cache owners additionally bind the
+/// plan to a concrete `Font`; this low-level boundary proves exact table bytes,
+/// table range, accelerator allocation, and every lookup tuple.
+pub fn collectAdjustmentsWithPlanAfterProof(
+    data: []const u8,
+    offset: usize,
+    length: usize,
+    plan: feature.LookupPlan,
+    glyphs: []const GlyphId,
+    adjustments: *std.ArrayList(Adjustment),
+    allocator: std.mem.Allocator,
+    options: LookupOptions,
+) (GposError || std.mem.Allocator.Error)!bool {
+    return feature.plan.applyAfterProof(
+        data,
+        offset,
+        length,
+        plan,
+        glyphs,
+        adjustments,
         allocator,
         options,
     );

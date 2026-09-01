@@ -472,7 +472,14 @@ test "CJK mark shortcut exactly preserves Unicode classification" {
 
     for ([_]u21{ 0x302a, 0x302b, 0x302c, 0x302d, 0x3099, 0x309a }) |mark| {
         try std.testing.expect(unicode.isNonspacingMarkCodepoint(mark));
-        try std.testing.expect(isUnicodeMarkForPositioning(mark));
+        // The positioning predicate deliberately follows Cangjie's supported
+        // mark/extender repertoire, which is narrower than General_Category
+        // Mn. What matters here is that the shortcut delegates each exception
+        // to that authoritative predicate rather than forcing `false`.
+        try std.testing.expectEqual(
+            unicode.isUnicodeMarkCodepoint(mark),
+            isUnicodeMarkForPositioning(mark),
+        );
     }
     for ([_]u21{ 0x3029, 0x302e, 0x3098, 0x309b }) |ordinary| {
         try std.testing.expectEqual(

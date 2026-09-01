@@ -144,14 +144,18 @@ pub fn apply(
             const level = scratch.line_levels.items[
                 scalar_index - scalar_start
             ];
-            visual_glyphs.appendAssumeCapacity(mapping.visualizedGlyph(
-                old_glyphs[scalar_index],
-                run_types.fontForBackend(old_runs[owner]),
-                if (level & 1 != 0 and bidi.mayHaveBidiMirror(scalar.codepoint))
-                    unicode.mirroredCodepoint(scalar.codepoint)
-                else
-                    scalar.codepoint,
-            ));
+            const source = old_glyphs[scalar_index];
+            if (level & 1 != 0 and
+                bidi.mayHaveBidiMirror(scalar.codepoint))
+            {
+                visual_glyphs.appendAssumeCapacity(mapping.visualizedGlyph(
+                    source,
+                    run_types.fontForBackend(old_runs[owner]),
+                    unicode.mirroredCodepoint(scalar.codepoint),
+                ));
+            } else {
+                visual_glyphs.appendAssumeCapacity(source);
+            }
             if (!single_owning_run)
                 visual_run_indices.appendAssumeCapacity(owner);
         }
@@ -308,14 +312,18 @@ pub fn applyFromSource(
             const level = scratch.line_levels.items[
                 scalar_index - scalar_start
             ];
-            buffer.glyphs.appendAssumeCapacity(mapping.visualizedGlyph(
-                logical_glyphs[scalar_index],
-                run_types.fontForBackend(logical_runs[owner]),
-                if (level & 1 != 0 and bidi.mayHaveBidiMirror(scalar.codepoint))
-                    unicode.mirroredCodepoint(scalar.codepoint)
-                else
-                    scalar.codepoint,
-            ));
+            const source = logical_glyphs[scalar_index];
+            if (level & 1 != 0 and
+                bidi.mayHaveBidiMirror(scalar.codepoint))
+            {
+                buffer.glyphs.appendAssumeCapacity(mapping.visualizedGlyph(
+                    source,
+                    run_types.fontForBackend(logical_runs[owner]),
+                    unicode.mirroredCodepoint(scalar.codepoint),
+                ));
+            } else {
+                buffer.glyphs.appendAssumeCapacity(source);
+            }
             if (!single_owning_run)
                 visual_run_indices.appendAssumeCapacity(owner);
         }

@@ -60,6 +60,16 @@ pub fn emit(input: Input) !Result {
     var previous_kern_glyph: ?GlyphId = null;
     var previous_kern_output_index: ?usize = null;
     var fallback_mark_base: ?fallback_mark.Base = null;
+    // Fallback mark geometry can only consume a base when a later source
+    // codepoint enters the exact nonspacing-mark branch in `geometry.resolve`.
+    // Check the post-normalization source buffer once so ordinary runs do not
+    // parse glyph outlines merely to retain bases that no glyph can consume.
+    // A positive result deliberately keeps the existing eager-base behavior,
+    // including consecutive-mark stacking and substituted-glyph semantics.
+    const may_need_fallback_mark_base = runMayNeedFallbackMarkBase(
+        input.fallback_mark_enabled,
+        input.scratch.codepoints.items,
+    );
     var adjustment_cursor: usize = 0;
     const loop_start = profileNow(input.profile, input.profile_io);
 
@@ -332,7 +342,7 @@ pub fn emit(input: Input) !Result {
             input.scratch.attachment_links.items[index] =
                 attachments.linkFor(kerx_adjustment, adjustment);
         }
-        if (input.fallback_mark_enabled and
+        if (may_need_fallback_mark_base and
             !hide_default_ignorable and
             !visible_not_found_variation_selector and
             !unicode.isNonspacingMarkCodepoint(source_codepoint))
@@ -563,6 +573,32 @@ noinline fn emitSimpleDevanagariHorizontal(
             input.output.items.len - segment_glyph_start;
     }
     return .{ .segment_glyph_start = segment_glyph_start };
+}
+
+fn runMayNeedFallbackMarkBase(
+    fallback_mark_enabled: bool,
+    codepoints: []const u21,
+) bool {
+    if (!fallback_mark_enabled) return false;
+    for (codepoints) |codepoint| {
+        if (unicode.isNonspacingMarkCodepoint(codepoint)) return true;
+    }
+    return false;
+}
+
+test "fallback mark bases are retained only for runs with nonspacing marks" {
+    try std.testing.expect(!runMayNeedFallbackMarkBase(
+        true,
+        &.{ 'A', 'S', 'C', 'I', 'I' },
+    ));
+    try std.testing.expect(runMayNeedFallbackMarkBase(
+        true,
+        &.{ 'A', 0x0301, 'B' },
+    ));
+    try std.testing.expect(!runMayNeedFallbackMarkBase(
+        false,
+        &.{ 'A', 0x0301, 'B' },
+    ));
 }
 
 fn profileNow(profile: ?*ShapeStageProfile, io: ?std.Io) i128 {

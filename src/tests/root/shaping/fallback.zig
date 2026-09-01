@@ -8,11 +8,57 @@ const FontCascade = support.FontCascade;
 const FontFallbackCache = support.FontFallbackCache;
 const GlyphId = support.GlyphId;
 const GlyphIndexCache = support.GlyphIndexCache;
+const GlyphPosition = support.GlyphPosition;
 const LayoutBuffer = support.LayoutBuffer;
 const TextShaper = support.TextShaper;
 const diagnoseFontFallbackUtf8 = support.diagnoseFontFallbackUtf8;
 const fallbackGlyphIndexWithOptionalCache =
     @import("../../../shaping/pipeline/source/root.zig").fallbackGlyphIndex;
+
+const ExpectedGlyphOutput = struct {
+    glyph_id: GlyphId,
+    codepoint: u21,
+    cluster: usize,
+    source_byte_len: usize,
+    x_advance: f32,
+    x_offset: f32 = 0,
+    y_offset: f32 = 0,
+    unsafe_to_break_before: bool = false,
+};
+
+fn expectGlyphOutput(expected: ExpectedGlyphOutput, glyph: GlyphPosition) !void {
+    try std.testing.expectEqual(expected.glyph_id, glyph.glyph_id);
+    try std.testing.expectEqual(@as(?u32, null), glyph.synthetic_glyph_id);
+    try std.testing.expectEqual(expected.codepoint, glyph.codepoint);
+    try std.testing.expectEqual(expected.cluster, glyph.cluster);
+    try std.testing.expectEqual(expected.source_byte_len, glyph.source_byte_len);
+    try std.testing.expectApproxEqAbs(expected.x_advance, glyph.x_advance, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), glyph.y_advance, 0.001);
+    try std.testing.expectApproxEqAbs(expected.x_offset, glyph.x_offset, 0.001);
+    try std.testing.expectApproxEqAbs(expected.y_offset, glyph.y_offset, 0.001);
+    try std.testing.expectEqual(.horizontal, glyph.orientation);
+    try std.testing.expectEqual(
+        expected.unsafe_to_break_before,
+        glyph.flags.unsafe_to_break_before,
+    );
+    try std.testing.expect(!glyph.flags.discretionary_hyphen);
+    try std.testing.expect(!glyph.flags.inline_object);
+    try std.testing.expect(!glyph.flags.automatic_hyphen);
+    try std.testing.expect(!glyph.flags.safe_to_insert_tatweel);
+    try std.testing.expect(!glyph.flags.kashida);
+    try std.testing.expect(!glyph.flags.tab);
+    try std.testing.expect(!glyph.flags.collapsed_whitespace);
+}
+
+fn expectGlyphOutputs(
+    expected: []const ExpectedGlyphOutput,
+    glyphs: []const GlyphPosition,
+) !void {
+    try std.testing.expectEqual(expected.len, glyphs.len);
+    for (expected, glyphs) |expected_glyph, glyph| {
+        try expectGlyphOutput(expected_glyph, glyph);
+    }
+}
 
 test "mapped spaces use the glyph index cache before fallback" {
     const test_font = @import("../../../test_font.zig");
@@ -167,6 +213,38 @@ test "font fallback keeps combining graphemes in a fully covering font" {
     try std.testing.expectEqual(@as(usize, 1), fallback_cache.misses);
 }
 
+test "fallback mark output preserves ASCII and consecutive mark semantics" {
+    const test_font = @import("../../../test_font.zig");
+    const allocator = std.testing.allocator;
+
+    const bytes = try test_font.buildFallbackMarkTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+
+    const ascii = try TextShaper.shapeUtf8(&font, &buffer, "Xx", 20);
+    try expectGlyphOutputs(&.{
+        .{ .glyph_id = 1, .codepoint = 'X', .cluster = 0, .source_byte_len = 1, .x_advance = 16 },
+        .{ .glyph_id = 2, .codepoint = 'x', .cluster = 1, .source_byte_len = 1, .x_advance = 16 },
+    }, ascii.glyphs);
+
+    const marked = try TextShaper.shapeUtf8WithOptions(
+        &font,
+        &buffer,
+        "x\u{0301}\u{0301}",
+        20,
+        .{ .cluster_level = .monotone_characters },
+    );
+    try expectGlyphOutputs(&.{
+        .{ .glyph_id = 2, .codepoint = 'x', .cluster = 0, .source_byte_len = 1, .x_advance = 16 },
+        .{ .glyph_id = 3, .codepoint = 0x0301, .cluster = 1, .source_byte_len = 2, .x_advance = 0, .x_offset = -8, .y_offset = 1.24, .unsafe_to_break_before = true },
+        .{ .glyph_id = 3, .codepoint = 0x0301, .cluster = 3, .source_byte_len = 2, .x_advance = 0, .x_offset = -8, .y_offset = 2.48, .unsafe_to_break_before = true },
+    }, marked.glyphs);
+}
+
 test "Arabic normalization composes base mark pairs when the font has the precomposed glyph" {
     const test_font = @import("../../../test_font.zig");
     const allocator = std.testing.allocator;
@@ -276,16 +354,11 @@ test "missing precomposed Latin falls back to recursive NFD components" {
     defer buffer.deinit();
     const run = try TextShaper.shapeUtf8(&font, &buffer, "Ấ", 1000);
 
-    try std.testing.expectEqual(@as(usize, 3), run.glyphs.len);
-    try std.testing.expectEqual(@as(u21, 0x0041), run.glyphs[0].codepoint);
-    try std.testing.expectEqual(@as(u21, 0x0302), run.glyphs[1].codepoint);
-    try std.testing.expectEqual(@as(u21, 0x0301), run.glyphs[2].codepoint);
-    for (run.glyphs) |glyph| {
-        try std.testing.expectEqual(@as(usize, 0), glyph.cluster);
-        try std.testing.expectEqual(@as(usize, "Ấ".len), glyph.source_byte_len);
-    }
-    try std.testing.expectApproxEqAbs(@as(f32, 0), run.glyphs[1].x_advance, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), run.glyphs[2].x_advance, 0.001);
+    try expectGlyphOutputs(&.{
+        .{ .glyph_id = 1, .codepoint = 0x0041, .cluster = 0, .source_byte_len = "Ấ".len, .x_advance = 800 },
+        .{ .glyph_id = 3, .codepoint = 0x0302, .cluster = 0, .source_byte_len = "Ấ".len, .x_advance = 0, .x_offset = -400, .y_offset = 62 },
+        .{ .glyph_id = 2, .codepoint = 0x0301, .cluster = 0, .source_byte_len = "Ấ".len, .x_advance = 0, .x_offset = -400, .y_offset = 124 },
+    }, run.glyphs);
 }
 
 test "missing canonical singleton decomposes through its supported target" {

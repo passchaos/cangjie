@@ -39,6 +39,19 @@ pub const Paragraph = struct {
         self.* = undefined;
     }
 
+    /// Return a non-owning copy of this resolved paragraph.
+    ///
+    /// The returned value may be deinitialized safely, but doing so releases
+    /// no storage. Its slices remain valid only until the paragraph that owns
+    /// them is deinitialized or replaces its backing storage. This is useful
+    /// for caches that must retain ownership while lending a short-lived value
+    /// to existing paragraph consumers.
+    pub fn borrowed(self: Paragraph) Paragraph {
+        var view = self;
+        view.owner = .borrowed;
+        return view;
+    }
+
     pub fn scalarIndexForByte(self: Paragraph, byte_offset: usize) ?usize {
         var low: usize = 0;
         var high = self.scalars.len;

@@ -107,16 +107,6 @@ pub fn layout(input: Input) !paragraph_types.ParagraphLayout {
         input.text,
         input.options.direction,
     );
-    var owned_bidi: ?unicode.BidiParagraph = null;
-    defer if (owned_bidi) |*paragraph| paragraph.deinit();
-    const bidi_paragraph = if (needs_bidi_reorder) paragraph: {
-        owned_bidi = try unicode.resolveBidiParagraph(
-            input.buffer.allocator,
-            input.text,
-            if (input.options.direction == .rtl) .rtl else .ltr,
-        );
-        break :paragraph owned_bidi.?;
-    } else null;
     var scratch: ReflowScratch = .{};
     defer scratch.deinit(input.buffer.allocator);
     var driver = Driver{
@@ -129,7 +119,6 @@ pub fn layout(input: Input) !paragraph_types.ParagraphLayout {
         .compute_content_widths = input.compute_content_widths,
         .scratch = &scratch,
         .needs_bidi_reorder = needs_bidi_reorder,
-        .bidi_paragraph = bidi_paragraph,
     };
     defer driver.deinitLogicalContext();
     try styled_paragraph.layout(&driver, input.text, input.spans);
@@ -272,6 +261,19 @@ const Driver = struct {
         spans: []const styled_paragraph.Span,
     ) !logical_run_itemization.ProbedIterator {
         self.deinitLogicalContext();
+        // `styled_paragraph.shape` reaches this only after validating the
+        // complete span partition and every span. Defer the cache lookup to
+        // this boundary so invalid requests cannot replace analysis or change
+        // observable hit/miss counters. Retained preparation supplies its own
+        // owning paragraph above and therefore never enters this branch.
+        if (self.bidi_paragraph == null and
+            self.needs_bidi_reorder orelse false)
+        {
+            self.bidi_paragraph = try self.styled.analysis.getBidi(
+                self.text,
+                if (self.options.direction == .rtl) .rtl else .ltr,
+            );
+        }
         var logical_runs = if (self.bidi_paragraph) |paragraph|
             logical_run_itemization.probedRuns(self.text, paragraph)
         else

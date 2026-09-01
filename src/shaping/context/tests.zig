@@ -68,42 +68,8 @@ test "engine caches immutable legacy kern lookup proofs" {
     try std.testing.expectEqual(context_mod.Engine.Counter{}, engine.stats().kern_lookups);
 }
 
-test "one-shot paragraph layout reuses bidi resolver storage" {
-    const test_font = @import("../../test_font.zig");
-    const bytes = try test_font.buildLastResortCmapTtfWithKern(
-        std.testing.allocator,
-        false,
-    );
-    defer std.testing.allocator.free(bytes);
-    var font = try Font.parse(std.testing.allocator, bytes);
-    defer font.deinit();
-    const cascade = face_mod.Cascade.init(face_mod.backend.faces(&.{&font}));
-    const request: context_mod.ParagraphRequest = .{
-        .text = "abc \u{05d0}\u{05d1} 12",
-        .font_size = 20,
-        .options = .{ .max_width = 200, .direction = .ltr },
-    };
-
-    var engine = context_mod.Engine.init(std.testing.allocator, .{});
-    defer engine.deinit();
-    const first = try engine.layout(cascade, request);
-    const Glyph = @import("../../layout/glyph_position.zig").GlyphPosition;
-    const Line = @import("../../layout/types/paragraph.zig").ParagraphLine;
-    const expected_glyphs = try std.testing.allocator.dupe(Glyph, first.glyphs);
-    defer std.testing.allocator.free(expected_glyphs);
-    const expected_lines = try std.testing.allocator.dupe(Line, first.lines);
-    defer std.testing.allocator.free(expected_lines);
-    const storage = &engine.state.output.bidi_reorder_scratch.bidi_storage;
-    const scalar_capacity = storage.scalars.capacity;
-    const input_capacity = storage.inputs.capacity;
-    try std.testing.expect(scalar_capacity != 0);
-    try std.testing.expect(input_capacity != 0);
-
-    const second = try engine.layout(cascade, request);
-    try std.testing.expectEqualSlices(Glyph, expected_glyphs, second.glyphs);
-    try std.testing.expectEqualSlices(Line, expected_lines, second.lines);
-    try std.testing.expectEqual(scalar_capacity, storage.scalars.capacity);
-    try std.testing.expectEqual(input_capacity, storage.inputs.capacity);
+test {
+    _ = @import("tests/bidi_analysis.zig");
 }
 
 test "one-shot uniform layout reuses exact Unicode analysis" {

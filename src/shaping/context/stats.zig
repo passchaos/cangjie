@@ -15,6 +15,8 @@ pub const Stats = struct {
     lookup_selection: Counter = .{},
     kern_lookups: Counter = .{},
     shaped_runs: Counter = .{},
+    /// Reusable UAX #9 resolution keyed by exact text and base direction.
+    bidi_paragraphs: Counter = .{},
 };
 
 pub fn counter(hits: usize, misses: usize) Counter {

@@ -115,7 +115,8 @@ pub const Engine = struct {
         self.getState().output.clear();
     }
 
-    /// Discard every font-derived cache and reset aggregate counters.
+    /// Discard every reusable cache, including Unicode paragraph analysis,
+    /// and reset aggregate counters.
     pub fn clearCaches(self: *Engine) void {
         self.getState().clearCaches();
     }

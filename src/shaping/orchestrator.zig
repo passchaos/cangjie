@@ -430,19 +430,30 @@ pub const TextShaper = struct {
     pub fn layoutParagraphUtf8WithCachesAndAnalysis(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, analysis_cache: ?*paragraph_analysis_cache.Cache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ParagraphOptions) !ParagraphLayout {
         try paragraph_options.validateForText(text, options);
         try plan_validation.utf8(text);
+        // Match `shapeParagraphContent`'s remaining validation order before a
+        // cache lookup can publish an entry or increment observable counters.
+        try plan_validation.fontSize(font_size);
+        if (cascade.fonts.len == 0) return error.EmptyFontCascade;
+        try inline_object.validate(text, options.inline_objects);
         const needs_bidi_reorder = plan_bidi.paragraphNeedsReorder(
             text,
             options.direction,
         );
         const bidi_paragraph: ?unicode.BidiParagraph = if (needs_bidi_reorder)
-            try buffer.bidi_reorder_scratch.resolveParagraph(
-                text,
-                if (options.direction == .rtl) .rtl else .ltr,
-            )
+            if (analysis_cache) |cache|
+                try cache.getBidi(
+                    text,
+                    if (options.direction == .rtl) .rtl else .ltr,
+                )
+            else
+                try buffer.bidi_reorder_scratch.resolveParagraph(
+                    text,
+                    if (options.direction == .rtl) .rtl else .ltr,
+                )
         else
             null;
-        // This overload has the same synchronous lifetime as the fully cached
-        // path above, including when its optional shaped-run cache misses.
+        // The Engine cache and the fallback buffer scratch both return borrowed
+        // views whose lifetime covers this synchronous layout transaction.
         try shapeParagraphContent(
             cascade,
             fallback_cache,

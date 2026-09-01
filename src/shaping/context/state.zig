@@ -63,6 +63,9 @@ pub const State = struct {
     }
 
     pub fn clearCaches(self: *State) void {
+        // Unlike ordinary output reset, an explicit cache clear must also
+        // release text-owned Unicode analyses and reset their counters.
+        self.styled_output.analysis.clear();
         self.shaped_runs.clear();
         self.kern_lookups.clear();
         self.lookup_selection.clear();
@@ -111,6 +114,10 @@ pub const State = struct {
             .shaped_runs = stats_mod.counter(
                 self.shaped_runs.hits,
                 self.shaped_runs.misses,
+            ),
+            .bidi_paragraphs = stats_mod.counter(
+                self.styled_output.analysis.bidi_hits,
+                self.styled_output.analysis.bidi_misses,
             ),
         };
     }

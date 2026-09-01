@@ -144,18 +144,13 @@ pub fn apply(
             const level = scratch.line_levels.items[
                 scalar_index - scalar_start
             ];
-            const source = old_glyphs[scalar_index];
-            if (level & 1 != 0 and
-                bidi.mayHaveBidiMirror(scalar.codepoint))
-            {
-                visual_glyphs.appendAssumeCapacity(mapping.visualizedGlyph(
-                    source,
-                    run_types.fontForBackend(old_runs[owner]),
-                    unicode.mirroredCodepoint(scalar.codepoint),
-                ));
-            } else {
-                visual_glyphs.appendAssumeCapacity(source);
-            }
+            appendVisualizedDirectGlyph(
+                old_glyphs[scalar_index],
+                old_runs[owner],
+                scalar.codepoint,
+                level,
+                visual_glyphs,
+            );
             if (!single_owning_run)
                 visual_run_indices.appendAssumeCapacity(owner);
         }
@@ -312,18 +307,13 @@ pub fn applyFromSource(
             const level = scratch.line_levels.items[
                 scalar_index - scalar_start
             ];
-            const source = logical_glyphs[scalar_index];
-            if (level & 1 != 0 and
-                bidi.mayHaveBidiMirror(scalar.codepoint))
-            {
-                buffer.glyphs.appendAssumeCapacity(mapping.visualizedGlyph(
-                    source,
-                    run_types.fontForBackend(logical_runs[owner]),
-                    unicode.mirroredCodepoint(scalar.codepoint),
-                ));
-            } else {
-                buffer.glyphs.appendAssumeCapacity(source);
-            }
+            appendVisualizedDirectGlyph(
+                logical_glyphs[scalar_index],
+                logical_runs[owner],
+                scalar.codepoint,
+                level,
+                &buffer.glyphs,
+            );
             if (!single_owning_run)
                 visual_run_indices.appendAssumeCapacity(owner);
         }
@@ -378,6 +368,27 @@ pub fn applyFromSource(
             line.run_start = run_range.start;
             line.run_len = run_range.len;
         }
+    }
+}
+
+fn appendVisualizedDirectGlyph(
+    source: GlyphPosition,
+    owner: run_types.CascadeRun,
+    codepoint: u21,
+    level: u8,
+    output: *std.ArrayList(GlyphPosition),
+) void {
+    if (level & 1 != 0 and bidi.mayHaveBidiMirror(codepoint)) {
+        output.appendAssumeCapacity(mapping.visualizedGlyph(
+            source,
+            run_types.fontForBackend(owner),
+            unicode.mirroredCodepoint(codepoint),
+        ));
+    } else {
+        // The direct proof already establishes source.codepoint == codepoint.
+        // Keep this helper out of the large caller so the rare mirroring path
+        // does not inflate the common identity-copy loop's register pressure.
+        output.appendAssumeCapacity(source);
     }
 }
 

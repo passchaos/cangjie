@@ -4,6 +4,7 @@ const std = @import("std");
 const contextual = @import("../../contextual/root.zig");
 const extension = @import("../../extension/root.zig");
 const GlyphId = @import("../../../../../glyph.zig").GlyphId;
+const marks = @import("../../marks/root.zig");
 const nested = @import("../../nested.zig");
 const options = @import("../../../options.zig");
 const pair = @import("../../pair/root.zig");
@@ -86,6 +87,24 @@ pub fn collect(
                     lookup_flag,
                     run,
                 );
+            },
+            5 => if (lookup_accelerator) |accelerator| {
+                if (accelerator.mark_to_ligature_subtables.len ==
+                    subtable_count)
+                {
+                    for (accelerator.mark_to_ligature_subtables) |subtable| {
+                        try marks.ligature.collectParsed(
+                            view,
+                            subtable,
+                            glyphs,
+                            adjustments,
+                            allocator,
+                            lookup_flag,
+                            run,
+                        );
+                    }
+                    return;
+                }
             },
             7 => if (lookup_accelerator) |accelerator| {
                 if (accelerator.context_class_subtables.len == subtable_count) {

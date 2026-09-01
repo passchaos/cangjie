@@ -155,6 +155,19 @@ pub fn one(
     );
     @memset(mark_bases, .{});
 
+    const mark_ligatures = if (lookup_type == 5 or extension_type == 5)
+        try allocator.alloc(
+            model.MarkToLigatureSubtable,
+            subtable_count,
+        )
+    else
+        try allocator.alloc(model.MarkToLigatureSubtable, 0);
+    errdefer model.deinitMarkToLigatureSubtables(
+        mark_ligatures,
+        allocator,
+    );
+    @memset(mark_ligatures, .{});
+
     const mark_marks = if (lookup_type == 6)
         try allocator.alloc(model.MarkToMarkSubtable, subtable_count)
     else
@@ -257,6 +270,21 @@ pub fn one(
                 allocator,
             );
         }
+        if (mark_ligatures.len != 0) {
+            const mark_subtable = if (extension_type == 5)
+                try positioning.lookup.dispatch.extensionPayload(
+                    view,
+                    subtable_offset,
+                    5,
+                )
+            else
+                subtable_offset;
+            mark_ligatures[subtable_index] = try buildMarkLigature(
+                view,
+                mark_subtable,
+                allocator,
+            );
+        }
         if (mark_marks.len != 0) {
             mark_marks[subtable_index] = try buildMarkMark(
                 view,
@@ -336,6 +364,7 @@ pub fn one(
     result.pair_pos_extension = extension_type == 2;
     result.cursive_subtables = cursive;
     result.mark_to_base_subtables = mark_bases;
+    result.mark_to_ligature_subtables = mark_ligatures;
     result.mark_to_mark_subtables = mark_marks;
     result.context_class_subtables = try context.classSubtables(
         view,
@@ -476,6 +505,30 @@ fn buildMarkMark(
     parsed.mark_2_coverage = try coverage.Owned.build(
         view,
         parsed.mark_2_coverage_offset,
+        allocator,
+    );
+    return parsed;
+}
+
+fn buildMarkLigature(
+    view: View,
+    subtable_offset: usize,
+    allocator: std.mem.Allocator,
+) (Error || std.mem.Allocator.Error)!model.MarkToLigatureSubtable {
+    var parsed =
+        try positioning.lookup.marks.parseMarkToLigature(
+            view,
+            subtable_offset,
+        );
+    errdefer if (parsed.mark_coverage) |owned| owned.deinit(allocator);
+    parsed.mark_coverage = try coverage.Owned.build(
+        view,
+        parsed.mark_coverage_offset,
+        allocator,
+    );
+    parsed.ligature_coverage = try coverage.Owned.build(
+        view,
+        parsed.ligature_coverage_offset,
         allocator,
     );
     return parsed;

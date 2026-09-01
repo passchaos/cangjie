@@ -9,14 +9,7 @@ pub const Error = table.view.Error || error{UnsupportedGpos};
 pub const View = table.View;
 pub const MarkToBase = accelerator.model.MarkToBaseSubtable;
 
-pub const MarkToLigature = struct {
-    subtable_offset: usize,
-    mark_coverage_offset: usize,
-    ligature_coverage_offset: usize,
-    class_count: u16,
-    mark_array_offset: usize,
-    ligature_array_offset: usize,
-};
+pub const MarkToLigature = accelerator.model.MarkToLigatureSubtable;
 
 pub const MarkToMark = accelerator.model.MarkToMarkSubtable;
 

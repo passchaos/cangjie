@@ -137,6 +137,25 @@ pub fn apply(
             }
         }
     }
+    if (lookup_type == 5) {
+        if (exact_accelerator) |accelerator| {
+            if (accelerator.mark_to_ligature_subtables.len == subtable_count) {
+                for (accelerator.mark_to_ligature_subtables) |subtable| {
+                    _ = try marks.ligature.collectAtParsed(
+                        view,
+                        subtable,
+                        glyphs,
+                        target_index,
+                        adjustments,
+                        allocator,
+                        lookup_flag,
+                        nested_run,
+                    );
+                }
+                return;
+            }
+        }
+    }
     if (lookup_type == 7 or lookup_type == 9) {
         if (exact_accelerator) |accelerator| {
             const wraps_context = lookup_type == 7 or
@@ -162,6 +181,23 @@ pub fn apply(
     }
     if (lookup_type == 9) {
         if (exact_accelerator) |accelerator| {
+            if (accelerator.extension_lookup_type == 5 and
+                accelerator.mark_to_ligature_subtables.len == subtable_count)
+            {
+                for (accelerator.mark_to_ligature_subtables) |subtable| {
+                    if (try marks.ligature.collectAtParsed(
+                        view,
+                        subtable,
+                        glyphs,
+                        target_index,
+                        adjustments,
+                        allocator,
+                        lookup_flag,
+                        nested_run,
+                    )) return;
+                }
+                return;
+            }
             if (accelerator.chaining_class_subtables.len != 0) {
                 _ = try @import("contextual/root.zig").chaining.class_accelerated.lookup
                     .collectNestedAt(

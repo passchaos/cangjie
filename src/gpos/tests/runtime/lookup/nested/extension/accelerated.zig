@@ -92,3 +92,79 @@ test "GPOS accelerates nested extension chaining class positioning" {
     try std.testing.expectEqual(@as(usize, 0), adjustments.items[0].index);
     try std.testing.expectEqual(@as(i16, 50), adjustments.items[0].x_placement);
 }
+
+test "GPOS accelerates nested extension MarkLigPos at only its target" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 90;
+    fixture.writeU32(&bytes, 0, 0x00010000);
+    fixture.writeU16(&bytes, 4, 86);
+    fixture.writeU16(&bytes, 6, 88);
+    fixture.writeU16(&bytes, 8, 10);
+    fixture.writeU16(&bytes, 10, 1);
+    fixture.writeU16(&bytes, 12, 4);
+
+    const lookup = 14;
+    fixture.writeU16(&bytes, lookup + 0, 9);
+    fixture.writeU16(&bytes, lookup + 2, 0);
+    fixture.writeU16(&bytes, lookup + 4, 1);
+    fixture.writeU16(&bytes, lookup + 6, 8);
+    const wrapper = 22;
+    fixture.writeU16(&bytes, wrapper + 0, 1);
+    fixture.writeU16(&bytes, wrapper + 2, 5);
+    fixture.writeU32(&bytes, wrapper + 4, 8);
+
+    const mark_ligature = 30;
+    fixture.writeU16(&bytes, mark_ligature + 0, 1);
+    fixture.writeU16(&bytes, mark_ligature + 2, 12);
+    fixture.writeU16(&bytes, mark_ligature + 4, 18);
+    fixture.writeU16(&bytes, mark_ligature + 6, 1);
+    fixture.writeU16(&bytes, mark_ligature + 8, 24);
+    fixture.writeU16(&bytes, mark_ligature + 10, 36);
+    fixture.writeCoverage1(&bytes, mark_ligature + 12, 22);
+    fixture.writeCoverage1(&bytes, mark_ligature + 18, 20);
+    fixture.writeU16(&bytes, mark_ligature + 24, 1);
+    fixture.writeU16(&bytes, mark_ligature + 26, 0);
+    fixture.writeU16(&bytes, mark_ligature + 28, 6);
+    fixture.writeAnchor1(&bytes, mark_ligature + 30, 10, 15);
+    fixture.writeU16(&bytes, mark_ligature + 36, 1);
+    fixture.writeU16(&bytes, mark_ligature + 38, 4);
+    fixture.writeU16(&bytes, mark_ligature + 40, 1);
+    fixture.writeU16(&bytes, mark_ligature + 42, 4);
+    fixture.writeAnchor1(&bytes, mark_ligature + 44, 100, 120);
+    fixture.writeU16(&bytes, 86, 0);
+    fixture.writeU16(&bytes, 88, 0);
+
+    const accelerators = try buildLookupAccelerators(
+        &bytes,
+        0,
+        bytes.len,
+        allocator,
+    );
+    defer deinitLookupAccelerators(allocator, accelerators);
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        accelerators[0].mark_to_ligature_subtables.len,
+    );
+    // A later covered mark proves nested execution does not accidentally run
+    // the whole prepared subtable. Poisoning borrowed Coverage values proves
+    // the exact ExtensionPos sidecar is the path that handles the target.
+    fixture.writeU16(&bytes, mark_ligature + 16, 99);
+    fixture.writeU16(&bytes, mark_ligature + 22, 99);
+    const glyphs = [_]GlyphId{ 20, 22, 20, 22 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+    try nested.apply(.{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    }, &glyphs, 1, 0, &adjustments, allocator, .{
+        .lookup_accelerators = accelerators,
+        .assume_validated = true,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 90), adjustments.items[0].x_placement);
+    try std.testing.expectEqual(@as(i16, 105), adjustments.items[0].y_placement);
+}

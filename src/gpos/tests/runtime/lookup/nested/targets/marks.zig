@@ -166,6 +166,94 @@ test "GPOS context nested lookup applies MarkLigPos only at sequence index" {
     try std.testing.expect(adjustments.items[0].markAttachment());
     try std.testing.expectEqual(@as(?usize, 0), adjustments.items[0].attachment_parent_index);
 }
+
+test "GPOS context nested lookup uses exact MarkLigPos sidecar" {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 132;
+
+    fixture.writeU32(&bytes, 0, 0x00010000);
+    fixture.writeU16(&bytes, 4, 128);
+    fixture.writeU16(&bytes, 6, 130);
+    fixture.writeU16(&bytes, 8, 10);
+    fixture.writeU16(&bytes, 10, 2);
+    fixture.writeU16(&bytes, 12, 6);
+    fixture.writeU16(&bytes, 14, 42);
+    fixture.writeU16(&bytes, 16, 7);
+    fixture.writeU16(&bytes, 20, 1);
+    fixture.writeU16(&bytes, 22, 8);
+
+    const context = 24;
+    fixture.writeU16(&bytes, context + 0, 1);
+    fixture.writeU16(&bytes, context + 2, 22);
+    fixture.writeU16(&bytes, context + 4, 1);
+    fixture.writeU16(&bytes, context + 6, 8);
+    const set = context + 8;
+    fixture.writeU16(&bytes, set + 0, 1);
+    fixture.writeU16(&bytes, set + 2, 4);
+    const rule = set + 4;
+    fixture.writeU16(&bytes, rule + 0, 2);
+    fixture.writeU16(&bytes, rule + 2, 1);
+    fixture.writeU16(&bytes, rule + 4, 22);
+    fixture.writeU16(&bytes, rule + 6, 1);
+    fixture.writeU16(&bytes, rule + 8, 1);
+    fixture.writeCoverage1(&bytes, context + 22, 20);
+
+    fixture.writeU16(&bytes, 52, 5);
+    fixture.writeU16(&bytes, 56, 1);
+    fixture.writeU16(&bytes, 58, 8);
+    const mark_lig = 60;
+    fixture.writeU16(&bytes, mark_lig + 0, 1);
+    fixture.writeU16(&bytes, mark_lig + 2, 12);
+    fixture.writeU16(&bytes, mark_lig + 4, 18);
+    fixture.writeU16(&bytes, mark_lig + 6, 1);
+    fixture.writeU16(&bytes, mark_lig + 8, 26);
+    fixture.writeU16(&bytes, mark_lig + 10, 38);
+    fixture.writeCoverage1(&bytes, mark_lig + 12, 22);
+    fixture.writeCoverage1List(&bytes, mark_lig + 18, &.{ 20, 21 });
+    fixture.writeU16(&bytes, mark_lig + 26, 1);
+    fixture.writeU16(&bytes, mark_lig + 28, 0);
+    fixture.writeU16(&bytes, mark_lig + 30, 6);
+    fixture.writeAnchor1(&bytes, mark_lig + 32, 10, 15);
+    fixture.writeU16(&bytes, mark_lig + 38, 2);
+    fixture.writeU16(&bytes, mark_lig + 40, 6);
+    fixture.writeU16(&bytes, mark_lig + 42, 16);
+    fixture.writeU16(&bytes, mark_lig + 44, 1);
+    fixture.writeU16(&bytes, mark_lig + 46, 4);
+    fixture.writeAnchor1(&bytes, mark_lig + 48, 100, 120);
+    fixture.writeU16(&bytes, mark_lig + 54, 1);
+    fixture.writeU16(&bytes, mark_lig + 56, 4);
+    fixture.writeAnchor1(&bytes, mark_lig + 58, 200, 220);
+    fixture.writeU16(&bytes, 128, 0);
+    fixture.writeU16(&bytes, 130, 0);
+
+    const accelerators = try @import("../../../../../accelerator/root.zig")
+        .build.lookup.all(&bytes, 0, bytes.len, allocator);
+    defer @import("../../../../../accelerator/root.zig")
+        .build.lookup.deinit(allocator, accelerators);
+    // Poison only borrowed coverage glyph ids after the immutable sidecar has
+    // captured them. The contextual target must use lookup 1's exact sidecar.
+    fixture.writeU16(&bytes, mark_lig + 16, 99);
+    fixture.writeU16(&bytes, mark_lig + 22, 99);
+
+    const glyphs = [_]GlyphId{ 20, 22, 21, 22 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+    try collectLookup(.{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    }, 16, &glyphs, &adjustments, allocator, .{
+        .lookup_accelerators = accelerators,
+        .assume_validated = true,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 90), adjustments.items[0].x_placement);
+    try std.testing.expectEqual(@as(i16, 105), adjustments.items[0].y_placement);
+}
+
 test "GPOS context nested lookup applies MarkToMarkPos only at sequence index" {
     const allocator = std.testing.allocator;
     var bytes = [_]u8{0} ** 116;

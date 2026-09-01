@@ -34,6 +34,7 @@ test "lookup model releases its complete nested ownership graph" {
         .pair_pos_class_matrix = try allocator.dupe(i16, &.{ -30, 0 }),
         .cursive_subtables = try ownedCursiveSubtables(allocator),
         .mark_to_base_subtables = try ownedMarkToBaseSubtables(allocator),
+        .mark_to_ligature_subtables = try ownedMarkToLigatureSubtables(allocator),
         .mark_to_mark_subtables = try ownedMarkToMarkSubtables(allocator),
         .context_class_subtables = try ownedContextClassSubtables(allocator),
         .chaining_subtables = try ownedChainingSubtables(allocator),
@@ -123,6 +124,22 @@ fn ownedMarkToMarkSubtables(
             .glyphs = try allocator.dupe(u16, &.{5}),
         },
         .mark_2_coverage = .{
+            .glyphs = try allocator.dupe(u16, &.{6}),
+        },
+    };
+    return subtables;
+}
+
+fn ownedMarkToLigatureSubtables(
+    allocator: std.mem.Allocator,
+) ![]accelerator.model.MarkToLigatureSubtable {
+    const subtables =
+        try allocator.alloc(accelerator.model.MarkToLigatureSubtable, 1);
+    subtables[0] = .{
+        .mark_coverage = .{
+            .glyphs = try allocator.dupe(u16, &.{5}),
+        },
+        .ligature_coverage = .{
             .glyphs = try allocator.dupe(u16, &.{6}),
         },
     };

@@ -10,6 +10,7 @@ const unicode = @import("../../../../unicode.zig");
 pub const Error =
     table.view.Error || error{ UnsupportedGpos, InvalidShapingInput };
 pub const MarkToBase = accelerator.model.MarkToBaseSubtable;
+pub const MarkToLigature = accelerator.model.MarkToLigatureSubtable;
 pub const Options = options.Options;
 pub const View = table.View;
 
@@ -81,14 +82,13 @@ pub fn markGlyph(
     glyph: GlyphId,
     run: Options,
 ) Error!bool {
-    if (run.glyph_classes) |classes| {
-        return glyph < classes.len and classes[glyph] == 3;
-    }
-    return try table.coverage.index(
+    return markGlyphFromCoverage(
         view,
         mark_coverage_offset,
+        null,
         glyph,
-    ) != null;
+        run,
+    );
 }
 
 pub fn markGlyphParsed(
@@ -97,17 +97,13 @@ pub fn markGlyphParsed(
     glyph: GlyphId,
     run: Options,
 ) Error!bool {
-    if (run.glyph_classes) |classes| {
-        return glyph < classes.len and classes[glyph] == 3;
-    }
-    return if (subtable.mark_coverage) |coverage|
-        coverage.index(glyph) != null
-    else
-        try table.coverage.index(
-            view,
-            subtable.mark_coverage_offset,
-            glyph,
-        ) != null;
+    return markGlyphFromCoverage(
+        view,
+        subtable.mark_coverage_offset,
+        subtable.mark_coverage,
+        glyph,
+        run,
+    );
 }
 
 pub fn skipsNonCoveredGlyphParsed(
@@ -144,15 +140,10 @@ pub fn skipsNonCoveredGlyph(
     glyph_index: usize,
     run: Options,
 ) Error!bool {
-    if (try markGlyph(
+    return skipsNonCoveredGlyphWithCoverage(
         view,
         mark_coverage_offset,
-        glyphs[glyph_index],
-        run,
-    )) return true;
-    return isMultipleSubstContinuation(
-        view,
-        mark_coverage_offset,
+        null,
         glyphs,
         glyph_index,
         run,
@@ -162,6 +153,125 @@ pub fn skipsNonCoveredGlyph(
 pub fn isMultipleSubstContinuation(
     view: View,
     mark_coverage_offset: usize,
+    glyphs: []const GlyphId,
+    glyph_index: usize,
+    run: Options,
+) Error!bool {
+    return isMultipleSubstContinuationWithCoverage(
+        view,
+        mark_coverage_offset,
+        null,
+        glyphs,
+        glyph_index,
+        run,
+    );
+}
+
+pub fn previousCoveredLigature(
+    view: View,
+    mark_coverage_offset: usize,
+    glyphs: []const GlyphId,
+    mark_position: usize,
+    lookup_flag: u16,
+    run: Options,
+) Error!?usize {
+    return previousCoveredLigatureWithCoverage(
+        view,
+        mark_coverage_offset,
+        null,
+        glyphs,
+        mark_position,
+        lookup_flag,
+        run,
+    );
+}
+
+pub fn previousCoveredLigatureParsed(
+    view: View,
+    subtable: MarkToLigature,
+    glyphs: []const GlyphId,
+    mark_position: usize,
+    lookup_flag: u16,
+    run: Options,
+) Error!?usize {
+    return previousCoveredLigatureWithCoverage(
+        view,
+        subtable.mark_coverage_offset,
+        subtable.mark_coverage,
+        glyphs,
+        mark_position,
+        lookup_flag,
+        run,
+    );
+}
+
+fn previousCoveredLigatureWithCoverage(
+    view: View,
+    mark_coverage_offset: usize,
+    mark_coverage: ?accelerator.coverage.Owned,
+    glyphs: []const GlyphId,
+    mark_position: usize,
+    lookup_flag: u16,
+    run: Options,
+) Error!?usize {
+    var glyph_index = mark_position;
+    while (glyph_index > 0) {
+        glyph_index -= 1;
+        if (matching.lookupIgnoresGlyph(
+            lookup_flag,
+            run,
+            glyphs[glyph_index],
+        )) continue;
+        if (matching.markAttachmentSearchSkipsGlyph(
+            run,
+            glyph_index,
+        )) continue;
+
+        // Earlier marks in the same cluster are transparent. The first
+        // participating non-mark is the candidate and later LigatureCoverage
+        // matching decides whether this subtable can attach to it.
+        if (try skipsNonCoveredGlyphWithCoverage(
+            view,
+            mark_coverage_offset,
+            mark_coverage,
+            glyphs,
+            glyph_index,
+            run,
+        )) continue;
+        return glyph_index;
+    }
+    return null;
+}
+
+fn skipsNonCoveredGlyphWithCoverage(
+    view: View,
+    mark_coverage_offset: usize,
+    mark_coverage: ?accelerator.coverage.Owned,
+    glyphs: []const GlyphId,
+    glyph_index: usize,
+    run: Options,
+) Error!bool {
+    if (try markGlyphFromCoverage(
+        view,
+        mark_coverage_offset,
+        mark_coverage,
+        glyphs[glyph_index],
+        run,
+    )) return true;
+    return isMultipleSubstContinuationWithCoverage(
+        view,
+        mark_coverage_offset,
+        mark_coverage,
+        glyphs,
+        glyph_index,
+        run,
+    );
+}
+
+fn isMultipleSubstContinuationWithCoverage(
+    view: View,
+    mark_coverage_offset: usize,
+    mark_coverage: ?accelerator.coverage.Owned,
     glyphs: []const GlyphId,
     glyph_index: usize,
     run: Options,
@@ -183,54 +293,90 @@ pub fn isMultipleSubstContinuation(
         run.run_metadata.glyph_source_indices orelse return false;
     if (glyph_index >= sources.len) return false;
     if (sources[glyph_index] != sources[glyph_index - 1]) return false;
-    if (try markGlyph(
+    return !try markGlyphFromCoverage(
         view,
         mark_coverage_offset,
+        mark_coverage,
         glyphs[glyph_index - 1],
         run,
-    )) return false;
-    return true;
+    );
 }
 
-pub fn previousCoveredLigature(
+fn markGlyphFromCoverage(
     view: View,
-    mark_coverage_offset: usize,
-    glyphs: []const GlyphId,
-    mark_position: usize,
-    lookup_flag: u16,
+    coverage_offset: usize,
+    coverage: ?accelerator.coverage.Owned,
+    glyph: GlyphId,
     run: Options,
-) Error!?usize {
-    var glyph_index = mark_position;
-    while (glyph_index > 0) {
-        glyph_index -= 1;
-        if (matching.lookupIgnoresGlyph(
-            lookup_flag,
-            run,
-            glyphs[glyph_index],
-        )) continue;
-        if (matching.markAttachmentSearchSkipsGlyph(
-            run,
-            glyph_index,
-        )) continue;
-
-        // Earlier marks in the same cluster are transparent. The first
-        // participating non-mark is the candidate and later coverage matching
-        // decides whether this subtable can attach to it.
-        if (try skipsNonCoveredGlyph(
-            view,
-            mark_coverage_offset,
-            glyphs,
-            glyph_index,
-            run,
-        )) continue;
-        return glyph_index;
+) Error!bool {
+    if (run.glyph_classes) |classes| {
+        return glyph < classes.len and classes[glyph] == 3;
     }
-    return null;
+    return coverageContains(view, coverage_offset, coverage, glyph);
+}
+
+fn coverageContains(
+    view: View,
+    coverage_offset: usize,
+    coverage: ?accelerator.coverage.Owned,
+    glyph: GlyphId,
+) Error!bool {
+    return if (coverage) |owned|
+        owned.index(glyph) != null
+    else
+        try table.coverage.index(view, coverage_offset, glyph) != null;
 }
 
 pub fn ligatureComponentIndex(
     view: View,
     mark_coverage_offset: usize,
+    glyphs: []const GlyphId,
+    ligature_position: usize,
+    mark_position: usize,
+    component_count: usize,
+    lookup_flag: u16,
+    run: Options,
+) Error!usize {
+    return ligatureComponentIndexWithCoverage(
+        view,
+        mark_coverage_offset,
+        null,
+        glyphs,
+        ligature_position,
+        mark_position,
+        component_count,
+        lookup_flag,
+        run,
+    );
+}
+
+pub fn ligatureComponentIndexParsed(
+    view: View,
+    subtable: MarkToLigature,
+    glyphs: []const GlyphId,
+    ligature_position: usize,
+    mark_position: usize,
+    component_count: usize,
+    lookup_flag: u16,
+    run: Options,
+) Error!usize {
+    return ligatureComponentIndexWithCoverage(
+        view,
+        subtable.mark_coverage_offset,
+        subtable.mark_coverage,
+        glyphs,
+        ligature_position,
+        mark_position,
+        component_count,
+        lookup_flag,
+        run,
+    );
+}
+
+fn ligatureComponentIndexWithCoverage(
+    view: View,
+    mark_coverage_offset: usize,
+    mark_coverage: ?accelerator.coverage.Owned,
     glyphs: []const GlyphId,
     ligature_position: usize,
     mark_position: usize,
@@ -259,10 +405,7 @@ pub fn ligatureComponentIndex(
         {
             // MultipleSubst pieces share a cluster but do not acquire a real
             // ligature id. HarfBuzz consequently treats the first piece as
-            // the attachment base and selects the last MarkLig component,
-            // rather than inferring a component from marks that precede the
-            // target. A multiplied real ligature still has source provenance
-            // below and must retain source-based component selection.
+            // the attachment base and selects the last MarkLig component.
             return component_count - 1;
         }
     }
@@ -304,11 +447,16 @@ pub fn ligatureComponentIndex(
             run,
             glyph_index,
         )) continue;
-        if (try table.coverage.index(
+        // Component fallback counts only marks authored in this MarkLigPos
+        // subtable. GDEF class 3 makes a glyph transparent during the
+        // backwards base search, but it must not select an anchor component
+        // when that glyph is outside this subtable's MarkCoverage.
+        if (try coverageContains(
             view,
             mark_coverage_offset,
+            mark_coverage,
             glyphs[glyph_index],
-        ) != null) {
+        )) {
             covered_marks_before_target += 1;
         }
     }

@@ -258,6 +258,57 @@ test "lookup builder releases second-lookahead groups on allocation failure" {
     );
 }
 
+test "lookup builder releases MarkLigPos coverages on allocation failure" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        buildMarkLigatureLookup,
+        .{},
+    );
+}
+
+fn buildMarkLigatureLookup(allocator: std.mem.Allocator) !void {
+    var bytes = [_]u8{0} ** 62;
+    writeU16(&bytes, 0, 5);
+    writeU16(&bytes, 2, 0);
+    writeU16(&bytes, 4, 1);
+    writeU16(&bytes, 6, 8);
+    const subtable = 8;
+    writeU16(&bytes, subtable + 0, 1);
+    writeU16(&bytes, subtable + 2, 12);
+    writeU16(&bytes, subtable + 4, 18);
+    writeU16(&bytes, subtable + 6, 1);
+    writeU16(&bytes, subtable + 8, 24);
+    writeU16(&bytes, subtable + 10, 36);
+    writeCoverage1(&bytes, subtable + 12, 22);
+    writeCoverage1(&bytes, subtable + 18, 20);
+    writeU16(&bytes, subtable + 24, 1);
+    writeU16(&bytes, subtable + 26, 0);
+    writeU16(&bytes, subtable + 28, 6);
+    writeU16(&bytes, subtable + 30, 1);
+    writeI16(&bytes, subtable + 32, 10);
+    writeI16(&bytes, subtable + 34, 15);
+    writeU16(&bytes, subtable + 36, 1);
+    writeU16(&bytes, subtable + 38, 4);
+    writeU16(&bytes, subtable + 40, 1);
+    writeU16(&bytes, subtable + 42, 4);
+    writeU16(&bytes, subtable + 44, 1);
+    writeI16(&bytes, subtable + 46, 100);
+    writeI16(&bytes, subtable + 48, 120);
+
+    const lookup = try build.lookup.one(.{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    }, 0, allocator);
+    var owned = [_]build.lookup.Lookup{lookup};
+    defer build.lookup.deinitContents(allocator, &owned);
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        lookup.mark_to_ligature_subtables.len,
+    );
+}
+
 fn buildSecondGroupingLookup(allocator: std.mem.Allocator) !void {
     var bytes = [_]u8{0} ** 256;
     const fixture = writeSecondGroupingLookup(&bytes);

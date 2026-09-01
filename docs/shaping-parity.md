@@ -5073,3 +5073,27 @@ shaping-performance superiority.
 - Common glyph-zone MDRP/MIRP execution now resolves both points and the glyph
   zone once. Fixed-CPU-30 A/B/B/A instructions fell `5.86%` for `A`, `6.30%`
   for `X`, and `4.69%` for U+00C2, with lower cycles and improved controls.
+
+
+## MarkLigPos prepared coverage sidecars (2026-09-01)
+
+- GPOS lookup preparation now owns exact MarkLigPos mark and ligature Coverage
+  indexes for direct type-5 lookups and homogeneous ExtensionPos type-5
+  wrappers. Direct, extension, and nested PosLookupRecord execution reuse the
+  sidecars only after the existing immutable table/allocation identity proof;
+  mixed wrappers and detached callers retain the validated table path. Anchor
+  arrays remain table-backed so device and variation deltas are evaluated at
+  the active coordinates. Focused tests cover ownership/OOM cleanup, direct and
+  extension dispatch after borrowed Coverage bytes are changed, nested target
+  isolation, and the distinction between GDEF mark class and a subtable's own
+  MarkCoverage when selecting a ligature component.
+- HarfBuzz 14.3 `shaping-parity-smoke` and `shaping-corpus-parity-smoke` both
+  pass after this change. The maintained Noto Nastaliq `dflt` corpora retain
+  83,486 and 110,143 output glyphs, with per-sample checksums
+  `34659f154e1f2e4c` and `43cd60c82fa43d33`. A pinned-CPU-30 A/B/B/A run
+  (14 observations per implementation) measured `1652.998` versus
+  `1656.427 ns/glyph` on words and `1277.435` versus `1269.644 ns/glyph` on
+  long prose (baseline versus candidate): noise-scale `-0.21%` and a repeatable
+  `+0.61%` speedup respectively. This is a bounded completeness improvement,
+  not closure of the larger Nastaliq gap; the dominant remaining cost is GSUB
+  contextual/chaining matching.

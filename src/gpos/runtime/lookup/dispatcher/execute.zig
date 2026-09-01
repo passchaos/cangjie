@@ -234,6 +234,22 @@ pub noinline fn collect(
                 );
             },
             5 => if (runtime_matching.runMayHaveMarkAttachments(glyphs, run)) {
+                if (lookup_accelerator) |active_accelerator| {
+                    if (active_accelerator.mark_to_ligature_subtables.len ==
+                        subtable_count)
+                    {
+                        try marks.ligature.collectParsed(
+                            view,
+                            active_accelerator.mark_to_ligature_subtables[subtable_index],
+                            glyphs,
+                            adjustments,
+                            allocator,
+                            lookup_flag,
+                            run,
+                        );
+                        continue;
+                    }
+                }
                 try marks.ligature.collect(
                     view,
                     subtable_offset,

@@ -39,6 +39,7 @@ pub const Lookup = struct {
     pair_pos_extension: bool = false,
     cursive_subtables: []const CursivePositionSubtable = &.{},
     mark_to_base_subtables: []const MarkToBaseSubtable = &.{},
+    mark_to_ligature_subtables: []const MarkToLigatureSubtable = &.{},
     mark_to_mark_subtables: []const MarkToMarkSubtable = &.{},
     context_class_subtables: []const ContextClassSubtable = &.{},
     chaining_coverage_only: bool = false,
@@ -128,6 +129,20 @@ pub const MarkToBaseSubtable = struct {
     base_array_offset: usize = 0,
     mark_coverage: ?coverage.Owned = null,
     base_coverage: ?coverage.Owned = null,
+};
+
+/// Fixed MarkLigPos metadata plus immutable coverage indexes. Anchor arrays
+/// remain table-backed so variable Anchor format 3 semantics and the compact
+/// font representation are preserved.
+pub const MarkToLigatureSubtable = struct {
+    subtable_offset: usize = 0,
+    mark_coverage_offset: usize = 0,
+    ligature_coverage_offset: usize = 0,
+    class_count: u16 = 0,
+    mark_array_offset: usize = 0,
+    ligature_array_offset: usize = 0,
+    mark_coverage: ?coverage.Owned = null,
+    ligature_coverage: ?coverage.Owned = null,
 };
 
 pub const MarkToMarkSubtable = struct {
@@ -227,6 +242,10 @@ pub fn deinitLookupContents(
         allocator.free(lookup.pair_pos_class_matrix);
         deinitCursiveSubtables(lookup.cursive_subtables, allocator);
         deinitMarkToBaseSubtables(lookup.mark_to_base_subtables, allocator);
+        deinitMarkToLigatureSubtables(
+            lookup.mark_to_ligature_subtables,
+            allocator,
+        );
         deinitMarkToMarkSubtables(lookup.mark_to_mark_subtables, allocator);
         deinitContextClassSubtables(lookup.context_class_subtables, allocator);
         glyph_groups.deinitGroups(lookup.chaining_groups, allocator);
@@ -278,6 +297,17 @@ pub fn deinitMarkToMarkSubtables(
     for (subtables) |subtable| {
         if (subtable.mark_1_coverage) |owned| owned.deinit(allocator);
         if (subtable.mark_2_coverage) |owned| owned.deinit(allocator);
+    }
+    allocator.free(subtables);
+}
+
+pub fn deinitMarkToLigatureSubtables(
+    subtables: []const MarkToLigatureSubtable,
+    allocator: std.mem.Allocator,
+) void {
+    for (subtables) |subtable| {
+        if (subtable.mark_coverage) |owned| owned.deinit(allocator);
+        if (subtable.ligature_coverage) |owned| owned.deinit(allocator);
     }
     allocator.free(subtables);
 }

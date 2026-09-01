@@ -794,19 +794,11 @@ fn shapeItemizedCascadeResolvedInto(
         const run_end = run.byteEnd();
         const run_text = text[run.byte_start..run_end];
         const script_text = text[run.script_byte_start..run.scriptByteEnd()];
-        var run_options = options;
-        // UAX #9 levels describe horizontal embedding direction. They split
-        // vertical text for later visual reordering, but must not replace the
-        // requested top-to-bottom or bottom-to-top shaping direction.
-        if (!options.writing_mode.isVertical()) {
-            run_options.direction = run.direction;
-        }
-        run_options.reorder_bidi = false;
-        run_options.native_direction_shaping = false;
-        var resolved = resolvedScriptRunOptions(
+        var resolved = resolvedBidiScriptRunOptions(
             script_text,
             run.script,
-            run_options,
+            run.direction,
+            options,
         );
         resolved.lookup.logical_context =
             prepared.view.subrange(run.byte_start, run_end);
@@ -841,6 +833,29 @@ fn resolvedScriptRunOptions(
     // proof restores the source/pipeline ASCII fast path without changing the
     // fixed script and language selected for the run.
     resolved.all_ascii = fallback_segment.isAscii(text);
+    return resolved;
+}
+
+/// Resolve one UAX #9 item without erasing an explicit direction for scripts
+/// whose horizontal direction is inherently variable. The resolved level
+/// still owns final visual ordering; it only replaces the GSUB/GPOS direction
+/// when the selected Unicode/OpenType script has one fixed native direction.
+fn resolvedBidiScriptRunOptions(
+    text: []const u8,
+    script: unicode.Script,
+    bidi_direction: TextDirection,
+    options: ShapeOptions,
+) ResolvedLookupOptions {
+    var resolved = resolvedScriptRunOptions(text, script, options);
+    if (!options.writing_mode.isVertical() and
+        resolved.lookup.nativeHorizontalDirection() != null)
+    {
+        resolved.lookup.direction = bidi_direction;
+    }
+    // The parent already resolved embedding levels and remains responsible for
+    // the one final visual permutation. Child segments must do neither again.
+    resolved.lookup.reorder_bidi = false;
+    resolved.lookup.native_direction_shaping = false;
     return resolved;
 }
 
@@ -1072,19 +1087,11 @@ fn shapeParagraphLogicalIntersectionInto(
     std.debug.assert(text_start >= run.byte_start);
     std.debug.assert(text_end <= run.byteEnd());
     const script_text = paragraph_text[run.script_byte_start..run.scriptByteEnd()];
-    var item_options = paragraph_options_value;
-    // Resolved bidi direction governs horizontal shaping only. In vertical
-    // text, the paragraph direction remains the inline progression requested
-    // by the caller while UAX #9 supplies item boundaries and visual order.
-    if (!paragraph_options_value.writing_mode.isVertical()) {
-        item_options.direction = run.direction;
-    }
-    item_options.reorder_bidi = false;
-    item_options.native_direction_shaping = false;
-    var resolved = resolvedScriptRunOptions(
+    var resolved = resolvedBidiScriptRunOptions(
         script_text,
         run.script,
-        item_options,
+        run.direction,
+        paragraph_options_value,
     );
     resolved.lookup.logical_context = context.subrange(text_start, text_end);
     resolved.lookup.beginning_of_text =

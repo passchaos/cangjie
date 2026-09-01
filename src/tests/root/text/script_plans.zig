@@ -188,6 +188,54 @@ test "ordinary cascade itemizes scripts before same-face fallback" {
     try std.testing.expectEqual(OpenTypeScriptTag.arab, scripted.script_runs[1].script_tag);
 }
 
+test "cascade preserves explicit direction for variable-direction script shaping" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildOldItalicDirectionalGsubTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const cascade = FontCascade.init(&.{&font});
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    const text = "\u{10300}\u{10301}";
+
+    const rtl = try TextShaper.shapeUtf8CascadeWithOptions(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{ .direction = .rtl },
+    );
+    // Old Italic has Unicode bidi class L but no single native OpenType
+    // direction. The explicit request therefore selects `rtlm`, while UAX #9
+    // keeps the homogeneous L item in its resolved visual order.
+    try std.testing.expectEqualSlices(GlyphId, &.{ 3, 4 }, &.{
+        rtl.glyphs[0].glyph_id,
+        rtl.glyphs[1].glyph_id,
+    });
+    try std.testing.expectEqualSlices(usize, &.{ 0, 4 }, &.{
+        rtl.glyphs[0].cluster,
+        rtl.glyphs[1].cluster,
+    });
+
+    const ltr = try TextShaper.shapeUtf8CascadeWithOptions(
+        cascade,
+        &buffer,
+        text,
+        20,
+        .{ .direction = .ltr },
+    );
+    try std.testing.expectEqualSlices(GlyphId, &.{ 1, 2 }, &.{
+        ltr.glyphs[0].glyph_id,
+        ltr.glyphs[1].glyph_id,
+    });
+    try std.testing.expectEqualSlices(usize, &.{ 0, 4 }, &.{
+        ltr.glyphs[0].cluster,
+        ltr.glyphs[1].cluster,
+    });
+}
+
 test "ordinary cascade preserves caller direction for already-visual text" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

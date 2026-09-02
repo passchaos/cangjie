@@ -5083,6 +5083,21 @@ shaping-performance superiority.
   for `X`, and `4.69%` for U+00C2, with lower cycles and improved controls.
 
 
+## Extension MarkBasePos and MarkMarkPos prepared coverages (2026-09-02)
+
+- Homogeneous ExtensionPos lookups wrapping MarkBasePos or MarkMarkPos now own
+  both payload Coverage indexes, just like the retained MarkLigPos path. The
+  builder resolves each extension payload before parsing it, and top-level plus
+  nested dispatch use the prepared slices only after exact table/allocation
+  identity and complete subtable-count checks. Mixed, copied, detached, and
+  incomplete sidecars retain generic wrapper parsing; nested execution preserves
+  authored order and stops after the first matching subtable.
+- Focused tests cover direct/extension equivalence, post-build mutation of
+  borrowed Coverage glyphs, nested target isolation, mixed/detached fallback,
+  authored-order semantics, malformed later payload cleanup, and exhaustive
+  allocator-failure cleanup. The full ReleaseFast suite and retained
+  HarfBuzz/HarfRust parity umbrellas pass.
+
 ## MarkLigPos prepared coverage sidecars (2026-09-01)
 
 - GPOS lookup preparation now owns exact MarkLigPos mark and ligature Coverage

@@ -266,6 +266,124 @@ test "lookup builder releases MarkLigPos coverages on allocation failure" {
     );
 }
 
+test "lookup builder releases extension mark coverages on allocation failure" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        buildExtensionMarkLookup,
+        .{4},
+    );
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        buildExtensionMarkLookup,
+        .{6},
+    );
+}
+
+test "lookup builder rejects a malformed later extension mark payload" {
+    for ([_]u16{ 4, 6 }) |wrapped_type| {
+        var bytes = [_]u8{0} ** 122;
+        writeExtensionMarkLookup(&bytes, wrapped_type);
+        // The second payload's second required Coverage points past the view.
+        writeU16(&bytes, 74 + 4, 0xffff);
+        try std.testing.expectError(
+            error.BadGpos,
+            build.lookup.one(.{
+                .data = &bytes,
+                .offset = 0,
+                .length = bytes.len,
+                .assume_validated = true,
+            }, 0, std.testing.allocator),
+        );
+    }
+}
+
+fn buildExtensionMarkLookup(
+    allocator: std.mem.Allocator,
+    wrapped_type: u16,
+) !void {
+    var bytes = [_]u8{0} ** 122;
+    writeExtensionMarkLookup(&bytes, wrapped_type);
+    const lookup = try build.lookup.one(.{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    }, 0, allocator);
+    var owned = [_]build.lookup.Lookup{lookup};
+    defer build.lookup.deinitContents(allocator, &owned);
+
+    try std.testing.expectEqual(@as(?u16, wrapped_type), lookup.extension_lookup_type);
+    if (wrapped_type == 4) {
+        try std.testing.expectEqual(
+            @as(usize, 2),
+            lookup.mark_to_base_subtables.len,
+        );
+        try std.testing.expectEqual(
+            @as(?usize, 0),
+            lookup.mark_to_base_subtables[0].mark_coverage.?.index(22),
+        );
+        try std.testing.expectEqual(
+            @as(?usize, 0),
+            lookup.mark_to_base_subtables[1].base_coverage.?.index(30),
+        );
+    } else {
+        try std.testing.expectEqual(
+            @as(usize, 2),
+            lookup.mark_to_mark_subtables.len,
+        );
+        try std.testing.expectEqual(
+            @as(?usize, 0),
+            lookup.mark_to_mark_subtables[0].mark_1_coverage.?.index(22),
+        );
+        try std.testing.expectEqual(
+            @as(?usize, 0),
+            lookup.mark_to_mark_subtables[1].mark_2_coverage.?.index(30),
+        );
+    }
+}
+
+fn writeExtensionMarkLookup(bytes: []u8, wrapped_type: u16) void {
+    writeU16(bytes, 0, 9);
+    writeU16(bytes, 2, 0);
+    writeU16(bytes, 4, 2);
+    writeU16(bytes, 6, 10);
+    writeU16(bytes, 8, 66);
+    writeExtensionMarkSubtable(bytes, 10, wrapped_type, 22, 20);
+    writeExtensionMarkSubtable(bytes, 66, wrapped_type, 32, 30);
+}
+
+fn writeExtensionMarkSubtable(
+    bytes: []u8,
+    wrapper: usize,
+    wrapped_type: u16,
+    first_glyph: u16,
+    second_glyph: u16,
+) void {
+    writeU16(bytes, wrapper, 1);
+    writeU16(bytes, wrapper + 2, wrapped_type);
+    writeU32(bytes, wrapper + 4, 8);
+    const subtable = wrapper + 8;
+    writeU16(bytes, subtable, 1);
+    writeU16(bytes, subtable + 2, 12);
+    writeU16(bytes, subtable + 4, 18);
+    writeU16(bytes, subtable + 6, 1);
+    writeU16(bytes, subtable + 8, 24);
+    writeU16(bytes, subtable + 10, 36);
+    writeCoverage1(bytes, subtable + 12, first_glyph);
+    writeCoverage1(bytes, subtable + 18, second_glyph);
+    writeU16(bytes, subtable + 24, 1);
+    writeU16(bytes, subtable + 26, 0);
+    writeU16(bytes, subtable + 28, 6);
+    writeU16(bytes, subtable + 30, 1);
+    writeI16(bytes, subtable + 32, 10);
+    writeI16(bytes, subtable + 34, 15);
+    writeU16(bytes, subtable + 36, 1);
+    writeU16(bytes, subtable + 38, 4);
+    writeU16(bytes, subtable + 40, 1);
+    writeI16(bytes, subtable + 42, 100);
+    writeI16(bytes, subtable + 44, 120);
+}
+
 fn buildMarkLigatureLookup(allocator: std.mem.Allocator) !void {
     var bytes = [_]u8{0} ** 62;
     writeU16(&bytes, 0, 5);

@@ -88,6 +88,19 @@ pub fn collect(
                     run,
                 );
             },
+            4, 6 => if (lookup_accelerator) |accelerator| {
+                if (try extension.prepared_marks.collectLookup(
+                    view,
+                    resolved_type,
+                    subtable_count,
+                    accelerator,
+                    glyphs,
+                    adjustments,
+                    allocator,
+                    lookup_flag,
+                    run,
+                )) return;
+            } else {},
             5 => if (lookup_accelerator) |accelerator| {
                 if (accelerator.mark_to_ligature_subtables.len ==
                     subtable_count)

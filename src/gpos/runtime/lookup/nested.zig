@@ -181,6 +181,22 @@ pub fn apply(
     }
     if (lookup_type == 9) {
         if (exact_accelerator) |accelerator| {
+            if (accelerator.extension_lookup_type) |wrapped_type| {
+                if (wrapped_type == 4 or wrapped_type == 6) {
+                    if (try extension.prepared_marks.collectAt(
+                        view,
+                        wrapped_type,
+                        subtable_count,
+                        accelerator,
+                        glyphs,
+                        target_index,
+                        adjustments,
+                        allocator,
+                        lookup_flag,
+                        nested_run,
+                    )) return;
+                }
+            }
             if (accelerator.extension_lookup_type == 5 and
                 accelerator.mark_to_ligature_subtables.len == subtable_count)
             {

@@ -3,6 +3,7 @@
 test {
     _ = @import("atomicity.zig");
     _ = @import("lookup.zig");
+    _ = @import("marks.zig");
     _ = @import("precedence.zig");
     _ = @import("wrapper.zig");
 }

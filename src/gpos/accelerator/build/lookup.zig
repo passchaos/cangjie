@@ -142,7 +142,7 @@ pub fn one(
     var pair_matrix = std.ArrayList(i16).empty;
     defer pair_matrix.deinit(allocator);
 
-    const mark_bases = if (lookup_type == 4)
+    const mark_bases = if (lookup_type == 4 or extension_type == 4)
         try allocator.alloc(
             model.MarkToBaseSubtable,
             subtable_count,
@@ -168,7 +168,7 @@ pub fn one(
     );
     @memset(mark_ligatures, .{});
 
-    const mark_marks = if (lookup_type == 6)
+    const mark_marks = if (lookup_type == 6 or extension_type == 6)
         try allocator.alloc(model.MarkToMarkSubtable, subtable_count)
     else
         try allocator.alloc(model.MarkToMarkSubtable, 0);
@@ -263,10 +263,22 @@ pub fn one(
                 allocator,
             );
         }
+        // Resolve homogeneous wrappers before any mark parser or sidecar
+        // builder sees the subtable. This keeps owned Coverage offsets bound to
+        // the actual payload rather than the eight-byte ExtensionPos header.
+        const base_or_mark_subtable = if (extension_type == 4 or
+            extension_type == 6)
+            try positioning.lookup.dispatch.extensionPayload(
+                view,
+                subtable_offset,
+                extension_type.?,
+            )
+        else
+            subtable_offset;
         if (mark_bases.len != 0) {
             mark_bases[subtable_index] = try buildMarkBase(
                 view,
-                subtable_offset,
+                base_or_mark_subtable,
                 allocator,
             );
         }
@@ -288,7 +300,7 @@ pub fn one(
         if (mark_marks.len != 0) {
             mark_marks[subtable_index] = try buildMarkMark(
                 view,
-                subtable_offset,
+                base_or_mark_subtable,
                 allocator,
             );
         }

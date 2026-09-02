@@ -3,6 +3,7 @@
 const std = @import("std");
 const accelerator = @import("../../../../../accelerator/root.zig");
 const fixture = @import("../fixture.zig");
+const mark_fixture = @import("../../extension/mark_fixture.zig");
 const GlyphId = fixture.GlyphId;
 const nested = @import("../../../../../runtime/lookup/nested.zig");
 const positioning = @import("../../../../../positioning/root.zig");
@@ -167,4 +168,52 @@ test "GPOS accelerates nested extension MarkLigPos at only its target" {
     try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
     try std.testing.expectEqual(@as(i16, 90), adjustments.items[0].x_placement);
     try std.testing.expectEqual(@as(i16, 105), adjustments.items[0].y_placement);
+}
+
+test "GPOS accelerates nested extension MarkBasePos at only its target" {
+    try expectPreparedExtensionMarkTarget(.base);
+}
+
+test "GPOS accelerates nested extension MarkMarkPos at only its target" {
+    try expectPreparedExtensionMarkTarget(.mark);
+}
+
+fn expectPreparedExtensionMarkTarget(kind: mark_fixture.MarkKind) !void {
+    const allocator = std.testing.allocator;
+    var bytes = [_]u8{0} ** 82;
+    const offsets = mark_fixture.writeSingleExtensionTable(&bytes, kind);
+    const accelerators = try buildLookupAccelerators(
+        &bytes,
+        0,
+        bytes.len,
+        allocator,
+    );
+    defer deinitLookupAccelerators(allocator, accelerators);
+
+    // The later covered pair proves that PosLookupRecord execution stays at its
+    // target; poisoning table Coverage values proves the exact sidecar supplied
+    // both membership indexes for that target.
+    mark_fixture.writeU16(&bytes, offsets.first_coverage_glyph, 99);
+    mark_fixture.writeU16(&bytes, offsets.second_coverage_glyph, 99);
+    const glyphs = [_]GlyphId{ 20, 22, 20, 22 };
+    var adjustments = std.ArrayList(Adjustment).empty;
+    defer adjustments.deinit(allocator);
+    try nested.apply(.{
+        .data = &bytes,
+        .offset = 0,
+        .length = bytes.len,
+        .assume_validated = true,
+    }, &glyphs, 1, 0, &adjustments, allocator, .{
+        .lookup_accelerators = accelerators,
+        .assume_validated = true,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items.len);
+    try std.testing.expectEqual(@as(usize, 1), adjustments.items[0].index);
+    try std.testing.expectEqual(@as(i16, 90), adjustments.items[0].x_placement);
+    try std.testing.expectEqual(@as(i16, 105), adjustments.items[0].y_placement);
+    try std.testing.expectEqual(
+        @as(?usize, 0),
+        adjustments.items[0].attachment_parent_index,
+    );
 }

@@ -4,15 +4,22 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Mapping, Sequence
 
 
 DEFAULT_MINIMUM_SPEEDUP = 1.01
+TOOL_NAME = "run_freetype_matrix.py"
+TOOL_VERSION = "1.0"
+REPORT_SCHEMA_VERSION = 1
 
 
 def valid_minimum_speedup(minimum_speedup: float) -> bool:
@@ -30,6 +37,46 @@ class Case:
     name: str
     font: Path
     codepoint: str
+
+
+@dataclass(frozen=True)
+class RowResult:
+    name: str
+    case: Case
+    mode: str
+    size: int
+    target_size: int
+    cangjie_checksum_a: str | None
+    cangjie_checksum_b: str | None
+    reference_checksum_a: str | None
+    reference_checksum_b: str | None
+    semantic_agreement: bool
+    cangjie_first_ns_per_iter: float
+    cangjie_second_ns_per_iter: float
+    reference_first_ns_per_iter: float
+    reference_second_ns_per_iter: float
+    speedup: float
+    threshold_status: str
+
+
+@dataclass(frozen=True)
+class RunConfiguration:
+    glyph_bench: Path
+    roboto: Path
+    cff: Path
+    cff2: Path
+    arabic: Path
+    cjk: Path
+    cbdt: Path | None
+    sbix: Path | None
+    colr_v0: Path | None
+    iterations: int
+    samples: int
+    cpu: int | None
+    sizes: tuple[int, ...]
+    minimum_target_size: int
+    fail_on_slower: bool
+    minimum_speedup: float
 
 
 def run(command: list[str], cpu: int | None) -> dict[str, str]:
@@ -65,6 +112,224 @@ def command(
     ]
 
 
+def case_result_json(result: RowResult) -> dict[str, Any]:
+    return {
+        "name": result.name,
+        "font": str(result.case.font),
+        "codepoint": result.case.codepoint,
+        "mode": result.mode,
+        "size": result.size,
+        "target_size": result.target_size,
+        "semantic": {
+            "cangjie_checksums": {
+                "a": result.cangjie_checksum_a,
+                "b": result.cangjie_checksum_b,
+            },
+            "reference_checksums": {
+                "a": result.reference_checksum_a,
+                "b": result.reference_checksum_b,
+            },
+            "agreement": result.semantic_agreement,
+        },
+        "timing": {
+            "cangjie_ns_per_iter": {
+                "a": result.cangjie_first_ns_per_iter,
+                "b": result.cangjie_second_ns_per_iter,
+            },
+            "reference_ns_per_iter": {
+                "a": result.reference_first_ns_per_iter,
+                "b": result.reference_second_ns_per_iter,
+            },
+            "speedup": result.speedup,
+        },
+        "threshold_status": result.threshold_status,
+    }
+
+
+def build_json_report(
+    configuration: RunConfiguration,
+    manifest: Sequence[str],
+    results: Sequence[RowResult],
+) -> dict[str, Any]:
+    if len(results) != len(manifest):
+        raise ValueError(
+            "cannot build a completed report from a partial matrix: "
+            f"expected {len(manifest)} rows, got {len(results)}"
+        )
+    actual_names = [result.name for result in results]
+    if actual_names != list(manifest):
+        raise ValueError(
+            "cannot build report from reordered or mismatched rows: "
+            f"expected {list(manifest)}, got {actual_names}"
+        )
+    below_minimum = [
+        result.name for result in results if result.threshold_status != "met"
+    ]
+    semantic_failures = [
+        result.name for result in results if not result.semantic_agreement
+    ]
+    gate_mode = "enforced" if configuration.fail_on_slower else "report-only"
+    thresholds_met = not below_minimum
+    semantic_agreement = not semantic_failures
+    command_succeeded = semantic_agreement and (
+        thresholds_met or not configuration.fail_on_slower
+    )
+    return {
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "tool": {"name": TOOL_NAME, "version": TOOL_VERSION},
+        "run": {
+            "glyph_bench": str(configuration.glyph_bench),
+            "roboto": str(configuration.roboto),
+            "cff": str(configuration.cff),
+            "cff2": str(configuration.cff2),
+            "arabic": str(configuration.arabic),
+            "cjk": str(configuration.cjk),
+            "cbdt": None if configuration.cbdt is None else str(configuration.cbdt),
+            "sbix": None if configuration.sbix is None else str(configuration.sbix),
+            "colr_v0": (
+                None if configuration.colr_v0 is None else str(configuration.colr_v0)
+            ),
+            "iterations": configuration.iterations,
+            "samples": configuration.samples,
+            "cpu": configuration.cpu,
+            "sizes": list(configuration.sizes),
+            "minimum_target_size": configuration.minimum_target_size,
+            "fail_on_slower": configuration.fail_on_slower,
+            "minimum_speedup": configuration.minimum_speedup,
+        },
+        "gate": {
+            "mode": gate_mode,
+            "minimum_speedup": configuration.minimum_speedup,
+            "thresholds_met": thresholds_met,
+            "semantic_agreement": semantic_agreement,
+            "command_succeeded": command_succeeded,
+        },
+        "manifest": {
+            "expected_row_count": len(manifest),
+            "actual_row_count": len(results),
+            "rows": list(manifest),
+        },
+        "rows": [case_result_json(result) for result in results],
+        "summary": {
+            "row_count": len(results),
+            "thresholds_met_count": len(results) - len(below_minimum),
+            "below_minimum_count": len(below_minimum),
+            "below_minimum_rows": below_minimum,
+            "semantic_agreement_count": len(results) - len(semantic_failures),
+            "semantic_failure_count": len(semantic_failures),
+            "semantic_failure_rows": semantic_failures,
+        },
+    }
+
+
+def write_json_atomic(path: Path, report: Mapping[str, Any]) -> None:
+    parent = path.parent
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=parent, prefix=f".{path.name}.", suffix=".tmp", text=True
+        )
+    except OSError as error:
+        raise RuntimeError(
+            f"cannot create JSON output for {path}: {error}"
+        ) from error
+    descriptor_open = True
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            descriptor_open = False
+            json.dump(report, output, indent=2, sort_keys=True, allow_nan=False)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_name, path)
+    except BaseException:
+        if descriptor_open:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def emit_json_report(
+    path: Path | None,
+    configuration: RunConfiguration,
+    manifest: Sequence[str],
+    results: Sequence[RowResult],
+) -> None:
+    if path is None:
+        return
+    write_json_atomic(path, build_json_report(configuration, manifest, results))
+
+
+def measure_row(
+    *,
+    name: str,
+    case: Case,
+    mode: str,
+    size: int,
+    target_size: int,
+    cangjie_a: dict[str, str],
+    freetype_a: dict[str, str],
+    freetype_b: dict[str, str],
+    cangjie_b: dict[str, str],
+    compare_cross_engine: bool,
+    failures: list[str],
+    minimum_speedup: float,
+) -> RowResult:
+    cangjie_checksum_a = cangjie_a.get("checksum")
+    cangjie_checksum_b = cangjie_b.get("checksum")
+    reference_checksum_a = freetype_a.get("checksum")
+    reference_checksum_b = freetype_b.get("checksum")
+    semantic_agreement = True
+    if cangjie_checksum_a != cangjie_checksum_b:
+        failures.append(
+            f"{name}: cangjie checksum {cangjie_checksum_a}/{cangjie_checksum_b}"
+        )
+        semantic_agreement = False
+    if reference_checksum_a != reference_checksum_b:
+        failures.append(
+            f"{name}: freetype checksum {reference_checksum_a}/{reference_checksum_b}"
+        )
+        semantic_agreement = False
+    if compare_cross_engine and cangjie_checksum_a != reference_checksum_a:
+        failures.append(
+            f"{name}: cross-engine "
+            f"{cangjie_checksum_a}/{reference_checksum_a}"
+        )
+        semantic_agreement = False
+    cangjie_first_ns = float(cangjie_a["sample_median_ns_per_iter"])
+    cangjie_second_ns = float(cangjie_b["sample_median_ns_per_iter"])
+    reference_first_ns = float(freetype_a["sample_median_ns_per_iter"])
+    reference_second_ns = float(freetype_b["sample_median_ns_per_iter"])
+    cangjie_mean = math.sqrt(cangjie_first_ns * cangjie_second_ns)
+    reference_mean = math.sqrt(reference_first_ns * reference_second_ns)
+    speedup = math.inf if cangjie_mean == 0 else reference_mean / cangjie_mean
+    threshold_status = (
+        "met"
+        if meets_speedup_gate(speedup, minimum_speedup)
+        else "below-minimum"
+    )
+    return RowResult(
+        name=name,
+        case=case,
+        mode=mode,
+        size=size,
+        target_size=target_size,
+        cangjie_checksum_a=cangjie_checksum_a,
+        cangjie_checksum_b=cangjie_checksum_b,
+        reference_checksum_a=reference_checksum_a,
+        reference_checksum_b=reference_checksum_b,
+        semantic_agreement=semantic_agreement,
+        cangjie_first_ns_per_iter=cangjie_first_ns,
+        cangjie_second_ns_per_iter=cangjie_second_ns,
+        reference_first_ns_per_iter=reference_first_ns,
+        reference_second_ns_per_iter=reference_second_ns,
+        speedup=speedup,
+        threshold_status=threshold_status,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--glyph-bench", required=True, type=Path)
@@ -81,6 +346,15 @@ def main() -> int:
     parser.add_argument("--cpu", type=int)
     parser.add_argument("--sizes", default="8,16,32,64,128")
     parser.add_argument("--minimum-target-size", type=int, default=32)
+    parser.add_argument(
+        "--json-output",
+        type=Path,
+        help=(
+            "atomically write a versioned JSON artifact after every "
+            "successful completed matrix, including report-only runs with "
+            "rows below the threshold"
+        ),
+    )
     parser.add_argument(
         "--fail-on-slower",
         action="store_true",
@@ -134,7 +408,8 @@ def main() -> int:
         ))
     )
     failures: list[str] = []
-    row_count = 0
+    manifest: list[str] = []
+    rows: list[RowResult] = []
     for case in cases:
         # Parsing is independent of glyph and size. Run one resident-byte
         # cold-face lifecycle per representative format before raster rows.
@@ -150,42 +425,41 @@ def main() -> int:
         freetype_a = run(freetype_cmd, args.cpu)
         freetype_b = run(freetype_cmd, args.cpu)
         cangjie_b = run(cangjie_cmd, args.cpu)
-        for engine, first, second in (
-            ("cangjie", cangjie_a, cangjie_b),
-            ("freetype", freetype_a, freetype_b),
-        ):
-            if first.get("checksum") != second.get("checksum"):
-                failures.append(
-                    f"{case.name}/face-open: {engine} checksum "
-                    f"{first.get('checksum')}/{second.get('checksum')}"
-                )
-        if cangjie_a.get("checksum") != freetype_a.get("checksum"):
-            failures.append(
-                f"{case.name}/face-open: cross-engine properties "
-                f"{cangjie_a.get('checksum')}/{freetype_a.get('checksum')}"
-            )
-        cangjie_ns = math.sqrt(
-            float(cangjie_a["sample_median_ns_per_iter"])
-            * float(cangjie_b["sample_median_ns_per_iter"])
+        row_name = f"{case.name}/face-open"
+        manifest.append(row_name)
+        row = measure_row(
+            name=row_name,
+            case=case,
+            mode="face-open",
+            size=16,
+            target_size=args.minimum_target_size,
+            cangjie_a=cangjie_a,
+            freetype_a=freetype_a,
+            freetype_b=freetype_b,
+            cangjie_b=cangjie_b,
+            compare_cross_engine=True,
+            failures=failures,
+            minimum_speedup=args.minimum_speedup,
         )
-        freetype_ns = math.sqrt(
-            float(freetype_a["sample_median_ns_per_iter"])
-            * float(freetype_b["sample_median_ns_per_iter"])
-        )
-        speedup = math.inf if cangjie_ns == 0 else freetype_ns / cangjie_ns
+        rows.append(row)
         print(
-            f"{case.name}/face-open: "
-            f"cangjie={cangjie_ns:.3f}ns freetype={freetype_ns:.3f}ns "
-            f"speedup={speedup:.3f}x "
+            f"{row_name}: "
+            f"cangjie={row.cangjie_first_ns_per_iter:.3f}ns "
+            f"freetype={row.reference_first_ns_per_iter:.3f}ns "
+            f"speedup={row.speedup:.3f}x "
             f"minimum_speedup={args.minimum_speedup:.3f}x"
         )
-        if (args.fail_on_slower and
-                not meets_speedup_gate(speedup, args.minimum_speedup)):
+        if args.fail_on_slower and row.threshold_status != "met":
+            cangjie_ns = math.sqrt(
+                row.cangjie_first_ns_per_iter * row.cangjie_second_ns_per_iter
+            )
+            freetype_ns = math.sqrt(
+                row.reference_first_ns_per_iter * row.reference_second_ns_per_iter
+            )
             failures.append(
-                f"{case.name}/face-open: performance "
+                f"{row_name}: performance "
                 f"{cangjie_ns:.3f}ns/{freetype_ns:.3f}ns"
             )
-        row_count += 1
         for mode in ("raster", "raster-owning", "raster-reuse"):
             for size in sizes:
                 # Size the surface to the glyph instead of letting a fixed
@@ -205,37 +479,43 @@ def main() -> int:
                 freetype_a = run(freetype_cmd, args.cpu)
                 freetype_b = run(freetype_cmd, args.cpu)
                 cangjie_b = run(cangjie_cmd, args.cpu)
-                for engine, first, second in (
-                    ("cangjie", cangjie_a, cangjie_b),
-                    ("freetype", freetype_a, freetype_b),
-                ):
-                    if first.get("checksum") != second.get("checksum"):
-                        failures.append(
-                            f"{case.name}/{mode}/{size}: {engine} checksum "
-                            f"{first.get('checksum')}/{second.get('checksum')}"
-                        )
-                cangjie_ns = math.sqrt(
-                    float(cangjie_a["sample_median_ns_per_iter"])
-                    * float(cangjie_b["sample_median_ns_per_iter"])
+                row_name = f"{case.name}/{mode}/{size}px"
+                manifest.append(row_name)
+                row = measure_row(
+                    name=row_name,
+                    case=case,
+                    mode=mode,
+                    size=size,
+                    target_size=target_size,
+                    cangjie_a=cangjie_a,
+                    freetype_a=freetype_a,
+                    freetype_b=freetype_b,
+                    cangjie_b=cangjie_b,
+                    compare_cross_engine=False,
+                    failures=failures,
+                    minimum_speedup=args.minimum_speedup,
                 )
-                freetype_ns = math.sqrt(
-                    float(freetype_a["sample_median_ns_per_iter"])
-                    * float(freetype_b["sample_median_ns_per_iter"])
-                )
-                speedup = math.inf if cangjie_ns == 0 else freetype_ns / cangjie_ns
+                rows.append(row)
                 print(
-                    f"{case.name}/{mode}/{size}px: "
-                    f"cangjie={cangjie_ns:.3f}ns freetype={freetype_ns:.3f}ns "
-                    f"speedup={speedup:.3f}x "
+                    f"{row_name}: "
+                    f"cangjie={row.cangjie_first_ns_per_iter:.3f}ns "
+                    f"freetype={row.reference_first_ns_per_iter:.3f}ns "
+                    f"speedup={row.speedup:.3f}x "
                     f"minimum_speedup={args.minimum_speedup:.3f}x"
                 )
-                if (args.fail_on_slower and
-                        not meets_speedup_gate(speedup, args.minimum_speedup)):
+                if args.fail_on_slower and row.threshold_status != "met":
+                    cangjie_ns = math.sqrt(
+                        row.cangjie_first_ns_per_iter
+                        * row.cangjie_second_ns_per_iter
+                    )
+                    freetype_ns = math.sqrt(
+                        row.reference_first_ns_per_iter
+                        * row.reference_second_ns_per_iter
+                    )
                     failures.append(
-                        f"{case.name}/{mode}/{size}: performance "
+                        f"{row_name}: performance "
                         f"{cangjie_ns:.3f}ns/{freetype_ns:.3f}ns"
                     )
-                row_count += 1
     for case in bitmap_cases:
         for size in sizes:
             # Compare decoded native strike output rather than differently
@@ -253,44 +533,42 @@ def main() -> int:
             freetype_a = run(freetype_cmd, args.cpu)
             freetype_b = run(freetype_cmd, args.cpu)
             cangjie_b = run(cangjie_cmd, args.cpu)
-            for engine, first, second in (
-                ("cangjie", cangjie_a, cangjie_b),
-                ("freetype", freetype_a, freetype_b),
-            ):
-                if first.get("checksum") != second.get("checksum"):
-                    failures.append(
-                        f"{case.name}/bitmap-render/{size}: {engine} "
-                        f"checksum {first.get('checksum')}/"
-                        f"{second.get('checksum')}"
-                    )
-            if cangjie_a.get("checksum") != freetype_a.get("checksum"):
-                failures.append(
-                    f"{case.name}/bitmap-render/{size}: cross-engine pixels "
-                    f"{cangjie_a.get('checksum')}/"
-                    f"{freetype_a.get('checksum')}"
-                )
-            cangjie_ns = math.sqrt(
-                float(cangjie_a["sample_median_ns_per_iter"])
-                * float(cangjie_b["sample_median_ns_per_iter"])
+            row_name = f"{case.name}/bitmap-render/{size}px"
+            manifest.append(row_name)
+            row = measure_row(
+                name=row_name,
+                case=case,
+                mode="bitmap-render",
+                size=size,
+                target_size=args.minimum_target_size,
+                cangjie_a=cangjie_a,
+                freetype_a=freetype_a,
+                freetype_b=freetype_b,
+                cangjie_b=cangjie_b,
+                compare_cross_engine=True,
+                failures=failures,
+                minimum_speedup=args.minimum_speedup,
             )
-            freetype_ns = math.sqrt(
-                float(freetype_a["sample_median_ns_per_iter"])
-                * float(freetype_b["sample_median_ns_per_iter"])
-            )
-            speedup = math.inf if cangjie_ns == 0 else freetype_ns / cangjie_ns
+            rows.append(row)
             print(
-                f"{case.name}/bitmap-render/{size}px: "
-                f"cangjie={cangjie_ns:.3f}ns freetype={freetype_ns:.3f}ns "
-                f"speedup={speedup:.3f}x "
+                f"{row_name}: "
+                f"cangjie={row.cangjie_first_ns_per_iter:.3f}ns "
+                f"freetype={row.reference_first_ns_per_iter:.3f}ns "
+                f"speedup={row.speedup:.3f}x "
                 f"minimum_speedup={args.minimum_speedup:.3f}x"
             )
-            if (args.fail_on_slower and
-                    not meets_speedup_gate(speedup, args.minimum_speedup)):
+            if args.fail_on_slower and row.threshold_status != "met":
+                cangjie_ns = math.sqrt(
+                    row.cangjie_first_ns_per_iter * row.cangjie_second_ns_per_iter
+                )
+                freetype_ns = math.sqrt(
+                    row.reference_first_ns_per_iter
+                    * row.reference_second_ns_per_iter
+                )
                 failures.append(
-                    f"{case.name}/bitmap-render/{size}: performance "
+                    f"{row_name}: performance "
                     f"{cangjie_ns:.3f}ns/{freetype_ns:.3f}ns"
                 )
-            row_count += 1
     if args.colr_v0 is not None:
         case = Case("colr-v0-layers", args.colr_v0, "U+0041")
         cangjie_cmd = command(
@@ -305,47 +583,69 @@ def main() -> int:
         freetype_a = run(freetype_cmd, args.cpu)
         freetype_b = run(freetype_cmd, args.cpu)
         cangjie_b = run(cangjie_cmd, args.cpu)
-        for engine, first, second in (
-            ("cangjie", cangjie_a, cangjie_b),
-            ("freetype", freetype_a, freetype_b),
-        ):
-            if first.get("checksum") != second.get("checksum"):
-                failures.append(
-                    f"{case.name}: {engine} checksum "
-                    f"{first.get('checksum')}/{second.get('checksum')}"
-                )
-        if cangjie_a.get("checksum") != freetype_a.get("checksum"):
-            failures.append(
-                f"{case.name}: cross-engine layers "
-                f"{cangjie_a.get('checksum')}/{freetype_a.get('checksum')}"
-            )
-        cangjie_ns = math.sqrt(
-            float(cangjie_a["sample_median_ns_per_iter"])
-            * float(cangjie_b["sample_median_ns_per_iter"])
+        row_name = case.name
+        manifest.append(row_name)
+        row = measure_row(
+            name=row_name,
+            case=case,
+            mode="color-layers",
+            size=64,
+            target_size=args.minimum_target_size,
+            cangjie_a=cangjie_a,
+            freetype_a=freetype_a,
+            freetype_b=freetype_b,
+            cangjie_b=cangjie_b,
+            compare_cross_engine=True,
+            failures=failures,
+            minimum_speedup=args.minimum_speedup,
         )
-        freetype_ns = math.sqrt(
-            float(freetype_a["sample_median_ns_per_iter"])
-            * float(freetype_b["sample_median_ns_per_iter"])
-        )
-        speedup = math.inf if cangjie_ns == 0 else freetype_ns / cangjie_ns
+        rows.append(row)
         print(
-            f"{case.name}: cangjie={cangjie_ns:.3f}ns "
-            f"freetype={freetype_ns:.3f}ns speedup={speedup:.3f}x "
+            f"{row_name}: cangjie={row.cangjie_first_ns_per_iter:.3f}ns "
+            f"freetype={row.reference_first_ns_per_iter:.3f}ns "
+            f"speedup={row.speedup:.3f}x "
             f"minimum_speedup={args.minimum_speedup:.3f}x"
         )
-        if (args.fail_on_slower and
-                not meets_speedup_gate(speedup, args.minimum_speedup)):
+        if args.fail_on_slower and row.threshold_status != "met":
+            cangjie_ns = math.sqrt(
+                row.cangjie_first_ns_per_iter * row.cangjie_second_ns_per_iter
+            )
+            freetype_ns = math.sqrt(
+                row.reference_first_ns_per_iter * row.reference_second_ns_per_iter
+            )
             failures.append(
-                f"{case.name}: performance "
+                f"{row_name}: performance "
                 f"{cangjie_ns:.3f}ns/{freetype_ns:.3f}ns"
             )
-        row_count += 1
     if failures:
         print("Cangjie/FreeType lifecycle matrix failed:", file=sys.stderr)
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         return 1
-    print(f"Cangjie/FreeType lifecycle matrix completed: {row_count} rows")
+    emit_json_report(
+        args.json_output,
+        RunConfiguration(
+            glyph_bench=args.glyph_bench,
+            roboto=args.roboto,
+            cff=args.cff,
+            cff2=args.cff2,
+            arabic=args.arabic,
+            cjk=args.cjk,
+            cbdt=args.cbdt,
+            sbix=args.sbix,
+            colr_v0=args.colr_v0,
+            iterations=args.iterations,
+            samples=args.samples,
+            cpu=args.cpu,
+            sizes=sizes,
+            minimum_target_size=args.minimum_target_size,
+            fail_on_slower=args.fail_on_slower,
+            minimum_speedup=args.minimum_speedup,
+        ),
+        manifest,
+        rows,
+    )
+    print(f"Cangjie/FreeType lifecycle matrix completed: {len(rows)} rows")
     return 0
 
 

@@ -10,16 +10,23 @@ A/B/B/A measurements.
 from __future__ import annotations
 
 import argparse
+import json
 import math
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from typing import Any, Mapping, Sequence
 
 
 DEFAULT_MINIMUM_SPEEDUP = 1.01
+TOOL_NAME = "run_fontations_matrix.py"
+TOOL_VERSION = "1.0"
+REPORT_SCHEMA_VERSION = 1
 
 
 def valid_minimum_speedup(minimum_speedup: float) -> bool:
@@ -58,6 +65,40 @@ class OutlineCorpus:
     name: str
     font: Path
     glyph_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class RowResult:
+    case: Case
+    resolved_font: Path
+    semantic_cangjie_checksum: str | None
+    semantic_reference_checksum: str | None
+    semantic_agreement: bool
+    cangjie_first_ns_per_iter: float
+    cangjie_second_ns_per_iter: float
+    reference_first_ns_per_iter: float
+    reference_second_ns_per_iter: float
+    speedup: float
+    threshold_status: str
+
+
+@dataclass(frozen=True)
+class RunConfiguration:
+    cangjie: Path
+    skrifa_manifest: Path
+    skrifa_executable: Path
+    fixture_dir: Path
+    roboto: Path
+    cff2: Path
+    varc: Path
+    cff2_extended: Path
+    extended: bool
+    source: str
+    iterations: int
+    samples: int
+    cpu: int | None
+    fail_on_slower: bool
+    minimum_speedup: float
 
 
 EXTENDED_OUTLINE_MODES = ("outline-session", "outline-reuse")
@@ -217,6 +258,153 @@ def run(command: list[str], cpu: int | None) -> dict[str, str]:
     return parse_fields(completed.stdout + completed.stderr)
 
 
+def case_result_json(result: RowResult) -> dict[str, Any]:
+    return {
+        "name": result.case.name,
+        "mode": result.case.mode,
+        "font": str(result.resolved_font),
+        "operand": result.case.operand,
+        "font_size": result.case.font_size,
+        "variation": result.case.variation,
+        "source": result.case.source.value,
+        "semantic": {
+            "cangjie_checksum": result.semantic_cangjie_checksum,
+            "reference_checksum": result.semantic_reference_checksum,
+            "agreement": result.semantic_agreement,
+        },
+        "timing": {
+            "cangjie_ns_per_iter": {
+                "a": result.cangjie_first_ns_per_iter,
+                "b": result.cangjie_second_ns_per_iter,
+            },
+            "reference_ns_per_iter": {
+                "a": result.reference_first_ns_per_iter,
+                "b": result.reference_second_ns_per_iter,
+            },
+            "speedup": result.speedup,
+        },
+        "threshold_status": result.threshold_status,
+    }
+
+
+def build_json_report(
+    configuration: RunConfiguration,
+    manifest: Sequence[Case],
+    results: Sequence[RowResult],
+) -> dict[str, Any]:
+    if len(results) != len(manifest):
+        raise ValueError(
+            "cannot build a completed report from a partial matrix: "
+            f"expected {len(manifest)} rows, got {len(results)}"
+        )
+    expected_names = [case.name for case in manifest]
+    actual_names = [result.case.name for result in results]
+    if actual_names != expected_names:
+        raise ValueError(
+            "cannot build report from reordered or mismatched rows: "
+            f"expected {expected_names}, got {actual_names}"
+        )
+    below_minimum = [
+        result.case.name
+        for result in results
+        if result.threshold_status != "met"
+    ]
+    semantic_failures = [
+        result.case.name
+        for result in results
+        if not result.semantic_agreement
+    ]
+    gate_mode = "enforced" if configuration.fail_on_slower else "report-only"
+    thresholds_met = not below_minimum
+    semantic_agreement = not semantic_failures
+    command_succeeded = semantic_agreement and (
+        thresholds_met or not configuration.fail_on_slower
+    )
+    return {
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "tool": {"name": TOOL_NAME, "version": TOOL_VERSION},
+        "run": {
+            "cangjie_executable": str(configuration.cangjie),
+            "skrifa_manifest": str(configuration.skrifa_manifest),
+            "skrifa_executable": str(configuration.skrifa_executable),
+            "fixture_dir": str(configuration.fixture_dir),
+            "roboto": str(configuration.roboto),
+            "cff2": str(configuration.cff2),
+            "varc": str(configuration.varc),
+            "cff2_extended": str(configuration.cff2_extended),
+            "extended": configuration.extended,
+            "source": configuration.source,
+            "iterations": configuration.iterations,
+            "samples": configuration.samples,
+            "cpu": configuration.cpu,
+            "fail_on_slower": configuration.fail_on_slower,
+            "minimum_speedup": configuration.minimum_speedup,
+        },
+        "gate": {
+            "mode": gate_mode,
+            "minimum_speedup": configuration.minimum_speedup,
+            "thresholds_met": thresholds_met,
+            "semantic_agreement": semantic_agreement,
+            "command_succeeded": command_succeeded,
+        },
+        "manifest": {
+            "expected_row_count": len(manifest),
+            "actual_row_count": len(results),
+            "rows": expected_names,
+        },
+        "rows": [case_result_json(result) for result in results],
+        "summary": {
+            "row_count": len(results),
+            "thresholds_met_count": len(results) - len(below_minimum),
+            "below_minimum_count": len(below_minimum),
+            "below_minimum_rows": below_minimum,
+            "semantic_agreement_count": len(results) - len(semantic_failures),
+            "semantic_failure_count": len(semantic_failures),
+            "semantic_failure_rows": semantic_failures,
+        },
+    }
+
+
+def write_json_atomic(path: Path, report: Mapping[str, Any]) -> None:
+    parent = path.parent
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=parent, prefix=f".{path.name}.", suffix=".tmp", text=True
+        )
+    except OSError as error:
+        raise RuntimeError(
+            f"cannot create JSON output for {path}: {error}"
+        ) from error
+    descriptor_open = True
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            descriptor_open = False
+            json.dump(report, output, indent=2, sort_keys=True, allow_nan=False)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_name, path)
+    except BaseException:
+        if descriptor_open:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def emit_json_report(
+    path: Path | None,
+    configuration: RunConfiguration,
+    manifest: Sequence[Case],
+    results: Sequence[RowResult],
+) -> None:
+    if path is None:
+        return
+    write_json_atomic(path, build_json_report(configuration, manifest, results))
+
+
 def cangjie_command(
     executable: Path,
     case: Case,
@@ -262,6 +450,84 @@ def skrifa_command(
     return command
 
 
+def measure_case(
+    *,
+    args: argparse.Namespace,
+    cangjie: Path,
+    skrifa: Path,
+    case: Case,
+    font: Path,
+    failures: list[str],
+) -> RowResult:
+    cangjie_semantic = run(
+        cangjie_command(cangjie, case, font, 1, 1), args.cpu
+    )
+    reference_semantic = run(
+        skrifa_command(skrifa, case, font, 1, 1), args.cpu
+    )
+    semantic_cangjie_checksum = cangjie_semantic.get("checksum")
+    semantic_reference_checksum = reference_semantic.get("checksum")
+    semantic_agreement = (
+        not case.compare_checksum
+        or (
+            semantic_cangjie_checksum is not None
+            and semantic_reference_checksum is not None
+            and int(semantic_cangjie_checksum, 16)
+            == int(semantic_reference_checksum, 16)
+        )
+    )
+    if not semantic_agreement:
+        failures.append(
+            f"{case.name}: checksum: Cangjie={semantic_cangjie_checksum!r}, "
+            f"Skrifa={semantic_reference_checksum!r}"
+        )
+    cangjie_first = (
+        cangjie_semantic if args.iterations == 1 and args.samples == 1 else run(
+            cangjie_command(cangjie, case, font, args.iterations, args.samples),
+            args.cpu,
+        )
+    )
+    reference_first = (
+        reference_semantic if args.iterations == 1 and args.samples == 1 else run(
+            skrifa_command(skrifa, case, font, args.iterations, args.samples),
+            args.cpu,
+        )
+    )
+    reference_second = run(
+        skrifa_command(skrifa, case, font, args.iterations, args.samples),
+        args.cpu,
+    )
+    cangjie_second = run(
+        cangjie_command(cangjie, case, font, args.iterations, args.samples),
+        args.cpu,
+    )
+    cangjie_first_ns = float(cangjie_first["sample_median_ns_per_iter"])
+    cangjie_second_ns = float(cangjie_second["sample_median_ns_per_iter"])
+    reference_first_ns = float(reference_first["median_ns_per_iter"])
+    reference_second_ns = float(reference_second["median_ns_per_iter"])
+    cangjie_mean = math.sqrt(cangjie_first_ns * cangjie_second_ns)
+    reference_mean = math.sqrt(reference_first_ns * reference_second_ns)
+    speedup = math.inf if cangjie_mean == 0 else reference_mean / cangjie_mean
+    threshold_status = (
+        "met"
+        if meets_speedup_gate(speedup, args.minimum_speedup)
+        else "below-minimum"
+    )
+    return RowResult(
+        case=case,
+        resolved_font=font,
+        semantic_cangjie_checksum=semantic_cangjie_checksum,
+        semantic_reference_checksum=semantic_reference_checksum,
+        semantic_agreement=semantic_agreement,
+        cangjie_first_ns_per_iter=cangjie_first_ns,
+        cangjie_second_ns_per_iter=cangjie_second_ns,
+        reference_first_ns_per_iter=reference_first_ns,
+        reference_second_ns_per_iter=reference_second_ns,
+        speedup=speedup,
+        threshold_status=threshold_status,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cangjie", required=True, type=Path)
@@ -283,6 +549,15 @@ def main() -> int:
     parser.add_argument("--iterations", type=int, default=1)
     parser.add_argument("--samples", type=int, default=1)
     parser.add_argument("--cpu", type=int)
+    parser.add_argument(
+        "--json-output",
+        type=Path,
+        help=(
+            "atomically write a versioned JSON artifact after every "
+            "successful completed matrix, including report-only runs with "
+            "rows below the threshold"
+        ),
+    )
     parser.add_argument(
         "--source", choices=("all", "varc"), default="all",
         help="run every maintained source or only the retained VARC rows",
@@ -317,36 +592,21 @@ def main() -> int:
     )
     skrifa = args.skrifa_manifest.parent / "target/release/fontations-bitmap-oracle"
     failures: list[str] = []
-    measured: list[tuple[str, float, float, float, float]] = []
-    cases = CASES if args.source == "all" else tuple(
+    rows: list[RowResult] = []
+    manifest = list(CASES if args.source == "all" else tuple(
         case for case in CASES if case.source is FontSource.VARC
-    )
-    for case in cases:
-        font = case_font(case, args)
-        cangjie_semantic = run(cangjie_command(args.cangjie, case, font, 1, 1), args.cpu)
-        reference_semantic = run(skrifa_command(skrifa, case, font, 1, 1), args.cpu)
-        if case.compare_checksum and int(cangjie_semantic.get("checksum", "-1"), 16) != int(reference_semantic.get("checksum", "-2"), 16):
-            failures.append(
-                f"{case.name}: checksum: Cangjie={cangjie_semantic.get('checksum')!r}, "
-                f"Skrifa={reference_semantic.get('checksum')!r}"
+    ))
+    for case in manifest:
+        rows.append(
+            measure_case(
+                args=args,
+                cangjie=args.cangjie,
+                skrifa=skrifa,
+                case=case,
+                font=case_font(case, args),
+                failures=failures,
             )
-        cangjie_first = cangjie_semantic if args.iterations == 1 and args.samples == 1 else run(
-            cangjie_command(args.cangjie, case, font, args.iterations, args.samples), args.cpu
         )
-        reference_first = reference_semantic if args.iterations == 1 and args.samples == 1 else run(
-            skrifa_command(skrifa, case, font, args.iterations, args.samples), args.cpu
-        )
-        reference_second = run(
-            skrifa_command(skrifa, case, font, args.iterations, args.samples), args.cpu
-        )
-        cangjie_second = run(
-            cangjie_command(args.cangjie, case, font, args.iterations, args.samples), args.cpu
-        )
-        measured.append((case.name,
-            float(cangjie_first["sample_median_ns_per_iter"]),
-            float(cangjie_second["sample_median_ns_per_iter"]),
-            float(reference_first["median_ns_per_iter"]),
-            float(reference_second["median_ns_per_iter"])))
 
     if args.extended and args.source == "all":
         corpora = (
@@ -390,98 +650,97 @@ def main() -> int:
                         mode, corpus.font.name, glyph_id,
                         source=FontSource.DIRECT,
                     )
-                    cangjie_semantic = run(cangjie_command(args.cangjie, case, corpus.font, 1, 1), args.cpu)
-                    reference_semantic = run(skrifa_command(skrifa, case, corpus.font, 1, 1), args.cpu)
-                    if int(cangjie_semantic.get("checksum", "-1"), 16) != int(reference_semantic.get("checksum", "-2"), 16):
-                        failures.append(
-                            f"{case.name}: checksum: Cangjie={cangjie_semantic.get('checksum')!r}, "
-                            f"Skrifa={reference_semantic.get('checksum')!r}"
+                    manifest.append(case)
+                    rows.append(
+                        measure_case(
+                            args=args,
+                            cangjie=args.cangjie,
+                            skrifa=skrifa,
+                            case=case,
+                            font=corpus.font,
+                            failures=failures,
                         )
-                    cangjie_first = cangjie_semantic if args.iterations == 1 and args.samples == 1 else run(
-                        cangjie_command(args.cangjie, case, corpus.font, args.iterations, args.samples), args.cpu
                     )
-                    reference_first = reference_semantic if args.iterations == 1 and args.samples == 1 else run(
-                        skrifa_command(skrifa, case, corpus.font, args.iterations, args.samples), args.cpu
-                    )
-                    reference_second = run(
-                        skrifa_command(skrifa, case, corpus.font, args.iterations, args.samples), args.cpu
-                    )
-                    cangjie_second = run(
-                        cangjie_command(args.cangjie, case, corpus.font, args.iterations, args.samples), args.cpu
-                    )
-                    measured.append((case.name,
-                        float(cangjie_first["sample_median_ns_per_iter"]),
-                        float(cangjie_second["sample_median_ns_per_iter"]),
-                        float(reference_first["median_ns_per_iter"]),
-                        float(reference_second["median_ns_per_iter"])))
 
     # Production-font queries cover the immutable cmap, metrics, bounds, and
     # complete global-metrics paths that synthetic fixtures cannot represent.
     roboto = Path(args.roboto)
-    production_cases = (
+    production_cases = list((
         Case("family-name", "family-name", roboto.name, 0),
         Case("charmap", "charmap", roboto.name, ord("A")),
         Case("metrics", "metrics", roboto.name, 38),
         Case("bounds", "bounds", roboto.name, 38),
         Case("global-metrics", "global-metrics", roboto.name, 0),
-    ) if args.source == "all" else ()
+    ) if args.source == "all" else [])
+    manifest.extend(production_cases)
     for case in production_cases:
-        cangjie_semantic = run(cangjie_command(args.cangjie, case, roboto, 1, 1), args.cpu)
-        reference_semantic = run(skrifa_command(skrifa, case, roboto, 1, 1), args.cpu)
-        if case.compare_checksum and int(cangjie_semantic.get("checksum", "-1"), 16) != int(reference_semantic.get("checksum", "-2"), 16):
-            failures.append(
-                f"{case.name}: checksum: Cangjie={cangjie_semantic.get('checksum')!r}, "
-                f"Skrifa={reference_semantic.get('checksum')!r}"
+        rows.append(
+            measure_case(
+                args=args,
+                cangjie=args.cangjie,
+                skrifa=skrifa,
+                case=case,
+                font=roboto,
+                failures=failures,
             )
-        cangjie_first = cangjie_semantic if args.iterations == 1 and args.samples == 1 else run(
-            cangjie_command(args.cangjie, case, roboto, args.iterations, args.samples), args.cpu
         )
-        reference_first = reference_semantic if args.iterations == 1 and args.samples == 1 else run(
-            skrifa_command(skrifa, case, roboto, args.iterations, args.samples), args.cpu
-        )
-        reference_second = run(
-            skrifa_command(skrifa, case, roboto, args.iterations, args.samples), args.cpu
-        )
-        cangjie_second = run(
-            cangjie_command(args.cangjie, case, roboto, args.iterations, args.samples), args.cpu
-        )
-        measured.append((case.name,
-            float(cangjie_first["sample_median_ns_per_iter"]),
-            float(cangjie_second["sample_median_ns_per_iter"]),
-            float(reference_first["median_ns_per_iter"]),
-            float(reference_second["median_ns_per_iter"])))
 
-    expected_rows = expected_row_count(
-        source=args.source, extended=args.extended
-    )
-    if len(measured) != expected_rows:
+    if len(rows) != len(manifest):
         failures.append(
             "matrix row manifest mismatch: "
-            f"expected={expected_rows} measured={len(measured)}"
+            f"expected={len(manifest)} measured={len(rows)}"
         )
 
-    for name, cangjie_first, cangjie_second, skrifa_first, skrifa_second in measured:
-        cangjie_mean = math.sqrt(cangjie_first * cangjie_second)
-        skrifa_mean = math.sqrt(skrifa_first * skrifa_second)
-        speedup = math.inf if cangjie_mean == 0 else skrifa_mean / cangjie_mean
+    for row in rows:
+        cangjie_mean = math.sqrt(
+            row.cangjie_first_ns_per_iter * row.cangjie_second_ns_per_iter
+        )
+        reference_mean = math.sqrt(
+            row.reference_first_ns_per_iter * row.reference_second_ns_per_iter
+        )
         print(
-            f"{name}: cangjie_ns={cangjie_first:.3f}/{cangjie_second:.3f} "
-            f"skrifa_ns={skrifa_first:.3f}/{skrifa_second:.3f} "
-            f"speedup={speedup:.3f}x "
+            f"{row.case.name}: "
+            f"cangjie_ns={row.cangjie_first_ns_per_iter:.3f}/"
+            f"{row.cangjie_second_ns_per_iter:.3f} "
+            f"skrifa_ns={row.reference_first_ns_per_iter:.3f}/"
+            f"{row.reference_second_ns_per_iter:.3f} "
+            f"speedup={row.speedup:.3f}x "
             f"minimum_speedup={args.minimum_speedup:.3f}x"
         )
         if (args.fail_on_slower and
-                not meets_speedup_gate(speedup, args.minimum_speedup)):
+                row.threshold_status != "met"):
             failures.append(
-                f"{name}: performance Cangjie={cangjie_mean:.3f}ns/"
-                f"Skrifa={skrifa_mean:.3f}ns"
+                f"{row.case.name}: performance Cangjie={cangjie_mean:.3f}ns/"
+                f"Skrifa={reference_mean:.3f}ns"
             )
     if failures:
         print("Fontations/Skrifa semantic matrix failed:", file=sys.stderr)
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         return 1
-    print(f"Fontations/Skrifa matrix passed: {len(measured)} cases")
+    emit_json_report(
+        args.json_output,
+        RunConfiguration(
+            cangjie=args.cangjie,
+            skrifa_manifest=args.skrifa_manifest,
+            skrifa_executable=skrifa,
+            fixture_dir=args.fixture_dir,
+            roboto=args.roboto,
+            cff2=args.cff2,
+            varc=args.varc,
+            cff2_extended=args.cff2_extended,
+            extended=args.extended,
+            source=args.source,
+            iterations=args.iterations,
+            samples=args.samples,
+            cpu=args.cpu,
+            fail_on_slower=args.fail_on_slower,
+            minimum_speedup=args.minimum_speedup,
+        ),
+        manifest,
+        rows,
+    )
+    print(f"Fontations/Skrifa matrix passed: {len(rows)} cases")
     return 0
 
 

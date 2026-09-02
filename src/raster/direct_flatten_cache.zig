@@ -1,9 +1,12 @@
-//! Inline one-entry cache for repeated direct outline flattening.
+//! Sharded one-entry cache for repeated direct outline flattening.
 //!
 //! The cache retains line geometry plus bounded default-sampling coverage. A
 //! hit still validates the complete command stream and blends into the current
-//! target. All storage is inline: moving or dropping a rasterizer cannot leave
-//! self-referential pointers or allocator ownership.
+//! target. Fixed process-wide shards keep the roughly 290 KiB payload out of
+//! static TLS, so unrelated worker threads that merely link Cangjie do not pay
+//! to allocate and zero a complete cache during startup. Threads select a
+//! stable shard lazily; a shard lock preserves correctness when applications
+//! use more raster threads than shards.
 
 const std = @import("std");
 const cached_sample_rows = @import("cached_sample_rows.zig");
@@ -179,10 +182,40 @@ pub const Cache = struct {
     }
 };
 
-threadlocal var thread_cache = Cache{};
+const shard_count: usize = 8;
+const unassigned_shard: usize = shard_count;
 
-pub fn local() *Cache {
-    return &thread_cache;
+const Shard = struct {
+    mutex: std.atomic.Mutex = .unlocked,
+    cache: Cache = .{},
+};
+
+var shards: [shard_count]Shard = @splat(.{});
+var next_shard: std.atomic.Value(usize) = .init(0);
+threadlocal var thread_shard: usize = unassigned_shard;
+
+pub const Borrow = struct {
+    shard: *Shard,
+
+    pub fn cache(self: *Borrow) *Cache {
+        return &self.shard.cache;
+    }
+
+    pub fn release(self: *Borrow) void {
+        self.shard.mutex.unlock();
+        self.* = undefined;
+    }
+};
+
+pub fn acquire() Borrow {
+    var shard_index = thread_shard;
+    if (shard_index == unassigned_shard) {
+        shard_index = next_shard.fetchAdd(1, .monotonic) % shard_count;
+        thread_shard = shard_index;
+    }
+    const shard = &shards[shard_index];
+    while (!shard.mutex.tryLock()) std.atomic.spinLoopHint();
+    return .{ .shard = shard };
 }
 
 fn commandsEqual(

@@ -896,24 +896,27 @@ pub const Rasterizer = struct {
             target.width,
             target.height,
         ) else undefined;
-        const flatten_cache = if (use_flatten_cache)
-            direct_flatten_cache.local()
+        var flatten_cache_borrow: ?direct_flatten_cache.Borrow =
+            if (use_flatten_cache) direct_flatten_cache.acquire() else null;
+        defer if (flatten_cache_borrow) |*borrow| borrow.release();
+        const flatten_cache = if (flatten_cache_borrow) |*borrow|
+            borrow.cache()
         else
-            undefined;
-        if (use_flatten_cache) {
-            if (flatten_cache.lookup(
+            null;
+        if (flatten_cache) |cache| {
+            if (cache.lookup(
                 cache_key,
                 outline.commands.items,
             )) |cached_lines| {
                 if (self.samples_per_axis != 4 or
-                    !try flatten_cache.fillCachedSamples(
+                    !try cache.fillCachedSamples(
                         self.allocator,
                         scanlineTarget(target),
                         .non_zero,
                         self.embolden_small_glyphs and hint_size <= 16.0,
                     ))
                 {
-                    const prepared = flatten_cache.prepared();
+                    const prepared = cache.prepared();
                     try scanline.fillPreparedSorted(
                         self.allocator,
                         scanlineTarget(target),
@@ -924,7 +927,7 @@ pub const Rasterizer = struct {
                     );
                 }
                 if (self.embolden_small_glyphs and hint_size <= 20.0 and
-                    !flatten_cache.hasCachedCoverage())
+                    !cache.hasCachedCoverage())
                 {
                     try self.emboldenSmallGlyph(target, cached_lines, hint_size);
                 }
@@ -958,12 +961,14 @@ pub const Rasterizer = struct {
             );
         }
         try self.fillLines(target, flattened.items, .non_zero);
-        if (use_flatten_cache and flatten_cache.shouldInstall(cache_key)) {
-            flatten_cache.install(
-                cache_key,
-                outline.commands.items,
-                flattened.items,
-            );
+        if (flatten_cache) |cache| {
+            if (cache.shouldInstall(cache_key)) {
+                cache.install(
+                    cache_key,
+                    outline.commands.items,
+                    flattened.items,
+                );
+            }
         }
         if (self.embolden_small_glyphs and hint_size <= 20.0) {
             try self.emboldenSmallGlyph(target, flattened.items, hint_size);

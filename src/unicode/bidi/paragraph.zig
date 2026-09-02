@@ -113,6 +113,28 @@ pub const Paragraph = struct {
         return try result.toOwnedSlice(allocator);
     }
 
+    /// Fill reusable caller-owned scratch with this line's effective levels.
+    ///
+    /// The returned view is `result.items`; it remains borrowed from `result`
+    /// only until that list is mutated. This narrow no-X9-retention form lets
+    /// direct glyph consumers apply L2 to their own parallel records without
+    /// materializing a scalar-index permutation.
+    pub fn lineLevelsInto(
+        self: Paragraph,
+        allocator: std.mem.Allocator,
+        scalar_start: usize,
+        scalar_end: usize,
+        result: *std.ArrayList(u8),
+    ) !void {
+        return self.fillLineLevelsRetaining(
+            allocator,
+            scalar_start,
+            scalar_end,
+            &.{},
+            result,
+        );
+    }
+
     fn fillLineLevelsRetaining(
         self: Paragraph,
         allocator: std.mem.Allocator,

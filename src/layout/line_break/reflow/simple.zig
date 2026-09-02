@@ -150,7 +150,17 @@ pub fn tryBuildFromSource(
             const break_end = selected.index;
             var next_line_start = break_end;
             geometry.trimLeadingSoftBreaks(glyphs, &next_line_start);
-            const line_byte_end = shaped_boundary.byteEndForGlyphPrefix(
+            const line_byte_end = if (direct_line_ranges != null) direct: {
+                // The source-backed direct path has already proved a strict
+                // one-scalar/one-glyph mapping in logical source order. The
+                // selected next-line index includes any trimmed break spaces,
+                // so its preceding glyph ends at this line's byte boundary.
+                // General shaped output cannot use this shortcut because
+                // ligatures, insertions, or reordered clusters require the
+                // prefix maximum computed below.
+                std.debug.assert(next_line_start > 0);
+                break :direct glyphs[next_line_start - 1].sourceByteEnd();
+            } else shaped_boundary.byteEndForGlyphPrefix(
                 glyphs,
                 next_line_start,
                 line_byte_start,
@@ -224,6 +234,18 @@ pub fn tryBuildFromSource(
             .scalar_end = glyphs.len,
         });
         break;
+    }
+    if (direct_line_ranges) |ranges| {
+        // Direct bidi relies on these ranges being an exact scalar partition:
+        // discarded break whitespace belongs to the preceding range, and the
+        // following iteration starts at that same post-trim boundary.
+        var expected_start: usize = 0;
+        for (ranges.items) |range| {
+            std.debug.assert(range.scalar_start == expected_start);
+            std.debug.assert(range.scalar_start <= range.scalar_end);
+            expected_start = range.scalar_end;
+        }
+        std.debug.assert(expected_start == glyphs.len);
     }
     return true;
 }

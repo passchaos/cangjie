@@ -228,6 +228,8 @@ pub fn applyFromSource(
 ) !void {
     if (buffer.lines.items.len !=
         buffer.bidi_reorder_scratch.direct_line_ranges.items.len or
+        buffer.glyphs.items.len != 0 or
+        buffer.runs.items.len != 0 or
         logical_glyphs.len != paragraph.scalars.len or
         !runsOwnCompleteGlyphStream(logical_runs, logical_glyphs.len))
     {
@@ -264,80 +266,120 @@ pub fn applyFromSource(
         buffer.allocator,
         paragraph.scalars.len,
     );
-    try scratch.visual_order.ensureTotalCapacity(
-        buffer.allocator,
-        paragraph.scalars.len,
-    );
 
     const glyph_run_indices = scratch.glyph_run_indices.items;
     const visual_run_indices = &scratch.visual_run_indices;
     const line_ranges = scratch.direct_line_ranges.items;
-    for (buffer.lines.items, line_ranges) |*line, scalar_range| {
-        const scalar_start = scalar_range.scalar_start;
-        const scalar_end = scalar_range.scalar_end;
-        if (scalar_start > scalar_end or scalar_end > paragraph.scalars.len or
-            line.glyph_start < scalar_start or
-            line.glyph_start + line.glyph_len > scalar_end)
+
+    // Validate every source interval before changing output or line metadata.
+    // Besides making InvalidBidiMap atomic, the ordered partition proves that
+    // each visible slice stays inside its complete L1 context. The strict line
+    // builder advances the next range start to the prior range end, including
+    // every trimmed space/tab in exactly one source range.
+    var source_cursor: usize = 0;
+    for (buffer.lines.items, line_ranges) |line, scalar_range| {
+        const visible_end = std.math.add(
+            usize,
+            line.glyph_start,
+            line.glyph_len,
+        ) catch return error.InvalidBidiMap;
+        if (scalar_range.scalar_start != source_cursor or
+            scalar_range.scalar_start > scalar_range.scalar_end or
+            scalar_range.scalar_end > paragraph.scalars.len or
+            line.glyph_start < scalar_range.scalar_start or
+            visible_end > scalar_range.scalar_end)
         {
             return error.InvalidBidiMap;
         }
+        source_cursor = scalar_range.scalar_end;
+    }
+    if (source_cursor != logical_glyphs.len) return error.InvalidBidiMap;
+
+    for (buffer.lines.items, line_ranges) |line, scalar_range| {
+        const scalar_start = scalar_range.scalar_start;
+        const scalar_end = scalar_range.scalar_end;
         const logical_start = line.glyph_start;
         const visible_end = logical_start + line.glyph_len;
-        // Direct output is built densely in final visual-line order. Update
-        // the start now; the saved logical range still gates source emission.
-        line.glyph_start = buffer.glyphs.items.len;
-        if (scalar_start == scalar_end or line.glyph_len == 0) continue;
-        try paragraph.visualOrderAndLevelsRetaining(
+        if (line.glyph_len == 0) continue;
+
+        // L1 is line-local and includes whitespace omitted from the visible
+        // glyph slice. Copy the visible records once, then permute those copies
+        // directly; the scalar==glyph proof makes gathering through a usize
+        // visual-order array unnecessary.
+        try paragraph.lineLevelsInto(
             buffer.allocator,
             scalar_start,
             scalar_end,
-            &.{},
             &scratch.line_levels,
-            &scratch.visual_order,
         );
-        for (scratch.visual_order.items) |scalar_index| {
-            if (scalar_index < logical_start or scalar_index >= visible_end)
-                continue;
+        const output_start = buffer.glyphs.items.len;
+        buffer.glyphs.appendSliceAssumeCapacity(
+            logical_glyphs[logical_start..visible_end],
+        );
+        if (!single_owning_run) visual_run_indices.appendSliceAssumeCapacity(
+            glyph_run_indices[logical_start..visible_end],
+        );
+        const output_end = buffer.glyphs.items.len;
+        const visible_level_start = logical_start - scalar_start;
+        const visible_levels = scratch.line_levels.items[visible_level_start .. visible_level_start + line.glyph_len];
+
+        reorderVisibleL2(
+            buffer.glyphs.items[output_start..output_end],
+            if (single_owning_run)
+                null
+            else
+                visual_run_indices.items[output_start..output_end],
+            visible_levels,
+        );
+
+        // Levels and owners followed their glyphs through every L2 reversal,
+        // so mirroring can now scan final visual order while still selecting
+        // the exact font that produced each positioned source glyph.
+        for (
+            buffer.glyphs.items[output_start..output_end],
+            visible_levels,
+            0..,
+        ) |*glyph, level, visual_index| {
+            if (level & 1 == 0 or
+                !bidi.mayHaveBidiMirror(glyph.codepoint)) continue;
             const owner = if (single_owning_run)
                 @as(usize, 0)
             else
-                glyph_run_indices[scalar_index];
+                visual_run_indices.items[output_start + visual_index];
             if (owner >= logical_runs.len) return error.InvalidBidiMap;
-            const scalar = paragraph.scalars[scalar_index];
-            const level = scratch.line_levels.items[
-                scalar_index - scalar_start
-            ];
-            appendVisualizedDirectGlyph(
-                logical_glyphs[scalar_index],
-                logical_runs[owner],
-                scalar.codepoint,
-                level,
-                &buffer.glyphs,
+            glyph.* = mapping.visualizedGlyph(
+                glyph.*,
+                run_types.fontForBackend(logical_runs[owner]),
+                unicode.mirroredCodepoint(glyph.codepoint),
             );
-            if (!single_owning_run)
-                visual_run_indices.appendAssumeCapacity(owner);
         }
     }
 
-    for (buffer.lines.items, line_ranges) |line, scalar_range| {
-        const logical_visible_start = if (scalar_range.scalar_start <
-            scalar_range.scalar_end and
-            logical_glyphs[scalar_range.scalar_start].codepoint == ' ')
-            scalar_range.scalar_start + 1
-        else
-            scalar_range.scalar_start;
-        const visible_end = logical_visible_start + line.glyph_len;
-        for (visible_end..scalar_range.scalar_end) |glyph_index| {
-            appendGapGlyph(
-                single_owning_run,
-                logical_glyphs,
-                glyph_run_indices,
-                glyph_index,
-                &buffer.glyphs,
-                visual_run_indices,
-            );
-        }
+    // Omitted wrapping whitespace is metadata-only. Preserve every source
+    // interval outside visible lines as one stable logical suffix, without
+    // applying line mirroring or L2 to records that no line exposes.
+    source_cursor = 0;
+    for (buffer.lines.items) |line| {
+        appendGapSlice(
+            single_owning_run,
+            logical_glyphs,
+            glyph_run_indices,
+            source_cursor,
+            line.glyph_start,
+            &buffer.glyphs,
+            visual_run_indices,
+        );
+        source_cursor = line.glyph_start + line.glyph_len;
     }
+    appendGapSlice(
+        single_owning_run,
+        logical_glyphs,
+        glyph_run_indices,
+        source_cursor,
+        logical_glyphs.len,
+        &buffer.glyphs,
+        visual_run_indices,
+    );
     if (buffer.glyphs.items.len != logical_glyphs.len or
         (!single_owning_run and
             visual_run_indices.items.len != logical_glyphs.len))
@@ -355,7 +397,10 @@ pub fn applyFromSource(
     } else {
         try runs.rebuild(buffer, logical_runs, visual_run_indices.items);
     }
+    var visual_start: usize = 0;
     for (buffer.lines.items) |*line| {
+        line.glyph_start = visual_start;
+        visual_start += line.glyph_len;
         if (single_owning_run) {
             line.run_start = 0;
             line.run_len = @intFromBool(line.glyph_len != 0);
@@ -368,6 +413,44 @@ pub fn applyFromSource(
             line.run_start = run_range.start;
             line.run_len = run_range.len;
         }
+    }
+}
+
+/// Apply UAX #9 L2 to already-copied visible records. Levels move with their
+/// records because later thresholds must inspect the current permutation.
+fn reorderVisibleL2(
+    glyphs: []GlyphPosition,
+    owner_indices: ?[]usize,
+    levels: []u8,
+) void {
+    std.debug.assert(glyphs.len == levels.len);
+    std.debug.assert(owner_indices == null or owner_indices.?.len == glyphs.len);
+    var max_level: u8 = 0;
+    var minimum_odd: u8 = 0xff;
+    for (levels) |level| {
+        max_level = @max(max_level, level);
+        if (level & 1 != 0) minimum_odd = @min(minimum_odd, level);
+    }
+    if (minimum_odd == 0xff) return;
+
+    var threshold = max_level;
+    while (true) : (threshold -= 1) {
+        var cursor: usize = 0;
+        while (cursor < levels.len) {
+            if (levels[cursor] < threshold) {
+                cursor += 1;
+                continue;
+            }
+            const start = cursor;
+            while (cursor < levels.len and levels[cursor] >= threshold) {
+                cursor += 1;
+            }
+            bidi.reverseRecords(GlyphPosition, glyphs[start..cursor]);
+            bidi.reverseRecords(u8, levels[start..cursor]);
+            if (owner_indices) |indices|
+                bidi.reverseRecords(usize, indices[start..cursor]);
+        }
+        if (threshold == minimum_odd) break;
     }
 }
 
@@ -406,6 +489,21 @@ fn appendGapGlyph(
     );
 }
 
+fn appendGapSlice(
+    single_owning_run: bool,
+    logical_glyphs: []const GlyphPosition,
+    glyph_run_indices: []const usize,
+    start: usize,
+    end: usize,
+    visual_glyphs: *std.ArrayList(GlyphPosition),
+    visual_run_indices: *std.ArrayList(usize),
+) void {
+    visual_glyphs.appendSliceAssumeCapacity(logical_glyphs[start..end]);
+    if (!single_owning_run) visual_run_indices.appendSliceAssumeCapacity(
+        glyph_run_indices[start..end],
+    );
+}
+
 fn scalarRemovedByX9(class: unicode.ExactBidiClass) bool {
     return switch (class) {
         .rle, .lre, .rlo, .lro, .pdf, .bn => true,
@@ -426,4 +524,97 @@ fn runsOwnCompleteGlyphStream(font_runs: anytype, glyph_count: usize) bool {
         if (glyph_cursor > glyph_count) return false;
     }
     return glyph_cursor == glyph_count;
+}
+
+test "direct retained bidi visible L2 matches full-line oracle" {
+    const cases = [_]struct {
+        text: []const u8,
+        base: unicode.BidiBaseDirection,
+    }{
+        .{ .text = "abc אב 12 (גד) xyz", .base = .ltr },
+        .{ .text = "אב ABC 12, גד", .base = .rtl },
+        .{ .text = "مرحبا 12 (abc) عالم", .base = .rtl },
+        .{ .text = "abc \u{2067}אב 12\u{2069} xyz", .base = .ltr },
+    };
+
+    for (cases) |case| {
+        var paragraph = try unicode.resolveBidiParagraph(
+            std.testing.allocator,
+            case.text,
+            case.base,
+        );
+        defer paragraph.deinit();
+        try std.testing.expect(paragraph.scalars.len <= 64);
+        for (paragraph.levels) |level|
+            try std.testing.expect(level != 0xff);
+
+        var effective_levels = std.ArrayList(u8).empty;
+        defer effective_levels.deinit(std.testing.allocator);
+        var full_order = std.ArrayList(usize).empty;
+        defer full_order.deinit(std.testing.allocator);
+        for (0..paragraph.scalars.len + 1) |line_start| {
+            for (line_start..paragraph.scalars.len + 1) |line_end| {
+                try paragraph.visualOrderAndLevelsRetaining(
+                    std.testing.allocator,
+                    line_start,
+                    line_end,
+                    &.{},
+                    &effective_levels,
+                    &full_order,
+                );
+                // The former source path reordered the complete line and then
+                // filtered this contiguous visible interval. Exercise every
+                // such interval so clipping levels before L2 is proven to
+                // preserve the induced order, including line-local L1 resets.
+                for (line_start..line_end + 1) |visible_start| {
+                    for (visible_start..line_end + 1) |visible_end| {
+                        const visible_len = visible_end - visible_start;
+                        var glyphs: [64]GlyphPosition = undefined;
+                        var owners: [64]usize = undefined;
+                        var levels: [64]u8 = undefined;
+                        for (0..visible_len) |index| {
+                            const scalar_index = visible_start + index;
+                            const scalar = paragraph.scalars[scalar_index];
+                            glyphs[index] = .{
+                                .glyph_id = @intCast(scalar_index + 1),
+                                .codepoint = scalar.codepoint,
+                                .cluster = scalar_index,
+                                .x_advance = 1,
+                            };
+                            owners[index] = scalar_index;
+                            levels[index] = effective_levels.items[
+                                scalar_index - line_start
+                            ];
+                        }
+
+                        reorderVisibleL2(
+                            glyphs[0..visible_len],
+                            owners[0..visible_len],
+                            levels[0..visible_len],
+                        );
+
+                        var expected_index: usize = 0;
+                        for (full_order.items) |scalar_index| {
+                            if (scalar_index < visible_start or
+                                scalar_index >= visible_end) continue;
+                            try std.testing.expectEqual(
+                                scalar_index,
+                                glyphs[expected_index].cluster,
+                            );
+                            try std.testing.expectEqual(
+                                scalar_index,
+                                owners[expected_index],
+                            );
+                            try std.testing.expectEqual(
+                                effective_levels.items[scalar_index - line_start],
+                                levels[expected_index],
+                            );
+                            expected_index += 1;
+                        }
+                        try std.testing.expectEqual(visible_len, expected_index);
+                    }
+                }
+            }
+        }
+    }
 }

@@ -10,6 +10,7 @@ test {
     _ = @import("paragraph_reflow.zig");
     _ = @import("paragraph_exclusions.zig");
     _ = @import("paragraph_retained.zig");
+    _ = @import("paragraph_retained/direct_bidi_l2.zig");
     _ = @import("paragraph_styled_retained.zig");
     _ = @import("paragraph_tab_alignment.zig");
     _ = @import("paragraph_tabs.zig");

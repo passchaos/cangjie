@@ -10,6 +10,59 @@ const FontCascade = support.FontCascade;
 const LayoutBuffer = support.LayoutBuffer;
 const TextShaper = support.TextShaper;
 
+test "interaction-only text geometry does not retain font faces" {
+    const allocator = std.testing.allocator;
+    const text = "A A";
+
+    var geometry = built: {
+        const test_font = @import("../../../test_font.zig");
+        const bytes = try test_font.buildMinimalTtf(allocator);
+        defer allocator.free(bytes);
+        var font = try Font.parse(allocator, bytes);
+        defer font.deinit();
+        const fonts = [_]*const Font{&font};
+        var layout_buffer = LayoutBuffer.init(allocator);
+        defer layout_buffer.deinit();
+        const layout = try TextShaper.layoutParagraphUtf8(
+            FontCascade.init(&fonts),
+            &layout_buffer,
+            text,
+            20,
+            .{ .max_width = 20 },
+        );
+        break :built try paragraph.buildGeometry(
+            allocator,
+            text,
+            layout,
+            .{ .retain_font_runs = false },
+        );
+    };
+    defer geometry.deinit();
+
+    try std.testing.expect(geometry.spans.len > 0);
+    for (geometry.spans) |span| {
+        try std.testing.expect(span.font_run == null);
+    }
+    var accessibility_runs = geometry.accessibilityRuns();
+    while (accessibility_runs.next()) |run| {
+        try std.testing.expect(run.font_run == null);
+    }
+
+    const caret = geometry.caret(.{
+        .byte_offset = 1,
+        .affinity = .upstream,
+    }).?;
+    const hit = geometry.hitTest(caret.rect.x, caret.rect.y + 1).?;
+    try std.testing.expectEqual(caret.line_index, hit.line_index);
+    const selection = try geometry.selectionFragments(
+        allocator,
+        .{ .byte_start = 0, .byte_end = 1 },
+    );
+    defer allocator.free(selection);
+    try std.testing.expectEqual(@as(usize, 1), selection.len);
+    try std.testing.expectEqual(@as(usize, 0), selection[0].line_index);
+}
+
 test "text geometry affinity distinguishes both sides of a soft wrap" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

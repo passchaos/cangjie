@@ -104,7 +104,9 @@ pub const TextGeometryVisualCaretStop = text_geometry.VisualCaretStop;
 ///
 /// The returned arrays remain valid after the shaping engine or layout buffer
 /// is reused. Source byte ranges still refer to `text`; font face pointers
-/// retain their ordinary caller-owned lifetime.
+/// retain their ordinary caller-owned lifetime unless
+/// `TextGeometryOptions.retain_font_runs` is false. The latter produces an
+/// interaction-only owner that does not retain borrowed face pointers.
 pub const buildGeometry = text_geometry.build;
 
 /// Styled counterpart of `buildGeometry`.

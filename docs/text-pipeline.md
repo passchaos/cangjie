@@ -1968,6 +1968,9 @@ position plus optional preferred inline coordinate, while TextGeometry methods
 resolve geometry and perform visual character, visual word, and cross-line
 movement. Applications no longer need to manually thread affinity and
 preferred-x/y state through the lower-level caret primitives.
+Set `TextGeometryOptions.retain_font_runs = false` for interaction-only owners.
+Caret, hit-test, selection, word, and cursor geometry remains available, while
+spans expose `font_run = null` and no borrowed font face must outlive the build.
 
 ## Next Structural Steps
 

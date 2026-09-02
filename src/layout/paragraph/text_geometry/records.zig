@@ -110,7 +110,7 @@ pub const GeometryView = struct {
 /// supplied to the builder and remains a numeric identity inside this owner.
 /// Do not use it to index a layout after that layout's reusable buffer changes.
 /// The face itself remains caller-owned and must outlive consumers that inspect
-/// it through this record.
+/// it through this record. Interaction-only geometry omits this record.
 pub const FontRun = struct {
     run_index: usize,
     font: *const Face,
@@ -144,7 +144,8 @@ pub const Grapheme = struct {
 ///
 /// Spans split whenever the line, final font run, resolved bidi direction, or
 /// optional style index changes. A span without `font_run` represents source
-/// such as an inline-object anchor that deliberately has no font ownership.
+/// such as an inline-object anchor that deliberately has no font ownership, or
+/// a build that disabled font-run retention.
 pub const Span = struct {
     line_index: usize,
     font_run: ?FontRun,

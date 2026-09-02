@@ -20,6 +20,13 @@ pub const Options = struct {
     /// from final visual glyph order because explicit base direction affects
     /// neutral text and UAX #9 line-level resets.
     direction: types.Direction = .ltr,
+
+    /// Retain final font-run metadata, including borrowed `Face` pointers.
+    ///
+    /// Disable this for interaction-only owners. Their spans and accessibility
+    /// runs expose `font_run = null`, and no caller-owned face must outlive a
+    /// successful build. The default preserves the existing rich run surface.
+    retain_font_runs: bool = true,
 };
 
 pub fn build(
@@ -197,6 +204,9 @@ fn buildInternal(
 
     const owned_lines = try output_lines.toOwnedSlice(allocator);
     errdefer allocator.free(owned_lines);
+    if (!options.retain_font_runs) {
+        for (output_spans.items) |*span| span.font_run = null;
+    }
     const owned_spans = try output_spans.toOwnedSlice(allocator);
     errdefer allocator.free(owned_spans);
     const owned_graphemes = try output_graphemes.toOwnedSlice(allocator);

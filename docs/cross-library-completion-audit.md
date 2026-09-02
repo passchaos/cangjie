@@ -11,9 +11,9 @@ one benchmark. The claim remains **open** until every row below is closed.
 | --- | --- | --- | --- |
 | HarfBuzz | Exact glyph IDs, clusters, advances, offsets, and relevant flags across retained upstream and production-font corpora | `shaping-parity-smoke`, `shaping-corpus-parity-smoke`, `tests/data/`, `docs/shaping-parity.md` | Strong retained coverage, not exhaustive |
 | HarfBuzz/HarfRust | Faster than the faster reference on every representative shaping workload, with independent binaries, pinned CPU, symmetric order, and repeatable margin | `shaping-performance-matrix` and its optional versioned `--json-output` artifact | Open: a low-contention current-HEAD fixed-CPU-30 `1 * 31` core run clears the explicit `1.01x` gate for Roboto and both Amiri rows (`1.076x`/`1.193x`/`1.271x`), while Source Serif words (`0.938x`) and Devanagari (`0.971x`) remain red. The matching broad run clears Roboto and Source Serif long (`1.147x`/`1.067x`) but Noto Nastaliq remains materially red (`0.835x` words, `0.664x` long). All six endpoints in every row agreed on normalized glyph count; broader shaping performance remains open |
-| Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; all 33 maintained rows are semantically exact, now including real VARC GID 1 at default, conditional-boundary, and endpoint locations in owning and reuse lifecycles. The focused strict VARC matrix now leads all eight new rows after parsed-gvar decoding was accelerated; broader semantic coverage remains open |
+| Fontations/Skrifa | Every pinned public table/API family mapped to a live test; shared high-level operations semantically equivalent and faster at matched lifecycle boundaries | `docs/fontations-coverage.json`, `fontations-coverage`, `fontations-matrix` | Inventory complete; all 33 maintained base rows are semantically exact, now including real VARC GID 1 at default, conditional-boundary, and endpoint locations in owning and reuse lifecycles. The focused strict VARC matrix now leads all eight new rows after parsed-gvar decoding was accelerated; broader semantic coverage remains open |
 | FreeType | Correct outline/hinting/bitmap behavior plus faster matched cold, owning, reused, and prepared raster lifecycles across glyf/CFF/CFF2, bitmap/color, representative scripts, and sizes | `hinting-freetype-test`, `hinted-outline-matrix`, `glyph-bench`, `freetype-matrix`, raster evidence in `docs/shaping-parity.md` | Open: all 75 maintained grayscale raster rows, all 10 native-strike bitmap rows, the shared COLRv0 layer/CPAL row, and all five matched face-open rows lead. The expanded 120-row hinted-outline matrix is semantically exact; the earlier 100 rows led in one strict run and the 20 new U+00C3 rows lead in focused repeats, but a combined strict run remains noise-sensitive. Complete eager validation is separately reported and remains slower, COLRv1/SVG have no FreeType built-in renderer for direct performance comparison, and broader glyph/platform coverage remains incomplete |
-| Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the maintained 38-row matrix covers three scripts, centered placement and reflow, three construction styles, retained reflow, matched in-flow/ordinary/custom out-of-flow objects, mixed Roboto→Noto Sans Devanagari fallback, and mixed Latin/Hebrew/Arabic construction and reflow with both LTR and RTL base directions. Seventeen text rows enforce exact normalized geometry, resolved cluster direction, and visible-left placement, while all 18 object rows enforce exact object geometry. The explicit performance gate defaults to `1.01x`; the latest strict run is red on twenty rows after applying it to every maintained row. Japanese default/spacing line boundaries differ because Cangjie honors shaping-derived unsafe-to-break boundaries that pinned Parley does not consume; vertical comparison remains unavailable because the pinned Parley API has no writing-mode input |
+| Parley | Equivalent paragraph layout results—not only counts—and faster default/styled/reflow paths for Latin, Arabic, CJK, bidi, vertical, fallback, and inline-object workloads | `parley-matrix`, paragraph/reflow tests, `docs/text-pipeline.md` | Open: the maintained 38-row matrix covers three scripts, centered placement and reflow, three construction styles, retained reflow, matched in-flow/ordinary/custom out-of-flow objects, mixed Roboto→Noto Sans Devanagari fallback, and mixed Latin/Hebrew/Arabic construction and reflow with both LTR and RTL base directions. Seventeen text rows enforce exact normalized geometry, resolved cluster direction, and visible-left placement, while all 18 object rows enforce exact object geometry. The explicit performance gate defaults to `1.01x`. The newest complete 38-row artifact is report-only and leaves two mixed-bidi retained-reflow rows below the threshold; the latest enforced run predates later retained-path changes, so a fresh strict full matrix is still required. Japanese default/spacing line boundaries differ because Cangjie honors shaping-derived unsafe-to-break boundaries that pinned Parley does not consume; vertical comparison remains unavailable because the pinned Parley API has no writing-mode input |
 | Robustness | Malformed supported inputs fail atomically under safety checks and sustained coverage-guided fuzzing | `font-fuzz-smoke`, `font-fuzz`, regression fixtures | Open: the retained 100K campaign is useful evidence, not exhaustive format coverage |
 | Platform scope | Results reproduced on each supported target or the performance claim explicitly scoped to named hardware/OS/toolchain versions | benchmark documentation | Open: current performance evidence is primarily one Linux x86-64 host |
 
@@ -36,7 +36,7 @@ x86-64, pinned to CPU 30 where the harness supports it:
 - `zig build fontations-coverage -Doptimize=ReleaseFast`: 41 table families,
   48 public modules, and eight high-level capability groups mapped.
 - `zig build fontations-matrix -Doptimize=ReleaseFast -- --iterations 100000
-  --samples 7 --cpu 30 --fail-on-slower`: 25/25 semantic rows passed and the
+  --samples 7 --cpu 30 --minimum-speedup 1.01 --fail-on-slower`: 25/25 semantic rows passed and the
   runner now enforces rather than merely reports the performance requirement.
   Every measured row favored Cangjie (`1.271x--13.947x` in the latest strict
   run). The real
@@ -58,8 +58,8 @@ x86-64, pinned to CPU 30 where the harness supports it:
   `18.146x--18.253x` at the two endpoints. Debug command tracing is resolved
   once outside the measured loop, so an unset diagnostic environment variable
   does not distort these results. A later fixed-CPU-30
-  `1000 * 11 --extended --fail-on-slower` run passed all 125 semantic and
-  performance rows.
+  `1000 * 11 --extended --fail-on-slower` run passed all 125 then-selected
+  semantic and performance rows.
 - The maintained matrix now retains Fontations' real
   `varc-ac01-conditional.ttf` and adds eight GID-1 rows: owning and
   caller-storage draws at the default location, immediately below/at the
@@ -91,7 +91,10 @@ x86-64, pinned to CPU 30 where the harness supports it:
   matching Skrifa and admitting glyphs 20, 64, 128, and 192 to the matrix.
   Raising the CFF2 operand stack to the format's 513-entry limit also admits
   glyph 2's large blend program. A `1000 * 7` semantic/performance run of the
-  resulting 125-row extended matrix confirmed every checksum. Under the
+  resulting then-125-row extended matrix confirmed every checksum. The current
+  runner defines 33 base rows plus 100 extended outline rows, so the next
+  refresh must report **133** rows rather than carrying the older snapshot's
+  count forward. Under the
   corrected owned and reusable lifecycles, a fixed-CPU-30 `1000 * 11` rerun
   measured glyph 20 at `1.008x` and glyph 128 at `1.052x`; a subsequent rerun
   measured them at `1.128x` and `1.321x`. All ten selected Adobe owning/reuse
@@ -222,7 +225,8 @@ x86-64, pinned to CPU 30 where the harness supports it:
   Its different case count reflects the external seeds' sizes: prefix coverage
   is capped at byte 256, then each seed receives 256 mutations.
 - `zig build freetype-matrix -Doptimize=ReleaseFast -- --iterations 100
-  --samples 5 --sizes 8,16,32,64,128 --cpu 30 --fail-on-slower`: completed 40 symmetric
+  --samples 5 --sizes 8,16,32,64,128 --cpu 30 --minimum-speedup 1.01
+  --fail-on-slower`: completed 40 symmetric
   A/B/B/A raster rows across Latin glyf, Latin CFF1, Arabic glyf, and CJK CFF.
   It found real remaining deficits before enlarging the bounded repeated-
   geometry cache: Arabic reused-outline raster ranged from `0.599x` to
@@ -739,6 +743,9 @@ checksums. It was fully removed rather than treated as progress.
    (default `1.01x`): `--fail-on-slower` rejects every row below the declared
    threshold, while an exact-boundary result passes. Without the fail flag,
    the same threshold result remains visible but report-only.
+   The FreeType lifecycle, hinted-outline, Fontations/Skrifa, and Parley
+   runners use the same default `1.01x` boundary; callers may raise it
+   explicitly, but may not configure a parity-only or non-finite threshold.
 5. Every retained optimization must preserve the full ReleaseFast suite and
    all applicable reference-parity gates.
 6. The overall claim may be made only after every open row above has concrete,
@@ -751,8 +758,10 @@ Fontations/Skrifa matrix, and every retained row currently leads its matched
 reference lifecycle, including the eight real VARC rows. Broader semantic
 coverage is still open, so no overall Fontations claim is made. Cangjie is ahead
 in the complete maintained 75-row FreeType grayscale lifecycle matrix. The
-latest strict Parley performance run covers all 38 maintained rows under the
-explicit `1.01x` gate and remains red on the twenty rows recorded above. Its
+newest complete Parley artifact covers all 38 maintained rows in report-only
+mode under the explicit `1.01x` threshold and leaves mixed-bidi LTR and RTL
+retained reflow red. The latest enforced artifact predates subsequent retained
+path changes, so a fresh current-HEAD strict run is still required. Its
 semantic side passes all 17 required text geometry/direction/placement rows and
 all 18 object-geometry rows, including both phases of both mixed-bidi fixtures.
 This evidence is
@@ -764,8 +773,8 @@ leads, while complete eager validation is reported separately. Broader hinting
 targets and more glyphs remain uncovered. SVG still needs a separate renderer
 reference, and COLRv1 coverage is represented by the bounded matrix below
 rather than a broad renderer claim. Parley's maintained semantic gate passes,
-but broader semantic/platform coverage and the twenty strict performance deficits
-remain open.
+but broader semantic/platform coverage and the two currently observed
+retained-reflow performance deficits remain open.
 
 ### COLRv1 pixel differential
 

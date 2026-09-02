@@ -39,6 +39,7 @@ BLOCK_ORDERS = (
     ("cangjie", "freetype", "freetype", "cangjie"),
     ("freetype", "cangjie", "cangjie", "freetype"),
 )
+DEFAULT_MINIMUM_SPEEDUP = 1.01
 
 
 def run(command: list[str], cpu: int | None) -> dict[str, str]:
@@ -124,9 +125,16 @@ def aggregate_speedup(blocks: list[TimingBlock]) -> float:
     return geometric_mean([block.speedup for block in blocks])
 
 
-def passes_gate(speedup: float) -> bool:
-    """The strict gate requires Cangjie to be strictly faster."""
-    return speedup > 1.0
+def valid_minimum_speedup(minimum_speedup: float) -> bool:
+    """A strict performance margin must be finite and exceed parity."""
+    return math.isfinite(minimum_speedup) and minimum_speedup > 1.0
+
+
+def passes_gate(
+    speedup: float, minimum_speedup: float = DEFAULT_MINIMUM_SPEEDUP
+) -> bool:
+    """Treat the declared boundary itself as a passing measurement."""
+    return not math.isnan(speedup) and speedup >= minimum_speedup
 
 
 def raw_medians(values: tuple[float, float]) -> str:
@@ -150,6 +158,7 @@ def measure_row(
     strict: bool,
     run_command: Callable[[list[str], int | None], dict[str, str]] = run,
     emit: Callable[[str], None] = print,
+    minimum_speedup: float = DEFAULT_MINIMUM_SPEEDUP,
 ) -> str | None:
     """Measure a row and confirm only a first-block strict failure."""
     try:
@@ -170,17 +179,22 @@ def measure_row(
         emit(
             f"{label}: cangjie={block.cangjie_ns:.3f}ns "
             f"freetype={block.freetype_ns:.3f}ns "
-            f"speedup={block.speedup:.3f}x",
+            f"speedup={block.speedup:.3f}x "
+            f"minimum_speedup={minimum_speedup:.3f}x",
         )
         return None
     emit(
-        f"{label}: {format_block(block)} block=1 order=ABBA confirmation="
-        f"{'not-needed' if passes_gate(block.speedup) else 'pending'}",
+        f"{label}: {format_block(block)} block=1 order=ABBA "
+        f"minimum_speedup={minimum_speedup:.3f}x confirmation="
+        f"{'not-needed' if passes_gate(block.speedup, minimum_speedup) else 'pending'}",
     )
-    if passes_gate(block.speedup):
+    if passes_gate(block.speedup, minimum_speedup):
         return None
 
-    emit(f"{label}: confirmation=started first_speedup={block.speedup:.3f}x")
+    emit(
+        f"{label}: confirmation=started first_speedup={block.speedup:.3f}x "
+        f"minimum_speedup={minimum_speedup:.3f}x"
+    )
     try:
         for block_index in (1, 2):
             confirmation = timing_block(
@@ -200,16 +214,17 @@ def measure_row(
         return f"{label}: {error}"
 
     speedup = aggregate_speedup(blocks)
-    status = "pass" if passes_gate(speedup) else "fail"
+    status = "pass" if passes_gate(speedup, minimum_speedup) else "fail"
     emit(
         f"{label}: confirmation={status} blocks=3 "
-        f"aggregate_speedup={speedup:.3f}x",
+        f"aggregate_speedup={speedup:.3f}x "
+        f"minimum_speedup={minimum_speedup:.3f}x",
     )
-    if passes_gate(speedup):
+    if passes_gate(speedup, minimum_speedup):
         return None
     return (
         f"{label}: performance aggregate_speedup={speedup:.3f}x "
-        f"blocks=3"
+        f"blocks=3 minimum_speedup={minimum_speedup:.3f}x"
     )
 
 
@@ -220,7 +235,7 @@ def self_test() -> None:
     assert block_order(2) == block_order(0)
     assert math.isclose(geometric_mean([4.0, 9.0]), 6.0)
 
-    # Preserve the existing strict boundary: equality is not "faster".
+    # Preserve the declared margin rather than accepting a noise-scale win.
     boundary = [
         TimingBlock(2.0, 1.0, (2.0, 2.0), (1.0, 1.0), "same"),
         TimingBlock(1.0, 1.0, (1.0, 1.0), (1.0, 1.0), "same"),
@@ -228,9 +243,13 @@ def self_test() -> None:
     ]
     boundary_speedup = aggregate_speedup(boundary)
     assert math.isclose(boundary_speedup, 1.0)
+    assert valid_minimum_speedup(DEFAULT_MINIMUM_SPEEDUP)
+    assert not valid_minimum_speedup(1.0)
+    assert not valid_minimum_speedup(math.inf)
+    assert not valid_minimum_speedup(math.nan)
     assert not passes_gate(1.0)
-    assert not passes_gate(math.nextafter(1.0, 0.0))
-    assert passes_gate(math.nextafter(1.0, math.inf))
+    assert not passes_gate(math.nextafter(DEFAULT_MINIMUM_SPEEDUP, 0.0))
+    assert passes_gate(DEFAULT_MINIMUM_SPEEDUP)
 
     # A passing row consumes one block, while an initial strict failure runs
     # the two alternating confirmations. Keep these lifecycle guarantees pure
@@ -283,7 +302,8 @@ def self_test() -> None:
     ) is None
     assert len(report_only_calls) == 4
     assert report_only_output == [
-        "report-only: cangjie=2.000ns freetype=1.000ns speedup=0.500x",
+        "report-only: cangjie=2.000ns freetype=1.000ns speedup=0.500x "
+        "minimum_speedup=1.010x",
     ]
 
     reversed_run, reversed_calls = scripted_runner(((4.0, 8.0, 18.0, 16.0),))
@@ -323,7 +343,8 @@ def self_test() -> None:
     assert any("block=2 order=BAAB" in line for line in recovered_output)
     assert any("block=3 order=ABBA" in line for line in recovered_output)
     assert recovered_output[-1].endswith(
-        "confirmation=pass blocks=3 aggregate_speedup=1.260x"
+        "confirmation=pass blocks=3 aggregate_speedup=1.260x "
+        "minimum_speedup=1.010x"
     )
 
     failed_run, failed_calls = scripted_runner((
@@ -341,6 +362,25 @@ def self_test() -> None:
     )
     assert failure is not None and "aggregate_speedup=0.500x" in failure
     assert len(failed_calls) == 12
+
+    # A result that merely beats parity must still fail the shared 1% audit
+    # margin. Keeping this in the runner's own self-test catches positional
+    # call sites that accidentally omit the configured threshold.
+    marginal_run, marginal_calls = scripted_runner((
+        (1.0, 1.005, 1.005, 1.0),
+        (1.005, 1.0, 1.0, 1.005),
+        (1.0, 1.005, 1.005, 1.0),
+    ))
+    marginal = measure_row(
+        "marginal",
+        {"cangjie": ["cangjie"], "freetype": ["freetype"]},
+        None,
+        True,
+        marginal_run,
+        lambda line: None,
+    )
+    assert marginal is not None and "minimum_speedup=1.010x" in marginal
+    assert len(marginal_calls) == 12
 
     mismatch_run, mismatch_calls = scripted_runner(
         ((2.0, 1.0, 1.0, 2.0),),
@@ -416,7 +456,18 @@ def main() -> int:
     )
     parser.add_argument(
         "--fail-on-slower", action="store_true",
-        help="fail when any Cangjie row is not faster than FreeType",
+        help=(
+            "fail when any Cangjie row does not meet --minimum-speedup"
+        ),
+    )
+    parser.add_argument(
+        "--minimum-speedup",
+        type=float,
+        default=DEFAULT_MINIMUM_SPEEDUP,
+        help=(
+            "minimum ratio required by --fail-on-slower "
+            f"(default: {DEFAULT_MINIMUM_SPEEDUP:g})"
+        ),
     )
     parser.add_argument(
         "--self-test", action="store_true",
@@ -431,6 +482,8 @@ def main() -> int:
         parser.error("--glyph-bench is required unless --self-test is used")
     if args.iterations <= 0 or args.samples <= 0:
         parser.error("iterations and samples must be positive")
+    if not valid_minimum_speedup(args.minimum_speedup):
+        parser.error("--minimum-speedup must be finite and greater than 1")
     sizes = tuple(int(value) for value in args.sizes.split(","))
     if not sizes or any(value <= 0 for value in sizes):
         parser.error("sizes must be positive integers")
@@ -505,6 +558,7 @@ def main() -> int:
                     commands = {"cangjie": cj, "freetype": ft}
                     failure = measure_row(
                         label, commands, args.cpu, args.fail_on_slower,
+                        minimum_speedup=args.minimum_speedup,
                     )
                     if failure is not None:
                         failures.append(failure)

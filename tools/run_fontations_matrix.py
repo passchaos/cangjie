@@ -19,6 +19,19 @@ from enum import Enum
 from pathlib import Path
 
 
+DEFAULT_MINIMUM_SPEEDUP = 1.01
+
+
+def valid_minimum_speedup(minimum_speedup: float) -> bool:
+    """A strict performance margin must be finite and exceed parity."""
+    return math.isfinite(minimum_speedup) and minimum_speedup > 1.0
+
+
+def meets_speedup_gate(speedup: float, minimum_speedup: float) -> bool:
+    """Treat the declared boundary itself as a passing measurement."""
+    return not math.isnan(speedup) and speedup >= minimum_speedup
+
+
 class FontSource(Enum):
     """Select the physical input independently of its outline format."""
 
@@ -45,6 +58,26 @@ class OutlineCorpus:
     name: str
     font: Path
     glyph_ids: tuple[int, ...]
+
+
+EXTENDED_OUTLINE_MODES = ("outline-session", "outline-reuse")
+EXTENDED_GLYPHS_PER_CORPUS = 10
+EXTENDED_CORPUS_COUNT = 5
+PRODUCTION_CASE_COUNT = 5
+
+
+def expected_row_count(*, source: str, extended: bool) -> int:
+    """Return the matrix cardinality implied by the current row manifest."""
+    if source == "varc":
+        return sum(case.source is FontSource.VARC for case in CASES)
+    base = len(CASES) + PRODUCTION_CASE_COUNT
+    if not extended:
+        return base
+    return base + (
+        EXTENDED_CORPUS_COUNT
+        * EXTENDED_GLYPHS_PER_CORPUS
+        * len(EXTENDED_OUTLINE_MODES)
+    )
 
 
 CASES = (
@@ -256,11 +289,26 @@ def main() -> int:
     )
     parser.add_argument(
         "--fail-on-slower", action="store_true",
-        help="fail when any measured Cangjie row is not faster than Skrifa",
+        help=(
+            "fail when any measured Cangjie row does not meet "
+            "--minimum-speedup"
+        ),
+    )
+    parser.add_argument(
+        "--minimum-speedup",
+        type=float,
+        default=DEFAULT_MINIMUM_SPEEDUP,
+        help=(
+            "minimum ratio required by --fail-on-slower "
+            f"(default: {DEFAULT_MINIMUM_SPEEDUP:g}); also reported when "
+            "the gate is disabled"
+        ),
     )
     args = parser.parse_args()
     if args.iterations <= 0 or args.samples <= 0:
         parser.error("iterations and samples must be positive")
+    if not valid_minimum_speedup(args.minimum_speedup):
+        parser.error("--minimum-speedup must be finite and greater than 1")
 
     subprocess.run(
         ["cargo", "build", "--release", "--quiet",
@@ -336,7 +384,7 @@ def main() -> int:
                 failures.append(f"{corpus.name}: missing font {corpus.font}")
                 continue
             for glyph_id in corpus.glyph_ids:
-                for mode in ("outline-session", "outline-reuse"):
+                for mode in EXTENDED_OUTLINE_MODES:
                     case = Case(
                         f"{corpus.name}-gid{glyph_id}-{mode}",
                         mode, corpus.font.name, glyph_id,
@@ -403,6 +451,15 @@ def main() -> int:
             float(reference_first["median_ns_per_iter"]),
             float(reference_second["median_ns_per_iter"])))
 
+    expected_rows = expected_row_count(
+        source=args.source, extended=args.extended
+    )
+    if len(measured) != expected_rows:
+        failures.append(
+            "matrix row manifest mismatch: "
+            f"expected={expected_rows} measured={len(measured)}"
+        )
+
     for name, cangjie_first, cangjie_second, skrifa_first, skrifa_second in measured:
         cangjie_mean = math.sqrt(cangjie_first * cangjie_second)
         skrifa_mean = math.sqrt(skrifa_first * skrifa_second)
@@ -410,9 +467,11 @@ def main() -> int:
         print(
             f"{name}: cangjie_ns={cangjie_first:.3f}/{cangjie_second:.3f} "
             f"skrifa_ns={skrifa_first:.3f}/{skrifa_second:.3f} "
-            f"speedup={speedup:.3f}x"
+            f"speedup={speedup:.3f}x "
+            f"minimum_speedup={args.minimum_speedup:.3f}x"
         )
-        if args.fail_on_slower and speedup <= 1.0:
+        if (args.fail_on_slower and
+                not meets_speedup_gate(speedup, args.minimum_speedup)):
             failures.append(
                 f"{name}: performance Cangjie={cangjie_mean:.3f}ns/"
                 f"Skrifa={skrifa_mean:.3f}ns"

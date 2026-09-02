@@ -12,6 +12,19 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+DEFAULT_MINIMUM_SPEEDUP = 1.01
+
+
+def valid_minimum_speedup(minimum_speedup: float) -> bool:
+    """A strict performance margin must be finite and exceed parity."""
+    return math.isfinite(minimum_speedup) and minimum_speedup > 1.0
+
+
+def meets_speedup_gate(speedup: float, minimum_speedup: float) -> bool:
+    """Treat the declared boundary itself as a passing measurement."""
+    return not math.isnan(speedup) and speedup >= minimum_speedup
+
+
 @dataclass(frozen=True)
 class Case:
     name: str
@@ -71,7 +84,20 @@ def main() -> int:
     parser.add_argument(
         "--fail-on-slower",
         action="store_true",
-        help="fail when Cangjie is not faster in any measured lifecycle row",
+        help=(
+            "fail when Cangjie does not meet --minimum-speedup in any "
+            "measured lifecycle row"
+        ),
+    )
+    parser.add_argument(
+        "--minimum-speedup",
+        type=float,
+        default=DEFAULT_MINIMUM_SPEEDUP,
+        help=(
+            "minimum ratio required by --fail-on-slower "
+            f"(default: {DEFAULT_MINIMUM_SPEEDUP:g}); also reported when "
+            "the gate is disabled"
+        ),
     )
     args = parser.parse_args()
     if args.iterations <= 0 or args.samples <= 0 or args.minimum_target_size <= 0:
@@ -82,6 +108,8 @@ def main() -> int:
         parser.error("sizes must be a comma-separated integer list")
     if not sizes or any(size <= 0 for size in sizes):
         parser.error("sizes must be positive")
+    if not valid_minimum_speedup(args.minimum_speedup):
+        parser.error("--minimum-speedup must be finite and greater than 1")
     for label, path in (
         ("cbdt", args.cbdt),
         ("sbix", args.sbix),
@@ -148,9 +176,11 @@ def main() -> int:
         print(
             f"{case.name}/face-open: "
             f"cangjie={cangjie_ns:.3f}ns freetype={freetype_ns:.3f}ns "
-            f"speedup={speedup:.3f}x"
+            f"speedup={speedup:.3f}x "
+            f"minimum_speedup={args.minimum_speedup:.3f}x"
         )
-        if args.fail_on_slower and speedup <= 1.0:
+        if (args.fail_on_slower and
+                not meets_speedup_gate(speedup, args.minimum_speedup)):
             failures.append(
                 f"{case.name}/face-open: performance "
                 f"{cangjie_ns:.3f}ns/{freetype_ns:.3f}ns"
@@ -196,9 +226,11 @@ def main() -> int:
                 print(
                     f"{case.name}/{mode}/{size}px: "
                     f"cangjie={cangjie_ns:.3f}ns freetype={freetype_ns:.3f}ns "
-                    f"speedup={speedup:.3f}x"
+                    f"speedup={speedup:.3f}x "
+                    f"minimum_speedup={args.minimum_speedup:.3f}x"
                 )
-                if args.fail_on_slower and speedup <= 1.0:
+                if (args.fail_on_slower and
+                        not meets_speedup_gate(speedup, args.minimum_speedup)):
                     failures.append(
                         f"{case.name}/{mode}/{size}: performance "
                         f"{cangjie_ns:.3f}ns/{freetype_ns:.3f}ns"
@@ -249,9 +281,11 @@ def main() -> int:
             print(
                 f"{case.name}/bitmap-render/{size}px: "
                 f"cangjie={cangjie_ns:.3f}ns freetype={freetype_ns:.3f}ns "
-                f"speedup={speedup:.3f}x"
+                f"speedup={speedup:.3f}x "
+                f"minimum_speedup={args.minimum_speedup:.3f}x"
             )
-            if args.fail_on_slower and speedup <= 1.0:
+            if (args.fail_on_slower and
+                    not meets_speedup_gate(speedup, args.minimum_speedup)):
                 failures.append(
                     f"{case.name}/bitmap-render/{size}: performance "
                     f"{cangjie_ns:.3f}ns/{freetype_ns:.3f}ns"
@@ -296,9 +330,11 @@ def main() -> int:
         speedup = math.inf if cangjie_ns == 0 else freetype_ns / cangjie_ns
         print(
             f"{case.name}: cangjie={cangjie_ns:.3f}ns "
-            f"freetype={freetype_ns:.3f}ns speedup={speedup:.3f}x"
+            f"freetype={freetype_ns:.3f}ns speedup={speedup:.3f}x "
+            f"minimum_speedup={args.minimum_speedup:.3f}x"
         )
-        if args.fail_on_slower and speedup <= 1.0:
+        if (args.fail_on_slower and
+                not meets_speedup_gate(speedup, args.minimum_speedup)):
             failures.append(
                 f"{case.name}: performance "
                 f"{cangjie_ns:.3f}ns/{freetype_ns:.3f}ns"

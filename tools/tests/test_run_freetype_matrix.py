@@ -20,7 +20,10 @@ class FreeTypeMatrixTest(unittest.TestCase):
 
     @staticmethod
     def row(
-        *, name: str = "synthetic/face-open", threshold_status: str = "met"
+        *,
+        name: str = "synthetic/face-open",
+        speedup: float = 2.0,
+        threshold_status: str = "met",
     ) -> matrix.RowResult:
         return matrix.RowResult(
             name=name,
@@ -35,9 +38,9 @@ class FreeTypeMatrixTest(unittest.TestCase):
             semantic_agreement=True,
             cangjie_first_ns_per_iter=4.0,
             cangjie_second_ns_per_iter=1.0,
-            reference_first_ns_per_iter=8.0,
-            reference_second_ns_per_iter=2.0,
-            speedup=2.0 if threshold_status == "met" else 0.9,
+            reference_first_ns_per_iter=4.0 * speedup,
+            reference_second_ns_per_iter=1.0 * speedup,
+            speedup=speedup,
             threshold_status=threshold_status,
         )
 
@@ -82,12 +85,16 @@ class FreeTypeMatrixTest(unittest.TestCase):
             {"a": 4.0, "b": 1.0},
             report["rows"][0]["timing"]["cangjie_ns_per_iter"],
         )
+        self.assertEqual(
+            {"a": 8.0, "b": 2.0},
+            report["rows"][0]["timing"]["reference_ns_per_iter"],
+        )
         self.assertTrue(report["gate"]["thresholds_met"])
         self.assertTrue(report["gate"]["command_succeeded"])
         json.dumps(report, allow_nan=False)
 
     def test_report_only_below_threshold_still_marks_success(self) -> None:
-        row = self.row(threshold_status="below-minimum")
+        row = self.row(speedup=0.9, threshold_status="below-minimum")
         report = matrix.build_json_report(
             self.configuration(), (row.name,), (row,)
         )
@@ -135,10 +142,18 @@ class FreeTypeMatrixTest(unittest.TestCase):
 
     def test_main_report_only_run_writes_json(self) -> None:
         def fake_measure_row(*, name: str, **_: object) -> matrix.RowResult:
-            return self.row(name=name, threshold_status="below-minimum")
+            return self.row(
+                name=name, speedup=0.9, threshold_status="below-minimum"
+            )
 
         with tempfile.TemporaryDirectory() as directory:
-            destination = Path(directory) / "matrix.json"
+            root = Path(directory)
+            destination = root / "matrix.json"
+            cbdt = root / "cbdt.ttf"
+            sbix = root / "sbix.ttf"
+            colr_v0 = root / "colr-v0.ttf"
+            for fixture in (cbdt, sbix, colr_v0):
+                fixture.touch()
             stdout = io.StringIO()
             stderr = io.StringIO()
             args = argparse.Namespace(
@@ -148,9 +163,9 @@ class FreeTypeMatrixTest(unittest.TestCase):
                 cff2=Path("fonts/CFF2.otf"),
                 arabic=Path("fonts/Arabic.ttf"),
                 cjk=Path("fonts/CJK.ttc"),
-                cbdt=None,
-                sbix=None,
-                colr_v0=None,
+                cbdt=cbdt,
+                sbix=sbix,
+                colr_v0=colr_v0,
                 iterations=2,
                 samples=3,
                 cpu=None,
@@ -172,12 +187,36 @@ class FreeTypeMatrixTest(unittest.TestCase):
             report = json.loads(destination.read_text(encoding="utf-8"))
             self.assertFalse(report["gate"]["thresholds_met"])
             self.assertTrue(report["gate"]["command_succeeded"])
-            self.assertIn("Cangjie/FreeType lifecycle matrix completed", stdout.getvalue())
+            metric = (
+                "cangjie=2.000ns freetype=1.800ns speedup=0.900x "
+                "minimum_speedup=1.010x"
+            )
+            output = stdout.getvalue()
+            for row_name in (
+                "glyf-latin/face-open",
+                "glyf-latin/raster/8px",
+                "cbdt-png/bitmap-render/8px",
+                "colr-v0-layers",
+            ):
+                self.assertIn(f"{row_name}: {metric}\n", output)
+            self.assertIn(
+                "Cangjie/FreeType lifecycle matrix completed: 40 rows", output
+            )
+            self.assertEqual(
+                {"a": 4.0, "b": 1.0},
+                report["rows"][0]["timing"]["cangjie_ns_per_iter"],
+            )
+            self.assertEqual(
+                {"a": 3.6, "b": 0.9},
+                report["rows"][0]["timing"]["reference_ns_per_iter"],
+            )
             self.assertEqual("", stderr.getvalue())
 
     def test_main_enforced_gate_failure_does_not_write_json(self) -> None:
         def fake_measure_row(*, name: str, **_: object) -> matrix.RowResult:
-            return self.row(name=name, threshold_status="below-minimum")
+            return self.row(
+                name=name, speedup=0.9, threshold_status="below-minimum"
+            )
 
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "matrix.json"

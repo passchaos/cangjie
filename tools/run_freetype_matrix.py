@@ -58,6 +58,20 @@ class RowResult:
     speedup: float
     threshold_status: str
 
+    @property
+    def cangjie_geometric_mean_ns_per_iter(self) -> float:
+        """Return the A/B aggregate used for the row's speedup."""
+        return math.sqrt(
+            self.cangjie_first_ns_per_iter * self.cangjie_second_ns_per_iter
+        )
+
+    @property
+    def reference_geometric_mean_ns_per_iter(self) -> float:
+        """Return the reference A/B aggregate used for the row's speedup."""
+        return math.sqrt(
+            self.reference_first_ns_per_iter * self.reference_second_ns_per_iter
+        )
+
 
 @dataclass(frozen=True)
 class RunConfiguration:
@@ -262,6 +276,23 @@ def emit_json_report(
     write_json_atomic(path, build_json_report(configuration, manifest, results))
 
 
+def format_row_stdout(result: RowResult, minimum_speedup: float) -> str:
+    """Render the stable human summary from the A/B/B/A aggregates.
+
+    The JSON report retains each timing endpoint for auditability. The concise
+    stdout contract instead reports the geometric means whose ratio is the
+    displayed speedup, so all three human-readable values describe the same
+    measurement.
+    """
+    return (
+        f"{result.name}: "
+        f"cangjie={result.cangjie_geometric_mean_ns_per_iter:.3f}ns "
+        f"freetype={result.reference_geometric_mean_ns_per_iter:.3f}ns "
+        f"speedup={result.speedup:.3f}x "
+        f"minimum_speedup={minimum_speedup:.3f}x"
+    )
+
+
 def measure_row(
     *,
     name: str,
@@ -442,23 +473,12 @@ def main() -> int:
             minimum_speedup=args.minimum_speedup,
         )
         rows.append(row)
-        print(
-            f"{row_name}: "
-            f"cangjie={row.cangjie_first_ns_per_iter:.3f}ns "
-            f"freetype={row.reference_first_ns_per_iter:.3f}ns "
-            f"speedup={row.speedup:.3f}x "
-            f"minimum_speedup={args.minimum_speedup:.3f}x"
-        )
+        print(format_row_stdout(row, args.minimum_speedup))
         if args.fail_on_slower and row.threshold_status != "met":
-            cangjie_ns = math.sqrt(
-                row.cangjie_first_ns_per_iter * row.cangjie_second_ns_per_iter
-            )
-            freetype_ns = math.sqrt(
-                row.reference_first_ns_per_iter * row.reference_second_ns_per_iter
-            )
             failures.append(
                 f"{row_name}: performance "
-                f"{cangjie_ns:.3f}ns/{freetype_ns:.3f}ns"
+                f"{row.cangjie_geometric_mean_ns_per_iter:.3f}ns/"
+                f"{row.reference_geometric_mean_ns_per_iter:.3f}ns"
             )
         for mode in ("raster", "raster-owning", "raster-reuse"):
             for size in sizes:
@@ -496,25 +516,12 @@ def main() -> int:
                     minimum_speedup=args.minimum_speedup,
                 )
                 rows.append(row)
-                print(
-                    f"{row_name}: "
-                    f"cangjie={row.cangjie_first_ns_per_iter:.3f}ns "
-                    f"freetype={row.reference_first_ns_per_iter:.3f}ns "
-                    f"speedup={row.speedup:.3f}x "
-                    f"minimum_speedup={args.minimum_speedup:.3f}x"
-                )
+                print(format_row_stdout(row, args.minimum_speedup))
                 if args.fail_on_slower and row.threshold_status != "met":
-                    cangjie_ns = math.sqrt(
-                        row.cangjie_first_ns_per_iter
-                        * row.cangjie_second_ns_per_iter
-                    )
-                    freetype_ns = math.sqrt(
-                        row.reference_first_ns_per_iter
-                        * row.reference_second_ns_per_iter
-                    )
                     failures.append(
                         f"{row_name}: performance "
-                        f"{cangjie_ns:.3f}ns/{freetype_ns:.3f}ns"
+                        f"{row.cangjie_geometric_mean_ns_per_iter:.3f}ns/"
+                        f"{row.reference_geometric_mean_ns_per_iter:.3f}ns"
                     )
     for case in bitmap_cases:
         for size in sizes:
@@ -550,24 +557,12 @@ def main() -> int:
                 minimum_speedup=args.minimum_speedup,
             )
             rows.append(row)
-            print(
-                f"{row_name}: "
-                f"cangjie={row.cangjie_first_ns_per_iter:.3f}ns "
-                f"freetype={row.reference_first_ns_per_iter:.3f}ns "
-                f"speedup={row.speedup:.3f}x "
-                f"minimum_speedup={args.minimum_speedup:.3f}x"
-            )
+            print(format_row_stdout(row, args.minimum_speedup))
             if args.fail_on_slower and row.threshold_status != "met":
-                cangjie_ns = math.sqrt(
-                    row.cangjie_first_ns_per_iter * row.cangjie_second_ns_per_iter
-                )
-                freetype_ns = math.sqrt(
-                    row.reference_first_ns_per_iter
-                    * row.reference_second_ns_per_iter
-                )
                 failures.append(
                     f"{row_name}: performance "
-                    f"{cangjie_ns:.3f}ns/{freetype_ns:.3f}ns"
+                    f"{row.cangjie_geometric_mean_ns_per_iter:.3f}ns/"
+                    f"{row.reference_geometric_mean_ns_per_iter:.3f}ns"
                 )
     if args.colr_v0 is not None:
         case = Case("colr-v0-layers", args.colr_v0, "U+0041")
@@ -600,22 +595,12 @@ def main() -> int:
             minimum_speedup=args.minimum_speedup,
         )
         rows.append(row)
-        print(
-            f"{row_name}: cangjie={row.cangjie_first_ns_per_iter:.3f}ns "
-            f"freetype={row.reference_first_ns_per_iter:.3f}ns "
-            f"speedup={row.speedup:.3f}x "
-            f"minimum_speedup={args.minimum_speedup:.3f}x"
-        )
+        print(format_row_stdout(row, args.minimum_speedup))
         if args.fail_on_slower and row.threshold_status != "met":
-            cangjie_ns = math.sqrt(
-                row.cangjie_first_ns_per_iter * row.cangjie_second_ns_per_iter
-            )
-            freetype_ns = math.sqrt(
-                row.reference_first_ns_per_iter * row.reference_second_ns_per_iter
-            )
             failures.append(
                 f"{row_name}: performance "
-                f"{cangjie_ns:.3f}ns/{freetype_ns:.3f}ns"
+                f"{row.cangjie_geometric_mean_ns_per_iter:.3f}ns/"
+                f"{row.reference_geometric_mean_ns_per_iter:.3f}ns"
             )
     if failures:
         print("Cangjie/FreeType lifecycle matrix failed:", file=sys.stderr)

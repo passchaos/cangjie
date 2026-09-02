@@ -2391,3 +2391,16 @@ Fixed-CPU-30 symmetric `5000 * 7` probes reduced LTR construction from
 digest. The subsequent complete strict matrix improved the corresponding
 Parley ratios to `0.749865x` and `0.763963x`, but they remain below the
 declared `1.01x` threshold; mixed-bidi retained reflow also remains open.
+
+The retained source-backed path now avoids constructing a separate visual-order
+array. It computes L1 over each complete source line, copies the visible slice
+once, and performs L2 in place while moving bidi levels and font-run owners in
+lockstep. The one-scalar/one-glyph proof also turns the simple builder's line
+byte-boundary calculation into an O(1) lookup while preserving trimmed
+whitespace as a stable logical suffix. On fixed CPU 29, a low-I/O (`full
+avg10 < 2%`) `20000 * 7` Cangjie A/B/B/A gate measured `1.262601x` for the
+LTR mixed fixture and `1.227407x` for the RTL fixture over the preceding
+Cangjie implementation. Latin, Arabic, and Japanese controls all remained
+above `1.01x`, and all four endpoints agreed on native, geometry, placement,
+and object checksums. This validates the internal optimization; a current full
+Cangjie/Parley matrix is still required before closing the cross-engine rows.

@@ -88,13 +88,13 @@ pub fn appendLine(
             }
         else if (run) |font_run| block: {
             const source_run = layout.runs[font_run.run_index];
-            const alignment = if (style_spans) |source_spans|
-                (styled_paragraph.spanForCluster(
+            const alignment, const baseline_shift = if (style_spans) |source_spans| style: {
+                const source_style = styled_paragraph.spanForCluster(
                     source_spans,
                     drafts[start].byte_start,
-                ) orelse return error.InvalidStyleSpans).vertical_align
-            else
-                .baseline;
+                ) orelse return error.InvalidStyleSpans;
+                break :style .{ source_style.vertical_align, source_style.baseline_shift };
+            } else .{ paragraph_types.VerticalAlign.baseline, @as(f32, 0) };
             const metrics = @import("../../line_break/reflow/geometry.zig")
                 .defaultBaselineMetrics(
                 @import("../../types/runs.zig").fontForBackend(source_run),
@@ -102,7 +102,12 @@ pub fn appendLine(
             );
             const baseline =
                 line.y + line.baseline +
-                vertical_align.fontOffset(line, source_run, alignment);
+                vertical_align.fontPhysicalOffset(
+                    line,
+                    source_run,
+                    alignment,
+                    baseline_shift,
+                );
             break :block paragraph_types.TextRect{
                 .x = min_inline,
                 .y = baseline - metrics.ascent,

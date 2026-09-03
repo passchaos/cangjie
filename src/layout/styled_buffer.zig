@@ -93,6 +93,7 @@ pub fn rebuild(
                 0,
             .minimum_line_height = span.minimum_line_height,
             .vertical_align = span.vertical_align,
+            .baseline_shift = span.baseline_shift,
         });
     }
 }
@@ -152,6 +153,7 @@ pub fn insertAutomaticHyphenMetadata(
                 .layout_spacing = 0,
                 .minimum_line_height = span.minimum_line_height,
                 .vertical_align = span.vertical_align,
+                .baseline_shift = span.baseline_shift,
             });
             continue;
         }
@@ -484,6 +486,7 @@ fn appendEllipsisStyle(
         .layout_spacing = 0,
         .minimum_line_height = style.minimum_line_height,
         .vertical_align = style.vertical_align,
+        .baseline_shift = style.baseline_shift,
     });
 }
 

@@ -28,6 +28,10 @@ pub const Span = struct {
     word_spacing: f32 = 0,
     minimum_line_height: ?f32 = null,
     vertical_align: @import("types/paragraph.zig").VerticalAlign = .baseline,
+    /// Physical block-axis offset in layout units. Horizontal text uses
+    /// y-down coordinates: negative values raise the inline box and positive
+    /// values lower it. The shifted extents participate in line metrics.
+    baseline_shift: f32 = 0,
     /// Optional attributed overrides of paragraph wrapping policy.
     ///
     /// These affect line analysis only and therefore do not split otherwise
@@ -47,6 +51,7 @@ pub const GlyphMetadata = struct {
     layout_spacing: f32,
     minimum_line_height: ?f32,
     vertical_align: @import("types/paragraph.zig").VerticalAlign = .baseline,
+    baseline_shift: f32 = 0,
 };
 
 /// Drive script/style itemization through a layout-owned context.

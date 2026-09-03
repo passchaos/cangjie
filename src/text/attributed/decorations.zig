@@ -160,10 +160,11 @@ fn appendFragment(
     const font = run_types.fontForBackend(font_run);
     const metrics = try font.scaledDecorationMetrics(font_run.font_size);
     const aligned_baseline =
-        line.y + line.baseline + vertical_align.fontOffset(
+        line.y + line.baseline + vertical_align.fontPhysicalOffset(
             line,
             font_run,
             style_run.style.vertical_align,
+            style_run.style.baseline_shift,
         );
     if (style_run.style.decoration.underline) {
         try output.append(allocator, .{

@@ -232,6 +232,9 @@ const NoShrinkageRecipe = struct {
     pub fn minimumLineHeight(_: @This(), _: usize, _: usize) ?f32 {
         return null;
     }
+    pub fn adjustLineInfo(_: @This(), _: anytype, _: anytype, _: anytype, _: usize, _: usize, info: geometry.LineRunInfo) geometry.LineRunInfo {
+        return info;
+    }
     pub fn prepareVerticalHyphenMetadata(
         _: @This(),
         _: []const @import("hyphen_insertions.zig").Selected,

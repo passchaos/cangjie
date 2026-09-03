@@ -834,6 +834,45 @@ test "styled text geometry exposes vertically aligned font bounds" {
     );
 }
 
+test "styled text geometry exposes baseline shifted font bounds and carets" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const bytes = try test_font.buildMinimalTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const text = "AA";
+    const styles = [_]paragraph.StyledSpan{
+        .{ .byte_start = 0, .byte_len = 1, .style_index = 1, .font_size = 20, .baseline_shift = -7 },
+        .{ .byte_start = 1, .byte_len = 1, .style_index = 2, .font_size = 20, .baseline_shift = 5 },
+    };
+    var layout_buffer = LayoutBuffer.init(allocator);
+    defer layout_buffer.deinit();
+    var styled_buffer = StyledParagraphBuffer.init(allocator);
+    defer styled_buffer.deinit();
+    const layout = try TextShaper.layoutStyledParagraphUtf8(
+        FontCascade.init(&.{&font}),
+        &layout_buffer,
+        &styled_buffer,
+        text,
+        20,
+        &styles,
+        .{ .max_width = 100 },
+    );
+    var geometry = try paragraph.buildStyledGeometry(allocator, text, layout, &styles, .{});
+    defer geometry.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), geometry.spans.len);
+    try std.testing.expectApproxEqAbs(@as(f32, -12), geometry.spans[0].bounds.y - geometry.spans[1].bounds.y, 0.001);
+    const raised = geometry.caret(.{ .byte_offset = 0 }) orelse return error.MissingRaisedCaret;
+    const lowered = geometry.caret(.{ .byte_offset = 1 }) orelse return error.MissingLoweredCaret;
+    try std.testing.expectApproxEqAbs(geometry.spans[0].bounds.y, raised.rect.y, 0.001);
+    try std.testing.expectApproxEqAbs(geometry.spans[1].bounds.y, lowered.rect.y, 0.001);
+    try std.testing.expect(raised.rect.y < lowered.rect.y);
+    try std.testing.expect(geometry.spans[0].bounds.y >= layout.lines[0].y - 0.001);
+    try std.testing.expect(geometry.spans[1].bounds.y + geometry.spans[1].bounds.height <= layout.lines[0].y + layout.lines[0].height + 0.001);
+}
+
 test "text geometry preserves fallback ownership and fontless inline objects" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

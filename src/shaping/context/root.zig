@@ -405,6 +405,7 @@ fn uniformStyledOptions(
         span.script_tag != null or span.language_tag != null or
         span.features.len != 0 or span.normalized_variation_coords.len != 0 or
         span.minimum_line_height != null or span.vertical_align != .baseline or
+        span.baseline_shift != 0 or
         span.wrap_mode != null or span.word_break != null or
         span.overflow_wrap != null or request.options.letter_spacing != 0 or
         request.options.word_spacing != 0 or request.options.script_tag != null or

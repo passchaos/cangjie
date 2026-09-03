@@ -128,8 +128,8 @@ test "attributed vertical align places runs decorations and objects in line box"
         result.lines[0].height,
         0.001,
     );
-    try std.testing.expect(result.glyphs[0].y_offset < 0);
-    try std.testing.expect(result.glyphs[2].y_offset > 0);
+    try std.testing.expect(result.glyphs[0].y_offset > 0);
+    try std.testing.expect(result.glyphs[2].y_offset < 0);
     try std.testing.expectEqual(@as(usize, 1), result.inline_objects.len);
     try std.testing.expectApproxEqAbs(
         result.lines[0].y,
@@ -148,13 +148,107 @@ test "attributed vertical align places runs decorations and objects in line box"
     );
     defer draw_list.deinit();
     try std.testing.expectEqual(@as(usize, 2), draw_list.glyphs.len);
-    try std.testing.expect(draw_list.glyphs[0].y_offset < 0);
-    try std.testing.expect(draw_list.glyphs[1].y_offset > 0);
+    try std.testing.expect(draw_list.glyphs[0].y_offset > 0);
+    try std.testing.expect(draw_list.glyphs[1].y_offset < 0);
+    const top_physical_baseline = draw_list.glyphs[0].baseline_y -
+        draw_list.glyphs[0].y_offset;
+    const bottom_physical_baseline = draw_list.glyphs[1].baseline_y -
+        draw_list.glyphs[1].y_offset;
+    try std.testing.expect(top_physical_baseline < bottom_physical_baseline);
+    try std.testing.expectApproxEqAbs(
+        result.lines[0].y + result.lines[0].baseline -
+            result.glyphs[1].y_offset - 20,
+        result.inline_objects[0].y,
+        0.001,
+    );
     try std.testing.expectApproxEqAbs(
         @as(f32, 0),
         draw_list.runs[0].baseline_y -
             (result.lines[0].y + result.lines[0].baseline),
         0.001,
+    );
+}
+
+test "attributed baseline shift expands line metrics and shares final geometry" {
+    const allocator = std.testing.allocator;
+    var owned = try OwnedFont.init(
+        allocator,
+        try test_font.buildMinimalTtf(allocator),
+    );
+    defer owned.deinit();
+    const fonts = [_]*const font_mod.Font{&owned.font};
+    const text = "AAA";
+    const spans = [_]style.StyleSpan{
+        .{ .byte_range = .{ .start = 0, .len = 1 }, .style = .{ .font_size = 20 } },
+        .{ .byte_range = .{ .start = 1, .len = 1 }, .style = .{ .font_size = 20, .baseline_shift = -8, .decoration = .{ .underline = true } } },
+        .{ .byte_range = .{ .start = 2, .len = 1 }, .style = .{ .font_size = 20, .baseline_shift = 6 } },
+    };
+    var result = try attributed_model.layoutAttributedParagraphUtf8(
+        allocator,
+        font_fallback.Cascade.init(&fonts),
+        .{ .text = text, .spans = &spans },
+        200,
+    );
+    defer result.deinit();
+
+    const natural = @import("../../layout/line_break/reflow/geometry.zig")
+        .defaultBaselineMetrics(&owned.font, 20);
+    try std.testing.expectEqual(@as(usize, 1), result.lines.len);
+    try std.testing.expect(result.lines[0].ascent >= natural.ascent + 8 - 0.001);
+    try std.testing.expect(result.lines[0].descent >= natural.descent + 6 - 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), result.glyphs[0].y_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 8), result.glyphs[1].y_offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -6), result.glyphs[2].y_offset, 0.001);
+
+    var draw_list = try render_bridge.buildGlyphDrawList(allocator, result.paragraph, .{ .decorations = result.decorations });
+    defer draw_list.deinit();
+    const line_baseline = result.lines[0].y + result.lines[0].baseline;
+    try std.testing.expectApproxEqAbs(line_baseline - 8, draw_list.glyphs[1].baseline_y - draw_list.glyphs[1].y_offset, 0.001);
+    try std.testing.expectApproxEqAbs(line_baseline + 6, draw_list.glyphs[2].baseline_y - draw_list.glyphs[2].y_offset, 0.001);
+    try std.testing.expectEqual(@as(usize, 1), result.decorations.len);
+    const decoration_metrics = try owned.font.scaledDecorationMetrics(20);
+    try std.testing.expectApproxEqAbs(
+        line_baseline - 8 - decoration_metrics.underline_position - decoration_metrics.underline_thickness / 2,
+        result.decorations[0].rect.y,
+        0.001,
+    );
+}
+
+test "styled baseline shift rejects invalid and ambiguous block placement" {
+    const allocator = std.testing.allocator;
+    var owned = try OwnedFont.init(allocator, try test_font.buildMinimalTtf(allocator));
+    defer owned.deinit();
+    const cascade = font_fallback.Cascade.init(&.{&owned.font});
+
+    const invalid = [_]style.StyleSpan{.{
+        .byte_range = .{ .start = 0, .len = 1 },
+        .style = .{ .font_size = 20, .baseline_shift = std.math.nan(f32) },
+    }};
+    try std.testing.expectError(
+        error.InvalidStyleSpans,
+        attributed_model.layoutAttributedParagraphUtf8(allocator, cascade, .{ .text = "A", .spans = &invalid }, 100),
+    );
+
+    const combined = [_]style.StyleSpan{.{
+        .byte_range = .{ .start = 0, .len = 1 },
+        .style = .{ .font_size = 20, .vertical_align = .top, .baseline_shift = -4 },
+    }};
+    try std.testing.expectError(
+        error.InvalidStyleSpans,
+        attributed_model.layoutAttributedParagraphUtf8(allocator, cascade, .{ .text = "A", .spans = &combined }, 100),
+    );
+
+    const vertical = [_]style.StyleSpan{.{
+        .byte_range = .{ .start = 0, .len = 1 },
+        .style = .{ .font_size = 20, .baseline_shift = -4 },
+    }};
+    try std.testing.expectError(
+        error.UnsupportedVerticalParagraphOptions,
+        attributed_model.layoutAttributedParagraphUtf8(allocator, cascade, .{
+            .text = "A",
+            .spans = &vertical,
+            .paragraph_style = .{ .writing_mode = .vertical_rl },
+        }, 100),
     );
 }
 

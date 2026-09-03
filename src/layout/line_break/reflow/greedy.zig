@@ -313,7 +313,7 @@ fn advanceWithPlan(
             const line_byte_end = shaped_boundary.glyphSourceEnd(
                 buffer.glyphs.items[break_end_index - 1],
             );
-            const line_info = geometry.resolvedLineInfo(
+            var line_info = geometry.resolvedLineInfo(
                 buffer.runs.items,
                 buffer.glyphs.items,
                 options.inline_objects,
@@ -322,6 +322,14 @@ fn advanceWithPlan(
                 default_metrics,
                 options.line_height,
                 recipe.minimumLineHeight(line_start, index),
+            );
+            line_info = recipe.adjustLineInfo(
+                buffer.runs.items,
+                buffer.glyphs.items,
+                options.inline_objects,
+                line_start,
+                index,
+                line_info,
             );
             const line_region = try regions.resolve(
                 buffer.allocator,
@@ -437,6 +445,7 @@ fn advanceWithPlan(
             const next_region_height = @max(
                 region_height,
                 glyphLineHeight(
+                    recipe,
                     buffer.runs.items,
                     buffer.glyphs.items,
                     options.inline_objects,
@@ -621,6 +630,7 @@ fn advanceWithPlan(
                     // well as glyph count. Refresh the prospective band before
                     // measuring the next source atom against exclusions.
                     region_height = lineHeightForRange(
+                        recipe,
                         buffer.runs.items,
                         buffer.glyphs.items,
                         options.inline_objects,
@@ -660,6 +670,7 @@ fn advanceWithPlan(
                     current_line_limit
                 else candidate_limit: {
                     const candidate_height = lineHeightForRange(
+                        recipe,
                         buffer.runs.items,
                         buffer.glyphs.items,
                         options.inline_objects,
@@ -856,7 +867,7 @@ fn advanceWithPlan(
             const justify_line =
                 next_line_start < buffer.glyphs.items.len and
                 buffer.lines.items.len + 1 < max_lines;
-            const line_info = geometry.resolvedLineInfo(
+            var line_info = geometry.resolvedLineInfo(
                 buffer.runs.items,
                 buffer.glyphs.items,
                 options.inline_objects,
@@ -865,6 +876,14 @@ fn advanceWithPlan(
                 default_metrics,
                 options.line_height,
                 recipe.minimumLineHeight(line_start, break_end),
+            );
+            line_info = recipe.adjustLineInfo(
+                buffer.runs.items,
+                buffer.glyphs.items,
+                options.inline_objects,
+                line_start,
+                break_end,
+                line_info,
             );
             const committed_region = try regions.resolve(
                 buffer.allocator,
@@ -939,6 +958,7 @@ fn advanceWithPlan(
                     0;
             line_start = next_line_start;
             region_height = lineHeightForRange(
+                recipe,
                 buffer.runs.items,
                 buffer.glyphs.items,
                 options.inline_objects,
@@ -1069,7 +1089,7 @@ fn advanceWithPlan(
                 buffer.glyphs.items[line_start..],
             );
         }
-        const line_info = geometry.resolvedLineInfo(
+        var line_info = geometry.resolvedLineInfo(
             buffer.runs.items,
             buffer.glyphs.items,
             options.inline_objects,
@@ -1078,6 +1098,14 @@ fn advanceWithPlan(
             default_metrics,
             options.line_height,
             recipe.minimumLineHeight(line_start, buffer.glyphs.items.len),
+        );
+        line_info = recipe.adjustLineInfo(
+            buffer.runs.items,
+            buffer.glyphs.items,
+            options.inline_objects,
+            line_start,
+            buffer.glyphs.items.len,
+            line_info,
         );
         const line_region = try regions.resolve(
             buffer.allocator,
@@ -1278,6 +1306,7 @@ fn requestedLineHeight(
 }
 
 fn glyphLineHeight(
+    recipe: anytype,
     runs: anytype,
     glyphs: []const @import("../../glyph_position.zig").GlyphPosition,
     objects: []const inline_object.Object,
@@ -1287,6 +1316,7 @@ fn glyphLineHeight(
     styled_minimum: ?f32,
 ) f32 {
     return lineHeightForRange(
+        recipe,
         runs,
         glyphs,
         objects,
@@ -1299,6 +1329,7 @@ fn glyphLineHeight(
 }
 
 fn lineHeightForRange(
+    recipe: anytype,
     runs: anytype,
     glyphs: []const @import("../../glyph_position.zig").GlyphPosition,
     objects: []const inline_object.Object,
@@ -1308,14 +1339,23 @@ fn lineHeightForRange(
     requested: ?f32,
     styled_minimum: ?f32,
 ) f32 {
-    return geometry.resolvedLineInfo(
+    const safe_end = @max(glyph_start, glyph_end);
+    const info = geometry.resolvedLineInfo(
         runs,
         glyphs,
         objects,
         glyph_start,
-        @max(glyph_start, glyph_end),
+        safe_end,
         default_metrics,
         requested,
         styled_minimum,
+    );
+    return recipe.adjustLineInfo(
+        runs,
+        glyphs,
+        objects,
+        glyph_start,
+        safe_end,
+        info,
     ).metrics.lineHeight();
 }

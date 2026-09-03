@@ -117,6 +117,12 @@ test "public facade uses domain names without legacy aliases" {
         @hasField(cangjie.text.style.Text, "vertical_align"),
     );
     try std.testing.expect(
+        @hasField(cangjie.text.style.Text, "baseline_shift"),
+    );
+    try std.testing.expect(
+        @hasField(cangjie.paragraph.StyledSpan, "baseline_shift"),
+    );
+    try std.testing.expect(
         !@hasField(cangjie.text.style.Paragraph, "vertical_align"),
     );
     try std.testing.expect(

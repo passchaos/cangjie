@@ -305,7 +305,8 @@ const Driver = struct {
     pub fn validateSpan(self: *@This(), span: styled_paragraph.Span) !void {
         if (self.options.writing_mode.isVertical() and
             (span.minimum_line_height != null or
-                span.vertical_align != .baseline))
+                span.vertical_align != .baseline or
+                span.baseline_shift != 0))
         {
             return error.UnsupportedVerticalParagraphOptions;
         }
@@ -318,7 +319,8 @@ const Driver = struct {
             span.normalized_variation_coords,
         );
         if (!std.math.isFinite(span.letter_spacing) or
-            !std.math.isFinite(span.word_spacing))
+            !std.math.isFinite(span.word_spacing) or
+            !std.math.isFinite(span.baseline_shift))
         {
             return error.InvalidStyleSpans;
         }
@@ -326,6 +328,9 @@ const Driver = struct {
             if (!std.math.isFinite(height) or height <= 0) {
                 return error.InvalidStyleSpans;
             }
+        }
+        if (span.baseline_shift != 0 and span.vertical_align != .baseline) {
+            return error.InvalidStyleSpans;
         }
     }
 
@@ -875,7 +880,8 @@ fn simpleStyledShape(
             glyph.codepoint == 0x0085 or glyph.codepoint == 0x2028 or
             glyph.codepoint == 0x2029 or
             item.minimum_line_height != null or
-            item.vertical_align != .baseline)
+            item.vertical_align != .baseline or
+            item.baseline_shift != 0)
         {
             return false;
         }

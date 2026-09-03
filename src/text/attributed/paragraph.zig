@@ -228,6 +228,7 @@ fn layoutSpansForRuns(
             .word_spacing = run.style.word_spacing,
             .minimum_line_height = run.style.line_height,
             .vertical_align = run.style.vertical_align,
+            .baseline_shift = run.style.baseline_shift,
             .wrap_mode = run.style.wrap_mode,
             .word_break = run.style.word_break,
             .overflow_wrap = run.style.overflow_wrap,

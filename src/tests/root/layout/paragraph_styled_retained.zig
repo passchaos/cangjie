@@ -166,6 +166,7 @@ test "retained styled paragraph deep-copies text spans and nested slices" {
         .letter_spacing = 2,
         .word_spacing = 3,
         .minimum_line_height = 28,
+        .baseline_shift = -4,
     }};
 
     var engine = cangjie.shaping.Engine.init(allocator, .{});
@@ -190,6 +191,7 @@ test "retained styled paragraph deep-copies text spans and nested slices" {
     spans[0].letter_spacing = 40;
     spans[0].word_spacing = 50;
     spans[0].minimum_line_height = null;
+    spans[0].baseline_shift = 12;
 
     // Reusing Engine output must likewise leave the owning paragraph intact.
     _ = try engine.layoutStyled(cascade, .{
@@ -212,6 +214,7 @@ test "retained styled paragraph deep-copies text spans and nested slices" {
     try std.testing.expectEqual(@as(f32, 2), retained_span.letter_spacing);
     try std.testing.expectEqual(@as(f32, 3), retained_span.word_spacing);
     try std.testing.expectEqual(@as(f32, 28), retained_span.minimum_line_height.?);
+    try std.testing.expectEqual(@as(f32, -4), retained_span.baseline_shift);
     try std.testing.expectEqual(
         @as(*const cangjie.font.Face, &face),
         retained_span.faces.?[0],

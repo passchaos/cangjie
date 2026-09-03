@@ -637,7 +637,7 @@ fn evaluateLine(
         .limit = 0,
         .next_y = y,
     };
-    const metrics = geometry.resolvedLineInfo(
+    const unadjusted = geometry.resolvedLineInfo(
         buffer.runs.items,
         buffer.glyphs.items,
         options.inline_objects,
@@ -646,6 +646,14 @@ fn evaluateLine(
         default_metrics,
         options.line_height,
         recipe.minimumLineHeight(start, boundary.glyph_index),
+    );
+    const metrics = recipe.adjustLineInfo(
+        buffer.runs.items,
+        buffer.glyphs.items,
+        options.inline_objects,
+        start,
+        boundary.glyph_index,
+        unadjusted,
     ).metrics;
     var committed_y = y;
     const region = try regions.resolve(

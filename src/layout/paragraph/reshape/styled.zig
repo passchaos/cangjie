@@ -80,6 +80,41 @@ pub const Recipe = struct {
         return result;
     }
 
+    /// Expand horizontal line metrics for style-authored physical baseline
+    /// offsets. A negative y-down shift raises content and consumes ascent; a
+    /// positive shift lowers content and consumes descent.
+    pub fn adjustLineInfo(
+        self: Recipe,
+        runs: []const run_types.CascadeRun,
+        glyphs: []const @import("../../glyph_position.zig").GlyphPosition,
+        objects: []const @import("../../inline_object/root.zig").Object,
+        glyph_start: usize,
+        glyph_end: usize,
+        input: @import("../../line_break/reflow/geometry.zig").LineRunInfo,
+    ) @import("../../line_break/reflow/geometry.zig").LineRunInfo {
+        var out = input;
+        if (glyph_start > glyph_end or glyph_end > glyphs.len) return out;
+        for (glyphs[glyph_start..glyph_end], glyph_start..) |glyph, glyph_index| {
+            const span = spanForOutput(self.spans, glyph) orelse continue;
+            const extents: BaselineExtents = if (glyph.isInlineObject()) extents: {
+                const object = @import("../../inline_object/root.zig").find(objects, glyph.cluster) orelse continue;
+                if (object.kind != .in_flow) continue;
+                const metrics = @import("../../inline_object/root.zig").verticalMetrics(object);
+                break :extents .{ .ascent = metrics.ascent, .descent = metrics.descent };
+            } else extents: {
+                const run = runForGlyph(runs, glyph_index) orelse continue;
+                const metrics = @import("../../line_break/reflow/geometry.zig").defaultBaselineMetrics(
+                    run_types.fontForBackend(run),
+                    run.font_size,
+                );
+                break :extents .{ .ascent = metrics.ascent, .descent = metrics.descent };
+            };
+            out.metrics.ascent = @max(out.metrics.ascent, extents.ascent - span.baseline_shift);
+            out.metrics.descent = @max(out.metrics.descent, extents.descent + span.baseline_shift);
+        }
+        return out;
+    }
+
     pub fn prepareVerticalHyphenMetadata(
         self: Recipe,
         selected: []const @import("../../line_break/reflow/hyphen_insertions.zig").Selected,
@@ -101,6 +136,7 @@ pub const Recipe = struct {
                 .layout_spacing = 0,
                 .minimum_line_height = span.minimum_line_height,
                 .vertical_align = span.vertical_align,
+                .baseline_shift = span.baseline_shift,
             });
         }
     }
@@ -605,6 +641,7 @@ pub const Recipe = struct {
                 .layout_spacing = spacing,
                 .minimum_line_height = span.minimum_line_height,
                 .vertical_align = span.vertical_align,
+                .baseline_shift = span.baseline_shift,
             });
         }
     }
@@ -644,6 +681,11 @@ pub const Recipe = struct {
             self.commit_metadata.items,
         );
     }
+};
+
+const BaselineExtents = struct {
+    ascent: f32,
+    descent: f32,
 };
 
 const SegmentContext = struct {
@@ -792,4 +834,24 @@ fn spanForBoundary(
         }
     }
     return styled_paragraph.spanForCluster(spans, boundary);
+}
+
+fn runForGlyph(
+    runs: []const run_types.CascadeRun,
+    glyph_index: usize,
+) ?run_types.CascadeRun {
+    var low: usize = 0;
+    var high = runs.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const run = runs[mid];
+        if (glyph_index < run.glyph_start) {
+            high = mid;
+        } else if (glyph_index >= run.glyph_start + run.glyph_len) {
+            low = mid + 1;
+        } else {
+            return run;
+        }
+    }
+    return null;
 }

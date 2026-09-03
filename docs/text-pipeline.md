@@ -816,6 +816,18 @@ baseline plus the per-glyph final offset, so atlas, path, color, object, and
 decoration output agree. The former paragraph-level `vertical_align` no-op has
 been removed rather than retained as a misleading control.
 
+`TextStyle.baseline_shift` and `paragraph.StyledSpan.baseline_shift` add an
+arbitrary physical block-axis offset after shaping while still participating in
+line metrics. Horizontal text uses y-down layout coordinates: negative values
+raise the inline box and positive values lower it. Shifted font or in-flow
+object extents enlarge the owning line's ascent/descent before region placement,
+so glyphs, caret/style bounds, selection geometry, decorations, inline objects,
+subsequent line origins, and paragraph height remain consistent. The glyph
+record keeps HarfBuzz's y-up offset convention, and the paragraph placement
+stage performs the sign conversion exactly once. Baseline shift currently
+requires horizontal writing and `.baseline` vertical alignment; ambiguous
+combinations fail validation rather than producing divergent geometry.
+
 `cangjie.font.database.Database.layoutAttributed` is the
 integrated entry point for callers that do want that resolution. It maps each
 normalized style run's family, weight, stretch, and normal/italic/oblique

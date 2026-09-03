@@ -37,6 +37,10 @@ pub const Uniform = struct {
         return null;
     }
 
+    pub fn adjustLineInfo(_: Uniform, _: anytype, _: anytype, _: anytype, _: usize, _: usize, info: geometry.LineRunInfo) geometry.LineRunInfo {
+        return info;
+    }
+
     pub fn prepareVerticalHyphenMetadata(
         _: Uniform,
         _: []const @import("../line_break/reflow/hyphen_insertions.zig").Selected,

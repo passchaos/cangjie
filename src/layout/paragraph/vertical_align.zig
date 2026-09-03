@@ -27,7 +27,8 @@ pub fn apply(
             metadata[line.glyph_start..line_end],
             line.glyph_start..,
         ) |*glyph, item, glyph_index| {
-            if (item.vertical_align == .baseline) continue;
+            if (item.vertical_align == .baseline and
+                item.baseline_shift == 0) continue;
             const extents = if (glyph.isInlineObject()) extents: {
                 const object = inline_object.find(
                     objects,
@@ -50,7 +51,11 @@ pub fn apply(
                     .descent = metrics.descent,
                 };
             };
-            glyph.y_offset += offset(line, extents, item.vertical_align);
+            // `offset` and public baseline shift use physical y-down block
+            // coordinates. GlyphPosition.y_offset is HarfBuzz y-up and is
+            // subtracted by renderers, so convert the sign at this boundary.
+            glyph.y_offset -= offset(line, extents, item.vertical_align) +
+                item.baseline_shift;
         }
     }
 }
@@ -70,6 +75,15 @@ pub fn fontOffset(
         .{ .ascent = metrics.ascent, .descent = metrics.descent },
         alignment,
     );
+}
+
+pub fn fontPhysicalOffset(
+    line: paragraph_types.ParagraphLine,
+    run: run_types.CascadeRun,
+    alignment: paragraph_types.VerticalAlign,
+    baseline_shift: f32,
+) f32 {
+    return fontOffset(line, run, alignment) + baseline_shift;
 }
 
 const Extents = struct {

@@ -215,6 +215,9 @@ pub const TextStyle = struct {
     word_spacing: f32 = 0,
     line_height: ?f32 = null,
     vertical_align: paragraph_types.VerticalAlign = .baseline,
+    /// Physical block-axis offset in layout units. Horizontal text uses
+    /// y-down coordinates, so negative raises and positive lowers the run.
+    baseline_shift: f32 = 0,
     /// Optional span-local wrapping overrides. Null inherits paragraph policy.
     wrap_mode: ?paragraph_types.WrapMode = null,
     word_break: ?paragraph_types.WordBreak = null,

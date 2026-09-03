@@ -320,7 +320,7 @@ pub fn position(
                 const anchor_y = if (writing_mode.isVertical())
                     pen_inline
                 else
-                    line.y + line.baseline + glyph.y_offset - baseline;
+                    line.y + line.baseline - glyph.y_offset - baseline;
                 const placement = if (object.kind == .custom_out_of_flow)
                     findPlacement(placements, object.byte_index)
                 else
@@ -395,7 +395,7 @@ pub fn positionSingleRetained(
     const anchor_y = if (writing_mode.isVertical())
         location.pen_inline
     else
-        line.y + line.baseline +
+        line.y + line.baseline -
             buffer.glyphs.items[location.glyph_index].y_offset - baseline;
     buffer.inline_objects.appendAssumeCapacity(.{
         .id = object.id,
@@ -459,7 +459,7 @@ pub fn positionSingleResolvedRetained(
     const anchor_y = if (writing_mode.isVertical())
         location.pen_inline
     else
-        line.y + line.baseline +
+        line.y + line.baseline -
             buffer.glyphs.items[location.glyph_index].y_offset - baseline;
     buffer.inline_objects.appendAssumeCapacity(.{
         .id = object.id,
@@ -515,7 +515,7 @@ fn positionSingleAt(
     const anchor_y = if (writing_mode.isVertical())
         hint.pen_inline
     else
-        line.y + line.baseline +
+        line.y + line.baseline -
             buffer.glyphs.items[hint.glyph_index].y_offset - baseline;
     const geometry = if (placement) |resolved| resolved.geometry else Geometry{
         .x = anchor_x,
@@ -729,7 +729,7 @@ test "verified retained hint positions every single-object kind" {
         positionSingleRetainedAt(&buffer, object, hint, .horizontal_tb);
         try std.testing.expectEqual(@as(usize, 1), buffer.inline_objects.items.len);
         try std.testing.expectEqual(@as(f32, 11), buffer.inline_objects.items[0].anchor_x);
-        try std.testing.expectEqual(@as(f32, 21), buffer.inline_objects.items[0].anchor_y);
+        try std.testing.expectEqual(@as(f32, 17), buffer.inline_objects.items[0].anchor_y);
     }
     const custom: Object = .{
         .id = 4,

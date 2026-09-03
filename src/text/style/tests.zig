@@ -223,6 +223,7 @@ test "paragraph style converts to paragraph options" {
 test "vertical alignment belongs to inline text style" {
     const text_style = TextStyle{
         .vertical_align = .middle,
+        .baseline_shift = -3,
         .wrap_mode = .no_wrap,
         .word_break = .keep_all,
         .overflow_wrap = .anywhere,
@@ -231,6 +232,7 @@ test "vertical alignment belongs to inline text style" {
         paragraph_types.VerticalAlign.middle,
         text_style.vertical_align,
     );
+    try std.testing.expectEqual(@as(f32, -3), text_style.baseline_shift);
     try std.testing.expectEqual(
         paragraph_types.WrapMode.no_wrap,
         text_style.wrap_mode.?,

@@ -274,6 +274,12 @@ test "public facade uses domain names without legacy aliases" {
     );
     try std.testing.expect(@hasDecl(cangjie.text, "segmentation"));
     try std.testing.expect(@hasDecl(cangjie.text, "hyphenation"));
+    try std.testing.expect(@hasDecl(cangjie.text, "document"));
+    try std.testing.expect(@hasDecl(cangjie.text.document, "Document"));
+    try std.testing.expect(@hasDecl(cangjie.text.document.Document, "replaceRange"));
+    try std.testing.expect(@hasDecl(cangjie.text.document.Document, "chunks"));
+    try std.testing.expect(@hasDecl(cangjie.text.document.Document, "pointForByte"));
+    try std.testing.expect(@hasDecl(cangjie.text.document.Document, "byteForPoint"));
     try std.testing.expect(@hasDecl(cangjie.font.metadata, "variations"));
 
     // The redesign deliberately carries no compatibility layer. These checks

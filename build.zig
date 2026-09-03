@@ -2892,10 +2892,40 @@ pub fn build(b: *std.Build) void {
     const document_bench_tests = b.addTest(.{ .root_module = document_bench_mod });
     const document_bench_test_step = b.step("test-document-bench", "Run scaled chunked-document benchmark contract tests");
     document_bench_test_step.dependOn(&b.addRunArtifact(document_bench_tests).step);
+    const document_history_bench_mod = b.createModule(.{
+        .root_source_file = b.path("tools/document_history_bench.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{.{ .name = "cangjie", .module = mod }},
+    });
+    const document_history_bench_exe = b.addExecutable(.{
+        .name = "cangjie-document-history-bench",
+        .root_module = document_history_bench_mod,
+    });
+    const document_history_bench_cmd = b.addRunArtifact(document_history_bench_exe);
+    if (b.args) |args| document_history_bench_cmd.addArgs(args) else document_history_bench_cmd.addArgs(&.{
+        "--lines=1000000",
+        "--transactions=1024",
+        "--json=zig-out/document_history_bench.json",
+        "--max-record-ns-per-op=100000",
+        "--max-undo-ns-per-op=100000",
+        "--max-redo-ns-per-op=100000",
+        "--max-history-bytes=1048576",
+        "--max-total-owned-bytes=54525952",
+        "--max-rss-kib=196608",
+        "--expect-checksum=8576014949671626165",
+    });
+    const document_history_bench_step = b.step("document-history-bench", "Benchmark million-line incremental document undo and redo");
+    document_history_bench_step.dependOn(&document_history_bench_cmd.step);
+    const document_history_bench_tests = b.addTest(.{ .root_module = document_history_bench_mod });
+    const document_history_bench_test_step = b.step("test-document-history-bench", "Run scaled document history benchmark contract tests");
+    document_history_bench_test_step.dependOn(&b.addRunArtifact(document_history_bench_tests).step);
     const verify_document_step = b.step("verify-document", "Verify chunked UTF-8 document correctness and million-line scaling");
     verify_document_step.dependOn(document_test_step);
     verify_document_step.dependOn(document_bench_test_step);
     verify_document_step.dependOn(document_bench_step);
+    verify_document_step.dependOn(document_history_bench_test_step);
+    verify_document_step.dependOn(document_history_bench_step);
 
     const reflow_bench_exe = b.addExecutable(.{
         .name = "cangjie-reflow-bench",

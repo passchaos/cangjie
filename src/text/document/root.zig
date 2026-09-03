@@ -236,6 +236,21 @@ pub const Document = struct {
         return offset;
     }
 
+    /// Reserves enough backing storage for a sequence of replacements without
+    /// changing document bytes or revision. Transaction layers use this to
+    /// make a forward edit and its compensating rollback allocation-free.
+    pub fn reserveReplacementCapacity(self: *Document, replacements: []const []const u8) Error!void {
+        var addition_bytes: usize = 0;
+        var node_slots: usize = 0;
+        for (replacements) |replacement| {
+            if (!std.unicode.utf8ValidateSlice(replacement)) return error.InvalidUtf8;
+            addition_bytes = std.math.add(usize, addition_bytes, replacement.len) catch return error.Overflow;
+            node_slots = std.math.add(usize, node_slots, pieceCountForBytes(replacement) +| 2) catch return error.Overflow;
+        }
+        try self.additions.ensureTotalCapacity(self.allocator, std.math.add(usize, self.additions.items.len, addition_bytes) catch return error.Overflow);
+        try self.nodes.ensureTotalCapacity(self.allocator, std.math.add(usize, self.nodes.items.len, node_slots) catch return error.Overflow);
+    }
+
     /// Replace one UTF-8 byte range. The edit is atomic with respect to
     /// allocation failure: storage and node capacity are reserved before the
     /// treap is modified. Empty insertion is a no-op and returns null.

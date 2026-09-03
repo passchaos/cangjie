@@ -130,6 +130,20 @@ pub fn appendLine(
             .byte_len = drafts[end - 1].byteEnd() -
                 drafts[start].byte_start,
             .bounds = block_bounds,
+            .baseline = if (layout.writing_mode.isVertical())
+                line.x + line.baseline
+            else if (run) |font_run| baseline: {
+                const source_run = layout.runs[font_run.run_index];
+                const alignment, const baseline_shift = if (style_spans) |source_spans| style: {
+                    const source_style = styled_paragraph.spanForCluster(
+                        source_spans,
+                        drafts[start].byte_start,
+                    ) orelse return error.InvalidStyleSpans;
+                    break :style .{ source_style.vertical_align, source_style.baseline_shift };
+                } else .{ paragraph_types.VerticalAlign.baseline, @as(f32, 0) };
+                break :baseline line.y + line.baseline +
+                    vertical_align.fontPhysicalOffset(line, source_run, alignment, baseline_shift);
+            } else line.y + line.baseline,
             .grapheme_start = grapheme_start,
             .grapheme_len = end - start,
             .word_start_start = word_start_start,

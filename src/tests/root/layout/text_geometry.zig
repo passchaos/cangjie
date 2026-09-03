@@ -864,6 +864,7 @@ test "styled text geometry exposes baseline shifted font bounds and carets" {
 
     try std.testing.expectEqual(@as(usize, 2), geometry.spans.len);
     try std.testing.expectApproxEqAbs(@as(f32, -12), geometry.spans[0].bounds.y - geometry.spans[1].bounds.y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -12), geometry.spans[0].baseline - geometry.spans[1].baseline, 0.001);
     const raised = geometry.caret(.{ .byte_offset = 0 }) orelse return error.MissingRaisedCaret;
     const lowered = geometry.caret(.{ .byte_offset = 1 }) orelse return error.MissingLoweredCaret;
     try std.testing.expectApproxEqAbs(geometry.spans[0].bounds.y, raised.rect.y, 0.001);

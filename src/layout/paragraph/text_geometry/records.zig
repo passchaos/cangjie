@@ -154,6 +154,9 @@ pub const Span = struct {
     byte_start: usize,
     byte_len: usize,
     bounds: paragraph_types.TextRect,
+    /// Final physical block-axis baseline for this span. Horizontal layouts
+    /// expose a y coordinate after vertical alignment and baseline shift.
+    baseline: f32 = 0,
     grapheme_start: usize,
     grapheme_len: usize,
     /// Range in `TextGeometry.word_starts`.

@@ -677,3 +677,33 @@ test "piece tree randomized edits match contiguous reference" {
         try std.testing.expectEqual(range.start, try document.byteForPoint(point));
     }
 }
+
+test "piece tree replacement is semantically atomic on allocation failure" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        struct {
+            fn run(allocator: std.mem.Allocator) !void {
+                const source = "0123456789abcdef" ** 300;
+                var document = try Document.init(allocator, source);
+                defer document.deinit();
+                const revision = document.revision();
+                const result = document.replaceRange(1024, 1032, "expanded replacement across pieces\n");
+                if (result) |edit_optional| {
+                    const edit = edit_optional orelse return error.ExpectedCommittedEdit;
+                    try std.testing.expectEqual(revision + 1, document.revision());
+                    try std.testing.expectEqual(@as(usize, 8), edit.old_bytes);
+                    try std.testing.expectEqual(@as(usize, "expanded replacement across pieces\n".len), edit.new_bytes);
+                } else |err| {
+                    if (err != error.OutOfMemory) return err;
+                    try std.testing.expectEqual(revision, document.revision());
+                    try std.testing.expectEqual(source.len, document.byteLen());
+                    const actual = try document.materialize(std.testing.allocator);
+                    defer std.testing.allocator.free(actual);
+                    try std.testing.expectEqualStrings(source, actual);
+                    return error.OutOfMemory;
+                }
+            }
+        }.run,
+        .{},
+    );
+}

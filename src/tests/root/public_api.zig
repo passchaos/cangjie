@@ -276,6 +276,12 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(@hasDecl(cangjie.text, "hyphenation"));
     try std.testing.expect(!@hasDecl(cangjie.text, "document"));
     try std.testing.expect(@hasDecl(cangjie.font.metadata, "variations"));
+    try std.testing.expect(@hasDecl(cangjie.font.database, "Descriptor"));
+    try std.testing.expect(@hasDecl(cangjie.font.database.Database, "descriptorForFaceIndex"));
+    try std.testing.expect(@hasDecl(cangjie.font.database.Database, "resolveDescriptor"));
+    try std.testing.expect(@hasDecl(cangjie.font.database, "encodeDescriptor"));
+    try std.testing.expect(@hasDecl(cangjie.font.database, "decodeDescriptor"));
+    try std.testing.expectEqual(@as(usize, 644), cangjie.font.database.descriptor_wire_size);
 
     // The redesign deliberately carries no compatibility layer. These checks
     // make accidental reintroduction of redundant names a test failure instead

@@ -7,6 +7,7 @@ const font_container = @import("../container/root.zig");
 const paragraph_types = @import("../../layout/types/paragraph.zig");
 const font_fallback = @import("../../shaping/fallback/font/root.zig");
 const attributed_font_resolution = @import("../../text/attributed/font_resolution.zig");
+const descriptor_mod = @import("descriptor.zig");
 const manifest_mod = @import("manifest.zig");
 const matching = @import("matching.zig");
 const source_mod = @import("sources.zig");
@@ -17,6 +18,14 @@ pub const FontFaceInfo = types.FaceInfo;
 pub const FontQuery = types.Query;
 pub const FontManifestEntry = manifest_mod.Entry;
 pub const FontSource = source_mod.Source;
+pub const FontDescriptor = descriptor_mod.Descriptor;
+pub const FontDescriptorResolveMode = descriptor_mod.ResolveMode;
+pub const FontDescriptorResolveStatus = descriptor_mod.ResolveStatus;
+pub const FontDescriptorResolution = descriptor_mod.Resolution;
+pub const font_descriptor_wire_size = descriptor_mod.wire_size;
+pub const encodeFontDescriptor = descriptor_mod.encode;
+pub const decodeFontDescriptor = descriptor_mod.decode;
+pub const fontDescriptorSourceDigest = descriptor_mod.sourceDigest;
 
 pub const serializeManifest = manifest_mod.serializeManifest;
 pub const parseManifest = manifest_mod.parseManifest;
@@ -102,6 +111,7 @@ pub const FontDatabase = struct {
         bytes: []const u8,
         max_decoded_size: usize,
     ) !usize {
+        const source_digest = descriptor_mod.sourceDigest(bytes);
         const owned_bytes = try font_container.decodeFontContainerAlloc(
             self.allocator,
             bytes,
@@ -110,6 +120,7 @@ pub const FontDatabase = struct {
         return try self.addOwnedFontFaceBytes(
             owned_bytes,
             manifest_mod.bytesHash(bytes),
+            source_digest,
             bytes.len,
             0,
         );
@@ -135,6 +146,7 @@ pub const FontDatabase = struct {
         defer self.allocator.free(decoded);
         const count = try Font.faceCount(decoded);
         const source_hash = manifest_mod.bytesHash(bytes);
+        const source_digest = descriptor_mod.sourceDigest(bytes);
         var added: usize = 0;
         errdefer {
             while (added > 0) : (added -= 1) {
@@ -146,6 +158,7 @@ pub const FontDatabase = struct {
             _ = try self.addFontFaceBytes(
                 decoded,
                 source_hash,
+                source_digest,
                 bytes.len,
                 face_index,
             );
@@ -253,6 +266,7 @@ pub const FontDatabase = struct {
         self: *FontDatabase,
         bytes: []const u8,
         source_hash: u64,
+        source_digest: descriptor_mod.Digest,
         source_size: usize,
         face_index: usize,
     ) !usize {
@@ -260,6 +274,7 @@ pub const FontDatabase = struct {
         return try self.addOwnedFontFaceBytes(
             owned_bytes,
             source_hash,
+            source_digest,
             source_size,
             face_index,
         );
@@ -269,6 +284,7 @@ pub const FontDatabase = struct {
         self: *FontDatabase,
         owned_bytes: []u8,
         source_hash: u64,
+        source_digest: descriptor_mod.Digest,
         source_size: usize,
         face_index: usize,
     ) !usize {
@@ -289,6 +305,7 @@ pub const FontDatabase = struct {
         owned.* = .{
             .bytes = owned_bytes,
             .source_hash = source_hash,
+            .source_digest = source_digest,
             .source_size = source_size,
             .font = font,
             .content_hash = content_hash,
@@ -510,6 +527,61 @@ pub const FontDatabase = struct {
         manifest_mod.free(allocator, entries);
     }
 
+    pub fn descriptorForFaceIndex(self: *const FontDatabase, index: usize) !FontDescriptor {
+        if (index >= self.faces.items.len) return error.InvalidFaceIndex;
+        const face = self.faces.items[index];
+        const provenance = self.provenanceForFont(face_mod.backend.font(face.face));
+        return try FontDescriptor.init(.{
+            .family = face.family,
+            .subfamily = face.subfamily,
+            .postscript_name = face.postscript_name,
+            .weight = face.weight,
+            .stretch = face.stretch,
+            .style = face.style,
+            .source_digest = if (provenance) |owned| owned.source_digest else null,
+            .source_size = if (provenance) |owned| owned.source_size else 0,
+            .face_index = if (provenance) |owned| std.math.cast(u32, owned.face_index) orelse return error.InvalidFaceIndex else 0,
+        });
+    }
+
+    pub fn resolveDescriptor(self: *const FontDatabase, descriptor: FontDescriptor, mode: FontDescriptorResolveMode) FontDescriptorResolution {
+        if (!descriptor.valid()) return .{ .status = .invalid_descriptor };
+        if (descriptor.has_content_identity) {
+            var matched: ?usize = null;
+            for (self.faces.items, 0..) |face, index| {
+                const owned = self.provenanceForFont(face_mod.backend.font(face.face)) orelse continue;
+                if (!descriptor_mod.exactContentMatch(descriptor, owned.source_digest, owned.source_size, @intCast(owned.face_index)) or
+                    !descriptor_mod.namesAndTraitsMatch(descriptor, face.family, face.subfamily, face.postscript_name, face.weight, face.stretch, face.style)) continue;
+                if (matched != null) return .{ .status = .ambiguous };
+                matched = index;
+            }
+            if (matched) |index| return .{ .status = .exact_content, .face_index = index };
+            if (mode == .exact) return .{ .status = .content_mismatch };
+        } else if (mode == .exact) return .{ .status = .content_unavailable };
+
+        if (descriptor.postscript_name.len != 0) {
+            const result = self.resolvePortableDescriptor(descriptor, true);
+            if (result.status != .not_found) return result;
+        }
+        return self.resolvePortableDescriptor(descriptor, false);
+    }
+
+    fn resolvePortableDescriptor(self: *const FontDatabase, descriptor: FontDescriptor, postscript: bool) FontDescriptorResolution {
+        var matched: ?usize = null;
+        for (self.faces.items, 0..) |face, index| {
+            const names_match = if (postscript)
+                face.postscript_name.len != 0 and std.ascii.eqlIgnoreCase(face.postscript_name, descriptor.postscript_name.slice())
+            else
+                std.ascii.eqlIgnoreCase(face.family, descriptor.family.slice()) and
+                    std.ascii.eqlIgnoreCase(face.subfamily, descriptor.subfamily.slice());
+            if (!names_match or face.weight != descriptor.weight or face.stretch != descriptor.stretch or face.style != descriptor.style) continue;
+            if (matched != null) return .{ .status = .ambiguous };
+            matched = index;
+        }
+        if (matched) |index| return .{ .status = if (postscript) .postscript else .family_style, .face_index = index };
+        return .{ .status = .not_found };
+    }
+
     fn findFallbackFace(self: *const FontDatabase, codepoint: u21, query: FontQuery) ?*const FontFaceInfo {
         var best: ?usize = null;
         var best_score: u32 = std.math.maxInt(u32);
@@ -567,6 +639,11 @@ pub const FontDatabase = struct {
         return 0;
     }
 
+    fn provenanceForFont(self: *const FontDatabase, font: *const Font) ?*const OwnedFont {
+        for (self.owned_fonts.items) |owned| if (&owned.font == font) return owned;
+        return null;
+    }
+
     fn contentSizeForFont(self: *const FontDatabase, font: *const Font) u64 {
         for (self.owned_fonts.items) |owned| {
             if (&owned.font == font) return owned.source_size;
@@ -578,6 +655,7 @@ pub const FontDatabase = struct {
 const OwnedFont = struct {
     bytes: []u8,
     source_hash: u64,
+    source_digest: descriptor_mod.Digest,
     source_size: u64,
     font: Font,
     content_hash: u64,

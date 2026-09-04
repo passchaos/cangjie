@@ -1241,6 +1241,17 @@ The former mutable document, span-transform, and undo/redo modules were moved
 to Zui's `src/ui/text/document/` on 2026-09-05 so this boundary is enforced by
 the public API and build graph rather than documentation alone.
 
+Cross-session font identity remains reusable text infrastructure.
+`cangjie.font.database.Descriptor` is a fixed-capacity, pointer-free value with
+family/subfamily/PostScript names, CSS-like weight/stretch/style, optional
+SHA-256 source identity, source size, and collection face index. Database
+resolution supports strict exact-content matching and an explicit portable
+mode; portable PostScript or family/style matches succeed only when unique, so
+document restoration fails closed instead of silently choosing an ambiguous
+face. `encodeDescriptor`/`decodeDescriptor` provide a versioned 644-byte wire
+contract. `zig build font-descriptor-bench -Doptimize=ReleaseFast` gates exact,
+portable, and codec performance over 4096 candidates.
+
 End-to-end paragraph construction now has an explicit cross-library benchmark
 boundary. `zig build paragraph-bench -Doptimize=ReleaseFast -- FONT TEXT N S`
 reuses one parsed face and shaping engine while measuring complete shaping,

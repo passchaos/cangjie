@@ -19,6 +19,7 @@ const userFontSourcesForOs = support.userFontSourcesForOs;
 const writeManifestFile = support.writeManifestFile;
 const Font = support.Font;
 const FontCascade = support.FontCascade;
+const FontDescriptor = support.FontDescriptor;
 const testing = support.testing;
 
 test "matches font database faces by family weight and style" {
@@ -344,6 +345,66 @@ test "font database uses PostScript names as stable duplicate ids" {
     const matched = database.match(.{ .family = "", .postscript_name = "sharedps-regular" }).?;
     try std.testing.expectEqualStrings("PS Family A", matched.family);
     try std.testing.expect(database.match(.{ .family = "", .postscript_name = "MissingPS-Regular" }) == null);
+}
+
+test "font database resolves stable descriptors exactly and portably" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const regular_bytes = try test_font.buildNamedTtfWithPostScript(allocator, "Stable Sans", "Regular", "Stable Sans Regular", "StableSans-Regular");
+    defer allocator.free(regular_bytes);
+    const alternate_bytes = try test_font.buildNamedTtfWithPostScript(allocator, "Portable Sans", "Regular", "Portable Sans Regular", "PortableSans-Regular");
+    defer allocator.free(alternate_bytes);
+
+    var database = FontDatabase.init(allocator);
+    defer database.deinit();
+    try std.testing.expectEqual(@as(usize, 0), try database.addFontBytes(regular_bytes));
+    try std.testing.expectEqual(@as(usize, 1), try database.addFontBytes(alternate_bytes));
+
+    const descriptor = try database.descriptorForFaceIndex(0);
+    try std.testing.expect(descriptor.valid());
+    try std.testing.expect(descriptor.has_content_identity);
+    try std.testing.expectEqualStrings("StableSans-Regular", descriptor.postscript_name.slice());
+    const exact = database.resolveDescriptor(descriptor, .exact);
+    try std.testing.expectEqual(support.FontDescriptorResolveStatus.exact_content, exact.status);
+    try std.testing.expectEqual(@as(?usize, 0), exact.face_index);
+
+    const portable = try FontDescriptor.init(.{
+        .family = "ignored",
+        .subfamily = "Regular",
+        .postscript_name = "portablesans-regular",
+    });
+    try std.testing.expectEqual(support.FontDescriptorResolveStatus.content_unavailable, database.resolveDescriptor(portable, .exact).status);
+    const portable_result = database.resolveDescriptor(portable, .portable);
+    try std.testing.expectEqual(support.FontDescriptorResolveStatus.postscript, portable_result.status);
+    try std.testing.expectEqual(@as(?usize, 1), portable_result.face_index);
+
+    var mismatched = descriptor;
+    mismatched.source_digest[0] ^= 0xff;
+    try std.testing.expectEqual(support.FontDescriptorResolveStatus.content_mismatch, database.resolveDescriptor(mismatched, .exact).status);
+    try std.testing.expectEqual(support.FontDescriptorResolveStatus.postscript, database.resolveDescriptor(mismatched, .portable).status);
+}
+
+test "portable font descriptor resolution fails closed on ambiguity" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+    const first_bytes = try test_font.buildNamedTtfWithPostScript(allocator, "Ambiguous Sans", "Regular", "Ambiguous Sans One", "AmbiguousSans-One");
+    defer allocator.free(first_bytes);
+    const second_bytes = try test_font.buildNamedTtfWithPostScript(allocator, "Ambiguous Sans", "Regular", "Ambiguous Sans Two", "AmbiguousSans-Two");
+    defer allocator.free(second_bytes);
+
+    var first = try Font.parse(allocator, first_bytes);
+    defer first.deinit();
+    var second = try Font.parse(allocator, second_bytes);
+    defer second.deinit();
+    var database = FontDatabase.init(allocator);
+    defer database.deinit();
+    try std.testing.expectEqual(@as(usize, 0), try database.addFont(&first));
+    // Full names differ and PostScript names are absent, so both faces remain
+    // legitimate candidates for the portable family/style descriptor.
+    try std.testing.expectEqual(@as(usize, 1), try database.addFont(&second));
+    const descriptor = try FontDescriptor.init(.{ .family = "Ambiguous Sans", .subfamily = "Regular" });
+    try std.testing.expectEqual(support.FontDescriptorResolveStatus.ambiguous, database.resolveDescriptor(descriptor, .portable).status);
+    try std.testing.expectEqual(support.FontDescriptorResolveStatus.content_unavailable, database.resolveDescriptor(descriptor, .exact).status);
 }
 
 test "font database ignores invalid PostScript names" {

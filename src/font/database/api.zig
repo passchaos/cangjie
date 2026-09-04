@@ -23,6 +23,17 @@ pub const ManifestEntry = impl.FontManifestEntry;
 pub const Query = impl.FontQuery;
 pub const Source = impl.FontSource;
 pub const Style = impl.FontStyle;
+pub const Descriptor = impl.FontDescriptor;
+pub const DescriptorResolveMode = impl.FontDescriptorResolveMode;
+pub const DescriptorResolveStatus = impl.FontDescriptorResolveStatus;
+pub const DescriptorResolution = impl.FontDescriptorResolution;
+pub const DescriptorCandidate = @import("descriptor.zig").Candidate;
+pub const DescriptorDigest = @import("descriptor.zig").Digest;
+pub const descriptor_wire_size = impl.font_descriptor_wire_size;
+pub const encodeDescriptor = impl.encodeFontDescriptor;
+pub const decodeDescriptor = impl.decodeFontDescriptor;
+pub const descriptorSourceDigest = impl.fontDescriptorSourceDigest;
+pub const resolveDescriptorCandidates = @import("descriptor.zig").resolveCandidates;
 
 pub const Database = struct {
     /// Source-visible implementation storage; use the focused methods below.
@@ -244,6 +255,14 @@ pub const Database = struct {
         entries: []ManifestEntry,
     ) void {
         impl.FontDatabase.freeManifest(allocator, entries);
+    }
+
+    pub fn descriptorForFaceIndex(self: *const Database, index: usize) !Descriptor {
+        return implConst(self).descriptorForFaceIndex(index);
+    }
+
+    pub fn resolveDescriptor(self: *const Database, descriptor: Descriptor, mode: DescriptorResolveMode) DescriptorResolution {
+        return implConst(self).resolveDescriptor(descriptor, mode);
     }
 };
 

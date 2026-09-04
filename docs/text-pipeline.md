@@ -1237,6 +1237,9 @@ paragraph, caret, selection, and hit-testing APIs with their own document,
 history, IME, clipboard, and viewport state. This keeps the font/text stack
 independent of any particular widget framework and avoids a second editor model
 beside the application's native one.
+The former mutable document, span-transform, and undo/redo modules were moved
+to Zui's `src/ui/text/document/` on 2026-09-05 so this boundary is enforced by
+the public API and build graph rather than documentation alone.
 
 End-to-end paragraph construction now has an explicit cross-library benchmark
 boundary. `zig build paragraph-bench -Doptimize=ReleaseFast -- FONT TEXT N S`

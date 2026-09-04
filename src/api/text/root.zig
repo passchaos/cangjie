@@ -1,5 +1,4 @@
-//! Unicode analysis, OpenType properties, portable text records, and mutable
-//! chunked UTF-8 document storage.
+//! Unicode analysis, OpenType properties, and portable text records.
 //!
 //! Each subnamespace represents one coherent contract. This avoids making
 //! unrelated bidi classes, style records, boundary iterators, and OpenType tags
@@ -13,5 +12,4 @@ pub const vertical = @import("vertical.zig");
 pub const opentype = @import("opentype/root.zig");
 pub const style = @import("style/root.zig");
 pub const attributed = @import("attributed/root.zig");
-pub const document = @import("document/root.zig");
 pub const hyphenation = @import("../../text/hyphenation/root.zig");

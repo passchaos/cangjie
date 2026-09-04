@@ -274,19 +274,7 @@ test "public facade uses domain names without legacy aliases" {
     );
     try std.testing.expect(@hasDecl(cangjie.text, "segmentation"));
     try std.testing.expect(@hasDecl(cangjie.text, "hyphenation"));
-    try std.testing.expect(@hasDecl(cangjie.text, "document"));
-    try std.testing.expect(@hasDecl(cangjie.text.document, "Document"));
-    try std.testing.expect(@hasDecl(cangjie.text.document.Document, "replaceRange"));
-    try std.testing.expect(@hasDecl(cangjie.text.document.Document, "chunks"));
-    try std.testing.expect(@hasDecl(cangjie.text.document.Document, "pointForByte"));
-    try std.testing.expect(@hasDecl(cangjie.text.document.Document, "byteForPoint"));
-    try std.testing.expect(@hasDecl(cangjie.text.document.Document, "reserveReplacementCapacity"));
-    try std.testing.expect(@hasDecl(cangjie.text.document, "History"));
-    try std.testing.expect(@hasDecl(cangjie.text.document.History, "replaceRange"));
-    try std.testing.expect(@hasDecl(cangjie.text.document.History, "attach"));
-    try std.testing.expect(@hasDecl(cangjie.text.document.History, "undo"));
-    try std.testing.expect(@hasDecl(cangjie.text.document.History, "redo"));
-    try std.testing.expect(@hasDecl(cangjie.text.document.History, "updateLastAfterState"));
+    try std.testing.expect(!@hasDecl(cangjie.text, "document"));
     try std.testing.expect(@hasDecl(cangjie.font.metadata, "variations"));
 
     // The redesign deliberately carries no compatibility layer. These checks

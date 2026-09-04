@@ -119,7 +119,7 @@ pub const History = struct {
     undo_stack: std.ArrayList(Transaction) = .empty,
     redo_stack: std.ArrayList(Transaction) = .empty,
     payload_bytes: usize = 0,
-    document_identity: usize = 0,
+    document_identity: document_mod.Identity = 0,
     expected_revision: u64 = 0,
     history_revision: u64 = 1,
     recorded_count: u64 = 0,
@@ -164,7 +164,7 @@ pub const History = struct {
     }
 
     pub fn ownsDocument(self: *const History, document: *const Document) bool {
-        return self.document_identity == 0 or self.document_identity == @intFromPtr(document);
+        return self.document_identity == 0 or self.document_identity == document.identity();
     }
 
     pub fn attach(self: *History, document: *const Document) Error!void {
@@ -218,7 +218,7 @@ pub const History = struct {
         const next_len = std.math.add(usize, document.byteLen() -| old_len, replacement.len) catch return error.Overflow;
         if (!selectionValidAfter(options.after_selection, document, start, end, replacement, next_len)) return error.InvalidTransaction;
         if (start == end and replacement.len == 0) return null;
-        if (self.document_identity != 0 and self.document_identity != @intFromPtr(document)) return error.StaleDocument;
+        if (self.document_identity != 0 and self.document_identity != document.identity()) return error.StaleDocument;
         const starts_fresh_branch = self.expected_revision != 0 and self.expected_revision != document.revision();
         const payload = std.math.add(usize, old_len, replacement.len) catch return error.Overflow;
         if (self.max_entries == 0 or payload > self.max_payload_bytes) return error.HistoryCapacityExceeded;
@@ -371,12 +371,12 @@ pub const History = struct {
     }
 
     fn bind(self: *History, document: *const Document) void {
-        self.document_identity = @intFromPtr(document);
+        self.document_identity = document.identity();
         self.expected_revision = document.revision();
     }
 
     fn currentFor(self: *const History, document: *const Document) bool {
-        return self.document_identity == @intFromPtr(document) and self.expected_revision == document.revision();
+        return self.document_identity == document.identity() and self.expected_revision == document.revision();
     }
 
     fn clearStack(self: *History, stack: *std.ArrayList(Transaction)) void {
@@ -701,6 +701,25 @@ test "document history attachment rejects a different document" {
     try history.attach(&first);
     try std.testing.expectError(error.StaleDocument, history.attach(&second));
     try std.testing.expectError(error.StaleDocument, history.replaceRange(&second, 0, 0, "x", .{
+        .before_selection = .{},
+        .after_selection = .{ .anchor = 1, .cursor = 1 },
+    }));
+}
+
+test "document history rejects a new document at the same address" {
+    var document = try Document.init(std.testing.allocator, "first");
+    var history = History.init(std.testing.allocator, 8, 1024);
+    defer history.deinit();
+    _ = (try history.replaceRange(&document, 0, 1, "F", .{
+        .before_selection = .{},
+        .after_selection = .{ .anchor = 1, .cursor = 1 },
+    })).?;
+    document.deinit();
+    document = try Document.init(std.testing.allocator, "other");
+    defer document.deinit();
+    try std.testing.expect(!history.canUndo(&document));
+    try std.testing.expectError(error.StaleDocument, history.attach(&document));
+    try std.testing.expectError(error.StaleDocument, history.replaceRange(&document, 0, 1, "O", .{
         .before_selection = .{},
         .after_selection = .{ .anchor = 1, .cursor = 1 },
     }));

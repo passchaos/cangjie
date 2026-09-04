@@ -21,6 +21,7 @@ pub const History = history.History;
 pub const HistoryError = history.Error;
 pub const HistorySelection = history.Selection;
 pub const HistoryRecordOptions = history.RecordOptions;
+pub const HistoryCommitFn = history.CommitFn;
 pub const HistoryReplay = history.Replay;
 pub const HistoryReplaceResult = history.ReplaceResult;
 pub const HistoryActionName = history.ActionName;

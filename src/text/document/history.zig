@@ -18,7 +18,10 @@ pub const Error = DocumentError || error{
     StaleDocument,
     InvalidTransaction,
     HistoryCapacityExceeded,
+    CommitRejected,
 };
+
+pub const CommitFn = *const fn (context: *anyopaque) bool;
 
 pub const Selection = struct {
     anchor: usize = 0,
@@ -75,6 +78,12 @@ pub const RecordOptions = struct {
     after_scroll_y: f64 = 0.0,
     action_name: []const u8 = "Text Edit",
     merge_adjacent: bool = false,
+    /// Optional non-reentrant external commit gate invoked after all
+    /// history/document capacity is reserved and immediately before the
+    /// document mutation. The callback must not mutate this History or
+    /// Document. A rejected gate leaves both history stacks unchanged.
+    commit_context: ?*anyopaque = null,
+    commit_fn: ?CommitFn = null,
 };
 
 pub const Replay = struct {
@@ -210,7 +219,7 @@ pub const History = struct {
         if (!selectionValidAfter(options.after_selection, document, start, end, replacement, next_len)) return error.InvalidTransaction;
         if (start == end and replacement.len == 0) return null;
         if (self.document_identity != 0 and self.document_identity != @intFromPtr(document)) return error.StaleDocument;
-        if (self.expected_revision != 0 and self.expected_revision != document.revision()) self.clear();
+        const starts_fresh_branch = self.expected_revision != 0 and self.expected_revision != document.revision();
         const payload = std.math.add(usize, old_len, replacement.len) catch return error.Overflow;
         if (self.max_entries == 0 or payload > self.max_payload_bytes) return error.HistoryCapacityExceeded;
 
@@ -225,7 +234,7 @@ pub const History = struct {
         errdefer self.allocator.free(new_copy);
         try self.undo_stack.ensureUnusedCapacity(self.allocator, 1);
         const action_name = ActionName.init(options.action_name);
-        const merge = options.merge_adjacent and self.redo_stack.items.len == 0 and self.undo_stack.items.len != 0 and
+        const merge = !starts_fresh_branch and options.merge_adjacent and self.redo_stack.items.len == 0 and self.undo_stack.items.len != 0 and
             old_len == 0 and self.undo_stack.items[self.undo_stack.items.len - 1].old_bytes.len == 0 and
             start == self.undo_stack.items[self.undo_stack.items.len - 1].start + self.undo_stack.items[self.undo_stack.items.len - 1].new_bytes.len and
             std.meta.eql(self.undo_stack.items[self.undo_stack.items.len - 1].after_selection, options.before_selection) and
@@ -241,6 +250,11 @@ pub const History = struct {
             }
         }
         errdefer if (merged) |bytes| self.allocator.free(bytes);
+        try document.reserveReplacementCapacity(&.{replacement});
+        if (options.commit_fn) |commit| {
+            const context = options.commit_context orelse return error.InvalidTransaction;
+            if (!commit(context)) return error.CommitRejected;
+        } else if (options.commit_context != null) return error.InvalidTransaction;
 
         const edit = (try document.replaceRange(start, end, replacement)) orelse {
             self.allocator.free(old_copy);
@@ -248,6 +262,7 @@ pub const History = struct {
             if (merged) |bytes| self.allocator.free(bytes);
             return null;
         };
+        if (starts_fresh_branch) self.clear();
 
         if (merged) |bytes| {
             var entry = &self.undo_stack.items[self.undo_stack.items.len - 1];
@@ -493,6 +508,77 @@ test "document history allocation failures leave document and stacks unchanged" 
         }.run,
         .{},
     );
+}
+
+test "document history commit gate runs after reservation and rejects atomically" {
+    const Gate = struct {
+        calls: usize = 0,
+        accept: bool = false,
+
+        fn commit(context: *anyopaque) bool {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.calls += 1;
+            return self.accept;
+        }
+    };
+    var document = try Document.init(std.testing.allocator, "alpha\nbeta");
+    defer document.deinit();
+    var history = History.init(std.testing.allocator, 8, 1024);
+    defer history.deinit();
+    const end = document.byteLen();
+    _ = (try history.replaceRange(&document, end, end, "!", .{
+        .before_selection = .{ .anchor = end, .cursor = end },
+        .after_selection = .{ .anchor = end + 1, .cursor = end + 1 },
+        .action_name = "Prior",
+    })).?;
+    _ = (try history.undo(&document)).?;
+    var gate = Gate{};
+    const revision = document.revision();
+    const history_revision = history.revision();
+    try std.testing.expectError(error.CommitRejected, history.replaceRange(&document, 0, 5, "expanded", .{
+        .before_selection = .{ .anchor = 0, .cursor = 5 },
+        .after_selection = .{ .anchor = 8, .cursor = 8 },
+        .commit_context = &gate,
+        .commit_fn = Gate.commit,
+    }));
+    try std.testing.expectEqual(@as(usize, 1), gate.calls);
+    try std.testing.expectEqual(revision, document.revision());
+    try std.testing.expectEqual(@as(usize, 0), history.diagnostics().undo_entries);
+    try std.testing.expectEqual(@as(usize, 1), history.diagnostics().redo_entries);
+    try std.testing.expectEqual(history_revision, history.revision());
+    const bytes = try document.materialize(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+    try std.testing.expectEqualStrings("alpha\nbeta", bytes);
+}
+
+test "document history rejected gate preserves stale chronology" {
+    const Gate = struct {
+        fn reject(_: *anyopaque) bool {
+            return false;
+        }
+    };
+    var document = try Document.init(std.testing.allocator, "abc");
+    defer document.deinit();
+    var history = History.init(std.testing.allocator, 8, 1024);
+    defer history.deinit();
+    _ = (try history.replaceRange(&document, 1, 2, "X", .{
+        .before_selection = .{ .anchor = 1, .cursor = 2 },
+        .after_selection = .{ .anchor = 2, .cursor = 2 },
+    })).?;
+    _ = try document.replaceRange(0, 0, "!");
+    var token: u8 = 0;
+    const revision = history.revision();
+    try std.testing.expectError(error.CommitRejected, history.replaceRange(&document, document.byteLen(), document.byteLen(), "?", .{
+        .before_selection = .{ .anchor = document.byteLen(), .cursor = document.byteLen() },
+        .after_selection = .{ .anchor = document.byteLen() + 1, .cursor = document.byteLen() + 1 },
+        .commit_context = &token,
+        .commit_fn = Gate.reject,
+    }));
+    try std.testing.expectEqual(revision, history.revision());
+    try std.testing.expectEqual(@as(usize, 1), history.diagnostics().undo_entries);
+    const bytes = try document.materialize(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+    try std.testing.expectEqualStrings("!aXc", bytes);
 }
 
 test "document history stale replay preserves document and stack" {

@@ -7,8 +7,33 @@
 //! this reusable text-core boundary.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const max_piece_bytes: usize = 4096;
+pub const Identity = u64;
+
+const cooperative_target = builtin.single_threaded or builtin.target.cpu.arch.isWasm();
+const IdentityCounter = if (cooperative_target) struct {
+    raw: Identity,
+
+    fn init(value: Identity) @This() {
+        return .{ .raw = value };
+    }
+
+    fn fetchAdd(self: *@This(), value: Identity, comptime _: std.builtin.AtomicOrder) Identity {
+        const previous = self.raw;
+        self.raw +%= value;
+        return previous;
+    }
+} else std.atomic.Value(Identity);
+
+var next_document_identity = IdentityCounter.init(1);
+
+fn allocateIdentity() Identity {
+    const value = next_document_identity.fetchAdd(1, .monotonic);
+    if (value == 0) @panic("cangjie document identity space exhausted");
+    return value;
+}
 
 pub const Error = std.mem.Allocator.Error || error{
     InvalidUtf8,
@@ -123,6 +148,7 @@ pub const ChunkIterator = struct {
 
 pub const Document = struct {
     allocator: std.mem.Allocator,
+    instance_identity: Identity,
     original: []u8 = &.{},
     additions: std.ArrayList(u8) = .empty,
     nodes: std.ArrayList(Node) = .empty,
@@ -135,7 +161,7 @@ pub const Document = struct {
 
     pub fn init(allocator: std.mem.Allocator, text: []const u8) Error!Document {
         if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
-        var self = Document{ .allocator = allocator };
+        var self = Document{ .allocator = allocator, .instance_identity = allocateIdentity() };
         errdefer self.deinit();
         self.original = try allocator.dupe(u8, text);
         const count = pieceCountForBytes(text);
@@ -153,6 +179,13 @@ pub const Document = struct {
 
     pub fn byteLen(self: *const Document) usize {
         return self.nodeSummary(self.root).bytes;
+    }
+
+    /// Process-unique identity for this logical document instance. It remains
+    /// stable across edits and compaction, and changes when storage at the same
+    /// address is deinitialized and initialized as a new document.
+    pub fn identity(self: *const Document) Identity {
+        return self.instance_identity;
     }
 
     pub fn newlineCount(self: *const Document) usize {
@@ -299,6 +332,7 @@ pub const Document = struct {
         const bytes = try self.materialize(self.allocator);
         defer self.allocator.free(bytes);
         var replacement = try Document.init(self.allocator, bytes);
+        replacement.instance_identity = self.instance_identity;
         replacement.source_revision = self.source_revision +% 1;
         if (replacement.source_revision == 0) replacement.source_revision = 1;
         std.mem.swap(Document, self, &replacement);
@@ -634,11 +668,22 @@ test "piece tree chunk iterator and compaction preserve bytes" {
 
     const before = try document.materialize(std.testing.allocator);
     defer std.testing.allocator.free(before);
+    const identity = document.identity();
     try document.compact();
     const after = try document.materialize(std.testing.allocator);
     defer std.testing.allocator.free(after);
     try std.testing.expectEqualStrings(before, after);
+    try std.testing.expectEqual(identity, document.identity());
     try std.testing.expectEqual(@as(usize, 0), document.diagnostics().addition_bytes);
+}
+
+test "piece tree identities distinguish document lifetimes at one address" {
+    var document = try Document.init(std.testing.allocator, "first");
+    const first = document.identity();
+    document.deinit();
+    document = try Document.init(std.testing.allocator, "other");
+    defer document.deinit();
+    try std.testing.expect(first != document.identity());
 }
 
 test "piece tree rejects invalid ranges without mutation" {

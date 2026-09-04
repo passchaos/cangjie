@@ -9,6 +9,7 @@ const implementation = @import("../../../text/document/root.zig");
 const history = @import("../../../text/document/history.zig");
 
 pub const Document = implementation.Document;
+pub const Identity = implementation.Identity;
 pub const ByteRange = implementation.ByteRange;
 pub const Point = implementation.Point;
 pub const EditSummary = implementation.EditSummary;

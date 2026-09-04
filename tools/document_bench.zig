@@ -27,6 +27,8 @@ const Options = struct {
     max_query_ns_per_op: u64 = 10_000,
     max_chunk_scan_ns: u64 = 500_000,
     max_materialize_ns: u64 = 250_000_000,
+    max_snapshot_ns: u64 = 20_000_000,
+    max_snapshot_owned_bytes: usize = 2 * 1024 * 1024,
     max_owned_bytes: usize = 48 * 1024 * 1024,
     max_rss_kib: usize = 192 * 1024,
     max_tree_depth: usize = 64,
@@ -59,6 +61,11 @@ const Report = struct {
     chunk_scan_ns: u64,
     chunk_scan_bytes: usize,
     materialize_ns: u64,
+    snapshot_ns: u64,
+    snapshot_pieces: usize,
+    snapshot_owned_bytes: usize,
+    snapshot_shared_original_bytes: usize,
+    snapshot_shared_addition_bytes: usize,
     initial_pieces: usize,
     pieces: usize,
     node_slots: usize,
@@ -181,6 +188,15 @@ fn run(allocator: std.mem.Allocator, io: std.Io, options: Options) !Report {
     for (bytes) |byte| mix(&checksum, byte);
     const materialize_ns = elapsedNs(materialize_started, io);
 
+    const snapshot_started = std.Io.Clock.awake.now(io);
+    var snapshot = try document.snapshot(allocator);
+    defer snapshot.deinit();
+    const snapshot_ns = elapsedNs(snapshot_started, io);
+    const snapshot_diagnostics = snapshot.diagnostics();
+    const snapshot_probe_line = options.lines / 3;
+    const snapshot_probe_range = try snapshot.lineRange(snapshot_probe_line);
+    const snapshot_probe_point = try snapshot.pointForByte(snapshot_probe_range.start);
+
     const diagnostics = document.diagnostics();
     mix(&checksum, diagnostics.pieces);
     mix(&checksum, diagnostics.node_slots);
@@ -196,7 +212,13 @@ fn run(allocator: std.mem.Allocator, io: std.Io, options: Options) !Report {
         deleted.old_bytes == inserted_text.len and deleted.new_bytes == 0 and deleted.old_newlines == 1 and
         delete_summary.revision == deleted.revision and chunk_scan_bytes == window_end - window_start and
         document.revision() == 3 + churn_edit_operations and std.mem.eql(u8, bytes, contiguous.items) and
-        diagnostics.pieces >= initial_pieces and diagnostics.pieces <= initial_pieces + 8;
+        diagnostics.pieces >= initial_pieces and diagnostics.pieces <= initial_pieces + 8 and
+        snapshot.identity() == document.identity() and snapshot.revision() == document.revision() and
+        snapshot.byteLen() == document.byteLen() and snapshot.lineCount() == document.lineCount() and
+        snapshot.pieceCount() == diagnostics.pieces and snapshot_probe_point.line == snapshot_probe_line and
+        snapshot_probe_point.column == 0 and snapshot_diagnostics.shared_original_bytes == diagnostics.original_bytes and
+        snapshot_diagnostics.shared_addition_bytes == diagnostics.addition_bytes and
+        snapshot_diagnostics.owned_bytes == snapshot_diagnostics.metadata_bytes;
     const performance = source_build_ns <= options.max_source_build_ns and init_ns <= options.max_init_ns and
         grow_insert_ns <= options.max_grow_ns and shrink_replace_ns <= options.max_shrink_ns and
         inserted_delete_ns <= options.max_delete_ns and
@@ -205,9 +227,10 @@ fn run(allocator: std.mem.Allocator, io: std.Io, options: Options) !Report {
         ratio(contiguous_inserted_delete_ns, inserted_delete_ns) >= options.min_contiguous_speedup and
         churn_edit_ns <= options.max_churn_ns_per_edit * churn_edit_operations and
         query_ns <= options.max_query_ns_per_op * options.queries and chunk_scan_ns <= options.max_chunk_scan_ns and
-        materialize_ns <= options.max_materialize_ns;
+        materialize_ns <= options.max_materialize_ns and snapshot_ns <= options.max_snapshot_ns;
     const peak_rss_kib = processPeakRssKib();
-    const memory = diagnostics.owned_bytes <= options.max_owned_bytes and diagnostics.tree_depth <= options.max_tree_depth and
+    const memory = diagnostics.owned_bytes <= options.max_owned_bytes and
+        snapshot_diagnostics.owned_bytes <= options.max_snapshot_owned_bytes and diagnostics.tree_depth <= options.max_tree_depth and
         (peak_rss_kib == 0 or peak_rss_kib <= options.max_rss_kib);
     const signature = options.expect_checksum == null or options.expect_checksum.? == checksum;
 
@@ -237,6 +260,11 @@ fn run(allocator: std.mem.Allocator, io: std.Io, options: Options) !Report {
         .chunk_scan_ns = chunk_scan_ns,
         .chunk_scan_bytes = chunk_scan_bytes,
         .materialize_ns = materialize_ns,
+        .snapshot_ns = snapshot_ns,
+        .snapshot_pieces = snapshot_diagnostics.pieces,
+        .snapshot_owned_bytes = snapshot_diagnostics.owned_bytes,
+        .snapshot_shared_original_bytes = snapshot_diagnostics.shared_original_bytes,
+        .snapshot_shared_addition_bytes = snapshot_diagnostics.shared_addition_bytes,
         .initial_pieces = initial_pieces,
         .pieces = diagnostics.pieces,
         .node_slots = diagnostics.node_slots,
@@ -284,7 +312,7 @@ fn parse(args: []const []const u8) !Options {
     var index: usize = if (args.len > 0 and !std.mem.startsWith(u8, args[0], "--")) 1 else 0;
     while (index < args.len) : (index += 1) {
         const arg = args[index];
-        if (std.mem.startsWith(u8, arg, "--lines=")) out.lines = try std.fmt.parseInt(usize, arg["--lines=".len..], 10) else if (std.mem.startsWith(u8, arg, "--queries=")) out.queries = try std.fmt.parseInt(usize, arg["--queries=".len..], 10) else if (std.mem.startsWith(u8, arg, "--edit-pairs=")) out.edit_pairs = try std.fmt.parseInt(usize, arg["--edit-pairs=".len..], 10) else if (std.mem.startsWith(u8, arg, "--json=")) out.json_path = arg["--json=".len..] else if (std.mem.startsWith(u8, arg, "--max-source-build-ns=")) out.max_source_build_ns = try std.fmt.parseInt(u64, arg["--max-source-build-ns=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-init-ns=")) out.max_init_ns = try std.fmt.parseInt(u64, arg["--max-init-ns=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-grow-ns=")) out.max_grow_ns = try std.fmt.parseInt(u64, arg["--max-grow-ns=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-shrink-ns=")) out.max_shrink_ns = try std.fmt.parseInt(u64, arg["--max-shrink-ns=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-delete-ns=")) out.max_delete_ns = try std.fmt.parseInt(u64, arg["--max-delete-ns=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-churn-ns-per-edit=")) out.max_churn_ns_per_edit = try std.fmt.parseInt(u64, arg["--max-churn-ns-per-edit=".len..], 10) else if (std.mem.startsWith(u8, arg, "--min-contiguous-speedup=")) out.min_contiguous_speedup = try std.fmt.parseFloat(f64, arg["--min-contiguous-speedup=".len..]) else if (std.mem.startsWith(u8, arg, "--max-query-ns-per-op=")) out.max_query_ns_per_op = try std.fmt.parseInt(u64, arg["--max-query-ns-per-op=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-chunk-scan-ns=")) out.max_chunk_scan_ns = try std.fmt.parseInt(u64, arg["--max-chunk-scan-ns=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-materialize-ns=")) out.max_materialize_ns = try std.fmt.parseInt(u64, arg["--max-materialize-ns=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-owned-bytes=")) out.max_owned_bytes = try std.fmt.parseInt(usize, arg["--max-owned-bytes=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-rss-kib=")) out.max_rss_kib = try std.fmt.parseInt(usize, arg["--max-rss-kib=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-tree-depth=")) out.max_tree_depth = try std.fmt.parseInt(usize, arg["--max-tree-depth=".len..], 10) else if (std.mem.startsWith(u8, arg, "--expect-checksum=")) out.expect_checksum = try std.fmt.parseInt(u64, arg["--expect-checksum=".len..], 10) else return error.InvalidArgument;
+        if (std.mem.startsWith(u8, arg, "--lines=")) out.lines = try std.fmt.parseInt(usize, arg["--lines=".len..], 10) else if (std.mem.startsWith(u8, arg, "--queries=")) out.queries = try std.fmt.parseInt(usize, arg["--queries=".len..], 10) else if (std.mem.startsWith(u8, arg, "--edit-pairs=")) out.edit_pairs = try std.fmt.parseInt(usize, arg["--edit-pairs=".len..], 10) else if (std.mem.startsWith(u8, arg, "--json=")) out.json_path = arg["--json=".len..] else if (std.mem.startsWith(u8, arg, "--max-source-build-ns=")) out.max_source_build_ns = try std.fmt.parseInt(u64, arg["--max-source-build-ns=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-init-ns=")) out.max_init_ns = try std.fmt.parseInt(u64, arg["--max-init-ns=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-grow-ns=")) out.max_grow_ns = try std.fmt.parseInt(u64, arg["--max-grow-ns=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-shrink-ns=")) out.max_shrink_ns = try std.fmt.parseInt(u64, arg["--max-shrink-ns=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-delete-ns=")) out.max_delete_ns = try std.fmt.parseInt(u64, arg["--max-delete-ns=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-churn-ns-per-edit=")) out.max_churn_ns_per_edit = try std.fmt.parseInt(u64, arg["--max-churn-ns-per-edit=".len..], 10) else if (std.mem.startsWith(u8, arg, "--min-contiguous-speedup=")) out.min_contiguous_speedup = try std.fmt.parseFloat(f64, arg["--min-contiguous-speedup=".len..]) else if (std.mem.startsWith(u8, arg, "--max-query-ns-per-op=")) out.max_query_ns_per_op = try std.fmt.parseInt(u64, arg["--max-query-ns-per-op=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-chunk-scan-ns=")) out.max_chunk_scan_ns = try std.fmt.parseInt(u64, arg["--max-chunk-scan-ns=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-materialize-ns=")) out.max_materialize_ns = try std.fmt.parseInt(u64, arg["--max-materialize-ns=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-snapshot-ns=")) out.max_snapshot_ns = try std.fmt.parseInt(u64, arg["--max-snapshot-ns=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-snapshot-owned-bytes=")) out.max_snapshot_owned_bytes = try std.fmt.parseInt(usize, arg["--max-snapshot-owned-bytes=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-owned-bytes=")) out.max_owned_bytes = try std.fmt.parseInt(usize, arg["--max-owned-bytes=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-rss-kib=")) out.max_rss_kib = try std.fmt.parseInt(usize, arg["--max-rss-kib=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-tree-depth=")) out.max_tree_depth = try std.fmt.parseInt(usize, arg["--max-tree-depth=".len..], 10) else if (std.mem.startsWith(u8, arg, "--expect-checksum=")) out.expect_checksum = try std.fmt.parseInt(u64, arg["--expect-checksum=".len..], 10) else return error.InvalidArgument;
     }
     if (out.lines < 64 or out.queries == 0 or out.edit_pairs == 0) return error.InvalidArguments;
     return out;
@@ -308,8 +336,8 @@ pub fn main(init: std.process.Init) !void {
     const options = try parse(args.items);
     const report = try run(init.gpa, init.io, options);
     std.debug.print(
-        "document: lines={d} bytes={d}->{d} init={d:.2}ms grow={d:.3}ms/{d:.1}x shrink={d:.3}ms/{d:.1}x delete={d:.3}ms/{d:.1}x churn={d:.1}ns/edit query={d:.1}ns/op chunk={d:.3}ms materialize={d:.2}ms pieces={d} depth={d} owned={d:.2}MiB rss={d:.2}MiB checksum={d} passed={}\n",
-        .{ report.lines, report.initial_bytes, report.final_bytes, @as(f64, @floatFromInt(report.init_ns)) / 1_000_000.0, @as(f64, @floatFromInt(report.grow_insert_ns)) / 1_000_000.0, report.grow_speedup, @as(f64, @floatFromInt(report.shrink_replace_ns)) / 1_000_000.0, report.shrink_speedup, @as(f64, @floatFromInt(report.inserted_delete_ns)) / 1_000_000.0, report.delete_speedup, report.churn_edit_ns_per_op, report.query_ns_per_op, @as(f64, @floatFromInt(report.chunk_scan_ns)) / 1_000_000.0, @as(f64, @floatFromInt(report.materialize_ns)) / 1_000_000.0, report.pieces, report.tree_depth, @as(f64, @floatFromInt(report.owned_bytes)) / (1024.0 * 1024.0), @as(f64, @floatFromInt(report.peak_rss_kib)) / 1024.0, report.checksum, report.passed },
+        "document: lines={d} bytes={d}->{d} init={d:.2}ms grow={d:.3}ms/{d:.1}x shrink={d:.3}ms/{d:.1}x delete={d:.3}ms/{d:.1}x churn={d:.1}ns/edit query={d:.1}ns/op chunk={d:.3}ms materialize={d:.2}ms snapshot={d:.3}ms/{d:.2}MiB pieces={d} depth={d} owned={d:.2}MiB rss={d:.2}MiB checksum={d} passed={}\n",
+        .{ report.lines, report.initial_bytes, report.final_bytes, @as(f64, @floatFromInt(report.init_ns)) / 1_000_000.0, @as(f64, @floatFromInt(report.grow_insert_ns)) / 1_000_000.0, report.grow_speedup, @as(f64, @floatFromInt(report.shrink_replace_ns)) / 1_000_000.0, report.shrink_speedup, @as(f64, @floatFromInt(report.inserted_delete_ns)) / 1_000_000.0, report.delete_speedup, report.churn_edit_ns_per_op, report.query_ns_per_op, @as(f64, @floatFromInt(report.chunk_scan_ns)) / 1_000_000.0, @as(f64, @floatFromInt(report.materialize_ns)) / 1_000_000.0, @as(f64, @floatFromInt(report.snapshot_ns)) / 1_000_000.0, @as(f64, @floatFromInt(report.snapshot_owned_bytes)) / (1024.0 * 1024.0), report.pieces, report.tree_depth, @as(f64, @floatFromInt(report.owned_bytes)) / (1024.0 * 1024.0), @as(f64, @floatFromInt(report.peak_rss_kib)) / 1024.0, report.checksum, report.passed },
     );
     if (options.json_path) |path| try writeReport(init.io, init.gpa, path, report);
     if (!report.passed) return error.DocumentBenchmarkFailed;

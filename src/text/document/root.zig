@@ -1,8 +1,10 @@
 //! Mutable chunked UTF-8 document storage.
 //!
-//! The document owns immutable original/add buffers and stores byte ranges as
-//! an implicit treap. Subtree summaries make byte/line queries logarithmic,
-//! while edits append replacement bytes and splice only the affected pieces.
+//! The document owns reference-counted original/add buffers and stores byte
+//! ranges as an implicit treap. Subtree summaries make byte/line queries
+//! logarithmic, while edits append replacement bytes and splice only the
+//! affected pieces. Immutable snapshots retain the byte buffers, copy only
+//! live piece metadata and make additions copy-on-write.
 //! Cursor, selection, history, layout and widgets deliberately remain outside
 //! this reusable text-core boundary.
 
@@ -13,6 +15,30 @@ pub const max_piece_bytes: usize = 4096;
 pub const Identity = u64;
 
 const cooperative_target = builtin.single_threaded or builtin.target.cpu.arch.isWasm();
+const ReferenceCounter = if (cooperative_target) struct {
+    raw: usize,
+
+    fn init(value: usize) @This() {
+        return .{ .raw = value };
+    }
+
+    fn load(self: *const @This(), comptime _: std.builtin.AtomicOrder) usize {
+        return self.raw;
+    }
+
+    fn fetchAdd(self: *@This(), value: usize, comptime _: std.builtin.AtomicOrder) usize {
+        const previous = self.raw;
+        self.raw += value;
+        return previous;
+    }
+
+    fn fetchSub(self: *@This(), value: usize, comptime _: std.builtin.AtomicOrder) usize {
+        const previous = self.raw;
+        self.raw -= value;
+        return previous;
+    }
+} else std.atomic.Value(usize);
+
 const IdentityCounter = if (cooperative_target) struct {
     raw: Identity,
 
@@ -82,6 +108,14 @@ pub const Diagnostics = struct {
     owned_bytes: usize,
 };
 
+pub const SnapshotDiagnostics = struct {
+    pieces: usize,
+    metadata_bytes: usize,
+    shared_original_bytes: usize,
+    shared_addition_bytes: usize,
+    owned_bytes: usize,
+};
+
 const Source = enum(u8) { original, additions };
 
 const Summary = struct {
@@ -118,6 +152,40 @@ const Node = struct {
 const Split = struct { left: ?usize, right: ?usize };
 const Location = struct { node: usize, local: usize, global_start: usize };
 
+const SharedBytes = struct {
+    allocator: std.mem.Allocator,
+    references: ReferenceCounter = ReferenceCounter.init(1),
+    storage: []u8,
+
+    fn create(allocator: std.mem.Allocator, bytes: []const u8, capacity: usize) std.mem.Allocator.Error!*SharedBytes {
+        std.debug.assert(capacity >= bytes.len and capacity > 0);
+        const self = try allocator.create(SharedBytes);
+        errdefer allocator.destroy(self);
+        const storage = try allocator.alloc(u8, capacity);
+        @memcpy(storage[0..bytes.len], bytes);
+        self.* = .{ .allocator = allocator, .storage = storage };
+        return self;
+    }
+
+    fn retain(self: *SharedBytes) void {
+        const previous = self.references.fetchAdd(1, .monotonic);
+        std.debug.assert(previous > 0);
+    }
+
+    fn release(self: *SharedBytes) void {
+        const previous = self.references.fetchSub(1, .acq_rel);
+        std.debug.assert(previous > 0);
+        if (previous != 1) return;
+        const allocator = self.allocator;
+        allocator.free(self.storage);
+        allocator.destroy(self);
+    }
+
+    fn isUnique(self: *const SharedBytes) bool {
+        return self.references.load(.acquire) == 1;
+    }
+};
+
 pub const Chunk = struct {
     bytes: []const u8,
     byte_start: usize,
@@ -146,11 +214,220 @@ pub const ChunkIterator = struct {
     }
 };
 
+const SnapshotPiece = struct {
+    piece: Piece,
+    prefix: Summary,
+};
+
+pub const SnapshotChunkIterator = struct {
+    snapshot: *const DocumentSnapshot,
+    cursor: usize,
+    end: usize,
+
+    /// Returned slices remain valid until the immutable snapshot is deinitialized.
+    pub fn next(self: *SnapshotChunkIterator) ?Chunk {
+        if (self.cursor >= self.end) return null;
+        const location = self.snapshot.locate(self.cursor) orelse return null;
+        const piece = self.snapshot.pieces[location.piece].piece;
+        const piece_bytes = self.snapshot.pieceBytes(piece);
+        const count = @min(piece_bytes.len - location.local, self.end - self.cursor);
+        const start = self.cursor;
+        self.cursor += count;
+        return .{
+            .bytes = piece_bytes[location.local .. location.local + count],
+            .byte_start = start,
+            .byte_end = self.cursor,
+        };
+    }
+};
+
+/// Immutable, thread-safe view of one document identity and revision. Snapshot
+/// creation copies only live piece metadata; byte buffers are retained and an
+/// edited `Document` detaches its additions buffer before writing to it.
+/// Creating snapshots and mutating the source `Document` must still be
+/// serialized by its owner. Once returned, independent threads may read the
+/// snapshot without locks, even after the source document is changed or freed.
+pub const DocumentSnapshot = struct {
+    allocator: std.mem.Allocator,
+    instance_identity: Identity,
+    source_revision: u64,
+    original: ?*SharedBytes,
+    additions: ?*SharedBytes,
+    addition_len: usize,
+    pieces: []SnapshotPiece,
+    summary: Summary,
+
+    const SnapshotLocation = struct { piece: usize, local: usize };
+
+    pub fn deinit(self: *DocumentSnapshot) void {
+        self.allocator.free(self.pieces);
+        if (self.additions) |bytes| bytes.release();
+        if (self.original) |bytes| bytes.release();
+        self.* = undefined;
+    }
+
+    pub fn identity(self: *const DocumentSnapshot) Identity {
+        return self.instance_identity;
+    }
+
+    pub fn revision(self: *const DocumentSnapshot) u64 {
+        return self.source_revision;
+    }
+
+    pub fn byteLen(self: *const DocumentSnapshot) usize {
+        return self.summary.bytes;
+    }
+
+    pub fn newlineCount(self: *const DocumentSnapshot) usize {
+        return self.summary.newlines;
+    }
+
+    pub fn lineCount(self: *const DocumentSnapshot) usize {
+        return self.newlineCount() + 1;
+    }
+
+    pub fn pieceCount(self: *const DocumentSnapshot) usize {
+        return self.pieces.len;
+    }
+
+    pub fn isUtf8Boundary(self: *const DocumentSnapshot, offset: usize) bool {
+        if (offset > self.byteLen()) return false;
+        if (offset == 0 or offset == self.byteLen()) return true;
+        const location = self.locate(offset) orelse return false;
+        if (location.local == 0) return true;
+        return (self.pieceBytes(self.pieces[location.piece].piece)[location.local] & 0xc0) != 0x80;
+    }
+
+    pub fn chunks(self: *const DocumentSnapshot, range: ByteRange) Error!SnapshotChunkIterator {
+        try self.validateRange(range.start, range.end);
+        return .{ .snapshot = self, .cursor = range.start, .end = range.end };
+    }
+
+    pub fn materialize(self: *const DocumentSnapshot, allocator: std.mem.Allocator) Error![]u8 {
+        const out = try allocator.alloc(u8, self.byteLen());
+        errdefer allocator.free(out);
+        _ = try self.copyRange(.{ .start = 0, .end = self.byteLen() }, out);
+        return out;
+    }
+
+    pub fn copyRange(self: *const DocumentSnapshot, range: ByteRange, out: []u8) Error!usize {
+        try self.validateRange(range.start, range.end);
+        if (out.len < range.len()) return error.NoSpaceLeft;
+        var iterator = SnapshotChunkIterator{ .snapshot = self, .cursor = range.start, .end = range.end };
+        var written: usize = 0;
+        while (iterator.next()) |chunk| {
+            @memcpy(out[written..][0..chunk.bytes.len], chunk.bytes);
+            written += chunk.bytes.len;
+        }
+        return written;
+    }
+
+    pub fn pointForByte(self: *const DocumentSnapshot, offset: usize) Error!Point {
+        if (offset > self.byteLen()) return error.InvalidRange;
+        if (!self.isUtf8Boundary(offset)) return error.InvalidUtf8Boundary;
+        const summary = self.prefixSummary(offset);
+        return .{ .line = summary.newlines, .column = summary.trailing_bytes };
+    }
+
+    pub fn lineStart(self: *const DocumentSnapshot, line: usize) Error!usize {
+        if (line >= self.lineCount()) return error.InvalidRange;
+        if (line == 0) return 0;
+        return self.byteAfterNewline(line - 1) orelse error.InvalidRange;
+    }
+
+    pub fn lineRange(self: *const DocumentSnapshot, line: usize) Error!ByteRange {
+        const start = try self.lineStart(line);
+        const end = if (line + 1 < self.lineCount()) (try self.lineStart(line + 1)) - 1 else self.byteLen();
+        return .{ .start = start, .end = end };
+    }
+
+    pub fn byteForPoint(self: *const DocumentSnapshot, point: Point) Error!usize {
+        const range = try self.lineRange(point.line);
+        if (point.column > range.len()) return error.InvalidRange;
+        const offset = range.start + point.column;
+        if (!self.isUtf8Boundary(offset)) return error.InvalidUtf8Boundary;
+        return offset;
+    }
+
+    pub fn diagnostics(self: *const DocumentSnapshot) SnapshotDiagnostics {
+        const metadata_bytes = self.pieces.len * @sizeOf(SnapshotPiece);
+        return .{
+            .pieces = self.pieces.len,
+            .metadata_bytes = metadata_bytes,
+            .shared_original_bytes = if (self.original) |bytes| bytes.storage.len else 0,
+            .shared_addition_bytes = self.addition_len,
+            .owned_bytes = metadata_bytes,
+        };
+    }
+
+    fn validateRange(self: *const DocumentSnapshot, start: usize, end: usize) Error!void {
+        if (start > end or end > self.byteLen()) return error.InvalidRange;
+        if (!self.isUtf8Boundary(start) or !self.isUtf8Boundary(end)) return error.InvalidUtf8Boundary;
+    }
+
+    fn pieceBytes(self: *const DocumentSnapshot, piece: Piece) []const u8 {
+        const source = switch (piece.source) {
+            .original => if (self.original) |bytes| bytes.storage else &.{},
+            .additions => if (self.additions) |bytes| bytes.storage[0..self.addition_len] else &.{},
+        };
+        return source[piece.start .. piece.start + piece.len];
+    }
+
+    fn locate(self: *const DocumentSnapshot, offset: usize) ?SnapshotLocation {
+        if (offset >= self.byteLen()) return null;
+        var low: usize = 0;
+        var high = self.pieces.len;
+        while (low < high) {
+            const middle = low + (high - low) / 2;
+            const entry = self.pieces[middle];
+            if (offset < entry.prefix.bytes) {
+                high = middle;
+            } else if (offset >= entry.prefix.bytes + entry.piece.len) {
+                low = middle + 1;
+            } else {
+                return .{ .piece = middle, .local = offset - entry.prefix.bytes };
+            }
+        }
+        return null;
+    }
+
+    fn prefixSummary(self: *const DocumentSnapshot, count: usize) Summary {
+        if (count == self.byteLen()) return self.summary;
+        const location = self.locate(count) orelse return .{};
+        const entry = self.pieces[location.piece];
+        return Summary.combine(entry.prefix, summarize(self.pieceBytes(entry.piece)[0..location.local]));
+    }
+
+    fn byteAfterNewline(self: *const DocumentSnapshot, ordinal: usize) ?usize {
+        var low: usize = 0;
+        var high = self.pieces.len;
+        while (low < high) {
+            const middle = low + (high - low) / 2;
+            const entry = self.pieces[middle];
+            if (ordinal < entry.prefix.newlines) {
+                high = middle;
+            } else if (ordinal >= entry.prefix.newlines + entry.piece.summary.newlines) {
+                low = middle + 1;
+            } else {
+                var remaining = ordinal - entry.prefix.newlines;
+                for (self.pieceBytes(entry.piece), 0..) |byte, local| {
+                    if (byte != '\n') continue;
+                    if (remaining == 0) return entry.prefix.bytes + local + 1;
+                    remaining -= 1;
+                }
+                return null;
+            }
+        }
+        return null;
+    }
+};
+
 pub const Document = struct {
     allocator: std.mem.Allocator,
     instance_identity: Identity,
-    original: []u8 = &.{},
-    additions: std.ArrayList(u8) = .empty,
+    original: ?*SharedBytes = null,
+    additions: ?*SharedBytes = null,
+    addition_len: usize = 0,
     nodes: std.ArrayList(Node) = .empty,
     root: ?usize = null,
     free_head: ?usize = null,
@@ -163,7 +440,7 @@ pub const Document = struct {
         if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
         var self = Document{ .allocator = allocator, .instance_identity = allocateIdentity() };
         errdefer self.deinit();
-        self.original = try allocator.dupe(u8, text);
+        if (text.len != 0) self.original = try SharedBytes.create(allocator, text, text.len);
         const count = pieceCountForBytes(text);
         try self.nodes.ensureTotalCapacity(allocator, count);
         self.root = self.buildPieces(.original, 0, text);
@@ -172,8 +449,8 @@ pub const Document = struct {
 
     pub fn deinit(self: *Document) void {
         self.nodes.deinit(self.allocator);
-        self.additions.deinit(self.allocator);
-        if (self.original.len != 0) self.allocator.free(self.original);
+        if (self.additions) |bytes| bytes.release();
+        if (self.original) |bytes| bytes.release();
         self.* = undefined;
     }
 
@@ -208,6 +485,31 @@ pub const Document = struct {
         const edit = self.last_edit orelse return null;
         if (previous_revision +% 1 != self.source_revision or edit.revision != self.source_revision) return null;
         return edit;
+    }
+
+    /// Capture one immutable identity/revision for detached, lock-free reads.
+    /// Byte storage is retained; only live piece metadata is copied.
+    pub fn snapshot(self: *const Document, allocator: std.mem.Allocator) Error!DocumentSnapshot {
+        const pieces = try allocator.alloc(SnapshotPiece, self.live_pieces);
+        errdefer allocator.free(pieces);
+        var write_index: usize = 0;
+        var prefix = Summary{};
+        self.copySnapshotPieces(self.root, pieces, &write_index, &prefix);
+        std.debug.assert(write_index == pieces.len);
+        std.debug.assert(prefix.bytes == self.byteLen());
+
+        if (self.original) |bytes| bytes.retain();
+        if (self.additions) |bytes| bytes.retain();
+        return .{
+            .allocator = allocator,
+            .instance_identity = self.instance_identity,
+            .source_revision = self.source_revision,
+            .original = self.original,
+            .additions = self.additions,
+            .addition_len = self.addition_len,
+            .pieces = pieces,
+            .summary = prefix,
+        };
     }
 
     pub fn isUtf8Boundary(self: *const Document, offset: usize) bool {
@@ -280,7 +582,7 @@ pub const Document = struct {
             addition_bytes = std.math.add(usize, addition_bytes, replacement.len) catch return error.Overflow;
             node_slots = std.math.add(usize, node_slots, pieceCountForBytes(replacement) +| 2) catch return error.Overflow;
         }
-        try self.additions.ensureTotalCapacity(self.allocator, std.math.add(usize, self.additions.items.len, addition_bytes) catch return error.Overflow);
+        try self.ensureAdditionsCapacity(std.math.add(usize, self.addition_len, addition_bytes) catch return error.Overflow);
         try self.nodes.ensureTotalCapacity(self.allocator, std.math.add(usize, self.nodes.items.len, node_slots) catch return error.Overflow);
     }
 
@@ -297,13 +599,17 @@ pub const Document = struct {
         const new_summary = summarize(replacement);
         const retained_bytes = self.byteLen() - old_bytes;
         _ = std.math.add(usize, retained_bytes, replacement.len) catch return error.Overflow;
-        const add_start = self.additions.items.len;
+        const add_start = self.addition_len;
         const add_end = std.math.add(usize, add_start, replacement.len) catch return error.Overflow;
         const required_nodes = std.math.add(usize, pieceCountForBytes(replacement), 2) catch return error.Overflow;
         const total_slots = std.math.add(usize, self.nodes.items.len, required_nodes) catch return error.Overflow;
         try self.nodes.ensureTotalCapacity(self.allocator, total_slots);
-        try self.additions.ensureTotalCapacity(self.allocator, add_end);
-        self.additions.appendSliceAssumeCapacity(replacement);
+        if (replacement.len != 0) {
+            try self.ensureAdditionsCapacity(add_end);
+            const additions = self.additions orelse unreachable;
+            @memcpy(additions.storage[add_start..add_end], replacement);
+        }
+        self.addition_len = add_end;
 
         const left_and_rest = self.split(self.root, start);
         const removed_and_right = self.split(left_and_rest.right, old_bytes);
@@ -347,9 +653,10 @@ pub const Document = struct {
             .pieces = self.live_pieces,
             .node_slots = self.nodes.items.len,
             .tree_depth = self.depth(self.root),
-            .original_bytes = self.original.len,
-            .addition_bytes = self.additions.items.len,
-            .owned_bytes = self.original.len + self.additions.capacity + self.nodes.capacity * @sizeOf(Node),
+            .original_bytes = if (self.original) |bytes| bytes.storage.len else 0,
+            .addition_bytes = self.addition_len,
+            .owned_bytes = (if (self.original) |bytes| bytes.storage.len else 0) +
+                (if (self.additions) |bytes| bytes.storage.len else 0) + self.nodes.capacity * @sizeOf(Node),
         };
     }
 
@@ -360,8 +667,8 @@ pub const Document = struct {
 
     fn pieceBytes(self: *const Document, piece: Piece) []const u8 {
         const source = switch (piece.source) {
-            .original => self.original,
-            .additions => self.additions.items,
+            .original => if (self.original) |bytes| bytes.storage else &.{},
+            .additions => if (self.additions) |bytes| bytes.storage[0..self.addition_len] else &.{},
         };
         return source[piece.start .. piece.start + piece.len];
     }
@@ -372,6 +679,37 @@ pub const Document = struct {
 
     fn nodePieceCount(self: *const Document, index: ?usize) usize {
         return if (index) |value| self.nodes.items[value].piece_count else 0;
+    }
+
+    fn ensureAdditionsCapacity(self: *Document, required: usize) Error!void {
+        if (required == 0) return;
+        if (self.additions) |bytes| {
+            if (bytes.isUnique() and bytes.storage.len >= required) return;
+            const capacity = try additionsCapacity(required);
+            const replacement = try SharedBytes.create(self.allocator, bytes.storage[0..self.addition_len], capacity);
+            self.additions = replacement;
+            bytes.release();
+            return;
+        }
+
+        const capacity = try additionsCapacity(required);
+        self.additions = try SharedBytes.create(self.allocator, &.{}, capacity);
+    }
+
+    fn copySnapshotPieces(
+        self: *const Document,
+        root: ?usize,
+        out: []SnapshotPiece,
+        write_index: *usize,
+        prefix: *Summary,
+    ) void {
+        const index = root orelse return;
+        const node = self.nodes.items[index];
+        self.copySnapshotPieces(node.left, out, write_index, prefix);
+        out[write_index.*] = .{ .piece = node.piece, .prefix = prefix.* };
+        write_index.* += 1;
+        prefix.* = Summary.combine(prefix.*, node.piece.summary);
+        self.copySnapshotPieces(node.right, out, write_index, prefix);
     }
 
     fn pull(self: *Document, index: usize) void {
@@ -611,6 +949,11 @@ pub const Document = struct {
     }
 };
 
+fn additionsCapacity(required: usize) Error!usize {
+    const growth = std.math.add(usize, required / 2, std.atomic.cache_line) catch return error.Overflow;
+    return std.math.add(usize, required, growth) catch return error.Overflow;
+}
+
 fn summarize(bytes: []const u8) Summary {
     var newlines: usize = 0;
     var trailing: usize = 0;
@@ -684,6 +1027,147 @@ test "piece tree identities distinguish document lifetimes at one address" {
     document = try Document.init(std.testing.allocator, "other");
     defer document.deinit();
     try std.testing.expect(first != document.identity());
+}
+
+test "immutable snapshot survives edits compaction and document deinit" {
+    var document = try Document.init(std.testing.allocator, "alpha\n中界\nomega");
+    _ = try document.replaceRange("alpha\n".len, "alpha\n中".len, "hello\n");
+    const expected = "alpha\nhello\n界\nomega";
+    const identity = document.identity();
+    const revision = document.revision();
+    var snapshot = try document.snapshot(std.testing.allocator);
+    defer snapshot.deinit();
+
+    try std.testing.expectEqual(identity, snapshot.identity());
+    try std.testing.expectEqual(revision, snapshot.revision());
+    try std.testing.expectEqual(@as(usize, 4), snapshot.lineCount());
+    try std.testing.expectEqual(ByteRange{ .start = 6, .end = 11 }, try snapshot.lineRange(1));
+    try std.testing.expectEqual(Point{ .line = 2, .column = "界".len }, try snapshot.pointForByte("alpha\nhello\n界".len));
+    try std.testing.expectEqual("alpha\nhello\n界".len, try snapshot.byteForPoint(.{ .line = 2, .column = "界".len }));
+
+    _ = try document.replaceRange(0, 5, "changed");
+    try document.compact();
+    document.deinit();
+
+    const bytes = try snapshot.materialize(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+    try std.testing.expectEqualStrings(expected, bytes);
+    var copied: [5]u8 = undefined;
+    try std.testing.expectEqual(copied.len, try snapshot.copyRange(.{ .start = 6, .end = 11 }, &copied));
+    try std.testing.expectEqualStrings("hello", &copied);
+}
+
+test "multiple immutable snapshots isolate addition generations" {
+    var document = try Document.init(std.testing.allocator, "root");
+    defer document.deinit();
+    _ = try document.replaceRange(4, 4, "-one");
+    var first = try document.snapshot(std.testing.allocator);
+    defer first.deinit();
+    _ = try document.replaceRange(document.byteLen(), document.byteLen(), "-two");
+    var second = try document.snapshot(std.testing.allocator);
+    defer second.deinit();
+    _ = try document.replaceRange(0, 4, "leaf");
+
+    const first_bytes = try first.materialize(std.testing.allocator);
+    defer std.testing.allocator.free(first_bytes);
+    const second_bytes = try second.materialize(std.testing.allocator);
+    defer std.testing.allocator.free(second_bytes);
+    const current = try document.materialize(std.testing.allocator);
+    defer std.testing.allocator.free(current);
+    try std.testing.expectEqualStrings("root-one", first_bytes);
+    try std.testing.expectEqualStrings("root-one-two", second_bytes);
+    try std.testing.expectEqualStrings("leaf-one-two", current);
+    try std.testing.expectEqual(@as(usize, 0), first.diagnostics().owned_bytes - first.diagnostics().metadata_bytes);
+}
+
+test "immutable snapshot permits worker reads during document edits" {
+    if (cooperative_target) return error.SkipZigTest;
+
+    const Reader = struct {
+        snapshot: *const DocumentSnapshot,
+        failed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+        fn run(self: *@This()) void {
+            for (0..2_000) |iteration| {
+                const line = iteration % self.snapshot.lineCount();
+                const range = self.snapshot.lineRange(line) catch {
+                    self.failed.store(true, .release);
+                    return;
+                };
+                const point = self.snapshot.pointForByte(range.start) catch {
+                    self.failed.store(true, .release);
+                    return;
+                };
+                if (point.line != line or point.column != 0) {
+                    self.failed.store(true, .release);
+                    return;
+                }
+                var iterator = self.snapshot.chunks(range) catch {
+                    self.failed.store(true, .release);
+                    return;
+                };
+                var bytes: usize = 0;
+                while (iterator.next()) |chunk| bytes += chunk.bytes.len;
+                if (bytes != range.len()) {
+                    self.failed.store(true, .release);
+                    return;
+                }
+            }
+        }
+    };
+
+    const source = "0123456789abcdef\n" ** 512;
+    var document = try Document.init(std.testing.allocator, source);
+    _ = try document.replaceRange(document.byteLen(), document.byteLen(), "tail\n");
+    var snapshot = try document.snapshot(std.testing.allocator);
+    defer snapshot.deinit();
+    var reader = Reader{ .snapshot = &snapshot };
+    const thread = try std.Thread.spawn(.{}, Reader.run, .{&reader});
+    for (0..256) |_| {
+        _ = try document.replaceRange(document.byteLen(), document.byteLen(), "x");
+    }
+    try document.compact();
+    document.deinit();
+    thread.join();
+    try std.testing.expect(!reader.failed.load(.acquire));
+    try std.testing.expectEqual(source.len + "tail\n".len, snapshot.byteLen());
+}
+
+test "snapshot and additions copy on write fail atomically" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        struct {
+            fn run(allocator: std.mem.Allocator) !void {
+                var document = try Document.init(allocator, "alpha\nbeta");
+                defer document.deinit();
+                _ = try document.replaceRange(document.byteLen(), document.byteLen(), "-shared");
+                const revision = document.revision();
+                var snapshot = document.snapshot(allocator) catch |err| {
+                    if (err != error.OutOfMemory) return err;
+                    return error.OutOfMemory;
+                };
+                defer snapshot.deinit();
+
+                const result = document.replaceRange(document.byteLen(), document.byteLen(), "-detached");
+                if (result) |_| {
+                    const current = try document.materialize(std.testing.allocator);
+                    defer std.testing.allocator.free(current);
+                    try std.testing.expectEqualStrings("alpha\nbeta-shared-detached", current);
+                } else |err| {
+                    if (err != error.OutOfMemory) return err;
+                    try std.testing.expectEqual(revision, document.revision());
+                    const current = try document.materialize(std.testing.allocator);
+                    defer std.testing.allocator.free(current);
+                    try std.testing.expectEqualStrings("alpha\nbeta-shared", current);
+                    const frozen = try snapshot.materialize(std.testing.allocator);
+                    defer std.testing.allocator.free(frozen);
+                    try std.testing.expectEqualStrings("alpha\nbeta-shared", frozen);
+                    return error.OutOfMemory;
+                }
+            }
+        }.run,
+        .{},
+    );
 }
 
 test "piece tree rejects invalid ranges without mutation" {

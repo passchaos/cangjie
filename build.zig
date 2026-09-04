@@ -2882,6 +2882,8 @@ pub fn build(b: *std.Build) void {
         "--max-query-ns-per-op=10000",
         "--max-chunk-scan-ns=500000",
         "--max-materialize-ns=250000000",
+        "--max-snapshot-ns=20000000",
+        "--max-snapshot-owned-bytes=2097152",
         "--max-owned-bytes=50331648",
         "--max-rss-kib=196608",
         "--max-tree-depth=64",

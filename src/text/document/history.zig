@@ -99,6 +99,7 @@ pub const ReplaceResult = struct {
     merged: bool = false,
     evicted: usize = 0,
     cleared_redo: usize = 0,
+    cleared_undo: usize = 0,
 };
 
 pub const Diagnostics = struct {
@@ -265,7 +266,13 @@ pub const History = struct {
             if (merged) |bytes| self.allocator.free(bytes);
             return null;
         };
-        if (starts_fresh_branch) self.clear();
+        var cleared_undo: usize = 0;
+        var cleared_redo: usize = 0;
+        if (starts_fresh_branch) {
+            cleared_undo = self.undo_stack.items.len;
+            cleared_redo = self.redo_stack.items.len;
+            self.clear();
+        }
 
         if (merged) |bytes| {
             var entry = &self.undo_stack.items[self.undo_stack.items.len - 1];
@@ -282,7 +289,7 @@ pub const History = struct {
             self.bumpRevision();
             return .{ .edit = edit, .recorded = true, .merged = true };
         }
-        const cleared_redo = self.redo_stack.items.len;
+        cleared_redo += self.redo_stack.items.len;
         self.clearStack(&self.redo_stack);
         var evicted: usize = 0;
         while (self.undo_stack.items.len >= self.max_entries or self.payload_bytes > self.max_payload_bytes - payload) {
@@ -303,7 +310,7 @@ pub const History = struct {
         self.bind(document);
         self.recorded_count +%= 1;
         self.bumpRevision();
-        return .{ .edit = edit, .recorded = true, .evicted = evicted, .cleared_redo = cleared_redo };
+        return .{ .edit = edit, .recorded = true, .evicted = evicted, .cleared_redo = cleared_redo, .cleared_undo = cleared_undo };
     }
 
     pub fn undo(self: *History, document: *Document) Error!?Replay {

@@ -96,6 +96,9 @@ pub const Replay = struct {
 pub const ReplaceResult = struct {
     edit: EditSummary,
     recorded: bool,
+    merged: bool = false,
+    evicted: usize = 0,
+    cleared_redo: usize = 0,
 };
 
 pub const Diagnostics = struct {
@@ -277,11 +280,14 @@ pub const History = struct {
             self.bind(document);
             self.merged_count +%= 1;
             self.bumpRevision();
-            return .{ .edit = edit, .recorded = true };
+            return .{ .edit = edit, .recorded = true, .merged = true };
         }
+        const cleared_redo = self.redo_stack.items.len;
         self.clearStack(&self.redo_stack);
+        var evicted: usize = 0;
         while (self.undo_stack.items.len >= self.max_entries or self.payload_bytes > self.max_payload_bytes - payload) {
             self.evictOldest(&self.undo_stack);
+            evicted += 1;
         }
         self.undo_stack.appendAssumeCapacity(.{
             .start = start,
@@ -297,7 +303,7 @@ pub const History = struct {
         self.bind(document);
         self.recorded_count +%= 1;
         self.bumpRevision();
-        return .{ .edit = edit, .recorded = true };
+        return .{ .edit = edit, .recorded = true, .evicted = evicted, .cleared_redo = cleared_redo };
     }
 
     pub fn undo(self: *History, document: *Document) Error!?Replay {
@@ -440,6 +446,9 @@ test "document history undoes and redoes variable length UTF-8 edits" {
         .action_name = "Replace",
     })).?;
     try std.testing.expect(result.recorded);
+    try std.testing.expect(!result.merged);
+    try std.testing.expectEqual(@as(usize, 0), result.evicted);
+    try std.testing.expectEqual(@as(usize, 0), result.cleared_redo);
     const undo = (try history.undo(&document)).?;
     try std.testing.expectEqual(Selection{ .anchor = 5, .cursor = 8 }, undo.selection);
     const bytes = try document.materialize(std.testing.allocator);
@@ -457,23 +466,27 @@ test "document history merges adjacent typing and invalidates redo" {
     defer document.deinit();
     var history = History.init(std.testing.allocator, 8, 1024);
     defer history.deinit();
-    for ([_][]const u8{ "a", "中", "b" }) |bytes| {
+    for ([_][]const u8{ "a", "中", "b" }, 0..) |bytes, index| {
         const start = document.byteLen() - 4;
-        _ = (try history.replaceRange(&document, start, start, bytes, .{
+        const result = (try history.replaceRange(&document, start, start, bytes, .{
             .before_selection = .{ .anchor = start, .cursor = start },
             .after_selection = .{ .anchor = start + bytes.len, .cursor = start + bytes.len },
             .action_name = "Typing",
             .merge_adjacent = true,
         })).?;
+        try std.testing.expectEqual(index != 0, result.merged);
+        try std.testing.expectEqual(@as(usize, 0), result.evicted);
+        try std.testing.expectEqual(@as(usize, 0), result.cleared_redo);
     }
     try std.testing.expectEqual(@as(usize, 1), history.diagnostics().undo_entries);
     try std.testing.expectEqual(@as(u64, 2), history.diagnostics().merged_count);
     _ = try history.undo(&document);
     try std.testing.expect(history.canRedo(&document));
-    _ = (try history.replaceRange(&document, 0, 0, "x", .{
+    const branch = (try history.replaceRange(&document, 0, 0, "x", .{
         .before_selection = .{},
         .after_selection = .{ .anchor = 1, .cursor = 1 },
     })).?;
+    try std.testing.expectEqual(@as(usize, 1), branch.cleared_redo);
     try std.testing.expect(!history.canRedo(&document));
 }
 
@@ -668,7 +681,8 @@ test "document history enforces payload budget and evicts oldest transaction" {
     defer history.deinit();
     _ = (try history.replaceRange(&document, 0, 1, "A", .{ .before_selection = .{}, .after_selection = .{ .anchor = 1, .cursor = 1 } })).?;
     _ = (try history.replaceRange(&document, 1, 2, "B", .{ .before_selection = .{ .anchor = 1, .cursor = 1 }, .after_selection = .{ .anchor = 2, .cursor = 2 } })).?;
-    _ = (try history.replaceRange(&document, 2, 3, "C", .{ .before_selection = .{ .anchor = 2, .cursor = 2 }, .after_selection = .{ .anchor = 3, .cursor = 3 } })).?;
+    const third = (try history.replaceRange(&document, 2, 3, "C", .{ .before_selection = .{ .anchor = 2, .cursor = 2 }, .after_selection = .{ .anchor = 3, .cursor = 3 } })).?;
+    try std.testing.expectEqual(@as(usize, 1), third.evicted);
     try std.testing.expectEqual(@as(usize, 2), history.diagnostics().undo_entries);
     try std.testing.expectEqual(@as(u64, 1), history.diagnostics().eviction_count);
     try std.testing.expectError(error.HistoryCapacityExceeded, history.replaceRange(&document, 0, 1, "01234567", .{

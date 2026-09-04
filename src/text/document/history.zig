@@ -86,6 +86,13 @@ pub const RecordOptions = struct {
     commit_fn: ?CommitFn = null,
 };
 
+pub const ReplayOptions = struct {
+    /// Optional non-reentrant gate invoked after all destination/history and
+    /// document capacity is reserved, but before the document or stacks move.
+    commit_context: ?*anyopaque = null,
+    commit_fn: ?CommitFn = null,
+};
+
 pub const Replay = struct {
     edit: EditSummary,
     selection: Selection,
@@ -314,14 +321,22 @@ pub const History = struct {
     }
 
     pub fn undo(self: *History, document: *Document) Error!?Replay {
-        return self.replay(document, .undo) catch |err| {
+        return self.undoWithOptions(document, .{});
+    }
+
+    pub fn undoWithOptions(self: *History, document: *Document, options: ReplayOptions) Error!?Replay {
+        return self.replay(document, .undo, options) catch |err| {
             self.failure_count +%= 1;
             return err;
         };
     }
 
     pub fn redo(self: *History, document: *Document) Error!?Replay {
-        return self.replay(document, .redo) catch |err| {
+        return self.redoWithOptions(document, .{});
+    }
+
+    pub fn redoWithOptions(self: *History, document: *Document, options: ReplayOptions) Error!?Replay {
+        return self.replay(document, .redo, options) catch |err| {
             self.failure_count +%= 1;
             return err;
         };
@@ -353,7 +368,7 @@ pub const History = struct {
 
     const Direction = enum { undo, redo };
 
-    fn replay(self: *History, document: *Document, direction: Direction) Error!?Replay {
+    fn replay(self: *History, document: *Document, direction: Direction, options: ReplayOptions) Error!?Replay {
         const source = if (direction == .undo) &self.undo_stack else &self.redo_stack;
         const destination = if (direction == .undo) &self.redo_stack else &self.undo_stack;
         if (source.items.len == 0) return null;
@@ -365,6 +380,10 @@ pub const History = struct {
         if (!try rangeEql(document, .{ .start = entry.start, .end = end }, expected)) return error.StaleDocument;
         try destination.ensureUnusedCapacity(self.allocator, 1);
         try document.reserveReplacementCapacity(&.{ replacement, expected });
+        if (options.commit_fn) |commit| {
+            const context = options.commit_context orelse return error.InvalidTransaction;
+            if (!commit(context)) return error.CommitRejected;
+        } else if (options.commit_context != null) return error.InvalidTransaction;
         const edit = (try document.replaceRange(entry.start, end, replacement)) orelse return error.InvalidTransaction;
         const selection = if (direction == .undo) entry.before_selection else entry.after_selection;
         const scroll_y = if (direction == .undo) entry.before_scroll_y else entry.after_scroll_y;
@@ -569,6 +588,36 @@ test "document history commit gate runs after reservation and rejects atomically
     const bytes = try document.materialize(std.testing.allocator);
     defer std.testing.allocator.free(bytes);
     try std.testing.expectEqualStrings("alpha\nbeta", bytes);
+}
+
+test "document history replay gate rejects without moving text or stacks" {
+    var document = try Document.init(std.testing.allocator, "abc");
+    defer document.deinit();
+    var history = History.init(std.testing.allocator, 4, 1024);
+    defer history.deinit();
+    _ = (try history.replaceRange(&document, 1, 2, "XYZ", .{
+        .before_selection = .{ .anchor = 1, .cursor = 2 },
+        .after_selection = .{ .anchor = 4, .cursor = 4 },
+    })).?;
+    const Gate = struct {
+        fn reject(_: *anyopaque) bool {
+            return false;
+        }
+    };
+    var token: u8 = 0;
+    const revision = document.revision();
+    const history_revision = history.revision();
+    try std.testing.expectError(error.CommitRejected, history.undoWithOptions(&document, .{
+        .commit_context = &token,
+        .commit_fn = Gate.reject,
+    }));
+    try std.testing.expectEqual(revision, document.revision());
+    try std.testing.expectEqual(history_revision, history.revision());
+    try std.testing.expectEqual(@as(usize, 1), history.diagnostics().undo_entries);
+    try std.testing.expectEqual(@as(usize, 0), history.diagnostics().redo_entries);
+    const bytes = try document.materialize(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+    try std.testing.expectEqualStrings("aXYZc", bytes);
 }
 
 test "document history rejected gate preserves stale chronology" {

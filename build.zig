@@ -2922,12 +2922,37 @@ pub fn build(b: *std.Build) void {
     const document_history_bench_tests = b.addTest(.{ .root_module = document_history_bench_mod });
     const document_history_bench_test_step = b.step("test-document-history-bench", "Run scaled document history benchmark contract tests");
     document_history_bench_test_step.dependOn(&b.addRunArtifact(document_history_bench_tests).step);
+    const document_span_transform_bench_mod = b.createModule(.{
+        .root_source_file = b.path("tools/document_span_transform_bench.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{.{ .name = "cangjie", .module = mod }},
+    });
+    const document_span_transform_bench_exe = b.addExecutable(.{
+        .name = "cangjie-document-span-transform-bench",
+        .root_module = document_span_transform_bench_mod,
+    });
+    const document_span_transform_bench_cmd = b.addRunArtifact(document_span_transform_bench_exe);
+    if (b.args) |args| document_span_transform_bench_cmd.addArgs(args) else document_span_transform_bench_cmd.addArgs(&.{
+        "--spans=100000",
+        "--rounds=256",
+        "--json=zig-out/document_span_transform_bench.json",
+        "--max-ns-per-span=20",
+        "--expect-checksum=4260338884297246757",
+    });
+    const document_span_transform_bench_step = b.step("document-span-transform-bench", "Benchmark allocation-free document span edit transforms");
+    document_span_transform_bench_step.dependOn(&document_span_transform_bench_cmd.step);
+    const document_span_transform_bench_tests = b.addTest(.{ .root_module = document_span_transform_bench_mod });
+    const document_span_transform_bench_test_step = b.step("test-document-span-transform-bench", "Run scaled document span transform benchmark contract tests");
+    document_span_transform_bench_test_step.dependOn(&b.addRunArtifact(document_span_transform_bench_tests).step);
     const verify_document_step = b.step("verify-document", "Verify chunked UTF-8 document correctness and million-line scaling");
     verify_document_step.dependOn(document_test_step);
     verify_document_step.dependOn(document_bench_test_step);
     verify_document_step.dependOn(document_bench_step);
     verify_document_step.dependOn(document_history_bench_test_step);
     verify_document_step.dependOn(document_history_bench_step);
+    verify_document_step.dependOn(document_span_transform_bench_test_step);
+    verify_document_step.dependOn(document_span_transform_bench_step);
 
     const reflow_bench_exe = b.addExecutable(.{
         .name = "cangjie-reflow-bench",

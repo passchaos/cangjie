@@ -8,6 +8,7 @@
 
 const implementation = @import("../../../text/document/root.zig");
 const history = @import("../../../text/document/history.zig");
+pub const span_transform = @import("../../../text/document/span_transform.zig");
 
 pub const Document = implementation.Document;
 pub const DocumentSnapshot = implementation.DocumentSnapshot;
@@ -31,6 +32,12 @@ pub const HistoryReplay = history.Replay;
 pub const HistoryReplaceResult = history.ReplaceResult;
 pub const HistoryActionName = history.ActionName;
 pub const HistoryDiagnostics = history.Diagnostics;
+pub const SpanEdit = span_transform.Edit;
+pub const SpanTransformOptions = span_transform.Options;
+pub const SpanTransformResult = span_transform.Result;
+pub const SpanTransformError = span_transform.Error;
+pub const transformSpans = span_transform.transform;
+pub const transformedSpanCount = span_transform.transformedCount;
 
 test {
     @import("std").testing.refAllDecls(@This());

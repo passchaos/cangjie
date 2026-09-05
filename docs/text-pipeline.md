@@ -1250,7 +1250,10 @@ mode; portable PostScript or family/style matches succeed only when unique, so
 document restoration fails closed instead of silently choosing an ambiguous
 face. `encodeDescriptor`/`decodeDescriptor` provide a versioned 644-byte wire
 contract. `zig build font-descriptor-bench -Doptimize=ReleaseFast` gates exact,
-portable, and codec performance over 4096 candidates.
+portable, and codec performance over 4096 candidates; the 2026-09-05
+ReleaseFast baseline measured about 8 us/query exact, 42 us/query portable, and
+2 us per codec roundtrip with checksum `12971938209271991909`. The incremental
+resolver uses no candidate array and has no fixed database-size ceiling.
 
 End-to-end paragraph construction now has an explicit cross-library benchmark
 boundary. `zig build paragraph-bench -Doptimize=ReleaseFast -- FONT TEXT N S`

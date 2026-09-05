@@ -29,6 +29,7 @@ pub const DescriptorResolveStatus = impl.FontDescriptorResolveStatus;
 pub const DescriptorResolution = impl.FontDescriptorResolution;
 pub const DescriptorCandidate = @import("descriptor.zig").Candidate;
 pub const DescriptorDigest = @import("descriptor.zig").Digest;
+pub const DescriptorResolver = @import("descriptor.zig").Resolver;
 pub const descriptor_wire_size = impl.font_descriptor_wire_size;
 pub const encodeDescriptor = impl.encodeFontDescriptor;
 pub const decodeDescriptor = impl.decodeFontDescriptor;

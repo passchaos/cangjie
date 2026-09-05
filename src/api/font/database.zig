@@ -15,6 +15,7 @@ pub const DescriptorResolveStatus = public.DescriptorResolveStatus;
 pub const DescriptorResolution = public.DescriptorResolution;
 pub const DescriptorCandidate = public.DescriptorCandidate;
 pub const DescriptorDigest = public.DescriptorDigest;
+pub const DescriptorResolver = public.DescriptorResolver;
 pub const descriptor_wire_size = public.descriptor_wire_size;
 pub const encodeDescriptor = public.encodeDescriptor;
 pub const decodeDescriptor = public.decodeDescriptor;

@@ -281,6 +281,8 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(@hasDecl(cangjie.font.database.Database, "resolveDescriptor"));
     try std.testing.expect(@hasDecl(cangjie.font.database, "encodeDescriptor"));
     try std.testing.expect(@hasDecl(cangjie.font.database, "decodeDescriptor"));
+    try std.testing.expect(@hasDecl(cangjie.font.database, "DescriptorResolver"));
+    try std.testing.expect(@hasDecl(cangjie.font.database, "resolveDescriptorCandidates"));
     try std.testing.expectEqual(@as(usize, 644), cangjie.font.database.descriptor_wire_size);
 
     // The redesign deliberately carries no compatibility layer. These checks

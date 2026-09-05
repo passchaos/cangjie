@@ -137,6 +137,49 @@ pub const Candidate = struct {
     face_index: u32 = 0,
 };
 
+pub const Resolver = struct {
+    descriptor: Descriptor,
+    mode: ResolveMode,
+    descriptor_valid: bool,
+    exact_index: ?usize = null,
+    postscript_index: ?usize = null,
+    family_index: ?usize = null,
+    postscript_ambiguous: bool = false,
+    family_ambiguous: bool = false,
+
+    pub fn init(descriptor: Descriptor, mode: ResolveMode) Resolver {
+        return .{ .descriptor = descriptor, .mode = mode, .descriptor_valid = descriptor.valid() };
+    }
+
+    pub fn add(self: *Resolver, index: usize, candidate: Candidate) void {
+        if (!self.descriptor_valid) return;
+        if (candidate.source_digest) |digest| {
+            if (exactContentMatch(self.descriptor, digest, candidate.source_size, candidate.face_index) and
+                namesAndTraitsMatch(self.descriptor, candidate.family, candidate.subfamily, candidate.postscript_name, candidate.weight, candidate.stretch, candidate.style))
+                self.exact_index = if (self.exact_index) |current| @min(current, index) else index;
+        }
+        if (self.mode == .exact) return;
+        if (candidate.weight != self.descriptor.weight or candidate.stretch != self.descriptor.stretch or candidate.style != self.descriptor.style) return;
+        if (self.descriptor.postscript_name.len != 0 and candidate.postscript_name.len != 0 and
+            std.ascii.eqlIgnoreCase(candidate.postscript_name, self.descriptor.postscript_name.slice()))
+            addUnique(&self.postscript_index, &self.postscript_ambiguous, index);
+        if (std.ascii.eqlIgnoreCase(candidate.family, self.descriptor.family.slice()) and
+            std.ascii.eqlIgnoreCase(candidate.subfamily, self.descriptor.subfamily.slice()))
+            addUnique(&self.family_index, &self.family_ambiguous, index);
+    }
+
+    pub fn finish(self: Resolver) Resolution {
+        if (!self.descriptor_valid) return .{ .status = .invalid_descriptor };
+        if (self.exact_index) |index| return .{ .status = .exact_content, .face_index = index };
+        if (self.mode == .exact) return .{ .status = if (self.descriptor.has_content_identity) .content_mismatch else .content_unavailable };
+        if (self.postscript_ambiguous) return .{ .status = .ambiguous };
+        if (self.postscript_index) |index| return .{ .status = .postscript, .face_index = index };
+        if (self.family_ambiguous) return .{ .status = .ambiguous };
+        if (self.family_index) |index| return .{ .status = .family_style, .face_index = index };
+        return .{ .status = .not_found };
+    }
+};
+
 pub fn sourceDigest(bytes: []const u8) Digest {
     var out: Digest = undefined;
     std.crypto.hash.sha2.Sha256.hash(bytes, &out, .{});
@@ -229,42 +272,13 @@ pub fn exactContentMatch(descriptor: Descriptor, digest: Digest, source_size: u6
 }
 
 pub fn resolveCandidates(candidates: []const Candidate, descriptor: Descriptor, mode: ResolveMode) Resolution {
-    if (!descriptor.valid()) return .{ .status = .invalid_descriptor };
-    if (descriptor.has_content_identity) {
-        var exact: ?usize = null;
-        for (candidates, 0..) |candidate, index| {
-            const digest = candidate.source_digest orelse continue;
-            if (!exactContentMatch(descriptor, digest, candidate.source_size, candidate.face_index)) continue;
-            if (!namesAndTraitsMatch(descriptor, candidate.family, candidate.subfamily, candidate.postscript_name, candidate.weight, candidate.stretch, candidate.style))
-                continue;
-            if (exact != null) return .{ .status = .ambiguous };
-            exact = index;
-        }
-        if (exact) |index| return .{ .status = .exact_content, .face_index = index };
-        if (mode == .exact) return .{ .status = .content_mismatch };
-    } else if (mode == .exact) return .{ .status = .content_unavailable };
-
-    if (descriptor.postscript_name.len != 0) {
-        const result = resolvePortableCandidates(candidates, descriptor, true);
-        if (result.status != .not_found) return result;
-    }
-    return resolvePortableCandidates(candidates, descriptor, false);
+    var resolver = Resolver.init(descriptor, mode);
+    for (candidates, 0..) |candidate, index| resolver.add(index, candidate);
+    return resolver.finish();
 }
 
-fn resolvePortableCandidates(candidates: []const Candidate, descriptor: Descriptor, postscript: bool) Resolution {
-    var matched: ?usize = null;
-    for (candidates, 0..) |candidate, index| {
-        const names_match = if (postscript)
-            candidate.postscript_name.len != 0 and std.ascii.eqlIgnoreCase(candidate.postscript_name, descriptor.postscript_name.slice())
-        else
-            std.ascii.eqlIgnoreCase(candidate.family, descriptor.family.slice()) and
-                std.ascii.eqlIgnoreCase(candidate.subfamily, descriptor.subfamily.slice());
-        if (!names_match or candidate.weight != descriptor.weight or candidate.stretch != descriptor.stretch or candidate.style != descriptor.style) continue;
-        if (matched != null) return .{ .status = .ambiguous };
-        matched = index;
-    }
-    if (matched) |index| return .{ .status = if (postscript) .postscript else .family_style, .face_index = index };
-    return .{ .status = .not_found };
+fn addUnique(index: *?usize, ambiguous: *bool, candidate: usize) void {
+    if (index.* != null and index.*.? != candidate) ambiguous.* = true else index.* = candidate;
 }
 
 fn digestIsZero(digest: Digest) bool {

@@ -545,41 +545,22 @@ pub const FontDatabase = struct {
     }
 
     pub fn resolveDescriptor(self: *const FontDatabase, descriptor: FontDescriptor, mode: FontDescriptorResolveMode) FontDescriptorResolution {
-        if (!descriptor.valid()) return .{ .status = .invalid_descriptor };
-        if (descriptor.has_content_identity) {
-            var matched: ?usize = null;
-            for (self.faces.items, 0..) |face, index| {
-                const owned = self.provenanceForFont(face_mod.backend.font(face.face)) orelse continue;
-                if (!descriptor_mod.exactContentMatch(descriptor, owned.source_digest, owned.source_size, @intCast(owned.face_index)) or
-                    !descriptor_mod.namesAndTraitsMatch(descriptor, face.family, face.subfamily, face.postscript_name, face.weight, face.stretch, face.style)) continue;
-                if (matched != null) return .{ .status = .ambiguous };
-                matched = index;
-            }
-            if (matched) |index| return .{ .status = .exact_content, .face_index = index };
-            if (mode == .exact) return .{ .status = .content_mismatch };
-        } else if (mode == .exact) return .{ .status = .content_unavailable };
-
-        if (descriptor.postscript_name.len != 0) {
-            const result = self.resolvePortableDescriptor(descriptor, true);
-            if (result.status != .not_found) return result;
-        }
-        return self.resolvePortableDescriptor(descriptor, false);
-    }
-
-    fn resolvePortableDescriptor(self: *const FontDatabase, descriptor: FontDescriptor, postscript: bool) FontDescriptorResolution {
-        var matched: ?usize = null;
+        var resolver = descriptor_mod.Resolver.init(descriptor, mode);
         for (self.faces.items, 0..) |face, index| {
-            const names_match = if (postscript)
-                face.postscript_name.len != 0 and std.ascii.eqlIgnoreCase(face.postscript_name, descriptor.postscript_name.slice())
-            else
-                std.ascii.eqlIgnoreCase(face.family, descriptor.family.slice()) and
-                    std.ascii.eqlIgnoreCase(face.subfamily, descriptor.subfamily.slice());
-            if (!names_match or face.weight != descriptor.weight or face.stretch != descriptor.stretch or face.style != descriptor.style) continue;
-            if (matched != null) return .{ .status = .ambiguous };
-            matched = index;
+            const owned = self.provenanceForFont(face_mod.backend.font(face.face));
+            resolver.add(index, .{
+                .family = face.family,
+                .subfamily = face.subfamily,
+                .postscript_name = face.postscript_name,
+                .weight = face.weight,
+                .stretch = face.stretch,
+                .style = face.style,
+                .source_digest = if (owned) |value| value.source_digest else null,
+                .source_size = if (owned) |value| value.source_size else 0,
+                .face_index = if (owned) |value| @intCast(value.face_index) else 0,
+            });
         }
-        if (matched) |index| return .{ .status = if (postscript) .postscript else .family_style, .face_index = index };
-        return .{ .status = .not_found };
+        return resolver.finish();
     }
 
     fn findFallbackFace(self: *const FontDatabase, codepoint: u21, query: FontQuery) ?*const FontFaceInfo {

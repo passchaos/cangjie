@@ -57,6 +57,10 @@ pub const CascadeRun = struct {
     /// Range in `ShapedText.normalized_variation_coords`.
     variation_coord_start: usize = 0,
     variation_coord_len: usize = 0,
+    baseline_ascent: f32 = 0,
+    baseline_descent: f32 = 0,
+    baseline_leading: f32 = 0,
+    has_baseline_metrics: bool = false,
 
     pub fn glyphs(self: CascadeRun, shaped: ShapedText) []const GlyphPosition {
         return shaped.glyphs[self.glyph_start .. self.glyph_start + self.glyph_len];
@@ -80,6 +84,32 @@ pub const CascadeRun = struct {
         return shaped.normalized_variation_coords[self.variation_coord_start..end];
     }
 };
+
+pub const BaselineMetrics = struct {
+    ascent: f32,
+    descent: f32,
+    leading: f32,
+
+    pub fn lineHeight(self: BaselineMetrics) f32 {
+        return self.ascent + self.descent + self.leading;
+    }
+};
+
+pub fn baselineMetricsAt(
+    font: *const Font,
+    font_size: f32,
+    normalized_coords: []const f32,
+) !BaselineMetrics {
+    const scale = font_size / @as(f32, @floatFromInt(font.units_per_em));
+    const ascender_delta = if (normalized_coords.len == 0) 0 else (try font.mvarDeltaAtCoords("hasc".*, normalized_coords)) orelse 0;
+    const descender_delta = if (normalized_coords.len == 0) 0 else (try font.mvarDeltaAtCoords("hdsc".*, normalized_coords)) orelse 0;
+    const line_gap_delta = if (normalized_coords.len == 0) 0 else (try font.mvarDeltaAtCoords("hlgp".*, normalized_coords)) orelse 0;
+    return .{
+        .ascent = @as(f32, @floatFromInt(@as(i32, font.ascender) + ascender_delta)) * scale,
+        .descent = -@as(f32, @floatFromInt(@as(i32, font.descender) + descender_delta)) * scale,
+        .leading = @as(f32, @floatFromInt(@as(i32, font.line_gap) + line_gap_delta)) * scale,
+    };
+}
 
 /// Internal bridge for layout/raster modules. Keeping this off the public
 /// record's method set prevents implementation fonts from leaking through

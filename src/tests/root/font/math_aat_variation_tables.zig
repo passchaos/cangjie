@@ -585,6 +585,104 @@ test "shaping applies normalized variation metric coordinates" {
     try std.testing.expectEqual(@as(usize, 1), shaped_cache.hits);
 }
 
+test "fallback cascade preserves an immutable location per face" {
+    const allocator = std.testing.allocator;
+    const test_font = @import("../../../test_font.zig");
+
+    const primary_bytes = try test_font.buildSingleCodepointTtf(allocator, 'B');
+    defer allocator.free(primary_bytes);
+    const variable_bytes = try test_font.buildMetricVariationTtf(allocator);
+    defer allocator.free(variable_bytes);
+    var primary = try Font.parse(allocator, primary_bytes);
+    defer primary.deinit();
+    var variable = try Font.parse(allocator, variable_bytes);
+    defer variable.deinit();
+
+    const fonts = [_]*const Font{ &primary, &variable };
+    const locations = [_][]const f32{ &.{}, &.{0.5} };
+    const cascade = FontCascade.initWithLocations(&fonts, &locations);
+    try cascade.validateLocations();
+    var buffer = LayoutBuffer.init(allocator);
+    defer buffer.deinit();
+    var cache = ShapedRunCache.init(allocator);
+    defer cache.deinit();
+
+    const varied = try TextShaper.shapeUtf8CascadeWithCaches(
+        cascade,
+        null,
+        null,
+        null,
+        &cache,
+        &buffer,
+        "BA",
+        20,
+        .{},
+    );
+    try std.testing.expectEqual(@as(usize, 2), varied.runs.len);
+    try std.testing.expectEqual(@as(usize, 0), varied.runs[0].font_index);
+    try std.testing.expectEqual(@as(usize, 1), varied.runs[1].font_index);
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0.5},
+        varied.runs[1].normalizedVariationCoords(varied),
+    );
+    const varied_width = varied.width();
+
+    const default_cascade = FontCascade.init(&fonts);
+    const default = try TextShaper.shapeUtf8CascadeWithCaches(
+        default_cascade,
+        null,
+        null,
+        null,
+        &cache,
+        &buffer,
+        "BA",
+        20,
+        .{},
+    );
+    try std.testing.expect(varied_width > default.width());
+    try std.testing.expectEqual(@as(usize, 2), cache.entries.items.len);
+    try std.testing.expectError(
+        error.InvalidFontCascade,
+        FontCascade.initWithLocations(&fonts, &.{&.{}}).validateLocations(),
+    );
+    try std.testing.expectError(
+        error.BadSfnt,
+        FontCascade.initWithLocations(&fonts, &.{ &.{}, &.{1.1} }).validateLocations(),
+    );
+
+    var owned_coordinate = [_]f32{0.5};
+    const owned_locations = [_][]const f32{ &.{}, &owned_coordinate };
+    var retained = try TextShaper.shapeParagraphUtf8(
+        allocator,
+        FontCascade.initWithLocations(&fonts, &owned_locations),
+        &buffer,
+        "BA",
+        20,
+        .{ .max_width = 100 },
+    );
+    defer retained.deinit();
+    owned_coordinate[0] = 0;
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0.5},
+        retained.cascade_locations.slices[1],
+    );
+    var reflow = @import("../../../layout/paragraph/retained.zig")
+        .ReflowBuffer.init(allocator);
+    defer reflow.deinit();
+    const retained_layout = try retained.layout(
+        &reflow,
+        .{ .max_width = 100 },
+    );
+    const retained_run = retained_layout.runs[1];
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0.5},
+        retained_layout.normalized_variation_coords[retained_run.variation_coord_start..][0..retained_run.variation_coord_len],
+    );
+}
+
 test "lazy HVAR and VVAR metadata revalidates borrowed table bytes" {
     const allocator = std.testing.allocator;
     const test_font = @import("../../../test_font.zig");

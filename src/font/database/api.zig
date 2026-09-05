@@ -24,17 +24,25 @@ pub const Query = impl.FontQuery;
 pub const Source = impl.FontSource;
 pub const Style = impl.FontStyle;
 pub const Descriptor = impl.FontDescriptor;
+pub const InstanceDescriptor = impl.FontInstanceDescriptor;
 pub const DescriptorResolveMode = impl.FontDescriptorResolveMode;
 pub const DescriptorResolveStatus = impl.FontDescriptorResolveStatus;
 pub const DescriptorResolution = impl.FontDescriptorResolution;
 pub const DescriptorCandidate = @import("descriptor.zig").Candidate;
 pub const DescriptorDigest = @import("descriptor.zig").Digest;
 pub const DescriptorResolver = @import("descriptor.zig").Resolver;
+pub const InstanceDescriptorCandidate = impl.FontInstanceDescriptorCandidate;
+pub const InstanceDescriptorResolver = impl.FontInstanceDescriptorResolver;
 pub const descriptor_wire_size = impl.font_descriptor_wire_size;
+pub const instance_descriptor_wire_size = impl.font_instance_descriptor_wire_size;
 pub const encodeDescriptor = impl.encodeFontDescriptor;
 pub const decodeDescriptor = impl.decodeFontDescriptor;
+pub const encodeInstanceDescriptor = impl.encodeFontInstanceDescriptor;
+pub const decodeInstanceDescriptor = impl.decodeFontInstanceDescriptor;
 pub const descriptorSourceDigest = impl.fontDescriptorSourceDigest;
 pub const resolveDescriptorCandidates = @import("descriptor.zig").resolveCandidates;
+pub const resolveInstanceDescriptorCandidates =
+    impl.resolveFontInstanceDescriptorCandidates;
 
 pub const Database = struct {
     /// Source-visible implementation storage; use the focused methods below.

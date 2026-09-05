@@ -20,6 +20,10 @@ pub const Span = struct {
     /// bound to the original paragraph cascade and uses a separate union only
     /// to assign stable public run indexes.
     faces: ?[]const *const face_mod.Face = null,
+    /// Optional immutable variable-font locations parallel to `faces`. A
+    /// non-empty `normalized_variation_coords` slice remains an explicit
+    /// span-wide override for compatibility.
+    normalized_variation_locations: ?[]const []const f32 = null,
     script_tag: ?unicode.OpenTypeScriptTag = null,
     language_tag: ?unicode.OpenTypeLanguageTag = null,
     features: []const unicode.FeatureOverride = &.{},
@@ -152,6 +156,10 @@ pub fn shapeEquivalent(a: Span, b: Span) bool {
     if (a.byteEnd() != b.byte_start or
         a.font_size != b.font_size or
         !optionalFontSlicesEqual(a.faces, b.faces) or
+        !optionalVariationLocationsEqual(
+            a.normalized_variation_locations,
+            b.normalized_variation_locations,
+        ) or
         a.script_tag != b.script_tag or
         a.language_tag != b.language_tag or
         !featureSlicesEqual(a.features, b.features) or
@@ -161,6 +169,24 @@ pub fn shapeEquivalent(a: Span, b: Span) bool {
     }
     for (a.normalized_variation_coords, b.normalized_variation_coords) |lhs, rhs| {
         if (@as(u32, @bitCast(lhs)) != @as(u32, @bitCast(rhs))) return false;
+    }
+    return true;
+}
+
+fn optionalVariationLocationsEqual(
+    a: ?[]const []const f32,
+    b: ?[]const []const f32,
+) bool {
+    const a_locations = a orelse &.{};
+    const b_locations = b orelse &.{};
+    if (a_locations.len != b_locations.len) return false;
+    for (a_locations, b_locations) |a_location, b_location| {
+        if (a_location.len != b_location.len) return false;
+        for (a_location, b_location) |lhs, rhs| {
+            if (@as(u32, @bitCast(lhs)) != @as(u32, @bitCast(rhs))) {
+                return false;
+            }
+        }
     }
     return true;
 }
@@ -309,6 +335,13 @@ test "styled spans distinguish shaping from paint geometry" {
 
     b.font_size = 17;
     try std.testing.expect(!shapeEquivalent(a, b));
+
+    b = a;
+    b.byte_start = 1;
+    b.normalized_variation_locations = &.{&.{0.5}};
+    try std.testing.expect(!shapeEquivalent(a, b));
+    b.normalized_variation_locations = &.{};
+    try std.testing.expect(shapeEquivalent(a, b));
 }
 
 test "styled span lookup handles visual cluster order" {

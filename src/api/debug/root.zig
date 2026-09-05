@@ -41,9 +41,11 @@ pub fn dumpFontFallback(
     cascade: face_mod.Cascade,
     text: []const u8,
 ) !void {
+    const cascade_value = font_fallbackCascade(cascade);
+    try cascade_value.validateLocations();
     return impl.dumpFontFallback(
         writer,
-        .init(face_mod.backend.fonts(cascade.faces)),
+        cascade_value,
         text,
     );
 }
@@ -53,9 +55,18 @@ pub fn dumpMissingGlyphs(
     cascade: face_mod.Cascade,
     text: []const u8,
 ) !void {
+    const cascade_value = font_fallbackCascade(cascade);
+    try cascade_value.validateLocations();
     return impl.dumpMissingGlyphs(
         writer,
-        .init(face_mod.backend.fonts(cascade.faces)),
+        cascade_value,
         text,
+    );
+}
+
+fn font_fallbackCascade(cascade: face_mod.Cascade) @import("../../shaping/fallback/font/root.zig").Cascade {
+    return .initWithLocations(
+        face_mod.backend.fonts(cascade.faces),
+        cascade.normalized_variation_locations,
     );
 }

@@ -2731,10 +2731,10 @@ pub fn build(b: *std.Build) void {
     const font_descriptor_bench = b.addExecutable(.{ .name = "cangjie-font-descriptor-bench", .root_module = font_descriptor_bench_mod });
     const run_font_descriptor_bench = b.addRunArtifact(font_descriptor_bench);
     if (b.args) |args| run_font_descriptor_bench.addArgs(args) else run_font_descriptor_bench.addArgs(&.{
-        "--faces=4096",                              "--iterations=20000",
-        "--max-exact-ns-per-query=100000",           "--max-portable-ns-per-query=100000",
-        "--max-codec-ns-per-roundtrip=10000",        "--expect-checksum=12971938209271991909",
-        "--json=zig-out/font_descriptor_bench.json",
+        "--faces=4096",                          "--iterations=20000",
+        "--max-exact-ns-per-query=100000",       "--max-portable-ns-per-query=100000",
+        "--max-codec-ns-per-roundtrip=10000",    "--max-instance-codec-ns-per-roundtrip=10000",
+        "--expect-checksum=5386328980970983525", "--json=zig-out/font_descriptor_bench.json",
     });
     const font_descriptor_bench_step = b.step("font-descriptor-bench", "Benchmark stable font descriptor codec and deterministic resolver");
     font_descriptor_bench_step.dependOn(&run_font_descriptor_bench.step);

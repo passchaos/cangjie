@@ -27,7 +27,7 @@ pub fn measure(
     var buffer = context_output.Buffer.init(allocator);
     defer buffer.deinit();
     return attributed_model.measureAttributedTextUtf8(
-        internalCascade(cascade),
+        try internalCascade(cascade),
         &buffer,
         attributed,
         max_width,
@@ -41,7 +41,7 @@ pub fn measureRuns(
 ) !paragraph_types.TextMetrics {
     return attributed_model.measureAttributedRunsUtf8(
         allocator,
-        internalCascade(cascade),
+        try internalCascade(cascade),
         attributed,
     );
 }
@@ -53,7 +53,7 @@ pub fn layoutRuns(
 ) !RunLayout {
     return attributed_model.layoutAttributedRunsUtf8(
         allocator,
-        internalCascade(cascade),
+        try internalCascade(cascade),
         attributed,
     );
 }
@@ -65,7 +65,7 @@ pub fn layoutGlyphRuns(
 ) !GlyphRunLayout {
     return attributed_model.layoutAttributedGlyphRunsUtf8(
         allocator,
-        internalCascade(cascade),
+        try internalCascade(cascade),
         attributed,
     );
 }
@@ -78,12 +78,17 @@ pub fn layoutParagraph(
 ) !ParagraphLayout {
     return attributed_model.layoutAttributedParagraphUtf8(
         allocator,
-        internalCascade(cascade),
+        try internalCascade(cascade),
         attributed,
         max_width,
     );
 }
 
-fn internalCascade(cascade: face_mod.Cascade) font_fallback.Cascade {
-    return .init(face_mod.backend.fonts(cascade.faces));
+fn internalCascade(cascade: face_mod.Cascade) !font_fallback.Cascade {
+    const result = font_fallback.Cascade.initWithLocations(
+        face_mod.backend.fonts(cascade.faces),
+        cascade.normalized_variation_locations,
+    );
+    try result.validateLocations();
+    return result;
 }

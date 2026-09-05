@@ -14,6 +14,10 @@ pub const SourceDigest = Digest;
 pub const wire_version: u16 = 1;
 pub const wire_size: usize = 644;
 const wire_magic = "CFD1";
+pub const max_instance_coordinates: usize = 32;
+pub const instance_wire_version: u16 = 1;
+pub const instance_wire_size: usize = 716;
+const instance_wire_magic = "CFI1";
 
 pub const Name = struct {
     bytes: [name_capacity]u8 = .{0} ** name_capacity,
@@ -109,6 +113,79 @@ pub const Descriptor = struct {
     }
 };
 
+/// Stable identity for one immutable variable-font instance. Coordinates are
+/// canonical OpenType F2Dot14 values in the exact face's fvar axis order. A
+/// non-default location therefore requires content identity; portable name
+/// fallback is intentionally limited to the default instance.
+pub const InstanceDescriptor = struct {
+    face: Descriptor,
+    normalized_coordinates: [max_instance_coordinates]i16 =
+        .{0} ** max_instance_coordinates,
+    coordinate_count: u8 = 0,
+
+    pub fn init(face: Descriptor, normalized_coordinates: []const f32) !InstanceDescriptor {
+        if (!face.valid() or normalized_coordinates.len > max_instance_coordinates) {
+            return error.InvalidDescriptor;
+        }
+        var non_default = false;
+        var out = InstanceDescriptor{ .face = face };
+        for (normalized_coordinates, 0..) |coordinate, index| {
+            if (!std.math.isFinite(coordinate) or coordinate < -1 or
+                coordinate > 1) return error.InvalidDescriptor;
+            out.normalized_coordinates[index] = @intFromFloat(
+                @round(coordinate * 16384.0),
+            );
+            non_default = non_default or out.normalized_coordinates[index] != 0;
+        }
+        if (!non_default) return out;
+        if (!face.has_content_identity) return error.InstanceRequiresContentIdentity;
+        out.coordinate_count = @intCast(normalized_coordinates.len);
+        return out;
+    }
+
+    pub fn valid(self: *const InstanceDescriptor) bool {
+        if (!self.face.valid() or
+            self.coordinate_count > max_instance_coordinates or
+            (self.coordinate_count != 0 and !self.face.has_content_identity))
+        {
+            return false;
+        }
+        for (self.normalized_coordinates[0..self.coordinate_count]) |value| {
+            if (value < -16384 or value > 16384) return false;
+        }
+        for (self.normalized_coordinates[self.coordinate_count..]) |value| {
+            if (value != 0) return false;
+        }
+        return true;
+    }
+
+    pub fn isDefault(self: *const InstanceDescriptor) bool {
+        return self.coordinate_count == 0;
+    }
+
+    pub fn normalizedCoordinates(
+        self: *const InstanceDescriptor,
+        out: *[max_instance_coordinates]f32,
+    ) []const f32 {
+        for (self.normalized_coordinates[0..self.coordinate_count], 0..) |value, index| {
+            out[index] = @as(f32, @floatFromInt(value)) / 16384.0;
+        }
+        return out[0..self.coordinate_count];
+    }
+
+    pub fn fingerprint(self: *const InstanceDescriptor) u64 {
+        if (!self.valid()) return 0;
+        if (self.isDefault()) return self.face.fingerprint();
+        var hash = std.hash.Wyhash.init(self.face.fingerprint());
+        hashInt(&hash, self.coordinate_count);
+        for (self.normalized_coordinates[0..self.coordinate_count]) |value| {
+            hashInt(&hash, value);
+        }
+        const result = hash.final();
+        return if (result == 0) 1 else result;
+    }
+};
+
 pub const ResolveMode = enum { exact, portable };
 pub const ResolveStatus = enum { exact_content, postscript, family_style, content_unavailable, content_mismatch, ambiguous, not_found, invalid_descriptor };
 
@@ -135,6 +212,11 @@ pub const Candidate = struct {
     source_digest: ?Digest = null,
     source_size: u64 = 0,
     face_index: u32 = 0,
+};
+
+pub const InstanceCandidate = struct {
+    face: Candidate,
+    normalized_coordinates: []const f32 = &.{},
 };
 
 pub const Resolver = struct {
@@ -176,6 +258,62 @@ pub const Resolver = struct {
         if (self.family_ambiguous) return .{ .status = .ambiguous };
         if (self.family_index) |index| return .{ .status = .family_style, .face_index = index };
         return .{ .status = .not_found };
+    }
+};
+
+pub const InstanceResolver = struct {
+    descriptor: InstanceDescriptor,
+    face_resolver: Resolver,
+    exact_index: ?usize = null,
+    saw_exact_face: bool = false,
+
+    pub fn init(descriptor: InstanceDescriptor, mode: ResolveMode) InstanceResolver {
+        return .{
+            .descriptor = descriptor,
+            .face_resolver = Resolver.init(descriptor.face, mode),
+        };
+    }
+
+    pub fn add(self: *InstanceResolver, index: usize, candidate: InstanceCandidate) void {
+        if (!self.descriptor.valid() or !candidateLocationValid(candidate.normalized_coordinates)) return;
+        if (candidate.face.source_digest) |digest| {
+            if (exactContentMatch(
+                self.descriptor.face,
+                digest,
+                candidate.face.source_size,
+                candidate.face.face_index,
+            )) {
+                self.saw_exact_face = true;
+                if (instanceLocationMatches(
+                    self.descriptor,
+                    candidate.normalized_coordinates,
+                )) {
+                    self.exact_index = if (self.exact_index) |current|
+                        @min(current, index)
+                    else
+                        index;
+                }
+            }
+        }
+        if (!self.descriptor.isDefault() or
+            !candidateLocationIsDefault(candidate.normalized_coordinates)) return;
+        self.face_resolver.add(index, candidate.face);
+    }
+
+    pub fn finish(self: InstanceResolver) Resolution {
+        if (!self.descriptor.valid()) return .{ .status = .invalid_descriptor };
+        if (self.exact_index) |index| {
+            return .{ .status = .exact_content, .face_index = index };
+        }
+        if (!self.descriptor.isDefault()) {
+            return .{ .status = if (self.saw_exact_face)
+                .content_mismatch
+            else if (self.descriptor.face.has_content_identity)
+                .content_mismatch
+            else
+                .content_unavailable };
+        }
+        return self.face_resolver.finish();
     }
 };
 
@@ -257,6 +395,51 @@ pub fn decode(bytes: []const u8) !Descriptor {
     return descriptor;
 }
 
+pub fn encodeInstance(descriptor: InstanceDescriptor, out: []u8) ![]const u8 {
+    if (!descriptor.valid()) return error.InvalidDescriptor;
+    if (out.len < instance_wire_size) return error.NoSpaceLeft;
+    var cursor: usize = 0;
+    @memcpy(out[cursor..][0..instance_wire_magic.len], instance_wire_magic);
+    cursor += instance_wire_magic.len;
+    writeInt(u16, out, &cursor, instance_wire_version);
+    writeInt(u8, out, &cursor, descriptor.coordinate_count);
+    writeInt(u8, out, &cursor, 0);
+    _ = try encode(descriptor.face, out[cursor..][0..wire_size]);
+    cursor += wire_size;
+    for (descriptor.normalized_coordinates) |coordinate| {
+        writeInt(i16, out, &cursor, coordinate);
+    }
+    std.debug.assert(cursor == instance_wire_size);
+    return out[0..instance_wire_size];
+}
+
+pub fn decodeInstance(bytes: []const u8) !InstanceDescriptor {
+    if (bytes.len != instance_wire_size) return error.InvalidDescriptorSize;
+    var cursor: usize = 0;
+    if (!std.mem.eql(u8, bytes[cursor..][0..instance_wire_magic.len], instance_wire_magic)) {
+        return error.InvalidMagic;
+    }
+    cursor += instance_wire_magic.len;
+    if (readInt(u16, bytes, &cursor) != instance_wire_version) {
+        return error.UnsupportedVersion;
+    }
+    const coordinate_count = readInt(u8, bytes, &cursor);
+    if (readInt(u8, bytes, &cursor) != 0) return error.InvalidReserved;
+    const face = try decode(bytes[cursor..][0..wire_size]);
+    cursor += wire_size;
+    var descriptor = InstanceDescriptor{
+        .face = face,
+        .coordinate_count = coordinate_count,
+    };
+    for (&descriptor.normalized_coordinates) |*coordinate| {
+        coordinate.* = readInt(i16, bytes, &cursor);
+    }
+    if (cursor != instance_wire_size or !descriptor.valid()) {
+        return error.InvalidDescriptor;
+    }
+    return descriptor;
+}
+
 pub fn namesAndTraitsMatch(descriptor: Descriptor, family: []const u8, subfamily: []const u8, postscript_name: []const u8, weight: u16, stretch: u16, style: types.Style) bool {
     if (descriptor.weight != weight or descriptor.stretch != stretch or descriptor.style != style) return false;
     if (descriptor.postscript_name.len != 0 and postscript_name.len != 0)
@@ -274,6 +457,46 @@ pub fn resolveCandidates(candidates: []const Candidate, descriptor: Descriptor, 
     var resolver = Resolver.init(descriptor, mode);
     for (candidates, 0..) |candidate, index| resolver.add(index, candidate);
     return resolver.finish();
+}
+
+pub fn resolveInstanceCandidates(
+    candidates: []const InstanceCandidate,
+    descriptor: InstanceDescriptor,
+    mode: ResolveMode,
+) Resolution {
+    var resolver = InstanceResolver.init(descriptor, mode);
+    for (candidates, 0..) |candidate, index| resolver.add(index, candidate);
+    return resolver.finish();
+}
+
+fn candidateLocationValid(coordinates: []const f32) bool {
+    if (coordinates.len > max_instance_coordinates) return false;
+    for (coordinates) |coordinate| {
+        if (!std.math.isFinite(coordinate) or coordinate < -1 or coordinate > 1) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn candidateLocationIsDefault(coordinates: []const f32) bool {
+    for (coordinates) |coordinate| if (coordinate != 0) return false;
+    return true;
+}
+
+fn instanceLocationMatches(
+    descriptor: InstanceDescriptor,
+    coordinates: []const f32,
+) bool {
+    if (descriptor.coordinate_count == 0) {
+        return candidateLocationIsDefault(coordinates);
+    }
+    if (coordinates.len != descriptor.coordinate_count) return false;
+    for (coordinates, descriptor.normalized_coordinates[0..descriptor.coordinate_count]) |coordinate, expected| {
+        const quantized: i16 = @intFromFloat(@round(coordinate * 16384.0));
+        if (quantized != expected) return false;
+    }
+    return true;
 }
 
 fn addUnique(index: *?usize, ambiguous: *bool, candidate: usize) void {
@@ -343,6 +566,77 @@ test "font descriptors are canonical pointer-free values" {
     try std.testing.expectEqual(descriptor, decoded);
     wire[8 + 2 + name_capacity - 1] = 1;
     try std.testing.expectError(error.InvalidPadding, decode(&wire));
+}
+
+test "font instance descriptors preserve canonical normalized coordinates" {
+    const face = try Descriptor.init(.{
+        .family = "Variable Sans",
+        .subfamily = "Regular",
+        .source_digest = sourceDigest("variable font bytes"),
+        .source_size = 19,
+    });
+    const descriptor = try InstanceDescriptor.init(face, &.{ -1, 0.5, 1 });
+    var wire: [instance_wire_size]u8 = undefined;
+    const decoded = try decodeInstance(try encodeInstance(descriptor, &wire));
+    try std.testing.expectEqual(descriptor, decoded);
+    var coordinates: [max_instance_coordinates]f32 = undefined;
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{ -1, 0.5, 1 },
+        decoded.normalizedCoordinates(&coordinates),
+    );
+    var corrupt = wire;
+    corrupt[7] = 1;
+    try std.testing.expectError(error.InvalidReserved, decodeInstance(&corrupt));
+
+    const portable = try Descriptor.init(.{
+        .family = "Variable Sans",
+        .subfamily = "Regular",
+    });
+    try std.testing.expectError(
+        error.InstanceRequiresContentIdentity,
+        InstanceDescriptor.init(portable, &.{0.5}),
+    );
+    const portable_default = try InstanceDescriptor.init(portable, &.{ 0, 0 });
+    try std.testing.expect(portable_default.isDefault());
+    try std.testing.expectEqual(portable.fingerprint(), portable_default.fingerprint());
+}
+
+test "font instance resolution requires the exact non-default location" {
+    const digest = sourceDigest("instance font bytes");
+    const face = try Descriptor.init(.{
+        .family = "Instance Sans",
+        .subfamily = "Regular",
+        .postscript_name = "InstanceSans-Regular",
+        .source_digest = digest,
+        .source_size = 19,
+    });
+    const descriptor = try InstanceDescriptor.init(face, &.{0.5});
+    const candidate = Candidate{
+        .family = "Renamed Instance Sans",
+        .subfamily = "Book",
+        .postscript_name = "RenamedInstanceSans-Book",
+        .weight = 450,
+        .stretch = 90,
+        .style = .oblique,
+        .source_digest = digest,
+        .source_size = 19,
+    };
+    const exact = resolveInstanceCandidates(
+        &.{.{ .face = candidate, .normalized_coordinates = &.{0.5} }},
+        descriptor,
+        .exact,
+    );
+    try std.testing.expectEqual(ResolveStatus.exact_content, exact.status);
+    try std.testing.expectEqual(@as(?usize, 0), exact.face_index);
+    try std.testing.expectEqual(
+        ResolveStatus.content_mismatch,
+        resolveInstanceCandidates(
+            &.{.{ .face = candidate, .normalized_coordinates = &.{0.25} }},
+            descriptor,
+            .portable,
+        ).status,
+    );
 }
 
 test "exact content identity is independent of mutable font metadata" {

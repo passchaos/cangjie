@@ -183,7 +183,7 @@ pub const Engine = struct {
     ) !run_types.ShapedText {
         const state = self.getStateForWork();
         return text_shaper.TextShaper.shapeUtf8CascadeWithCaches(
-            internalCascade(cascade),
+            try internalCascade(cascade),
             if (state.cache_font_data) &state.font_fallback else null,
             if (state.cache_font_data) &state.glyph_metrics else null,
             if (state.cache_font_data) &state.glyph_indices else null,
@@ -203,7 +203,7 @@ pub const Engine = struct {
     ) !run_types.ScriptedText {
         const state = self.getStateForWork();
         return text_shaper.TextShaper.shapeUtf8ScriptRuns(
-            internalCascade(cascade),
+            try internalCascade(cascade),
             &state.output,
             request.text,
             request.font_size,
@@ -220,7 +220,7 @@ pub const Engine = struct {
         const state = self.getStateForWork();
         return text_shaper.TextShaper.shapeParagraphUtf8WithCaches(
             state.allocator,
-            internalCascade(cascade),
+            try internalCascade(cascade),
             if (state.cache_font_data) &state.font_fallback else null,
             if (state.cache_font_data) &state.glyph_metrics else null,
             if (state.cache_font_data) &state.glyph_indices else null,
@@ -243,7 +243,7 @@ pub const Engine = struct {
         const state = self.getStateForWork();
         return retained_styled.prepare(
             state.allocator,
-            internalCascade(cascade),
+            try internalCascade(cascade),
             &state.output,
             &state.styled_output,
             request.text,
@@ -262,7 +262,7 @@ pub const Engine = struct {
         const state = self.getStateForWork();
         return shaping_orchestrator.TextShaper
             .layoutParagraphUtf8WithCachesAndAnalysis(
-            internalCascade(cascade),
+            try internalCascade(cascade),
             if (state.cache_font_data) &state.font_fallback else null,
             if (state.cache_font_data) &state.glyph_metrics else null,
             if (state.cache_font_data) &state.glyph_indices else null,
@@ -282,7 +282,7 @@ pub const Engine = struct {
     ) !StyledParagraph {
         const state = self.getStateForWork();
         const paragraph = try text_shaper.TextShaper.layoutStyledParagraphUtf8(
-            internalCascade(cascade),
+            try internalCascade(cascade),
             &state.output,
             &state.styled_output,
             request.text,
@@ -310,7 +310,7 @@ pub const Engine = struct {
             state.styled_output.clear();
             const paragraph = try shaping_orchestrator.TextShaper
                 .layoutParagraphUtf8WithCachesAndAnalysis(
-                internalCascade(cascade),
+                try internalCascade(cascade),
                 if (state.cache_font_data) &state.font_fallback else null,
                 if (state.cache_font_data) &state.glyph_metrics else null,
                 if (state.cache_font_data) &state.glyph_indices else null,
@@ -334,7 +334,7 @@ pub const Engine = struct {
         }
         const paragraph = try text_shaper.TextShaper
             .layoutStyledParagraphUtf8WithoutContentWidths(
-            internalCascade(cascade),
+            try internalCascade(cascade),
             &state.output,
             &state.styled_output,
             request.text,
@@ -358,7 +358,7 @@ pub const Engine = struct {
         var paragraph =
             try text_shaper.TextShaper.shapeParagraphUtf8WithCaches(
                 state.allocator,
-                internalCascade(cascade),
+                try internalCascade(cascade),
                 if (state.cache_font_data) &state.font_fallback else null,
                 if (state.cache_font_data) &state.glyph_metrics else null,
                 if (state.cache_font_data) &state.glyph_indices else null,
@@ -420,6 +420,11 @@ fn uniformStyledOptions(
     return options;
 }
 
-fn internalCascade(cascade: face_mod.Cascade) font_fallback.Cascade {
-    return .init(face_mod.backend.fonts(cascade.faces));
+fn internalCascade(cascade: face_mod.Cascade) !font_fallback.Cascade {
+    const result = font_fallback.Cascade.initWithLocations(
+        face_mod.backend.fonts(cascade.faces),
+        cascade.normalized_variation_locations,
+    );
+    try result.validateLocations();
+    return result;
 }

@@ -119,7 +119,8 @@ pub const TextShaper = struct {
 
     pub fn shapeUtf8CascadeWithCaches(cascade: FontCascade, fallback_cache: ?*FontFallbackCache, metrics_cache: ?*GlyphMetricsCache, glyph_index_cache: ?*GlyphIndexCache, shaped_cache: ?*ShapedRunCache, buffer: *LayoutBuffer, text: []const u8, font_size: f32, options: ShapeOptions) !ShapedText {
         try plan_validation.input(text, font_size, options);
-        const cache_key = if (shaped_cache != null) ShapedRunCache.key(cascade.fonts, text, font_size, options) else undefined;
+        try cascade.validateLocations();
+        const cache_key = if (shaped_cache != null) ShapedRunCache.key(cascade, text, font_size, options) else undefined;
         if (shaped_cache) |cache| {
             if (cache.lookup(cache_key)) |entry| {
                 buffer.clear();
@@ -198,6 +199,7 @@ pub const TextShaper = struct {
         try paragraph_options.validateForText(text, options);
         try plan_validation.utf8(text);
         if (cascade.fonts.len == 0) return error.EmptyFontCascade;
+        try cascade.validateLocations();
         const shape_options = paragraph_options.shapeOptions(options);
         const needs_bidi_reorder = plan_bidi.paragraphNeedsReorder(
             text,
@@ -271,6 +273,11 @@ pub const TextShaper = struct {
             cascade.fonts,
         );
         errdefer allocator.free(cascade_fonts);
+        var cascade_locations = try font_fallback.OwnedLocations.init(
+            allocator,
+            cascade.normalized_variation_locations,
+        );
+        errdefer cascade_locations.deinit();
         const pure_rtl_lines = options.direction == .rtl and
             bidi_order.visualOrderInputKind(owned_text, true) == .pure_rtl;
         const pure_rtl_may_have_mirroring = pure_rtl_lines and
@@ -314,6 +321,7 @@ pub const TextShaper = struct {
             .direct_bidi_scalar_glyphs = direct_bidi_scalar_glyphs,
             .bidi_paragraph = bidi_paragraph,
             .cascade_fonts = cascade_fonts,
+            .cascade_locations = cascade_locations,
             .font_size = font_size,
         };
     }
@@ -439,6 +447,7 @@ pub const TextShaper = struct {
         // cache lookup can publish an entry or increment observable counters.
         try plan_validation.fontSize(font_size);
         if (cascade.fonts.len == 0) return error.EmptyFontCascade;
+        try cascade.validateLocations();
         try inline_object.validate(text, options.inline_objects);
         const needs_bidi_reorder = plan_bidi.paragraphNeedsReorder(
             text,
@@ -662,6 +671,10 @@ const FixedFallbackContext = struct {
             local_start + text.len,
         );
         scoped.all_ascii = fallback_segment.isAscii(text);
+        scoped.lookup.normalized_variation_coords = cascade.locationFor(
+            font_index,
+            scoped.lookup.normalized_variation_coords,
+        );
         return try appendCascadeRun(
             cascade.fonts[font_index],
             self.metrics_cache,
@@ -1448,6 +1461,11 @@ fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
     const variation_range = try buffer.internVariationCoords(
         lookup_options.lookup.normalized_variation_coords,
     );
+    const baseline_metrics = try run_types.baselineMetricsAt(
+        font,
+        font_size,
+        lookup_options.lookup.normalized_variation_coords,
+    );
     const new_run = CascadeRun{
         .font = face_mod.backend.face(font),
         .font_index = font_index,
@@ -1458,6 +1476,10 @@ fn appendCascadeRun(font: *const Font, metrics_cache: ?*GlyphMetricsCache, glyph
         .y_offset = pen.y,
         .variation_coord_start = variation_range.start,
         .variation_coord_len = variation_range.len,
+        .baseline_ascent = baseline_metrics.ascent,
+        .baseline_descent = baseline_metrics.descent,
+        .baseline_leading = baseline_metrics.leading,
+        .has_baseline_metrics = true,
     };
     if (buffer.runs.items.len != 0) {
         const previous = &buffer.runs.items[buffer.runs.items.len - 1];

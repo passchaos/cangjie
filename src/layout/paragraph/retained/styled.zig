@@ -46,6 +46,7 @@ pub const ShapedParagraph = struct {
     inline_object_indexes: []const usize,
     /// Original fallback cascade used by spans with `faces = null`.
     cascade_fonts: []const *const Font,
+    cascade_locations: font_fallback.OwnedLocations,
     /// Stable public run-index namespace: base cascade followed by unique
     /// style-local faces.
     font_index_fonts: []const *const Font,
@@ -59,6 +60,7 @@ pub const ShapedParagraph = struct {
     pub fn deinit(self: *ShapedParagraph) void {
         if (self.bidi_paragraph) |*paragraph| paragraph.deinit();
         self.allocator.free(self.font_index_fonts);
+        self.cascade_locations.deinit();
         self.allocator.free(self.cascade_fonts);
         self.allocator.free(self.inline_object_indexes);
         self.allocator.free(self.line_breaks);
@@ -91,7 +93,10 @@ pub const ShapedParagraph = struct {
         try reflow.restore(self);
         errdefer reflow.clear();
         const paragraph = try styled_layout.reflow(.{
-            .cascade = font_fallback.Cascade.init(self.cascade_fonts),
+            .cascade = font_fallback.Cascade.initWithLocations(
+                self.cascade_fonts,
+                self.cascade_locations.slices,
+            ),
             .font_index_cascade = font_fallback.Cascade.init(
                 self.font_index_fonts,
             ),
@@ -340,6 +345,11 @@ pub fn prepare(
     }
     const cascade_fonts = try allocator.dupe(*const Font, cascade.fonts);
     errdefer allocator.free(cascade_fonts);
+    var cascade_locations = try font_fallback.OwnedLocations.init(
+        allocator,
+        cascade.normalized_variation_locations,
+    );
+    errdefer cascade_locations.deinit();
     return .{
         .allocator = allocator,
         .text = owned_text,
@@ -352,6 +362,7 @@ pub fn prepare(
         .line_breaks = line_breaks,
         .inline_object_indexes = object_indexes,
         .cascade_fonts = cascade_fonts,
+        .cascade_locations = cascade_locations,
         .font_index_fonts = union_fonts,
         .word_break_dictionary = options.word_break_dictionary,
         .hyphenation_dictionary = options.hyphenation.dictionary,
@@ -403,6 +414,7 @@ fn cloneSpans(
         output.* = input;
         output.features = &.{};
         output.normalized_variation_coords = &.{};
+        output.normalized_variation_locations = null;
         output.faces = null;
         if (input.faces) |faces| {
             output.faces = try allocator.dupe(*const face_mod.Face, faces);
@@ -414,6 +426,13 @@ fn cloneSpans(
             f32,
             input.normalized_variation_coords,
         );
+        if (input.normalized_variation_locations) |locations| {
+            const owned_locations = try cloneVariationLocations(
+                allocator,
+                locations,
+            );
+            output.normalized_variation_locations = owned_locations;
+        }
         initialized += 1;
     }
     return spans;
@@ -435,5 +454,25 @@ fn freeSpanContents(
         if (span.faces) |faces| allocator.free(faces);
         allocator.free(span.features);
         allocator.free(span.normalized_variation_coords);
+        if (span.normalized_variation_locations) |locations| {
+            freeVariationLocations(allocator, locations);
+        }
     }
+}
+
+fn cloneVariationLocations(allocator: std.mem.Allocator, source: []const []const f32) ![]const []const f32 {
+    const result = try allocator.alloc([]const f32, source.len);
+    errdefer allocator.free(result);
+    var initialized: usize = 0;
+    errdefer for (result[0..initialized]) |location| allocator.free(location);
+    for (source, result) |location, *owned| {
+        owned.* = try allocator.dupe(f32, location);
+        initialized += 1;
+    }
+    return result;
+}
+
+fn freeVariationLocations(allocator: std.mem.Allocator, locations: []const []const f32) void {
+    for (locations) |location| allocator.free(location);
+    allocator.free(locations);
 }

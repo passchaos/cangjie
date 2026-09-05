@@ -7,6 +7,7 @@
 const std = @import("std");
 
 const Font = @import("../../../font.zig").Font;
+const font_fallback = @import("../../fallback/font/root.zig");
 const glyph_position = @import("../../../layout/glyph_position.zig");
 const run_types = @import("../../../layout/types/runs.zig");
 const shaping_plan = @import("../../plan/root.zig");
@@ -19,6 +20,8 @@ pub const ShapedRunCacheKey = struct {
     plan: shaping_plan.ShapePlanKey,
     /// Borrowed for lookup keys and owned by the cache for stored keys.
     fonts: []const *const Font,
+    /// Per-face immutable instance locations parallel to `fonts`.
+    cascade_locations: []const []const f32,
     /// Borrowed for lookup keys and owned by the cache for stored keys.
     text: []const u8,
     /// Dynamic plan inputs are retained exactly because their hashes are only
@@ -29,17 +32,22 @@ pub const ShapedRunCacheKey = struct {
     context_after: []const u8,
 
     pub fn init(
-        fonts: []const *const Font,
+        cascade: font_fallback.Cascade,
         text: []const u8,
         font_size: f32,
         options: shaping_plan.ShapeOptions,
     ) ShapedRunCacheKey {
+        const effective_cascade = if (options.normalized_variation_coords.len != 0)
+            font_fallback.Cascade.init(cascade.fonts)
+        else
+            cascade;
         return .{
-            .cascade_hash = cascadeHash(fonts),
+            .cascade_hash = cascadeIdentityHash(effective_cascade),
             .text_hash = std.hash.Wyhash.hash(0, text),
             .font_size_bits = @bitCast(font_size),
             .plan = shaping_plan.ShapePlanKey.fromText(text, options),
-            .fonts = fonts,
+            .fonts = cascade.fonts,
+            .cascade_locations = effective_cascade.normalized_variation_locations,
             .text = text,
             .features = options.features,
             .normalized_variation_coords = options.normalized_variation_coords,
@@ -54,6 +62,11 @@ pub const ShapedRunCacheKey = struct {
             a.font_size_bits != b.font_size_bits or
             !a.plan.eql(b.plan) or
             a.fonts.len != b.fonts.len or
+            !variationLocationsEqual(
+                a.cascade_locations,
+                b.cascade_locations,
+                a.fonts.len,
+            ) or
             !std.mem.eql(u8, a.text, b.text) or
             !featureOverridesEqual(a.features, b.features) or
             !variationCoordsEqual(
@@ -78,6 +91,7 @@ pub const ShapedRunCacheKey = struct {
 
 pub const ShapedRunCacheEntry = struct {
     key: ShapedRunCacheKey,
+    cascade_locations: font_fallback.OwnedLocations,
     glyphs: []glyph_position.GlyphPosition,
     runs: []run_types.CascadeRun,
     variation_coords: []f32,
@@ -121,12 +135,12 @@ pub const ShapedRunCache = struct {
     }
 
     pub fn key(
-        fonts: []const *const Font,
+        cascade: font_fallback.Cascade,
         text: []const u8,
         font_size: f32,
         options: shaping_plan.ShapeOptions,
     ) ShapedRunCacheKey {
-        return .init(fonts, text, font_size, options);
+        return .init(cascade, text, font_size, options);
     }
 
     /// Return a borrowed entry that remains valid until the cache is mutated.
@@ -154,6 +168,11 @@ pub const ShapedRunCache = struct {
         if (self.max_entries == 0) return;
         const fonts = try self.allocator.dupe(*const Font, key_value.fonts);
         errdefer self.allocator.free(fonts);
+        var cascade_locations = try font_fallback.OwnedLocations.init(
+            self.allocator,
+            key_value.cascade_locations,
+        );
+        errdefer cascade_locations.deinit();
         const text = try self.allocator.dupe(u8, key_value.text);
         errdefer self.allocator.free(text);
         const features = try self.allocator.dupe(
@@ -191,6 +210,7 @@ pub const ShapedRunCache = struct {
 
         var owned_key = key_value;
         owned_key.fonts = fonts;
+        owned_key.cascade_locations = cascade_locations.slices;
         owned_key.text = text;
         owned_key.features = features;
         owned_key.normalized_variation_coords = normalized_variation_coords;
@@ -198,6 +218,7 @@ pub const ShapedRunCache = struct {
         owned_key.context_after = context_after;
         const owned = ShapedRunCacheEntry{
             .key = owned_key,
+            .cascade_locations = cascade_locations,
             .glyphs = glyphs,
             .runs = runs,
             .variation_coords = variation_coords,
@@ -215,6 +236,8 @@ pub const ShapedRunCache = struct {
 
     fn freeEntry(self: *ShapedRunCache, entry: ShapedRunCacheEntry) void {
         self.allocator.free(entry.key.fonts);
+        var cascade_locations = entry.cascade_locations;
+        cascade_locations.deinit();
         self.allocator.free(entry.key.text);
         self.allocator.free(entry.key.features);
         self.allocator.free(entry.key.normalized_variation_coords);
@@ -245,13 +268,8 @@ pub const ShapedRunCache = struct {
     }
 };
 
-fn cascadeHash(fonts: []const *const Font) u64 {
-    var hasher = std.hash.Wyhash.init(0);
-    for (fonts) |font| {
-        const addr = @intFromPtr(font);
-        hasher.update(std.mem.asBytes(&addr));
-    }
-    return hasher.final();
+fn cascadeIdentityHash(cascade: font_fallback.Cascade) u64 {
+    return cascade.shapingIdentityHash();
 }
 
 fn featureOverridesEqual(
@@ -279,9 +297,25 @@ fn variationCoordsEqual(a: []const f32, b: []const f32) bool {
     return true;
 }
 
+fn variationLocationsEqual(
+    a: []const []const f32,
+    b: []const []const f32,
+    font_count: usize,
+) bool {
+    if ((a.len != 0 and a.len != font_count) or
+        (b.len != 0 and b.len != font_count)) return false;
+    for (0..font_count) |index| {
+        const a_location = if (a.len == 0) &.{} else a[index];
+        const b_location = if (b.len == 0) &.{} else b[index];
+        if (!variationCoordsEqual(a_location, b_location)) return false;
+    }
+    return true;
+}
+
 test "shaped-run keys verify source bytes after hash filtering" {
-    var a = ShapedRunCacheKey.init(&.{}, "abc", 20, .{});
-    var b = ShapedRunCacheKey.init(&.{}, "xyz", 20, .{});
+    const cascade = font_fallback.Cascade.init(&.{});
+    var a = ShapedRunCacheKey.init(cascade, "abc", 20, .{});
+    var b = ShapedRunCacheKey.init(cascade, "xyz", 20, .{});
     b.text_hash = a.text_hash;
 
     try std.testing.expect(!a.eql(b));
@@ -296,12 +330,13 @@ test "shaped-run keys verify dynamic options after hash filtering" {
     const kern_off = [_]unicode.FeatureOverride{
         .{ .tag = unicode.tag("kern"), .enabled = false },
     };
-    const a = ShapedRunCacheKey.init(&.{}, "abc", 20, .{
+    const cascade = font_fallback.Cascade.init(&.{});
+    const a = ShapedRunCacheKey.init(cascade, "abc", 20, .{
         .features = &liga_off,
         .normalized_variation_coords = &.{0.25},
         .context_before = "a",
     });
-    var b = ShapedRunCacheKey.init(&.{}, "abc", 20, .{
+    var b = ShapedRunCacheKey.init(cascade, "abc", 20, .{
         .features = &kern_off,
         .normalized_variation_coords = &.{0.5},
         .context_before = "b",
@@ -318,12 +353,43 @@ test "shaped-run cache owns borrowed key text" {
     var cache = ShapedRunCache.init(std.testing.allocator);
     defer cache.deinit();
 
-    const key_value = ShapedRunCacheKey.init(&.{}, &text, 20, .{});
+    const cascade = font_fallback.Cascade.init(&.{});
+    const key_value = ShapedRunCacheKey.init(cascade, &text, 20, .{});
     try cache.store(key_value, .{ .glyphs = &.{}, .runs = &.{} });
     text[0] = 'z';
 
-    const original = ShapedRunCacheKey.init(&.{}, "abc", 20, .{});
-    const mutated = ShapedRunCacheKey.init(&.{}, &text, 20, .{});
+    const original = ShapedRunCacheKey.init(cascade, "abc", 20, .{});
+    const mutated = ShapedRunCacheKey.init(cascade, &text, 20, .{});
+    try std.testing.expect(cache.lookup(original) != null);
+    try std.testing.expect(cache.lookup(mutated) == null);
+}
+
+test "shaped-run cache owns per-face variation locations" {
+    var font: Font = undefined;
+    const fonts = [_]*const Font{&font};
+    var coordinate = [_]f32{0.5};
+    const locations = [_][]const f32{&coordinate};
+    const cascade = font_fallback.Cascade.initWithLocations(&fonts, &locations);
+    var cache = ShapedRunCache.init(std.testing.allocator);
+    defer cache.deinit();
+    const key_value = ShapedRunCacheKey.init(cascade, "A", 20, .{});
+    try cache.store(key_value, .{ .glyphs = &.{}, .runs = &.{} });
+    coordinate[0] = 0.25;
+
+    const original_locations = [_][]const f32{&.{0.5}};
+    const mutated_locations = [_][]const f32{&coordinate};
+    const original = ShapedRunCacheKey.init(
+        font_fallback.Cascade.initWithLocations(&fonts, &original_locations),
+        "A",
+        20,
+        .{},
+    );
+    const mutated = ShapedRunCacheKey.init(
+        font_fallback.Cascade.initWithLocations(&fonts, &mutated_locations),
+        "A",
+        20,
+        .{},
+    );
     try std.testing.expect(cache.lookup(original) != null);
     try std.testing.expect(cache.lookup(mutated) == null);
 }
@@ -332,9 +398,10 @@ test "shaped-run cache evicts least recently used entries at capacity" {
     var cache = ShapedRunCache.initWithCapacity(std.testing.allocator, 2);
     defer cache.deinit();
     const shaped = run_types.ShapedText{ .glyphs = &.{}, .runs = &.{} };
-    const a = ShapedRunCacheKey.init(&.{}, "a", 20, .{});
-    const b = ShapedRunCacheKey.init(&.{}, "b", 20, .{});
-    const c = ShapedRunCacheKey.init(&.{}, "c", 20, .{});
+    const cascade = font_fallback.Cascade.init(&.{});
+    const a = ShapedRunCacheKey.init(cascade, "a", 20, .{});
+    const b = ShapedRunCacheKey.init(cascade, "b", 20, .{});
+    const c = ShapedRunCacheKey.init(cascade, "c", 20, .{});
 
     try cache.store(a, shaped);
     try cache.store(b, shaped);
@@ -350,7 +417,7 @@ test "shaped-run cache evicts least recently used entries at capacity" {
 test "zero-capacity shaped-run cache retains no output" {
     var cache = ShapedRunCache.initWithCapacity(std.testing.allocator, 0);
     defer cache.deinit();
-    const key_value = ShapedRunCacheKey.init(&.{}, "a", 20, .{});
+    const key_value = ShapedRunCacheKey.init(font_fallback.Cascade.init(&.{}), "a", 20, .{});
     try cache.store(key_value, .{ .glyphs = &.{}, .runs = &.{} });
     try std.testing.expectEqual(@as(usize, 0), cache.entries.items.len);
 }

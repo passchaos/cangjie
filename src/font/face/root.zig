@@ -369,9 +369,40 @@ pub const InstanceColor = struct {
 /// An ordered fallback list. The slice and every face are borrowed.
 pub const Cascade = struct {
     faces: []const *const Face,
+    /// Optional normalized fvar location for each face. An empty outer slice
+    /// preserves the request-wide location used by legacy callers. When
+    /// present, the outer slice must be parallel to `faces`; each inner slice
+    /// is borrowed and represents one immutable font instance.
+    normalized_variation_locations: []const []const f32 = &.{},
 
     pub fn init(faces: []const *const Face) Cascade {
         return .{ .faces = faces };
+    }
+
+    pub fn initWithLocations(
+        faces: []const *const Face,
+        normalized_variation_locations: []const []const f32,
+    ) font_mod.FontError!Cascade {
+        if (normalized_variation_locations.len != faces.len) {
+            return error.BadSfnt;
+        }
+        for (faces, normalized_variation_locations) |face, location| {
+            const summary = try face.variations().summary();
+            if (location.len != 0 and location.len != summary.axis_count) {
+                return error.BadSfnt;
+            }
+            for (location) |coordinate| {
+                if (!std.math.isFinite(coordinate) or
+                    coordinate < -1 or coordinate > 1)
+                {
+                    return error.BadSfnt;
+                }
+            }
+        }
+        return .{
+            .faces = faces,
+            .normalized_variation_locations = normalized_variation_locations,
+        };
     }
 
     pub fn len(self: Cascade) usize {

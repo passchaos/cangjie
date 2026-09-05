@@ -218,8 +218,8 @@ test "remove-default-ignorables deletes the font's fallback space glyph" {
 
     const fonts = [_]*const Font{&font};
     const cascade = FontCascade.init(&fonts);
-    const default_key = ShapedRunCache.key(cascade.fonts, text, 20, .{});
-    const removed_key = ShapedRunCache.key(cascade.fonts, text, 20, .{ .remove_default_ignorables = true });
+    const default_key = ShapedRunCache.key(cascade, text, 20, .{});
+    const removed_key = ShapedRunCache.key(cascade, text, 20, .{ .remove_default_ignorables = true });
     try std.testing.expect(!default_key.plan.eql(removed_key.plan));
 }
 

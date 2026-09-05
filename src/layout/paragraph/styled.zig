@@ -99,6 +99,7 @@ pub fn layout(input: Input) !paragraph_types.ParagraphLayout {
     try plan_validation.utf8(input.text);
     try plan_validation.fontSize(input.default_font_size);
     if (input.cascade.fonts.len == 0) return error.EmptyFontCascade;
+    try input.cascade.validateLocations();
     try inline_object.validate(input.text, input.options.inline_objects);
 
     input.buffer.clear();
@@ -134,6 +135,7 @@ pub fn prepare(input: Input) !?unicode.BidiParagraph {
     try plan_validation.utf8(input.text);
     try plan_validation.fontSize(input.default_font_size);
     if (input.cascade.fonts.len == 0) return error.EmptyFontCascade;
+    try input.cascade.validateLocations();
     try inline_object.validate(input.text, input.options.inline_objects);
 
     input.buffer.clear();
@@ -177,6 +179,7 @@ pub fn validate(input: Input) !void {
     try plan_validation.utf8(input.text);
     try plan_validation.fontSize(input.default_font_size);
     if (input.cascade.fonts.len == 0) return error.EmptyFontCascade;
+    try input.cascade.validateLocations();
     try inline_object.validate(input.text, input.options.inline_objects);
     var driver = Driver{
         .cascade = input.cascade,
@@ -313,6 +316,13 @@ const Driver = struct {
         try plan_validation.fontSize(span.font_size);
         if (span.faces) |faces| {
             if (faces.len == 0) return error.EmptyFontCascade;
+            const item_cascade = font_fallback.Cascade.initWithLocations(
+                face_mod.backend.fonts(faces),
+                span.normalized_variation_locations orelse &.{},
+            );
+            try item_cascade.validateLocations();
+        } else if (span.normalized_variation_locations != null) {
+            return error.InvalidStyleSpans;
         }
         try plan_validation.features(span.features);
         try plan_validation.variationCoords(
@@ -341,12 +351,13 @@ const Driver = struct {
         logical_run: logical_run_itemization.Run,
         span: styled_paragraph.Span,
     ) !void {
-        const item_cascade = font_fallback.Cascade.init(
-            if (span.faces) |faces|
-                face_mod.backend.fonts(faces)
-            else
-                self.cascade.fonts,
-        );
+        const item_cascade = if (span.faces) |faces|
+            font_fallback.Cascade.initWithLocations(
+                face_mod.backend.fonts(faces),
+                span.normalized_variation_locations orelse &.{},
+            )
+        else
+            self.cascade;
         const run_start = self.buffer.runs.items.len;
         var items = source_items.Cursor.init(
             self.text,
@@ -937,6 +948,10 @@ const SegmentContext = struct {
             local_start + text.len,
         );
         lookup_options.all_ascii = fallback_segment.isAscii(text);
+        lookup_options.lookup.normalized_variation_coords = cascade.locationFor(
+            font_index,
+            lookup_options.lookup.normalized_variation_coords,
+        );
         const font = cascade.fonts[font_index];
         const glyph_start = self.buffer.glyphs.items.len;
         _ = try segment_pipeline.run(.{
@@ -955,6 +970,11 @@ const SegmentContext = struct {
         const variation_range = try self.buffer.internVariationCoords(
             lookup_options.lookup.normalized_variation_coords,
         );
+        const baseline_metrics = try run_types.baselineMetricsAt(
+            font,
+            self.font_size,
+            lookup_options.lookup.normalized_variation_coords,
+        );
         try self.buffer.runs.append(self.buffer.allocator, .{
             .font = face_mod.backend.face(font),
             .font_index = font_index,
@@ -965,6 +985,10 @@ const SegmentContext = struct {
             .y_offset = pen.y,
             .variation_coord_start = variation_range.start,
             .variation_coord_len = variation_range.len,
+            .baseline_ascent = baseline_metrics.ascent,
+            .baseline_descent = baseline_metrics.descent,
+            .baseline_leading = baseline_metrics.leading,
+            .has_baseline_metrics = true,
         });
         var next_pen = pen;
         for (self.buffer.glyphs.items[glyph_start..]) |glyph| {

@@ -222,6 +222,11 @@ Cluster-safe fallback is grouped under `src/shaping/fallback/`:
 - `font/root.zig` owns borrowed cascade identity and complete-cluster font
   selection, including variation-selector preference and default-ignorable
   coverage policy.
+- Public `font.Cascade.initWithLocations` binds one immutable normalized fvar
+  location to each fallback face. Request-level coordinates remain an explicit
+  whole-request override for compatibility; otherwise each selected run uses
+  its owning face's location. Shaped-run caches compare and own the complete
+  per-face location set, and retained paragraphs preserve it across reflow.
 - `segment.zig` partitions ASCII or grapheme input into maximal same-font
   spans. It invokes a generic context's `appendSegment` method through Zig
   static dispatch, so the boundary adds neither a function pointer nor type
@@ -1249,11 +1254,17 @@ resolution supports strict exact-content matching and an explicit portable
 mode; portable PostScript or family/style matches succeed only when unique, so
 document restoration fails closed instead of silently choosing an ambiguous
 face. `encodeDescriptor`/`decodeDescriptor` provide a versioned 644-byte wire
-contract. `zig build font-descriptor-bench -Doptimize=ReleaseFast` gates exact,
-portable, and codec performance over 4096 candidates; the 2026-09-05
-ReleaseFast baseline measured about 8 us/query exact, 42 us/query portable, and
-2 us per codec roundtrip with checksum `12971938209271991909`. The incremental
-resolver uses no candidate array and has no fixed database-size ceiling.
+contract. `InstanceDescriptor` layers a canonical, F2Dot14-quantized normalized
+location over that face identity. All-zero locations canonicalize to the default
+instance; non-default instances require exact content identity and never fall
+back by name, because axis order belongs to the exact font bytes. Its independent
+716-byte wire preserves compatibility with the published face descriptor.
+`zig build font-descriptor-bench -Doptimize=ReleaseFast` gates exact, portable,
+and codec performance over 4096 candidates; the 2026-09-05
+ReleaseFast baseline measured about 6 us/query exact, 43 us/query portable,
+about 2 us per face codec roundtrip, and 2.7 us per instance codec roundtrip.
+The instance-aware checksum is `5386328980970983525`. The incremental resolver
+uses no candidate array and has no fixed database-size ceiling.
 
 End-to-end paragraph construction now has an explicit cross-library benchmark
 boundary. `zig build paragraph-bench -Doptimize=ReleaseFast -- FONT TEXT N S`

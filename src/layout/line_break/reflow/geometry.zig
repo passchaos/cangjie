@@ -13,15 +13,7 @@ const inline_object = @import("../../inline_object/root.zig");
 const regions = @import("regions.zig");
 const run_types = @import("../../types/runs.zig");
 
-pub const BaselineMetrics = struct {
-    ascent: f32,
-    descent: f32,
-    leading: f32,
-
-    pub fn lineHeight(self: BaselineMetrics) f32 {
-        return self.ascent + self.descent + self.leading;
-    }
-};
+pub const BaselineMetrics = run_types.BaselineMetrics;
 
 pub const LineRunInfo = struct {
     run_start: usize,
@@ -149,10 +141,17 @@ pub fn lineRunInfoWithoutObjects(
         if (run_end <= glyph_start or run_start >= glyph_end) continue;
         if (first_run == null) first_run = run_index;
         run_end_index = run_index + 1;
-        const run_metrics = defaultBaselineMetrics(
-            run_types.fontForBackend(run),
-            run.font_size,
-        );
+        const run_metrics = if (run.has_baseline_metrics)
+            BaselineMetrics{
+                .ascent = run.baseline_ascent,
+                .descent = run.baseline_descent,
+                .leading = run.baseline_leading,
+            }
+        else
+            defaultBaselineMetrics(
+                run_types.fontForBackend(run),
+                run.font_size,
+            );
         metrics.ascent = @max(metrics.ascent, run_metrics.ascent);
         metrics.descent = @max(metrics.descent, run_metrics.descent);
         metrics.leading = @max(metrics.leading, run_metrics.leading);

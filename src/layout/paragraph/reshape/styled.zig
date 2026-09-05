@@ -163,13 +163,15 @@ pub const Recipe = struct {
             self.spans,
             source_boundary,
         ) orelse return source_run;
-        const fonts = if (span.faces) |faces|
-            face_mod.backend.fonts(faces)
+        const item_cascade = if (span.faces) |faces|
+            font_fallback.Cascade.initWithLocations(
+                face_mod.backend.fonts(faces),
+                span.normalized_variation_locations orelse &.{},
+            )
         else
-            self.cascade.fonts;
-        const local_index = try font_fallback.Cascade.init(fonts).selectFont(
-            '.',
-        );
+            self.cascade;
+        const fonts = item_cascade.fonts;
+        const local_index = try item_cascade.selectFont('.');
         const font = fonts[local_index];
         const namespace = self.font_index_cascade orelse self.cascade;
         const font_index = for (namespace.fonts, 0..) |candidate, index| {
@@ -179,7 +181,18 @@ pub const Recipe = struct {
         else
             local_index;
         const variation_range = try buffer.internVariationCoords(
-            span.normalized_variation_coords,
+            item_cascade.locationFor(
+                local_index,
+                span.normalized_variation_coords,
+            ),
+        );
+        const baseline_metrics = try run_types.baselineMetricsAt(
+            font,
+            span.font_size,
+            item_cascade.locationFor(
+                local_index,
+                span.normalized_variation_coords,
+            ),
         );
         return .{
             .font = face_mod.backend.face(font),
@@ -191,6 +204,10 @@ pub const Recipe = struct {
             .y_offset = 0,
             .variation_coord_start = variation_range.start,
             .variation_coord_len = variation_range.len,
+            .baseline_ascent = baseline_metrics.ascent,
+            .baseline_descent = baseline_metrics.descent,
+            .baseline_leading = baseline_metrics.leading,
+            .has_baseline_metrics = true,
         };
     }
 
@@ -547,12 +564,13 @@ pub const Recipe = struct {
         pen: fallback_segment.Pen,
     ) !fallback_segment.Pen {
         const item_text = temporary_text[item_start..item_end];
-        const item_cascade = font_fallback.Cascade.init(
-            if (span.faces) |faces|
-                face_mod.backend.fonts(faces)
-            else
-                self.cascade.fonts,
-        );
+        const item_cascade = if (span.faces) |faces|
+            font_fallback.Cascade.initWithLocations(
+                face_mod.backend.fonts(faces),
+                span.normalized_variation_locations orelse &.{},
+            )
+        else
+            self.cascade;
         const run_start = buffer.runs.items.len;
         var context = SegmentContext{
             .buffer = buffer,
@@ -702,6 +720,11 @@ const SegmentContext = struct {
         pen: fallback_segment.Pen,
     ) !fallback_segment.Pen {
         const font = cascade.fonts[font_index];
+        var lookup_options = self.lookup_options;
+        lookup_options.lookup.normalized_variation_coords = cascade.locationFor(
+            font_index,
+            lookup_options.lookup.normalized_variation_coords,
+        );
         const glyph_start = self.buffer.glyphs.items.len;
         _ = try segment_pipeline.run(.{
             .font = font,
@@ -711,13 +734,18 @@ const SegmentContext = struct {
             .text = text,
             .font_size = self.font_size,
             .cluster_base = cluster_base,
-            .lookup_options = self.lookup_options,
+            .lookup_options = lookup_options,
         });
         const glyph_len = self.buffer.glyphs.items.len - glyph_start;
         if (glyph_len == 0) return pen;
 
         const variation_range = try self.buffer.internVariationCoords(
-            self.lookup_options.lookup.normalized_variation_coords,
+            lookup_options.lookup.normalized_variation_coords,
+        );
+        const baseline_metrics = try run_types.baselineMetricsAt(
+            font,
+            self.font_size,
+            lookup_options.lookup.normalized_variation_coords,
         );
         try self.buffer.runs.append(self.buffer.allocator, .{
             .font = face_mod.backend.face(font),
@@ -729,6 +757,10 @@ const SegmentContext = struct {
             .y_offset = pen.y,
             .variation_coord_start = variation_range.start,
             .variation_coord_len = variation_range.len,
+            .baseline_ascent = baseline_metrics.ascent,
+            .baseline_descent = baseline_metrics.descent,
+            .baseline_leading = baseline_metrics.leading,
+            .has_baseline_metrics = true,
         });
         var next_pen = pen;
         for (self.buffer.glyphs.items[glyph_start..]) |glyph| {

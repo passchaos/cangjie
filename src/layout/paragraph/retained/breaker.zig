@@ -107,6 +107,7 @@ pub const Init = struct {
     pure_rtl_lines: bool,
     bidi_paragraph: ?unicode.BidiParagraph,
     cascade_fonts: []const *const font_mod.Font,
+    cascade_variation_locations: []const []const f32,
     font_size: f32,
 };
 
@@ -127,6 +128,7 @@ pub const Breaker = struct {
     pure_rtl_lines: bool,
     bidi_paragraph: ?unicode.BidiParagraph,
     cascade_fonts: []const *const font_mod.Font,
+    cascade_variation_locations: []const []const f32,
     font_size: f32,
     regions: std.ArrayList(line_regions.Region) = .empty,
     greedy: paragraph_reflow.GreedyState,
@@ -158,6 +160,7 @@ pub const Breaker = struct {
             .pure_rtl_lines = init.pure_rtl_lines,
             .bidi_paragraph = init.bidi_paragraph,
             .cascade_fonts = init.cascade_fonts,
+            .cascade_variation_locations = init.cascade_variation_locations,
             .font_size = init.font_size,
             .greedy = paragraph_reflow.GreedyState.init(init.allocator),
         };
@@ -571,7 +574,10 @@ pub const Breaker = struct {
 
     fn recipe(self: *const Breaker) reshape.Uniform {
         return .{
-            .cascade = font_fallback.Cascade.init(self.cascade_fonts),
+            .cascade = font_fallback.Cascade.initWithLocations(
+                self.cascade_fonts,
+                self.cascade_variation_locations,
+            ),
             .text = self.text,
             .font_size = self.font_size,
             .options = self.options,

@@ -46,6 +46,7 @@ pub const Input = struct {
 /// once for each maximal contiguous span assigned to one fallback face.
 pub fn shape(context: anytype, input: Input) !Pen {
     if (input.cascade.fonts.len == 0) return error.EmptyFontCascade;
+    try input.cascade.validateLocations();
 
     var segment_start: usize = 0;
     var segment_font_index: ?usize = null;

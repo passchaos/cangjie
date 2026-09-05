@@ -59,7 +59,7 @@ pub const diagnostics = struct {
     ) ![]FontFallbackDecision {
         return shaping_diagnostics.fallback.analyze(
             allocator,
-            internalCascade(cascade),
+            try internalCascade(cascade),
             text,
         );
     }
@@ -74,7 +74,7 @@ pub const diagnostics = struct {
         return shaping_diagnostics.orchestration.clusterCaretConsistency(
             ordinary_shaper,
             allocator,
-            internalCascade(cascade),
+            try internalCascade(cascade),
             text,
             font_size,
             options,
@@ -91,14 +91,19 @@ pub const diagnostics = struct {
         return shaping_diagnostics.orchestration.shapeQuality(
             ordinary_shaper,
             allocator,
-            internalCascade(cascade),
+            try internalCascade(cascade),
             text,
             font_size,
             options,
         );
     }
 
-    fn internalCascade(cascade: face_mod.Cascade) font_fallback.Cascade {
-        return .init(face_mod.backend.fonts(cascade.faces));
+    fn internalCascade(cascade: face_mod.Cascade) !font_fallback.Cascade {
+        const result = font_fallback.Cascade.initWithLocations(
+            face_mod.backend.fonts(cascade.faces),
+            cascade.normalized_variation_locations,
+        );
+        try result.validateLocations();
+        return result;
     }
 };

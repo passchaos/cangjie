@@ -31,6 +31,51 @@ pub fn readImmutableFace(font: *const font_mod.Font, size: ?f32) font_mod.FontEr
     return readForMode(font, size, .parsed);
 }
 
+pub fn readImmutableFaceAt(
+    font: *const font_mod.Font,
+    size: ?f32,
+    normalized_coords: []const f32,
+) font_mod.FontError!Metrics {
+    var metrics = try readForMode(font, size, .parsed);
+    if (normalized_coords.len == 0) return metrics;
+    const scale = if (size) |value|
+        value / @as(f32, @floatFromInt(metrics.units_per_em))
+    else
+        1.0;
+    metrics.ascent += @as(f32, @floatFromInt(
+        (try font.mvarDeltaAtCoords("hasc".*, normalized_coords)) orelse 0,
+    )) * scale;
+    metrics.descent += @as(f32, @floatFromInt(
+        (try font.mvarDeltaAtCoords("hdsc".*, normalized_coords)) orelse 0,
+    )) * scale;
+    metrics.leading += @as(f32, @floatFromInt(
+        (try font.mvarDeltaAtCoords("hlgp".*, normalized_coords)) orelse 0,
+    )) * scale;
+    if (metrics.cap_height) |*value| value.* += @as(f32, @floatFromInt(
+        (try font.mvarDeltaAtCoords("cpht".*, normalized_coords)) orelse 0,
+    )) * scale;
+    if (metrics.x_height) |*value| value.* += @as(f32, @floatFromInt(
+        (try font.mvarDeltaAtCoords("xhgt".*, normalized_coords)) orelse 0,
+    )) * scale;
+    if (metrics.underline) |*value| {
+        value.offset += @as(f32, @floatFromInt(
+            (try font.mvarDeltaAtCoords("undo".*, normalized_coords)) orelse 0,
+        )) * scale;
+        value.thickness += @as(f32, @floatFromInt(
+            (try font.mvarDeltaAtCoords("unds".*, normalized_coords)) orelse 0,
+        )) * scale;
+    }
+    if (metrics.strikeout) |*value| {
+        value.offset += @as(f32, @floatFromInt(
+            (try font.mvarDeltaAtCoords("stro".*, normalized_coords)) orelse 0,
+        )) * scale;
+        value.thickness += @as(f32, @floatFromInt(
+            (try font.mvarDeltaAtCoords("strs".*, normalized_coords)) orelse 0,
+        )) * scale;
+    }
+    return metrics;
+}
+
 const ReadMode = enum { revalidate, parsed };
 
 fn readForMode(font: *const font_mod.Font, size: ?f32, mode: ReadMode) font_mod.FontError!Metrics {

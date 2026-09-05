@@ -10,6 +10,7 @@ const Options = struct {
     max_exact_ns_per_query: f64 = 100_000,
     max_portable_ns_per_query: f64 = 100_000,
     max_codec_ns_per_roundtrip: f64 = 10_000,
+    max_instance_codec_ns_per_roundtrip: f64 = 10_000,
     expect_checksum: ?u64 = null,
     json_path: ?[]const u8 = null,
 };
@@ -20,7 +21,9 @@ const Report = struct {
     exact_ns_per_query: f64,
     portable_ns_per_query: f64,
     codec_ns_per_roundtrip: f64,
+    instance_codec_ns_per_roundtrip: f64,
     descriptor_bytes: usize,
+    instance_descriptor_bytes: usize,
     checksum: u64,
     expected_checksum: ?u64,
     semantic_passed: bool,
@@ -95,12 +98,29 @@ fn run(allocator: std.mem.Allocator, io: std.Io, options: Options) !Report {
     }
     const codec_ns = elapsedNs(codec_started, io);
 
+    const instance = try database.InstanceDescriptor.init(exact, &.{0.5});
+    var instance_wire: [database.instance_descriptor_wire_size]u8 = undefined;
+    const instance_codec_started = std.Io.Clock.awake.now(io);
+    for (0..options.iterations) |_| {
+        const encoded = try database.encodeInstanceDescriptor(
+            instance,
+            &instance_wire,
+        );
+        const decoded = try database.decodeInstanceDescriptor(encoded);
+        mix(&checksum, decoded.fingerprint());
+    }
+    const instance_codec_ns = elapsedNs(instance_codec_started, io);
+
     const exact_per = perOperation(exact_ns, options.iterations);
     const portable_per = perOperation(portable_ns, options.iterations);
     const codec_per = perOperation(codec_ns, options.iterations);
-    const semantic = exact.valid() and portable.valid() and database.descriptor_wire_size == 644;
+    const instance_codec_per = perOperation(instance_codec_ns, options.iterations);
+    const semantic = exact.valid() and portable.valid() and instance.valid() and
+        database.descriptor_wire_size == 644 and
+        database.instance_descriptor_wire_size == 716;
     const performance = exact_per <= options.max_exact_ns_per_query and portable_per <= options.max_portable_ns_per_query and
-        codec_per <= options.max_codec_ns_per_roundtrip;
+        codec_per <= options.max_codec_ns_per_roundtrip and
+        instance_codec_per <= options.max_instance_codec_ns_per_roundtrip;
     const signature = options.expect_checksum == null or options.expect_checksum.? == checksum;
     return .{
         .faces = options.faces,
@@ -108,7 +128,9 @@ fn run(allocator: std.mem.Allocator, io: std.Io, options: Options) !Report {
         .exact_ns_per_query = exact_per,
         .portable_ns_per_query = portable_per,
         .codec_ns_per_roundtrip = codec_per,
+        .instance_codec_ns_per_roundtrip = instance_codec_per,
         .descriptor_bytes = database.descriptor_wire_size,
+        .instance_descriptor_bytes = database.instance_descriptor_wire_size,
         .checksum = checksum,
         .expected_checksum = options.expect_checksum,
         .semantic_passed = semantic,
@@ -123,7 +145,7 @@ fn parse(args: []const []const u8) !Options {
     var index: usize = if (args.len != 0 and !std.mem.startsWith(u8, args[0], "--")) 1 else 0;
     while (index < args.len) : (index += 1) {
         const arg = args[index];
-        if (std.mem.startsWith(u8, arg, "--faces=")) out.faces = try std.fmt.parseInt(usize, arg["--faces=".len..], 10) else if (std.mem.startsWith(u8, arg, "--iterations=")) out.iterations = try std.fmt.parseInt(usize, arg["--iterations=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-exact-ns-per-query=")) out.max_exact_ns_per_query = try std.fmt.parseFloat(f64, arg["--max-exact-ns-per-query=".len..]) else if (std.mem.startsWith(u8, arg, "--max-portable-ns-per-query=")) out.max_portable_ns_per_query = try std.fmt.parseFloat(f64, arg["--max-portable-ns-per-query=".len..]) else if (std.mem.startsWith(u8, arg, "--max-codec-ns-per-roundtrip=")) out.max_codec_ns_per_roundtrip = try std.fmt.parseFloat(f64, arg["--max-codec-ns-per-roundtrip=".len..]) else if (std.mem.startsWith(u8, arg, "--expect-checksum=")) out.expect_checksum = try std.fmt.parseInt(u64, arg["--expect-checksum=".len..], 10) else if (std.mem.startsWith(u8, arg, "--json=")) out.json_path = arg["--json=".len..] else return error.InvalidArgument;
+        if (std.mem.startsWith(u8, arg, "--faces=")) out.faces = try std.fmt.parseInt(usize, arg["--faces=".len..], 10) else if (std.mem.startsWith(u8, arg, "--iterations=")) out.iterations = try std.fmt.parseInt(usize, arg["--iterations=".len..], 10) else if (std.mem.startsWith(u8, arg, "--max-exact-ns-per-query=")) out.max_exact_ns_per_query = try std.fmt.parseFloat(f64, arg["--max-exact-ns-per-query=".len..]) else if (std.mem.startsWith(u8, arg, "--max-portable-ns-per-query=")) out.max_portable_ns_per_query = try std.fmt.parseFloat(f64, arg["--max-portable-ns-per-query=".len..]) else if (std.mem.startsWith(u8, arg, "--max-codec-ns-per-roundtrip=")) out.max_codec_ns_per_roundtrip = try std.fmt.parseFloat(f64, arg["--max-codec-ns-per-roundtrip=".len..]) else if (std.mem.startsWith(u8, arg, "--max-instance-codec-ns-per-roundtrip=")) out.max_instance_codec_ns_per_roundtrip = try std.fmt.parseFloat(f64, arg["--max-instance-codec-ns-per-roundtrip=".len..]) else if (std.mem.startsWith(u8, arg, "--expect-checksum=")) out.expect_checksum = try std.fmt.parseInt(u64, arg["--expect-checksum=".len..], 10) else if (std.mem.startsWith(u8, arg, "--json=")) out.json_path = arg["--json=".len..] else return error.InvalidArgument;
     }
     if (out.faces == 0 or out.iterations == 0) return error.InvalidArguments;
     return out;
@@ -158,7 +180,7 @@ pub fn main(init: std.process.Init) !void {
     while (iterator.next()) |arg| try args.append(init.gpa, arg);
     const options = try parse(args.items);
     const report = try run(init.gpa, init.io, options);
-    std.debug.print("font descriptor: faces={d} iterations={d} exact={d:.1}ns portable={d:.1}ns codec={d:.1}ns bytes={d} checksum={d} passed={}\n", .{ report.faces, report.iterations, report.exact_ns_per_query, report.portable_ns_per_query, report.codec_ns_per_roundtrip, report.descriptor_bytes, report.checksum, report.passed });
+    std.debug.print("font descriptor: faces={d} iterations={d} exact={d:.1}ns portable={d:.1}ns face-codec={d:.1}ns/{d}B instance-codec={d:.1}ns/{d}B checksum={d} passed={}\n", .{ report.faces, report.iterations, report.exact_ns_per_query, report.portable_ns_per_query, report.codec_ns_per_roundtrip, report.descriptor_bytes, report.instance_codec_ns_per_roundtrip, report.instance_descriptor_bytes, report.checksum, report.passed });
     if (options.json_path) |path| try writeReport(init.io, init.gpa, path, report);
     if (!report.passed) return error.FontDescriptorGateFailed;
 }
@@ -170,6 +192,7 @@ test "font descriptor benchmark scales down" {
         .max_exact_ns_per_query = std.math.inf(f64),
         .max_portable_ns_per_query = std.math.inf(f64),
         .max_codec_ns_per_roundtrip = std.math.inf(f64),
+        .max_instance_codec_ns_per_roundtrip = std.math.inf(f64),
     });
     try std.testing.expect(report.semantic_passed);
 }

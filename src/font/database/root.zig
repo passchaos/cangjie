@@ -19,13 +19,21 @@ pub const FontQuery = types.Query;
 pub const FontManifestEntry = manifest_mod.Entry;
 pub const FontSource = source_mod.Source;
 pub const FontDescriptor = descriptor_mod.Descriptor;
+pub const FontInstanceDescriptor = descriptor_mod.InstanceDescriptor;
 pub const FontDescriptorResolveMode = descriptor_mod.ResolveMode;
 pub const FontDescriptorResolveStatus = descriptor_mod.ResolveStatus;
 pub const FontDescriptorResolution = descriptor_mod.Resolution;
+pub const FontInstanceDescriptorCandidate = descriptor_mod.InstanceCandidate;
+pub const FontInstanceDescriptorResolver = descriptor_mod.InstanceResolver;
 pub const font_descriptor_wire_size = descriptor_mod.wire_size;
+pub const font_instance_descriptor_wire_size = descriptor_mod.instance_wire_size;
 pub const encodeFontDescriptor = descriptor_mod.encode;
 pub const decodeFontDescriptor = descriptor_mod.decode;
+pub const encodeFontInstanceDescriptor = descriptor_mod.encodeInstance;
+pub const decodeFontInstanceDescriptor = descriptor_mod.decodeInstance;
 pub const fontDescriptorSourceDigest = descriptor_mod.sourceDigest;
+pub const resolveFontInstanceDescriptorCandidates =
+    descriptor_mod.resolveInstanceCandidates;
 
 pub const serializeManifest = manifest_mod.serializeManifest;
 pub const parseManifest = manifest_mod.parseManifest;

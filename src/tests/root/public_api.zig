@@ -9,6 +9,7 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(!@hasDecl(cangjie, "editor"));
     try std.testing.expect(@hasDecl(cangjie.font, "Face"));
     try std.testing.expect(@hasDecl(cangjie.font, "Cascade"));
+    try std.testing.expect(@hasDecl(cangjie.font.Cascade, "initWithLocations"));
     try std.testing.expect(
         @typeInfo(cangjie.font.HintingInstance) == .@"struct",
     );
@@ -277,13 +278,19 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(!@hasDecl(cangjie.text, "document"));
     try std.testing.expect(@hasDecl(cangjie.font.metadata, "variations"));
     try std.testing.expect(@hasDecl(cangjie.font.database, "Descriptor"));
+    try std.testing.expect(@hasDecl(cangjie.font.database, "InstanceDescriptor"));
+    try std.testing.expect(@hasDecl(cangjie.font.database, "InstanceDescriptorResolver"));
     try std.testing.expect(@hasDecl(cangjie.font.database.Database, "descriptorForFaceIndex"));
     try std.testing.expect(@hasDecl(cangjie.font.database.Database, "resolveDescriptor"));
     try std.testing.expect(@hasDecl(cangjie.font.database, "encodeDescriptor"));
     try std.testing.expect(@hasDecl(cangjie.font.database, "decodeDescriptor"));
     try std.testing.expect(@hasDecl(cangjie.font.database, "DescriptorResolver"));
     try std.testing.expect(@hasDecl(cangjie.font.database, "resolveDescriptorCandidates"));
+    try std.testing.expect(@hasDecl(cangjie.font.database, "resolveInstanceDescriptorCandidates"));
     try std.testing.expectEqual(@as(usize, 644), cangjie.font.database.descriptor_wire_size);
+    try std.testing.expectEqual(@as(usize, 716), cangjie.font.database.instance_descriptor_wire_size);
+    _ = cangjie.font.database.encodeInstanceDescriptor;
+    _ = cangjie.font.database.decodeInstanceDescriptor;
 
     // The redesign deliberately carries no compatibility layer. These checks
     // make accidental reintroduction of redundant names a test failure instead
@@ -317,6 +324,7 @@ test "public facade uses domain names without legacy aliases" {
     try std.testing.expect(@hasDecl(cangjie.font.Instance, "metrics"));
     try std.testing.expect(@hasDecl(cangjie.font.Instance, "color"));
     try std.testing.expect(@hasDecl(Face, "metrics"));
+    try std.testing.expect(@hasDecl(cangjie.font.Metrics, "globalAt"));
     try std.testing.expect(@hasDecl(Face, "names"));
     try std.testing.expect(@hasDecl(Face, "variations"));
     try std.testing.expect(@hasDecl(Face, "color"));
@@ -458,6 +466,61 @@ test "font instance binds normalized coordinates across views" {
     var outline = try instance.glyphs().outline(allocator, 1);
     defer outline.deinit();
     try std.testing.expect(outline.commands.items.len != 0);
+}
+
+test "public fallback cascade validates per-face variation locations" {
+    const allocator = std.testing.allocator;
+    const variable_bytes = try test_font.buildMetricVariationTtf(allocator);
+    defer allocator.free(variable_bytes);
+    const static_bytes = try test_font.buildSingleCodepointTtf(allocator, 'B');
+    defer allocator.free(static_bytes);
+    var variable = try cangjie.font.Face.parse(allocator, variable_bytes);
+    defer variable.deinit();
+    var static = try cangjie.font.Face.parse(allocator, static_bytes);
+    defer static.deinit();
+
+    const faces = [_]*const cangjie.font.Face{ &variable, &static };
+    const locations = [_][]const f32{ &.{0.5}, &.{} };
+    const cascade = try cangjie.font.Cascade.initWithLocations(
+        &faces,
+        &locations,
+    );
+    try std.testing.expectEqual(@as(usize, 2), cascade.len());
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0.5},
+        cascade.normalized_variation_locations[0],
+    );
+    try std.testing.expectError(
+        error.BadSfnt,
+        cangjie.font.Cascade.initWithLocations(&faces, &.{&.{0.5}}),
+    );
+    try std.testing.expectError(
+        error.BadSfnt,
+        cangjie.font.Cascade.initWithLocations(
+            &faces,
+            &.{ &.{0.5}, &.{0} },
+        ),
+    );
+
+    var engine = cangjie.shaping.Engine.init(allocator, .{
+        .cache_font_data = true,
+        .cache_shaped_runs = true,
+    });
+    defer engine.deinit();
+    const shaped = try engine.shapeText(cascade, .{
+        .text = "AB",
+        .font_size = 20,
+    });
+    try std.testing.expectEqual(@as(usize, 2), shaped.runs.len);
+    try std.testing.expectEqual(@as(usize, 0), shaped.runs[0].font_index);
+    try std.testing.expectEqualSlices(
+        f32,
+        &.{0.5},
+        shaped.runs[0].normalizedVariationCoords(shaped),
+    );
+    try std.testing.expectEqual(@as(usize, 1), shaped.runs[1].font_index);
+    try std.testing.expectEqual(@as(usize, 0), shaped.runs[1].normalizedVariationCoords(shaped).len);
 }
 
 test "glyph session reuses outlines only at the same variation location" {

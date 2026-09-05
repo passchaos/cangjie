@@ -392,6 +392,11 @@ const Driver = struct {
         pen: fallback_segment.Pen,
     ) !fallback_segment.Pen {
         const font = cascade.fonts[font_index];
+        var lookup_options = self.lookup_options;
+        lookup_options.lookup.normalized_variation_coords = cascade.locationFor(
+            font_index,
+            lookup_options.lookup.normalized_variation_coords,
+        );
         const glyph_start = self.buffer.glyphs.items.len;
         _ = try segment_pipeline.run(.{
             .font = font,
@@ -401,13 +406,18 @@ const Driver = struct {
             .text = text,
             .font_size = self.font_size,
             .cluster_base = cluster_base,
-            .lookup_options = self.lookup_options,
+            .lookup_options = lookup_options,
         });
         const glyph_len = self.buffer.glyphs.items.len - glyph_start;
         if (glyph_len == 0) return pen;
 
         const variation_range = try self.buffer.internVariationCoords(
-            self.lookup_options.lookup.normalized_variation_coords,
+            lookup_options.lookup.normalized_variation_coords,
+        );
+        const baseline_metrics = try run_types.baselineMetricsAt(
+            font,
+            self.font_size,
+            lookup_options.lookup.normalized_variation_coords,
         );
         try self.buffer.runs.append(self.buffer.allocator, .{
             .font = face_mod.backend.face(font),
@@ -419,6 +429,10 @@ const Driver = struct {
             .y_offset = pen.y,
             .variation_coord_start = variation_range.start,
             .variation_coord_len = variation_range.len,
+            .baseline_ascent = baseline_metrics.ascent,
+            .baseline_descent = baseline_metrics.descent,
+            .baseline_leading = baseline_metrics.leading,
+            .has_baseline_metrics = true,
         });
         var next_pen = pen;
         for (self.buffer.glyphs.items[glyph_start..]) |glyph| {

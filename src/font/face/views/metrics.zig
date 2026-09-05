@@ -15,6 +15,18 @@ pub const View = struct {
         return global_metrics.readImmutableFace(self.implementation, size);
     }
 
+    pub fn globalAt(
+        self: View,
+        size: ?f32,
+        normalized_coords: []const f32,
+    ) font_mod.FontError!Global {
+        return global_metrics.readImmutableFaceAt(
+            self.implementation,
+            size,
+            normalized_coords,
+        );
+    }
+
     pub fn horizontal(
         self: View,
         glyph_id: glyph_mod.GlyphId,

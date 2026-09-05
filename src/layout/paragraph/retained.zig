@@ -63,6 +63,7 @@ pub const ShapedParagraph = struct {
     /// The font-pointer slice is owned by this paragraph, while the referenced
     /// parsed fonts must outlive it just like the pointers already in `runs`.
     cascade_fonts: []const *const @import("../../font.zig").Font,
+    cascade_locations: font_fallback.OwnedLocations,
     font_size: f32,
 
     pub fn deinit(self: *ShapedParagraph) void {
@@ -73,6 +74,7 @@ pub const ShapedParagraph = struct {
         self.allocator.free(self.runs);
         self.allocator.free(self.glyphs);
         self.allocator.free(self.normalized_variation_coords);
+        self.cascade_locations.deinit();
         self.allocator.free(self.cascade_fonts);
         self.allocator.free(self.text);
         self.* = undefined;
@@ -207,7 +209,10 @@ pub const ShapedParagraph = struct {
             return reflow.buffer.paragraphLayout(options.writing_mode);
         }
         const recipe = reshape.Uniform{
-            .cascade = font_fallback.Cascade.init(self.cascade_fonts),
+            .cascade = font_fallback.Cascade.initWithLocations(
+                self.cascade_fonts,
+                self.cascade_locations.slices,
+            ),
             .text = self.text,
             .font_size = self.font_size,
             .options = options,
@@ -266,6 +271,7 @@ pub const ShapedParagraph = struct {
             .pure_rtl_lines = self.pure_rtl_lines,
             .bidi_paragraph = self.bidi_paragraph,
             .cascade_fonts = self.cascade_fonts,
+            .cascade_variation_locations = self.cascade_locations.slices,
             .font_size = self.font_size,
         });
     }

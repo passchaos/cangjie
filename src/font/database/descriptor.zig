@@ -154,8 +154,7 @@ pub const Resolver = struct {
     pub fn add(self: *Resolver, index: usize, candidate: Candidate) void {
         if (!self.descriptor_valid) return;
         if (candidate.source_digest) |digest| {
-            if (exactContentMatch(self.descriptor, digest, candidate.source_size, candidate.face_index) and
-                namesAndTraitsMatch(self.descriptor, candidate.family, candidate.subfamily, candidate.postscript_name, candidate.weight, candidate.stretch, candidate.style))
+            if (exactContentMatch(self.descriptor, digest, candidate.source_size, candidate.face_index))
                 self.exact_index = if (self.exact_index) |current| @min(current, index) else index;
         }
         if (self.mode == .exact) return;
@@ -344,4 +343,31 @@ test "font descriptors are canonical pointer-free values" {
     try std.testing.expectEqual(descriptor, decoded);
     wire[8 + 2 + name_capacity - 1] = 1;
     try std.testing.expectError(error.InvalidPadding, decode(&wire));
+}
+
+test "exact content identity is independent of mutable font metadata" {
+    const digest = sourceDigest("same collection bytes");
+    const descriptor = try Descriptor.init(.{
+        .family = "Source Family",
+        .subfamily = "Regular",
+        .postscript_name = "SourceFamily-Regular",
+        .weight = 400,
+        .source_digest = digest,
+        .source_size = 21,
+        .face_index = 3,
+    });
+    const candidates = [_]Candidate{.{
+        .family = "Normalized Family",
+        .subfamily = "Book",
+        .postscript_name = "NormalizedFamily-Book",
+        .weight = 450,
+        .stretch = 90,
+        .style = .oblique,
+        .source_digest = digest,
+        .source_size = 21,
+        .face_index = 3,
+    }};
+    const exact = resolveCandidates(&candidates, descriptor, .exact);
+    try std.testing.expectEqual(ResolveStatus.exact_content, exact.status);
+    try std.testing.expectEqual(@as(?usize, 0), exact.face_index);
 }

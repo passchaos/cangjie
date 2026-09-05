@@ -83,7 +83,7 @@ pub const Descriptor = struct {
         if (!self.family.valid() or self.family.len == 0 or !self.subfamily.valid() or
             !self.postscript_name.valid() or self.weight < 1 or self.weight > 1000 or
             self.stretch < 1 or self.stretch > 1000) return false;
-        if (self.has_content_identity) return self.source_size != 0 and !digestIsZero(self.source_digest);
+        if (self.has_content_identity) return self.source_size != 0;
         return self.source_size == 0 and self.face_index == 0 and digestIsZero(self.source_digest);
     }
 

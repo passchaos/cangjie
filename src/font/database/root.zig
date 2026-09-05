@@ -548,6 +548,7 @@ pub const FontDatabase = struct {
         var resolver = descriptor_mod.Resolver.init(descriptor, mode);
         for (self.faces.items, 0..) |face, index| {
             const owned = self.provenanceForFont(face_mod.backend.font(face.face));
+            const face_index = if (owned) |value| std.math.cast(u32, value.face_index) orelse continue else 0;
             resolver.add(index, .{
                 .family = face.family,
                 .subfamily = face.subfamily,
@@ -557,7 +558,7 @@ pub const FontDatabase = struct {
                 .style = face.style,
                 .source_digest = if (owned) |value| value.source_digest else null,
                 .source_size = if (owned) |value| value.source_size else 0,
-                .face_index = if (owned) |value| @intCast(value.face_index) else 0,
+                .face_index = face_index,
             });
         }
         return resolver.finish();

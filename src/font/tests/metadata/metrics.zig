@@ -50,6 +50,21 @@ test "font decoration metrics prefer post underline and OS/2 strikeout" {
     );
 }
 
+test "global metrics apply MVAR at an immutable font location" {
+    const allocator = std.testing.allocator;
+    const bytes = try test_font.buildMvarTtf(allocator);
+    defer allocator.free(bytes);
+    var font = try Font.parse(allocator, bytes);
+    defer font.deinit();
+    const face = @import("../../face/root.zig").backend.face(&font);
+
+    const defaults = try face.metrics().global(null);
+    const varied = try face.metrics().globalAt(null, &.{1});
+    try std.testing.expectEqual(defaults.ascent + 7, varied.ascent);
+    try std.testing.expectEqual(defaults.descent, varied.descent);
+    try std.testing.expectEqual(defaults.leading, varied.leading);
+}
+
 test "font decoration metrics read OS/2 strikeout and fallback invalid underline" {
     const allocator = std.testing.allocator;
     const bytes = try test_font.buildNamedTtfWithStyle(
